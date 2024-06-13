@@ -1,0 +1,166 @@
+/*
+Copyright 2024 Kapetan.io Technologies Inc
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+syntax = "proto3";
+
+option go_package = "github.com/kapetan-io/querator/proto";
+import "google/protobuf/timestamp.proto";
+
+package querator;
+
+
+message ProduceRequest {
+  // The name of the queue this message is to be queued to.
+  string queueName = 1  [json_name = "queue_name"];
+  // A user specified field which indicates the encoding used to encode the 'body'
+  string encoding = 2;
+  // A Kind or Type the body contains. Consumers can use this field to determine handling
+  // of the body prior to unmarshalling. Examples: 'webhook-v2', 'webhook-v1',
+  string kind = 3;
+  // This is a user specified field that can be used by the consumer to determine handling
+  // of the message without needing to unmarshall the body.
+  // Examples: 'account-0001', 'john.smith'
+  string reference = 4;
+  // The maximum number of times this message can be deferred by a consumer before it is
+  // placed in the dead letter queue. This includes cases where the 'deadline' was exceeded
+  // and the message was retried.
+  int32  maxAttempts = 5 [json_name = "max_attempts"];
+  // How long the message can wait in the queue regardless of attempts before it is moved
+  // to the dead letter queue.
+  // Example: '24h', '60m', '10s'
+  string deadline = 6;
+  //  The body of the message, it's encoding is specified by the 'encoding' field.
+  // Example: '{"key": "value"}'
+  bytes  body = 7;
+}
+
+message ProduceResponse {
+  // A unique ID which refers to the message, queue, and partition this message is in.
+  // Example: 'queue-p1-018ed3da0bf6740f'
+  string messageId = 1 [json_name = "message_id"];
+}
+
+message ReserveRequest {
+  // The name of the queue to reserve work from
+  // Example: 'http-send'
+  string queueName = 1  [json_name = "queue_name"];
+
+  // The number of messages requested from the queue.
+  int32 batchSize = 2 [json_name = "batch_size"];
+
+  // The duration the client expects to wait for a message to consume before timing out.
+  string waitTimeout = 3 [json_name = "wait_timeout"];
+}
+
+message ReserveItem {
+  // A user specified field which indicates the encoding used to encode the 'body'
+  string encoding = 1;
+
+  // A Kind or Type the body contains. Consumers can use this field to determine handling
+  // of the body prior to unmarshalling. Examples: 'webhook-v2', 'webhook-v1',
+  string kind = 2;
+
+  // This is a user specified field that can be used by the consumer to determine handling
+  // of the message without needing to unmarshall the body.
+  // Examples: 'account-0001', 'john.smith'
+  string reference = 3;
+
+  // A unique ID which refers to the message, queue, and partition this message is in.
+  // Example: 'queue-p1-018ed3da0bf6740f'
+  string messageId = 4 [json_name = "message_id"];
+
+  // The number of times this message has been deferred or reservation timed out during
+  // processing by a consumer.
+  int32  attempts = 5;
+
+  // The date time that Querator will offer up this message to another consumer
+  // If the consumer reserving this message has not marked it complete.
+  //
+  // The consumer can use this date to decide if it should finalize it's work
+  // if the timeout date has expired.
+  google.protobuf.Timestamp reserveTimeout = 6 [json_name = "reserve_timeout"];
+
+  //  The body of the message, it's encoding is specified by the 'encoding' field.
+  // Example: '{"key": "value"}'
+  bytes  body = 7;
+}
+
+message ReserveResponse {
+  repeated ReserveItem items = 1;
+}
+
+message DeferRequest {
+  // A unique ID which refers to the message, queue, and partition this message is in.
+  // Example: 'queue-p1-018ed3da0bf6740f'
+  string messageId = 4 [json_name = "message_id"];
+
+  // The date after which the message will be added to the queue specified.
+  // The date can be empty, the current time or a past date/time, in which
+  // case the message will be immediately added to the queue.
+  google.protobuf.Timestamp offerAt = 2 [json_name = "offer_at"];
+
+  // Indicates the message is dead, will not be retried regardless of the number of attempts
+  // remaining. If set to true the defer will place the message in the dead letter queue for
+  // the specified queue.
+  bool dead = 3;
+}
+
+message CompleteRequest {
+  // A unique ID which refers to the message, queue, and partition this message is in.
+  // Example: 'queue-p1-018ed3da0bf6740f'
+  string messageId = 4 [json_name = "message_id"];
+}
+
+message QueueItem {
+  // The name of the queue
+  string name = 1;
+
+  // The date the queue was created
+  google.protobuf.Timestamp createdAt = 2 [json_name = "created_at"];
+
+  // The date the queue was last updated
+  google.protobuf.Timestamp updatedAt = 3 [json_name = "updated_at"];
+
+  // The name of the dead letter queue for this queue. If this is a dead letter queue then
+  // this field will be empty when retrieved via '/queue.list'
+  string deadQueue = 4 [json_name = "dead_queue"];
+
+  // This is a user supplied field which could contain metadata or specify who owns this queue
+  // Examples: "jake@statefarm.com", "stapler@office-space.com", "account-0001"
+  string reference = 5;
+
+  // The default reservation timeout for this queue
+  // Example: '60m', '24h', '10s'
+  string reserveTimeout = 6  [json_name = "reserve_timeout"];
+
+  // How long the message can wait in the queue regardless of attempts before it is moved
+  // to the dead letter queue.
+  string deadline = 7;
+}
+
+message ListQueueResponse {
+  repeated QueueItem items = 1;
+}
+
+message DeleteQueueRequest {
+    // The name of the queue
+    string name = 1;
+}
+
+message InspectQueueRequest {
+  // The name of the queue
+  string name = 1;
+}

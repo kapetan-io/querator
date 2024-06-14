@@ -19,12 +19,11 @@ package internal
 import (
 	"context"
 	"github.com/kapetan-io/querator/proto"
-	"log/slog"
 )
 
 type Service struct {
-	opts ServiceOptions
-	log  slog.Logger
+	//opts ServiceOptions
+	//log  slog.Logger
 }
 
 func NewService(opts ...ServiceOptions) *Service {

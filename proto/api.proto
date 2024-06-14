@@ -22,7 +22,7 @@ import "google/protobuf/timestamp.proto";
 package querator;
 
 
-message ProduceRequest {
+message QueueProduceRequest {
   // The name of the queue this message is to be queued to.
   string queueName = 1  [json_name = "queue_name"];
   // A user specified field which indicates the encoding used to encode the 'body'
@@ -47,13 +47,13 @@ message ProduceRequest {
   bytes  body = 7;
 }
 
-message ProduceResponse {
+message QueueProduceResponse {
   // A unique ID which refers to the message, queue, and partition this message is in.
   // Example: 'queue-p1-018ed3da0bf6740f'
   string messageId = 1 [json_name = "message_id"];
 }
 
-message ReserveRequest {
+message QueueReserveRequest {
   // The name of the queue to reserve work from
   // Example: 'http-send'
   string queueName = 1  [json_name = "queue_name"];
@@ -65,7 +65,7 @@ message ReserveRequest {
   string waitTimeout = 3 [json_name = "wait_timeout"];
 }
 
-message ReserveItem {
+message QueueReserveItem {
   // A user specified field which indicates the encoding used to encode the 'body'
   string encoding = 1;
 
@@ -98,11 +98,11 @@ message ReserveItem {
   bytes  body = 7;
 }
 
-message ReserveResponse {
-  repeated ReserveItem items = 1;
+message QueueReserveResponse {
+  repeated QueueReserveItem items = 1;
 }
 
-message DeferRequest {
+message QueueDeferRequest {
   // A unique ID which refers to the message, queue, and partition this message is in.
   // Example: 'queue-p1-018ed3da0bf6740f'
   string messageId = 4 [json_name = "message_id"];
@@ -118,7 +118,7 @@ message DeferRequest {
   bool dead = 3;
 }
 
-message CompleteRequest {
+message QueueCompleteRequest {
   // A unique ID which refers to the message, queue, and partition this message is in.
   // Example: 'queue-p1-018ed3da0bf6740f'
   string messageId = 4 [json_name = "message_id"];
@@ -151,16 +151,16 @@ message QueueItem {
   string deadline = 7;
 }
 
-message ListQueueResponse {
+message QueueListResponse {
   repeated QueueItem items = 1;
 }
 
-message DeleteQueueRequest {
+message QueueDeleteRequest {
     // The name of the queue
     string name = 1;
 }
 
-message InspectQueueRequest {
+message QueueInspectRequest {
   // The name of the queue
   string name = 1;
 }

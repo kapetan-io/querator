@@ -3,6 +3,10 @@ package internal
 import (
 	"context"
 	"errors"
+	"github.com/duh-rpc/duh-go"
+	"github.com/kapetan-io/querator/internal/maps"
+	"github.com/kapetan-io/tackle/set"
+	"log/slog"
 	"sync/atomic"
 	"time"
 )
@@ -12,32 +16,45 @@ var (
 	ErrReserveRequestExpired = errors.New("reserve request expired")
 )
 
-// TODO: When a message has been deferred, it could be queued into a different partition than
-//  what it's message id suggests. We should either NOT include the partition in the message id.
-//  which means we need to include the partition during /queue.complete OR we change the message id
-//  everytime it's deferred... I think if the user wanted a unique id through which it can track the
-//  status of a queued item all through it's life time, we should introduce a new field for that purpose.
+const (
+	queueChSize = 20_000
+	// TODO: This should be based on the reservation timeout set on the queue.
+	dataStoreTimeout = time.Minute
+)
 
-// Queue manages a set of partitions which make up the queue. Its job is to evenly distribute and
-// consume items from the queue. Ensuring consumers and producers are handled fairly and efficiently.
-type Queue struct {
-	waitCh            atomic.Pointer[chan *ReserveRequest]
-	partitionsReadyCh chan struct{}
-	shutdownCh        chan struct{}
+type QueueOptions struct {
+	Logger duh.StandardLogger
 }
 
-func NewQueue() *Queue {
+// Queue manages job is to evenly distribute and consume items from a single queue. Ensuring consumers and
+// producers are handled fairly and efficiently. Since a Queue is the synchronization point for R/W
+// there can ONLY BE ONE instance of a Queue running anywhere in the cluster at any given time. All consume
+// and produce requests MUST go through this queue singleton.
+type Queue struct {
+	reserveQueueCh atomic.Pointer[chan *ReserveRequest]
+	produceQueueCh atomic.Pointer[chan *ProduceRequest]
+	shutdownCh     chan struct{}
+	store          Store
+	opts           QueueOptions
+	name           string
+}
+
+func NewQueue(opts QueueOptions) *Queue {
+	set.Default(&opts.Logger, slog.Default())
+
 	q := &Queue{
-		partitionsReadyCh: make(chan struct{}),
-		shutdownCh:        make(chan struct{}),
+		// TODO: Init the Store
+		shutdownCh: make(chan struct{}),
 	}
 
 	// Assign new wait queue
-	ch := make(chan *ReserveRequest, 20_000)
-	q.waitCh.Store(&ch)
+	ch := make(chan *ReserveRequest, queueChSize)
+	q.reserveQueueCh.Store(&ch)
 
 	return q
 }
+
+// TODO(thrawn01): Consider creating a pool of ReserveRequest and QueueItem to avoid GC
 
 type ReserveRequest struct {
 	// The number of messages requested from the queue.
@@ -45,40 +62,57 @@ type ReserveRequest struct {
 	// A time in the future when the caller expects Reserve() to return
 	// if no items are available to be reserved.
 	TimeoutDeadline time.Time
-	// The id of the client reserving
+	// The id of the client
 	ClientID string
 	// The context of the requesting client
 	Context context.Context
 	// The result of the reservation
-	Items []ReservedItem
+	Items []*QueueItem
 
-	// Used by Reserve() to wait for this reserve request to complete
+	// Used by Reserve() to wait for this request to complete
 	readyCh chan struct{}
 	// The error to be returned to the caller
 	err error
 }
 
-type ReservedItem struct {
+type ProduceRequest struct {
+	// The id of the client
 	ClientID string
+	// The context of the requesting client
+	Context context.Context
+	// The items to produce
+	Items []*QueueItem
+
+	// Used by Produce() to wait for this request to complete
+	readyCh chan struct{}
+	// The error to be returned to the caller
+	err error
 }
 
-// Reserve is called by clients wanting to reserve a new item from the queue. This call
-// will block until the request is cancelled via the passed context.
-//
-// ### Context
-// DO NOT use with context.WithTimeout() or context.WithDeadline(). Reserve() will block
-// until the duration provided via ReserveRequest.WaitTimeout has been reached. You may cancel
-// the context if the client has gone away. In this case Queue will abort the reservation
-// request. If the context is cancelled after reservation has been written to the database
-// then those requests will be lost until they can be offered to another client after the
-// `reserve_timeout` has been reached.
-//
-// Unique Requests
-// ClientID must NOT be empty and each request must be unique, or it will be rejected with ErrDuplicateClientID
-func (q *Queue) Reserve(req *ReserveRequest) error {
+// QueueItem is the queue representation of an item in the queue. It is separate from the data store
+// representation and the protocol representation.
+type QueueItem struct {
+	// ID is unique to each item in the data store. The ID style is different depending on the data store
+	// implementation, and does not include the queue name.
+	ID string
+	// ClientID is the id of the client which reserved this item
+	ClientID string
+	// IsReserved is true if the item has been reserved by a client
+	IsReserved bool
+	// ExpireAt is the time in the future the item will expire
+	ExpireAt time.Time
+
+	Attempts  int
+	Reference string
+	Encoding  string
+	Kind      string
+	Body      []byte
+}
+
+func (q *Queue) Produce(req *ReserveRequest) error {
 	req.readyCh = make(chan struct{})
 
-	*q.waitCh.Load() <- req
+	*q.reserveQueueCh.Load() <- req
 
 	// Wait until the request has been processed
 	select {
@@ -87,109 +121,252 @@ func (q *Queue) Reserve(req *ReserveRequest) error {
 	}
 }
 
-// processReserveRequests processes the queue of waiting clients in waitCh. It adds every
-// client waiting to the 'requests' list. Then it tries its best to find data for every client.
+// Reserve is called by clients wanting to reserve a new item from the queue. This call
+// will block until the request is cancelled via the passed context or the TimeoutDeadline
+// is reached.
 //
-// The idea here is that when this go routine is woken up by the scheduler we do as much as
+// ### Context
+// DO NOT use with context.WithTimeout() or context.WithDeadline(). Reserve() will block
+// until the duration provided via ReserveRequest.WaitTimeout has been reached. You may cancel
+// the context if the client has gone away. In this case Queue will abort the reservation
+// request. If the context is cancelled after reservation has been written to the data store
+// then those requests will be lost until they can be offered to another client after the
+// `reserve_timeout` has been reached.
+//
+// ### Unique Requests
+// ClientID must NOT be empty and each request must have a unique id, or it will
+// be rejected with ErrDuplicateClientID. When recording a reservation in the data store the ClientID
+// the reservation is for is also written. This can assist in diagnosing which clients are failing
+// to process items properly. It is so used to avoid poor performing or bad behavior from clients
+// who may attempt to issue many requests simultaneously in an attempt to increase throughput.
+// Increased throughput can instead be achieved by raising the batch size.
+func (q *Queue) Reserve(req *ReserveRequest) error {
+	req.readyCh = make(chan struct{})
+
+	*q.reserveQueueCh.Load() <- req
+
+	// Wait until the request has been processed
+	select {
+	case <-req.readyCh:
+		return req.err
+	}
+}
+
+// processQueues processes the queues of both producing and reserving clients. It is the synchronization
+// point where reads and writes to the queue are handled. Because reads and writes to the queue are
+// handled by a single go routine (single threaded). We can preform optimizations where items produced to
+// the queue can be marked as reserved before they are written to the data store.
+//
+// Single threaded design also allows batching reads and writes in the same transaction. Most databases
+// benefit from batching R/W paths as it reduces IOPs, transaction overheard, network overhead, results
+// in fewer locks, and logging. In addition, by preforming the R/W synchronization here in code, we avoid
+// pushing that synchronization on to the datastore, which reduces datastore costs.
+// TODO(thrawn01) reference my blog post(s) about this.
+//
+// ### Queue all the things
+// The design goal here is that when this go routine is woken up by the go scheduler we do as much work as
 // possible without giving the scheduler an excuse to steal away our CPU time. In other words,
-// the code path to get an item from the queue should not do anything that blocks. Items in
-// partitions should already be in a queue waiting for this go routine to pick them up.
+// the code path to get an item into or out of the queue should result in as little blocking or mutex lock
+// contention as possible. While we can't avoid R/W to the data store, we can have producers and consumers
+// 'queue' as much work as possible so when we are active, we get as much done as quickly as possible.
 //
-// This allows for some really cool FUTURE optimizations where items produced to the queue
-// can be reserved before they are written to the database. It also allows batching reads and
-// writes with the database. Batching reduces IOPs required and increases efficiency.
+// If a single queue becomes a bottle neck for throughput, users should create more queues.
 //
-// This routine does one of a few things:
-//   - New client requests are added to the waiting 'requests' list. If there is
-//     data waiting in the partitions, we distribute the data between all the
-//     waiting requests
-//   - The timer fires, and we look for any clients which have expired setting the
-//     appropriate time out error.
-//   - The partitions tell us there is data ready, and we process 'requests' list
-//     giving out candy to any client asking.
-//   - Close all the things, we are in shutdown!
-func (q *Queue) processReserveRequests() {
+// ### Write Optimization
+// We don't fetch batches of items from the data store and mark them as reserved in the same transaction because
+// we record the ID of the client who got the reservation in the data store. This results in a best cast scenario
+// where each item that is queued and processed can have up to 4 writes.
+// * 1st Write - Add item to the Queue
+// * 2nd Write - Fetch Reservable item from the queue
+// * 3rd Write - Write Reserved status and record the client
+// * 4th Write - Write the item in the queue as complete (delete the item)
+//
+// However if in the future we discover writing the client id to the reserving an item is not useful, then we
+// could optimise by fetching reservable items and marking them as reserved in the same transaction.
+//
+// In addition, our single threaded synchronized design allows for several optimizations and probably
+// some I'm not thinking of.
+// * Pre-fetching reservable items from the queue into memory
+// * Reserving items as soon as they are produced (avoiding the second write)
+//
+// ### FUTURE
+// Allow users to combine multiple queues by creating a "Consumer Group". Then a client can
+// produce/reserve from the consumer group, and the consumer group round robins the request to each queue
+// in the group. Doing so destroys any ordering of queued items, but in some applications ordering might
+// not be important to the consumer, but Exactly Once Delivery is still desired.
+func (q *Queue) processQueues() {
+
+	// TODO: Refeactor this into a smaller loop with handler functions which pass around a state object with
+	//  State.AddToWPR() and State.AddToWRR() etc....
+	wrr := waitingReserveRequests{
+		Requests: make(map[string]*ReserveRequest, 5_000),
+	}
+	wpr := waitingProduceRequests{
+		Requests: make([]*ProduceRequest, 5_000),
+	}
 	var timerCh <-chan time.Time
-	// TODO: Adjust the size of the requests (maybe)?
-	requests := make(map[string]*ReserveRequest, 100_000)
-	addToRequests := func(req *ReserveRequest) {
-		if _, ok := requests[req.ClientID]; ok {
+
+	addToWPR := func(req *ProduceRequest) {
+		wpr.Requests = append(wpr.Requests, req)
+		wpr.Total += len(req.Items)
+	}
+
+	addToWRR := func(req *ReserveRequest) {
+		if _, ok := wrr.Requests[req.ClientID]; ok {
 			req.err = ErrDuplicateClientID
 			close(req.readyCh)
 			return
 		}
-		requests[req.ClientID] = req
+		wrr.Requests[req.ClientID] = req
+		wrr.Total += req.BatchSize
 	}
 
 	for {
-		waitCh := q.waitCh.Load()
+		reserveQueueCh := q.reserveQueueCh.Load()
+		produceQueueCh := q.produceQueueCh.Load()
 		select {
 
-		case req := <-*waitCh:
+		// Process the produce queue into the wpr list
+		case req := <-*produceQueueCh:
 			// Swap the wait channel, so we can process the wait queue. Creating a
-			// new channel allows any incoming requests that occur while this routine
+			// new channel allows any incoming waiting produce requests (wpr) that occur
+			// while this routine is running to be queued into the new wait queue without
+			// interfering with anything we are doing here.
+			ch := make(chan *ProduceRequest, queueChSize)
+			q.produceQueueCh.Store(&ch)
+			close(*produceQueueCh)
+
+			addToWPR(req)
+			for req := range *produceQueueCh {
+				addToWPR(req)
+			}
+			produceQueueCh = nil
+
+			// FUTURE: Inspect the Waiting Reserve Requests, and attempt to assign produced messages with
+			//  waiting reserve requests if our queue is caught up.
+			//  (Check for cancel or expire reserve requests first)
+
+			// FUTURE: Buffer the produced messages at the top of the queue into memory, so we don't need
+			//  to query them from the database when we reserve messages later. Doing so avoids the GetReservable()
+			//  step, in addition, we can back fill reservable items into memory when processQueues() isn't
+			//  actively producing or consuming.
+
+			items := make([]*QueueItem, wpr.Total)
+			for _, req := range wpr.Requests {
+				items = append(items, req.Items...)
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), dataStoreTimeout)
+			if err := q.store.WriteItems(ctx, q.name, items); err != nil {
+				q.opts.Logger.Warn("while calling Store.WriteItems()", "error", err)
+				continue
+			}
+			cancel()
+
+			// TODO: Tell the waiting clients the items have been produced
+
+		// Process the reserve queue into the waiting reserve request (wrr) list.
+		case req := <-*reserveQueueCh:
+			// Swap the wait channel, so we can process the wait queue. Creating a
+			// new channel allows any incoming wrr that occur while this routine
 			// is running to be queued into the new wait queue without interfering with
 			// anything we are doing here.
-			ch := make(chan *ReserveRequest, 20_000)
-			q.waitCh.Store(&ch)
-			close(*waitCh)
+			ch := make(chan *ReserveRequest, queueChSize)
+			q.reserveQueueCh.Store(&ch)
+			close(*reserveQueueCh)
 
-			// Consume the wait queue
-			addToRequests(req)
-			for req := range *waitCh {
-				addToRequests(req)
+			addToWRR(req)
+			for req := range *reserveQueueCh {
+				addToWRR(req)
 			}
-			waitCh = nil
+			reserveQueueCh = nil
 
-			// If there is nothing to do, then check for request timeouts.
-			if !q.partitionsReady() {
-				next := findNextTimeout(requests)
-				if next.Nanoseconds() != 0 {
-					timerCh = time.After(next)
+			// NOTE: V0 doing the simplest thing that works now, we can get fancy & efficient later.
+
+			// Remove any clients that have expired
+			_ = findNextTimeout(&wrr)
+
+			// Fetch all the reservable items in the store
+			ctx, cancel := context.WithTimeout(context.Background(), dataStoreTimeout)
+			var items []*QueueItem
+			if err := q.store.GetReservable(ctx, q.name, items, wrr.Total); err != nil {
+				q.opts.Logger.Warn("while calling Store.GetReservable()", "error", err)
+				continue
+			}
+			cancel()
+
+			// Distribute the records evenly to all the reserve clients
+			keys := maps.Keys(wrr.Requests)
+			var idx int
+			for _, item := range items {
+				req = wrr.Requests[keys[idx]]
+				req.Items = append(req.Items, item)
+				// Queue each item assigned to be updated in the database with the reservation
+				item.ClientID = req.ClientID
+				if idx > len(keys)-1 {
+					idx = 0
+				}
+				// TODO: Update the ExpiredAt and IsReserved field
+			}
+
+			// Now mark the records as reserved
+			ctx, cancel = context.WithTimeout(context.Background(), dataStoreTimeout)
+			if err := q.store.WriteItems(ctx, q.name, items); err != nil {
+				q.opts.Logger.Warn("while calling Store.MarkAsReserved()", "error", err)
+				continue
+			}
+			cancel()
+
+			// Inform clients they have reservations ready
+			for _, req := range wrr.Requests {
+				if len(req.Items) != 0 {
+					close(req.readyCh)
+					wrr.Total -= int32(len(req.Items))
+					delete(wrr.Requests, req.ClientID)
 				}
 			}
-			// TODO: Attempt to fill each request from all the partitions
 
-			// TODO: close(req.readyCh) each request with reservations
-
-			// TODO: Set a timer for the request that will expire next
-
-		// partitionsReadyCh acts like a semaphore. If any partition receives new data, it
-		// will attempt to queue into the channel, thus waking up this go routine.
-		case <-q.partitionsReadyCh:
-		// TODO: Process any waiting reservation requests
-		case <-q.shutdownCh:
-			// TODO: Tell all the clients are are done, and tell all the partitions to flush everything and exit
-		case <-timerCh:
-			// Find the next request that will time out, and notify any clients of expired requests
-			next := findNextTimeout(requests)
+			// Set a timer for remaining open reserve requests
+			next := findNextTimeout(&wrr)
 			if next.Nanoseconds() != 0 {
 				timerCh = time.After(next)
 			}
 
+		case <-q.shutdownCh:
+			// TODO: Tell all the clients are are done, and flush everything then exit
+		case <-timerCh:
+			// Find the next request that will time out, and notify any clients of expired wrr
+			next := findNextTimeout(&wrr)
+			if next.Nanoseconds() != 0 {
+				timerCh = time.After(next)
+			}
+
+			// TODO: Preform queue maintenance, cleaning up reserved items that have not been completed and
+			//  moving items into the dead letter queue.
 		}
 	}
 }
 
-// Returns true of one of the partitions is ready to be read
-func (q *Queue) partitionsReady() bool {
-	select {
-	case <-q.partitionsReadyCh:
-		return true
-	default:
-		return false
-	}
-}
-
-func findNextTimeout(m map[string]*ReserveRequest) time.Duration {
+func findNextTimeout(r *waitingReserveRequests) time.Duration {
 	var soon *ReserveRequest
 
-	for _, req := range m {
+	for _, req := range r.Requests {
 		// If request has already expired
 		if req.TimeoutDeadline.After(time.Now()) {
 			// Inform our waiting client
 			req.err = ErrReserveRequestExpired
 			close(req.readyCh)
+			r.Total -= req.BatchSize
+			delete(r.Requests, req.ClientID)
+			continue
+		}
+
+		// If client has gone away
+		if req.Context.Err() != nil {
+			close(req.readyCh)
+			r.Total -= req.BatchSize
+			req.err = req.Context.Err()
+			delete(r.Requests, req.ClientID)
 			continue
 		}
 
@@ -212,4 +389,14 @@ func findNextTimeout(m map[string]*ReserveRequest) time.Duration {
 
 	// How soon is it? =)
 	return soon.TimeoutDeadline.Sub(time.Now())
+}
+
+type waitingReserveRequests struct {
+	Requests map[string]*ReserveRequest
+	Total    int32
+}
+
+type waitingProduceRequests struct {
+	Requests []*ProduceRequest
+	Total    int
 }

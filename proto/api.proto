@@ -1,5 +1,5 @@
 /*
-Copyright 2024 Kapetan.io Technologies Inc
+Copyright 2024 Derrick J Wippler
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -48,8 +48,15 @@ message QueueProduceRequest {
 }
 
 message QueueProduceResponse {
-  // A unique ID which refers to the message, queue, and partition this message is in.
-  // Example: 'queue-p1-018ed3da0bf6740f'
+  // A unique ID which is in the form <queue_name>-<unique_id>. The message id changes
+  // everytime the item is deferred. If you need a reliable method for tracking a message
+  // through all the stages of it's life time, then you can use the reference field or
+  // encode this information in the body of the queue item. The unique_id is dependent
+  // upon the data store implementation used to store the items in the queue.
+  //
+  // FUTURE: Perhaps if the 'reference' field is empty we generate a uid which can then
+  //  be used to query the dead letter queue if our message ends up there.
+  // Examples: 'queue1-0ujsswThIGTUYm2K8FjOOfXtY1K', 'queue2-0001'
   string messageId = 1 [json_name = "message_id"];
 }
 
@@ -75,11 +82,11 @@ message QueueReserveItem {
 
   // This is a user specified field that can be used by the consumer to determine handling
   // of the message without needing to unmarshall the body.
-  // Examples: 'account-0001', 'john.smith'
+  // Examples: 'account-0001', 'john.smith', 'id-hIGTUYm2'
   string reference = 3;
 
-  // A unique ID which refers to the message, queue, and partition this message is in.
-  // Example: 'queue-p1-018ed3da0bf6740f'
+  // A unique ID which is in the form <queue_name>-<unique_id>.
+  // Example: 'queue1-0ujsswThIGTUYm2K8FjOOfXtY1K'
   string messageId = 4 [json_name = "message_id"];
 
   // The number of times this message has been deferred or reservation timed out during
@@ -103,8 +110,8 @@ message QueueReserveResponse {
 }
 
 message QueueDeferRequest {
-  // A unique ID which refers to the message, queue, and partition this message is in.
-  // Example: 'queue-p1-018ed3da0bf6740f'
+  // A unique ID which is in the form <queue_name>-<unique_id>.
+  // Example: 'queue1-0ujsswThIGTUYm2K8FjOOfXtY1K'
   string messageId = 4 [json_name = "message_id"];
 
   // The date after which the message will be added to the queue specified.
@@ -119,8 +126,8 @@ message QueueDeferRequest {
 }
 
 message QueueCompleteRequest {
-  // A unique ID which refers to the message, queue, and partition this message is in.
-  // Example: 'queue-p1-018ed3da0bf6740f'
+  // A unique ID which is in the form <queue_name>-<unique_id>.
+  // Example: 'queue1-0ujsswThIGTUYm2K8FjOOfXtY1K'
   string messageId = 4 [json_name = "message_id"];
 }
 

@@ -7,21 +7,21 @@ import (
 
 type Store interface {
 	// GetReservable gets up to 'limit' reservable items from a queue without marking the items as reserved
-	GetReservable(ctx context.Context, items []*QueueItem, limit int) error
+	ListReservable(ctx context.Context, items *[]*QueueItem, limit int) error
 
 	// Reserve gets up to 'limit' reservable items from the queue and marks the items as reserved.
-	Reserve(ctx context.Context, items []*QueueItem, limit int) error
+	Reserve(ctx context.Context, items *[]*QueueItem, limit int) error
 
 	// ReadItems reads items in a queue. limit and offset allow the user to page through all the items
 	// in the queue.
-	ReadItems(ctx context.Context, items []*QueueItem, pivot string, limit int) error
+	Read(ctx context.Context, items *[]*QueueItem, pivot string, limit int) error
 
 	// WriteItems writes the item to the queue and updates the item with the
 	// unique id.
-	WriteItems(ctx context.Context, items []*QueueItem) error
+	Write(ctx context.Context, items []*QueueItem) error
 
 	// DeleteItems removes the provided items from the queue
-	DeleteItems(ctx context.Context, items []*QueueItem) error
+	Delete(ctx context.Context, items []*QueueItem) error
 
 	Close(ctx context.Context) error
 }

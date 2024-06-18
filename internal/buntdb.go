@@ -18,6 +18,7 @@ type BuntOptions struct {
 type Bunt struct {
 	db   *buntdb.DB
 	opts BuntOptions
+	uid  ksuid.KSUID
 }
 
 func NewBuntStore(opts BuntOptions) (*Bunt, error) {
@@ -28,21 +29,22 @@ func NewBuntStore(opts BuntOptions) (*Bunt, error) {
 		return nil, fmt.Errorf("opening buntdb: %w", err)
 	}
 	return &Bunt{
-		db: db,
+		db:  db,
+		uid: ksuid.New(),
 	}, nil
 }
 
-func (s *Bunt) GetReservable(ctx context.Context, items []*QueueItem, limit int) error {
+func (s *Bunt) ListReservable(ctx context.Context, items *[]*QueueItem, limit int) error {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (s *Bunt) Reserve(ctx context.Context, items []*QueueItem, limit int) error {
+func (s *Bunt) Reserve(ctx context.Context, items *[]*QueueItem, limit int) error {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (s *Bunt) ReadItems(ctx context.Context, items []*QueueItem, pivot string, limit int) error {
+func (s *Bunt) Read(_ context.Context, items *[]*QueueItem, pivot string, limit int) error {
 	tx, err := s.db.Begin(false)
 	if err != nil {
 		return fmt.Errorf("during begin: %w", err)
@@ -50,7 +52,9 @@ func (s *Bunt) ReadItems(ctx context.Context, items []*QueueItem, pivot string, 
 
 	var iterErr error
 	var count int
-	err = tx.DescendEqual("", pivot, func(key, value string) bool {
+
+	err = tx.AscendGreaterOrEqual("", pivot, func(key, value string) bool {
+		//err = tx.Ascend("", func(key, value string) bool {
 		if count >= limit {
 			return false
 		}
@@ -60,12 +64,12 @@ func (s *Bunt) ReadItems(ctx context.Context, items []*QueueItem, pivot string, 
 			iterErr = fmt.Errorf("during unmarshal of db value: %w", err)
 			return false
 		}
-		items = append(items, item)
+		*items = append(*items, item)
 		count++
 		return true
 	})
 	if err != nil {
-		return fmt.Errorf("during DescendEqual(): %w", err)
+		return fmt.Errorf("during AscendGreaterOrEqual(): %w", err)
 	}
 
 	if err = tx.Rollback(); err != nil {
@@ -78,7 +82,7 @@ func (s *Bunt) ReadItems(ctx context.Context, items []*QueueItem, pivot string, 
 	return nil
 }
 
-func (s *Bunt) WriteItems(_ context.Context, items []*QueueItem) error {
+func (s *Bunt) Write(_ context.Context, items []*QueueItem) error {
 	tx, err := s.db.Begin(true)
 	if err != nil {
 		return fmt.Errorf("during begin: %w", err)
@@ -86,7 +90,8 @@ func (s *Bunt) WriteItems(_ context.Context, items []*QueueItem) error {
 
 	for _, record := range items {
 		if record.ID == "" {
-			record.ID = ksuid.New().String()
+			s.uid = s.uid.Next()
+			record.ID = s.uid.String()
 		}
 
 		// TODO: Use something more efficient like protobuf,
@@ -109,7 +114,7 @@ func (s *Bunt) WriteItems(_ context.Context, items []*QueueItem) error {
 	return nil
 }
 
-func (s *Bunt) DeleteItems(ctx context.Context, items []*QueueItem) error {
+func (s *Bunt) Delete(ctx context.Context, items []*QueueItem) error {
 	//TODO implement me
 	panic("implement me")
 }

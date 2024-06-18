@@ -96,7 +96,7 @@ type QueueItem struct {
 	// implementation, and does not include the queue name.
 	ID string
 	// ClientID is the id of the client which reserved this item
-	ClientID string
+	ClientID string // TODO: Remove the ClientID
 	// IsReserved is true if the item has been reserved by a client
 	IsReserved bool
 	// ExpireAt is the time in the future the item will expire
@@ -247,7 +247,7 @@ func (q *Queue) processQueues() {
 			//  (Check for cancel or expire reserve requests first)
 
 			// FUTURE: Buffer the produced messages at the top of the queue into memory, so we don't need
-			//  to query them from the database when we reserve messages later. Doing so avoids the GetReservable()
+			//  to query them from the database when we reserve messages later. Doing so avoids the ListReservable()
 			//  step, in addition, we can back fill reservable items into memory when processQueues() isn't
 			//  actively producing or consuming.
 
@@ -257,8 +257,8 @@ func (q *Queue) processQueues() {
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), dataStoreTimeout)
-			if err := q.store.WriteItems(ctx, items); err != nil {
-				q.opts.Logger.Warn("while calling Store.WriteItems()", "error", err)
+			if err := q.store.Write(ctx, items); err != nil {
+				q.opts.Logger.Warn("while calling Store.Write()", "error", err)
 				cancel()
 				continue
 			}
@@ -294,8 +294,8 @@ func (q *Queue) processQueues() {
 			// Fetch all the reservable items in the store
 			ctx, cancel := context.WithTimeout(context.Background(), dataStoreTimeout)
 			var items []*QueueItem
-			if err := q.store.Reserve(ctx, items, wrr.Total); err != nil {
-				q.opts.Logger.Warn("while calling Store.GetReservable()", "error", err)
+			if err := q.store.Reserve(ctx, &items, wrr.Total); err != nil {
+				q.opts.Logger.Warn("while calling Store.ListReservable()", "error", err)
 				continue
 			}
 			cancel()
@@ -316,7 +316,7 @@ func (q *Queue) processQueues() {
 
 			// Now mark the records as reserved
 			//ctx, cancel = context.WithTimeout(context.Background(), dataStoreTimeout)
-			//if err := q.store.WriteItems(ctx, q.name, items); err != nil {
+			//if err := q.store.Write(ctx, q.name, items); err != nil {
 			//	q.opts.Logger.Warn("while calling Store.MarkAsReserved()", "error", err)
 			//	continue
 			//}

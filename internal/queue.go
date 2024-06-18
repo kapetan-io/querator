@@ -218,7 +218,7 @@ func (q *Queue) processQueues() {
 			return
 		}
 		wrr.Requests[req.ClientID] = req
-		wrr.Total += req.BatchSize
+		wrr.Total += int(req.BatchSize)
 	}
 
 	for {
@@ -257,13 +257,18 @@ func (q *Queue) processQueues() {
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), dataStoreTimeout)
-			if err := q.store.WriteItems(ctx, q.name, items); err != nil {
+			if err := q.store.WriteItems(ctx, items); err != nil {
 				q.opts.Logger.Warn("while calling Store.WriteItems()", "error", err)
+				cancel()
 				continue
 			}
 			cancel()
 
 			// TODO: Tell the waiting clients the items have been produced
+			for _, req := range wpr.Requests {
+				close(req.readyCh)
+			}
+			wpr.Total = 0
 
 		// Process the reserve queue into the waiting reserve request (wrr) list.
 		case req := <-*reserveQueueCh:
@@ -289,7 +294,7 @@ func (q *Queue) processQueues() {
 			// Fetch all the reservable items in the store
 			ctx, cancel := context.WithTimeout(context.Background(), dataStoreTimeout)
 			var items []*QueueItem
-			if err := q.store.GetReservable(ctx, q.name, items, wrr.Total); err != nil {
+			if err := q.store.Reserve(ctx, items, wrr.Total); err != nil {
 				q.opts.Logger.Warn("while calling Store.GetReservable()", "error", err)
 				continue
 			}
@@ -310,18 +315,18 @@ func (q *Queue) processQueues() {
 			}
 
 			// Now mark the records as reserved
-			ctx, cancel = context.WithTimeout(context.Background(), dataStoreTimeout)
-			if err := q.store.WriteItems(ctx, q.name, items); err != nil {
-				q.opts.Logger.Warn("while calling Store.MarkAsReserved()", "error", err)
-				continue
-			}
-			cancel()
+			//ctx, cancel = context.WithTimeout(context.Background(), dataStoreTimeout)
+			//if err := q.store.WriteItems(ctx, q.name, items); err != nil {
+			//	q.opts.Logger.Warn("while calling Store.MarkAsReserved()", "error", err)
+			//	continue
+			//}
+			//cancel()
 
 			// Inform clients they have reservations ready
 			for _, req := range wrr.Requests {
 				if len(req.Items) != 0 {
 					close(req.readyCh)
-					wrr.Total -= int32(len(req.Items))
+					wrr.Total -= len(req.Items)
 					delete(wrr.Requests, req.ClientID)
 				}
 			}
@@ -356,7 +361,7 @@ func findNextTimeout(r *waitingReserveRequests) time.Duration {
 			// Inform our waiting client
 			req.err = ErrReserveRequestExpired
 			close(req.readyCh)
-			r.Total -= req.BatchSize
+			r.Total -= int(req.BatchSize)
 			delete(r.Requests, req.ClientID)
 			continue
 		}
@@ -364,7 +369,7 @@ func findNextTimeout(r *waitingReserveRequests) time.Duration {
 		// If client has gone away
 		if req.Context.Err() != nil {
 			close(req.readyCh)
-			r.Total -= req.BatchSize
+			r.Total -= int(req.BatchSize)
 			req.err = req.Context.Err()
 			delete(r.Requests, req.ClientID)
 			continue
@@ -393,7 +398,7 @@ func findNextTimeout(r *waitingReserveRequests) time.Duration {
 
 type waitingReserveRequests struct {
 	Requests map[string]*ReserveRequest
-	Total    int32
+	Total    int
 }
 
 type waitingProduceRequests struct {

@@ -3,9 +3,11 @@ package store_test
 import (
 	"context"
 	"fmt"
-	"github.com/kapetan-io/querator/internal/store"
+	"github.com/kapetan-io/querator/store"
+	"github.com/kapetan-io/tackle/random"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"math/rand"
 	"testing"
 	"time"
 )
@@ -49,23 +51,25 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		now := time.Now()
 		var items []*store.QueueItem
 		items = append(items, &store.QueueItem{
-			IsReserved: true,
-			ExpireAt:   now,
-			Attempts:   5,
-			Reference:  "rainbow@dash.com",
-			Encoding:   "rainbows",
-			Kind:       "20% cooler",
+			IsReserved:      true,
+			ExpireAt:        now.Add(100_000 * time.Minute),
+			ReserveExpireAt: now.Add(3_000 * time.Minute),
+			Attempts:        5,
+			Reference:       "rainbow@dash.com",
+			Encoding:        "rainbows",
+			Kind:            "20% cooler",
 			Body: []byte("I mean... have I changed? Same sleek body. Same " +
 				"flowing mane. Same spectacular hooves. Nope, I'm still awesome"),
 		})
 		items = append(items, &store.QueueItem{
-			IsReserved: false,
-			ExpireAt:   now.Add(1_000_000 * time.Minute),
-			Attempts:   10_000,
-			Reference:  "rarity@dash.com",
-			Encoding:   "beauty",
-			Kind:       "sparkles",
-			Body:       []byte("Whining? I am not whining, I am complaining"),
+			IsReserved:      false,
+			ExpireAt:        now.Add(1_000_000 * time.Minute),
+			ReserveExpireAt: now.Add(3_000 * time.Minute),
+			Attempts:        10_000,
+			Reference:       "rarity@dash.com",
+			Encoding:        "beauty",
+			Kind:            "sparkles",
+			Body:            []byte("Whining? I am not whining, I am complaining"),
 		})
 
 		err = s.Write(ctx, items)
@@ -83,6 +87,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		assert.Equal(t, reads[0].ID, items[0].ID)
 		assert.Equal(t, reads[0].IsReserved, items[0].IsReserved)
 		assert.Equal(t, 0, reads[0].ExpireAt.Compare(items[0].ExpireAt))
+		assert.Equal(t, 0, reads[0].ReserveExpireAt.Compare(items[0].ReserveExpireAt))
 		assert.Equal(t, reads[0].Attempts, items[0].Attempts)
 		assert.Equal(t, reads[0].Reference, items[0].Reference)
 		assert.Equal(t, reads[0].Encoding, items[0].Encoding)
@@ -92,6 +97,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		assert.Equal(t, reads[1].ID, items[1].ID)
 		assert.Equal(t, reads[1].IsReserved, items[1].IsReserved)
 		assert.Equal(t, 0, reads[1].ExpireAt.Compare(items[1].ExpireAt))
+		assert.Equal(t, 0, reads[1].ReserveExpireAt.Compare(items[1].ReserveExpireAt))
 		assert.Equal(t, reads[1].Attempts, items[1].Attempts)
 		assert.Equal(t, reads[1].Reference, items[1].Reference)
 		assert.Equal(t, reads[1].Encoding, items[1].Encoding)
@@ -99,29 +105,34 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		assert.Equal(t, reads[1].Body, items[1].Body)
 
 		cmp := &store.QueueItem{
-			IsReserved: false,
-			ExpireAt:   now.Add(1_000_000 * time.Minute),
-			Attempts:   100_000,
-			Reference:  "discord@dash.com",
-			Encoding:   "Lord of Chaos",
-			Kind:       "Captain Good guy",
-			Body:       []byte("Make sense? Oh, what fun is there in making sense?"),
+			IsReserved:      false,
+			ExpireAt:        now.Add(1_000_000 * time.Minute),
+			ReserveExpireAt: now.Add(2_000 * time.Minute),
+			Attempts:        100_000,
+			Reference:       "discord@dash.com",
+			Encoding:        "Lord of Chaos",
+			Kind:            "Captain Good guy",
+			Body:            []byte("Make sense? Oh, what fun is there in making sense?"),
 		}
 
 		assert.True(t, cmp.Compare(&store.QueueItem{
-			IsReserved: false,
-			ExpireAt:   now.Add(1_000_000 * time.Minute),
-			Attempts:   100_000,
-			Reference:  "discord@dash.com",
-			Encoding:   "Lord of Chaos",
-			Kind:       "Captain Good guy",
-			Body:       []byte("Make sense? Oh, what fun is there in making sense?"),
+			IsReserved:      false,
+			ExpireAt:        now.Add(1_000_000 * time.Minute),
+			ReserveExpireAt: now.Add(2_000 * time.Minute),
+			Attempts:        100_000,
+			Reference:       "discord@dash.com",
+			Encoding:        "Lord of Chaos",
+			Kind:            "Captain Good guy",
+			Body:            []byte("Make sense? Oh, what fun is there in making sense?"),
 		}))
 		cpy := *cmp
 		cpy.IsReserved = true
 		assert.False(t, cmp.Compare(&cpy))
 		cpy = *cmp
 		cpy.ExpireAt = time.Now()
+		assert.False(t, cmp.Compare(&cpy))
+		cpy = *cmp
+		cpy.ReserveExpireAt = time.Now()
 		assert.False(t, cmp.Compare(&cpy))
 		cpy = *cmp
 		cpy.Attempts = 2
@@ -211,6 +222,92 @@ func testSuite(t *testing.T, newStore NewFunc) {
 				assert.Equal(t, items[i+1000].Kind, read[i].Kind)
 				assert.Equal(t, items[i+1000].Body, read[i].Body)
 			}
+
+			// TODO: Pivot through more pages and ensure the pivot allows us to page through items
+
+		})
+
+		t.Run("Reserve", func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			s, err := newStore()
+			defer func() { _ = s.Close(context.Background()) }()
+			require.NoError(t, err)
+
+			items := writeRandomItems(t, ctx, s, 10_000)
+			require.Len(t, items, 10_000)
+
+			// Reserve 10 items
+			var reserved []*store.QueueItem
+			expire := time.Now().Add(2_000 * time.Minute)
+
+			err = s.Reserve(ctx, &reserved, store.ReserveOptions{ReserveExpireAt: expire, Limit: 10})
+			require.NoError(t, err)
+			assert.Equal(t, 10, len(reserved))
+
+			// Ensure the items reserved are marked as reserved in the database
+			var read []*store.QueueItem
+			err = s.Read(ctx, &read, "", 10_000)
+			require.NoError(t, err)
+
+			for i := range reserved {
+				assert.Equal(t, read[i].ID, reserved[i].ID)
+				assert.Equal(t, true, read[i].IsReserved)
+				assert.True(t, expire.Equal(read[i].ReserveExpireAt))
+			}
+
+			// Reserve some more items
+			var secondReserve []*store.QueueItem
+			err = s.Reserve(ctx, &secondReserve, store.ReserveOptions{ReserveExpireAt: expire, Limit: 10})
+			require.NoError(t, err)
+
+			var combined []*store.QueueItem
+			combined = append(combined, reserved...)
+			combined = append(combined, secondReserve...)
+
+			err = s.Read(ctx, &read, "", 10_000)
+			require.NoError(t, err)
+			assert.NotEqual(t, reserved[0].ID, secondReserve[0].ID)
+
+			// Ensure all the items reserved are marked as reserved in the database
+			for i := range reserved {
+				assert.Equal(t, read[i].ID, reserved[i].ID)
+				assert.Equal(t, true, read[i].IsReserved)
+				assert.True(t, expire.Equal(read[i].ReserveExpireAt))
+			}
+		})
+
+		t.Run("Stats", func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			s, err := newStore()
+			defer func() { _ = s.Close(context.Background()) }()
+			require.NoError(t, err)
+
+			items := writeRandomItems(t, ctx, s, 10_000)
+			require.Len(t, items, 10_000)
+
+			// Reserve 100 items
+			var reserved []*store.QueueItem
+			expire := time.Now().Add(time.Minute)
+
+			err = s.Reserve(ctx, &reserved, store.ReserveOptions{ReserveExpireAt: expire, Limit: 100})
+			require.NoError(t, err)
+			assert.Equal(t, 100, len(reserved))
+
+			var stats store.Stats
+			require.NoError(t, s.Stats(ctx, &stats))
+
+			// Ensure stats are accurate
+			assert.Equal(t, 10_000, stats.Total)
+			assert.Equal(t, 100, stats.TotalReserved)
+			assert.True(t, stats.AverageReservedAge < time.Minute)
+			assert.NotEmpty(t, stats.AverageAge)
+
+			t.Logf("total: %d average-age: %s reserved %d average-reserved: %s",
+				stats.Total, stats.AverageAge, stats.TotalReserved, stats.AverageReservedAge)
 		})
 
 		t.Run("Delete", func(t *testing.T) {
@@ -247,11 +344,17 @@ func testSuite(t *testing.T, newStore NewFunc) {
 
 func writeRandomItems(t *testing.T, ctx context.Context, s store.QueueStorage, count int) []*store.QueueItem {
 	t.Helper()
+	expire := time.Now().Add(random.Duration(time.Minute))
 
 	var items []*store.QueueItem
 	for i := 0; i < count; i++ {
 		items = append(items, &store.QueueItem{
-			Body: []byte(fmt.Sprintf("message-%d", i)),
+			ExpireAt:  expire,
+			Attempts:  rand.Intn(10),
+			Reference: random.String("ref-", 10),
+			Encoding:  random.String("enc-", 10),
+			Kind:      random.String("kind-", 10),
+			Body:      []byte(fmt.Sprintf("message-%d", i)),
 		})
 	}
 	err := s.Write(ctx, items)

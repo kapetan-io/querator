@@ -131,7 +131,7 @@ message QueueCompleteRequest {
   string messageId = 4 [json_name = "message_id"];
 }
 
-message QueueItem {
+message QueueOption {
   // The name of the queue
   string name = 1;
 
@@ -159,7 +159,7 @@ message QueueItem {
 }
 
 message QueueListResponse {
-  repeated QueueItem items = 1;
+  repeated QueueOption items = 1;
 }
 
 message QueueDeleteRequest {

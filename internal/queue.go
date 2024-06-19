@@ -5,7 +5,7 @@ import (
 	"errors"
 	"github.com/duh-rpc/duh-go"
 	"github.com/kapetan-io/querator/internal/maps"
-	store "github.com/kapetan-io/querator/internal/store"
+	"github.com/kapetan-io/querator/store"
 	"github.com/kapetan-io/tackle/set"
 	"log/slog"
 	"sync/atomic"
@@ -25,6 +25,16 @@ const (
 
 type QueueOptions struct {
 	Logger duh.StandardLogger
+
+	// ReserveTimeout is how long the reservation is valid for.
+	ReserveTimeout time.Duration
+
+	// DeadQueue is the name of the dead letter queue for this queue.
+	DeadQueue string
+
+	// DeadLine is how long the message can wait in the queue regardless
+	// of attempts before it is moved to the dead letter queue.
+	DeadLine time.Duration
 }
 
 // Queue manages job is to evenly distribute and consume items from a single queue. Ensuring consumers and
@@ -34,8 +44,8 @@ type QueueOptions struct {
 type Queue struct {
 	reserveQueueCh atomic.Pointer[chan *ReserveRequest]
 	produceQueueCh atomic.Pointer[chan *ProduceRequest]
-	shutdownCh     chan struct{}
 	store          store.QueueStorage
+	shutdownCh     chan struct{}
 	opts           QueueOptions
 	name           string
 }
@@ -145,7 +155,7 @@ func (q *Queue) Reserve(req *ReserveRequest) error {
 // TODO(thrawn01) reference my blog post(s) about this.
 //
 // ### Queue all the things
-// The design goal here is that when this go routine is woken up by the go scheduler we do as much work as
+// The design goal here is that when this go routine is woken up by the go scheduler it can do as much work as
 // possible without giving the scheduler an excuse to steal away our CPU time. In other words,
 // the code path to get an item into or out of the queue should result in as little blocking or mutex lock
 // contention as possible. While we can't avoid R/W to the data store, we can have producers and consumers
@@ -153,28 +163,27 @@ func (q *Queue) Reserve(req *ReserveRequest) error {
 //
 // If a single queue becomes a bottle neck for throughput, users should create more queues.
 //
-// ### Write Optimization
-// We don't fetch batches of items from the data store and mark them as reserved in the same transaction because
-// we record the ID of the client who got the reservation in the data store. This results in a best cast scenario
-// where each item that is queued and processed can have up to 4 writes.
+// ### The Write Path
+// The best cast scenario is that each item will have 3 writes.
 // * 1st Write - Add item to the Queue
-// * 2nd Write - Fetch Reservable item from the queue
-// * 3rd Write - Write Reserved status and record the client
-// * 4th Write - Write the item in the queue as complete (delete the item)
+// * 2nd Write - Fetch Reservable items from the queue and mark them as Reserved
+// * 3rd Write - Write the item in the queue as complete (delete the item)
 //
-// However if in the future we discover writing the client id to the reserving an item is not useful, then we
-// could optimise by fetching reservable items and marking them as reserved in the same transaction.
-//
-// In addition, our single threaded synchronized design allows for several optimizations and probably
+// In addition, our single threaded synchronized design may allow for several optimizations and probably
 // some I'm not thinking of.
-// * Pre-fetching reservable items from the queue into memory
+// * Pre-fetching reservable items from the queue into memory, if we know items are in high demand.
 // * Reserving items as soon as they are produced (avoiding the second write)
 //
-// ### FUTURE
+// ### Consumer Groups
 // Allow users to combine multiple queues by creating a "Consumer Group". Then a client can
 // produce/reserve from the consumer group, and the consumer group round robins the request to each queue
 // in the group. Doing so destroys any ordering of queued items, but in some applications ordering might
 // not be important to the consumer, but Exactly Once Delivery is still desired.
+//
+// ### Audit Trail
+// If users need to track which client picked up the item, we should implement an optional audit log which
+// follows the progress of each item in the queue. In this way, the audit log shows which clients picked up the
+// item and for how long. This especially helpful in understanding how an item got into the dead letter queue.
 func (q *Queue) processQueues() {
 
 	// TODO: Refeactor this into a smaller loop with handler functions which pass around a state object with
@@ -275,8 +284,11 @@ func (q *Queue) processQueues() {
 			// Fetch all the reservable items in the store
 			ctx, cancel := context.WithTimeout(context.Background(), dataStoreTimeout)
 			var items []*store.QueueItem
-			if err := q.store.Reserve(ctx, &items, wrr.Total); err != nil {
-				q.opts.Logger.Warn("while calling QueueStorage.ListReservable()", "error", err)
+			if err := q.store.Reserve(ctx, &items, store.ReserveOptions{
+				ReserveExpireAt: time.Now().Add(q.opts.ReserveTimeout),
+				Limit:           wrr.Total,
+			}); err != nil {
+				q.opts.Logger.Warn("while calling QueueStorage.Reserve", "error", err)
 				continue
 			}
 			cancel()

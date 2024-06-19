@@ -1,4 +1,4 @@
-package internal
+package store
 
 import (
 	"context"
@@ -35,13 +35,12 @@ func NewBuntStore(opts BuntOptions) (*Bunt, error) {
 }
 
 func (s *Bunt) ListReservable(ctx context.Context, items *[]*QueueItem, limit int) error {
-	//TODO implement me
-	panic("implement me")
+	// TODO: Do this next
+	return nil
 }
 
 func (s *Bunt) Reserve(ctx context.Context, items *[]*QueueItem, limit int) error {
-	//TODO implement me
-	panic("implement me")
+	return nil
 }
 
 func (s *Bunt) Read(_ context.Context, items *[]*QueueItem, pivot string, limit int) error {
@@ -54,7 +53,6 @@ func (s *Bunt) Read(_ context.Context, items *[]*QueueItem, pivot string, limit 
 	var count int
 
 	err = tx.AscendGreaterOrEqual("", pivot, func(key, value string) bool {
-		//err = tx.Ascend("", func(key, value string) bool {
 		if count >= limit {
 			return false
 		}
@@ -82,28 +80,28 @@ func (s *Bunt) Read(_ context.Context, items *[]*QueueItem, pivot string, limit 
 	return nil
 }
 
-func (s *Bunt) Write(_ context.Context, items []*QueueItem) error {
+func (s *Bunt) Write(_ context.Context, messages []*QueueItem) error {
 	tx, err := s.db.Begin(true)
 	if err != nil {
 		return fmt.Errorf("during begin: %w", err)
 	}
 
-	for _, record := range items {
-		if record.ID == "" {
+	for _, msg := range messages {
+		if msg.ID == "" {
 			s.uid = s.uid.Next()
-			record.ID = s.uid.String()
+			msg.ID = s.uid.String()
 		}
 
 		// TODO: Use something more efficient like protobuf,
 		//  gob or https://github.com/capnproto/go-capnp
-		b, err := json.Marshal(record)
+		b, err := json.Marshal(msg)
 		if err != nil {
-			return fmt.Errorf("marshalling record: %w", err)
+			return fmt.Errorf("marshalling msg: %w", err)
 		}
 
-		_, _, err = tx.Set(record.ID, string(b), nil)
+		_, _, err = tx.Set(msg.ID, string(b), nil)
 		if err != nil {
-			return fmt.Errorf("while writing record: %w", err)
+			return fmt.Errorf("while writing msg: %w", err)
 		}
 	}
 
@@ -115,15 +113,25 @@ func (s *Bunt) Write(_ context.Context, items []*QueueItem) error {
 }
 
 func (s *Bunt) Delete(ctx context.Context, items []*QueueItem) error {
-	//TODO implement me
-	panic("implement me")
+	tx, err := s.db.Begin(true)
+	if err != nil {
+		return fmt.Errorf("during begin: %w", err)
+	}
+
+	for _, item := range items {
+		_, err := tx.Delete(item.ID)
+		if err != nil {
+			return fmt.Errorf("during delete: %w", err)
+		}
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		return fmt.Errorf("during commit: %w", err)
+	}
+	return nil
 }
 
 func (s *Bunt) Close(ctx context.Context) error {
 	return s.db.Close()
-}
-
-type idxItem struct {
-	ID  string
-	Key string
 }

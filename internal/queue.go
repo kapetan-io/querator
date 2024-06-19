@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/duh-rpc/duh-go"
 	"github.com/kapetan-io/querator/internal/maps"
+	store "github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/tackle/set"
 	"log/slog"
 	"sync/atomic"
@@ -34,7 +35,7 @@ type Queue struct {
 	reserveQueueCh atomic.Pointer[chan *ReserveRequest]
 	produceQueueCh atomic.Pointer[chan *ProduceRequest]
 	shutdownCh     chan struct{}
-	store          Store
+	store          store.QueueStorage
 	opts           QueueOptions
 	name           string
 }
@@ -43,7 +44,7 @@ func NewQueue(opts QueueOptions) *Queue {
 	set.Default(&opts.Logger, slog.Default())
 
 	q := &Queue{
-		// TODO: Init the Store
+		// TODO: Init the QueueStorage
 		shutdownCh: make(chan struct{}),
 	}
 
@@ -67,7 +68,7 @@ type ReserveRequest struct {
 	// The context of the requesting client
 	Context context.Context
 	// The result of the reservation
-	Items []*QueueItem
+	Items []*store.QueueItem
 
 	// Used by Reserve() to wait for this request to complete
 	readyCh chan struct{}
@@ -81,32 +82,12 @@ type ProduceRequest struct {
 	// The context of the requesting client
 	Context context.Context
 	// The items to produce
-	Items []*QueueItem
+	Items []*store.QueueItem
 
 	// Used by Produce() to wait for this request to complete
 	readyCh chan struct{}
 	// The error to be returned to the caller
 	err error
-}
-
-// QueueItem is the queue representation of an item in the queue. It is separate from the data store
-// representation and the protocol representation.
-type QueueItem struct {
-	// ID is unique to each item in the data store. The ID style is different depending on the data store
-	// implementation, and does not include the queue name.
-	ID string
-	// ClientID is the id of the client which reserved this item
-	ClientID string // TODO: Remove the ClientID
-	// IsReserved is true if the item has been reserved by a client
-	IsReserved bool
-	// ExpireAt is the time in the future the item will expire
-	ExpireAt time.Time
-
-	Attempts  int
-	Reference string
-	Encoding  string
-	Kind      string
-	Body      []byte
 }
 
 func (q *Queue) Produce(req *ReserveRequest) error {
@@ -251,14 +232,14 @@ func (q *Queue) processQueues() {
 			//  step, in addition, we can back fill reservable items into memory when processQueues() isn't
 			//  actively producing or consuming.
 
-			items := make([]*QueueItem, wpr.Total)
+			items := make([]*store.QueueItem, wpr.Total)
 			for _, req := range wpr.Requests {
 				items = append(items, req.Items...)
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), dataStoreTimeout)
 			if err := q.store.Write(ctx, items); err != nil {
-				q.opts.Logger.Warn("while calling Store.Write()", "error", err)
+				q.opts.Logger.Warn("while calling QueueStorage.Write()", "error", err)
 				cancel()
 				continue
 			}
@@ -293,9 +274,9 @@ func (q *Queue) processQueues() {
 
 			// Fetch all the reservable items in the store
 			ctx, cancel := context.WithTimeout(context.Background(), dataStoreTimeout)
-			var items []*QueueItem
+			var items []*store.QueueItem
 			if err := q.store.Reserve(ctx, &items, wrr.Total); err != nil {
-				q.opts.Logger.Warn("while calling Store.ListReservable()", "error", err)
+				q.opts.Logger.Warn("while calling QueueStorage.ListReservable()", "error", err)
 				continue
 			}
 			cancel()
@@ -306,7 +287,7 @@ func (q *Queue) processQueues() {
 			for _, item := range items {
 				req = wrr.Requests[keys[idx]]
 				req.Items = append(req.Items, item)
-				// Queue each item assigned to be updated in the database with the reservation
+				// QueueStorage each item assigned to be updated in the database with the reservation
 				item.ClientID = req.ClientID
 				if idx > len(keys)-1 {
 					idx = 0
@@ -317,7 +298,7 @@ func (q *Queue) processQueues() {
 			// Now mark the records as reserved
 			//ctx, cancel = context.WithTimeout(context.Background(), dataStoreTimeout)
 			//if err := q.store.Write(ctx, q.name, items); err != nil {
-			//	q.opts.Logger.Warn("while calling Store.MarkAsReserved()", "error", err)
+			//	q.opts.Logger.Warn("while calling QueueStorage.MarkAsReserved()", "error", err)
 			//	continue
 			//}
 			//cancel()

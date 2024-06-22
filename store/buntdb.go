@@ -52,9 +52,9 @@ func (s *Bunt) Stats(ctx context.Context, stats *Stats) error {
 		}
 
 		stats.Total++
-		stats.AverageAge += item.ExpireAt.Sub(now)
+		stats.AverageAge += item.ExpireDeadline.Sub(now)
 		if item.IsReserved {
-			stats.AverageReservedAge += item.ReserveExpireAt.Sub(now)
+			stats.AverageReservedAge += item.ReserveDeadline.Sub(now)
 			stats.TotalReserved++
 		}
 
@@ -102,7 +102,7 @@ func (s *Bunt) Reserve(_ context.Context, items *[]*QueueItem, opts ReserveOptio
 			return true
 		}
 
-		item.ReserveExpireAt = opts.ReserveExpireAt
+		item.ReserveDeadline = opts.ReserveExpireAt
 		item.IsReserved = true
 		*items = append(*items, item)
 		count++
@@ -133,6 +133,7 @@ func (s *Bunt) Reserve(_ context.Context, items *[]*QueueItem, opts ReserveOptio
 		}
 	}
 
+	// TODO: Rollback if the context has been cancelled
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("during writable commit: %w", err)
 	}
@@ -195,6 +196,7 @@ func (s *Bunt) Write(_ context.Context, items []*QueueItem) error {
 
 	}
 
+	// TODO: Rollback if the context has been cancelled
 	err = tx.Commit()
 	if err != nil {
 		return fmt.Errorf("during commit: %w", err)

@@ -95,6 +95,7 @@ func (d *Daemon) Client() (*querator.Client, error) {
 	}
 	return querator.NewClient(querator.WithNoTLS(d.Listener.Addr().String()))
 }
+
 func (d *Daemon) spawnHTTPS(ctx context.Context, mux http.Handler) error {
 	srv := &http.Server{
 		ErrorLog:  log.New(d.logAdaptor, "", 0),
@@ -108,16 +109,16 @@ func (d *Daemon) spawnHTTPS(ctx context.Context, mux http.Handler) error {
 	if err != nil {
 		return fmt.Errorf("while starting HTTPS listener: %w", err)
 	}
+	srv.Addr = d.Listener.Addr().String()
 
 	d.wg.Add(1)
 	go func() {
 		defer d.wg.Done()
-		d.conf.Logger.Info("HTTPS Listening ...", "address", d.conf.ListenAddress)
+		d.conf.Logger.Info("HTTPS Listening ...", "address", d.Listener.Addr().String())
 		if err := srv.ServeTLS(d.Listener, "", ""); err != nil {
 			if !errors.Is(err, http.ErrServerClosed) {
 				d.conf.Logger.Error("while starting TLS HTTP server", "error", err)
 			}
-
 		}
 	}()
 	if err := duh.WaitForConnect(ctx, d.Listener.Addr().String(), d.conf.ClientTLS()); err != nil {
@@ -140,11 +141,12 @@ func (d *Daemon) spawnHTTP(ctx context.Context, h http.Handler) error {
 	if err != nil {
 		return fmt.Errorf("while starting HTTP listener: %w", err)
 	}
+	srv.Addr = d.Listener.Addr().String()
 
 	d.wg.Add(1)
 	go func() {
 		defer d.wg.Done()
-		d.conf.Logger.Info("HTTP Listening ...", "address", d.conf.ListenAddress)
+		d.conf.Logger.Info("HTTP Listening ...", "address", d.Listener.Addr().String())
 		if err := srv.Serve(d.Listener); err != nil {
 			if !errors.Is(err, http.ErrServerClosed) {
 				d.conf.Logger.Error("while starting HTTP server", "error", err)

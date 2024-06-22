@@ -64,12 +64,12 @@ type QueueItem struct {
 	// IsReserved is true if the item has been reserved by a client
 	IsReserved bool
 
-	// ReserveExpireAt is the time in the future when the reservation is
+	// ReserveDeadline is the time in the future when the reservation is
 	// expired and can be reserved by another consumer
-	ReserveExpireAt time.Time
+	ReserveDeadline time.Time
 
-	// ExpireAt is the time in the future the item will expire
-	ExpireAt time.Time
+	// ExpireDeadline is the time in the future the item will expire
+	ExpireDeadline time.Time
 
 	// Attempts is how many attempts this item has seen
 	Attempts int
@@ -99,10 +99,10 @@ func (l *QueueItem) Compare(r *QueueItem) bool {
 	if l.IsReserved != r.IsReserved {
 		return false
 	}
-	if l.ExpireAt.Compare(r.ExpireAt) != 0 {
+	if l.ExpireDeadline.Compare(r.ExpireDeadline) != 0 {
 		return false
 	}
-	if l.ReserveExpireAt.Compare(r.ReserveExpireAt) != 0 {
+	if l.ReserveDeadline.Compare(r.ReserveDeadline) != 0 {
 		return false
 	}
 	if l.Attempts != r.Attempts {

@@ -35,16 +35,21 @@ message QueueProduceRequest {
   // Examples: 'account-0001', 'john.smith'
   string reference = 4;
   // The maximum number of times this message can be deferred by a consumer before it is
-  // placed in the dead letter queue. This includes cases where the 'deadline' was exceeded
+  // placed in the dead letter queue. This includes cases where the 'QueueOptions.Deadline' was exceeded
   // and the message was retried.
   int32  maxAttempts = 5 [json_name = "max_attempts"];
   // How long the message can wait in the queue regardless of attempts before it is moved
-  // to the dead letter queue.
-  // Example: '24h', '60m', '10s'
-  string deadline = 6;
+  // to the dead letter queue. Example: '24h', '60m', '10s'
+  string queueTimeout = 6 [json_name = "produce_timeout"]; // TODO: OpenAPI
+  // How long the client should wait until this produce request accepted into the queue. If this
+  // duration elapses and the server hasn't responded the client should assume the item was not
+  // produced. If the server detects a client has been waiting for to long, it will cancel the
+  // produce request and return an error to the client.
+  // Example: '1m', '20s'. Default timeout is '1m' and the maximum timeout is 15 minutes.
+  string requestTimeout = 7 [json_name = "request_timeout"]; // TODO: OpenAPI
   //  The body of the message, it's encoding is specified by the 'encoding' field.
   // Example: '{"key": "value"}'
-  bytes  body = 7;
+  bytes  body = 8;
 }
 
 message QueueProduceResponse {
@@ -57,7 +62,7 @@ message QueueProduceResponse {
   // FUTURE: Perhaps if the 'reference' field is empty we generate a uid which can then
   //  be used to query the dead letter queue if our message ends up there.
   // Examples: 'queue1-0ujsswThIGTUYm2K8FjOOfXtY1K', 'queue2-0001'
-  string messageId = 1 [json_name = "message_id"];
+  string messageId = 1 [json_name = "message_id"]; // TODO: OpenAPI
 }
 
 message QueueReserveRequest {
@@ -68,8 +73,16 @@ message QueueReserveRequest {
   // The number of messages requested from the queue.
   int32 batchSize = 2 [json_name = "batch_size"];
 
+  // A user supplied unique string which identifies the client making this request. This
+  // must be unique for each client reserving items. Multiple clients with the same
+  // id cannot reserve from the same queue. If you need more throughput, increase the batch
+  // size instead.
+  string clientId = 3 [json_name = "client_id"]; // TODO: OpenAPI
+
   // The duration the client expects to wait for a message to consume before timing out.
-  string waitTimeout = 3 [json_name = "wait_timeout"];
+  // Maximum timeout duration is 15 minutes
+  // Example: '5m', '10s'
+  string requestTimeout = 4 [json_name = "wait_timeout"]; // TODO: OpenAPI
 }
 
 message QueueReserveItem {
@@ -87,7 +100,7 @@ message QueueReserveItem {
 
   // A unique ID which is in the form <queue_name>-<unique_id>.
   // Example: 'queue1-0ujsswThIGTUYm2K8FjOOfXtY1K'
-  string messageId = 4 [json_name = "message_id"];
+  string messageId = 4 [json_name = "message_id"]; // TODO: OpenAPI
 
   // The number of times this message has been deferred or reservation timed out during
   // processing by a consumer.
@@ -98,7 +111,7 @@ message QueueReserveItem {
   //
   // The consumer can use this date to decide if it should finalize it's work
   // if the timeout date has expired.
-  google.protobuf.Timestamp reserveTimeout = 6 [json_name = "reserve_timeout"];
+  google.protobuf.Timestamp reserveDeadline = 6 [json_name = "reserve_deadline"]; // TODO: OpenAPI
 
   //  The body of the message, it's encoding is specified by the 'encoding' field.
   // Example: '{"key": "value"}'
@@ -117,7 +130,7 @@ message QueueDeferRequest {
   // The date after which the message will be added to the queue specified.
   // The date can be empty, the current time or a past date/time, in which
   // case the message will be immediately added to the queue.
-  google.protobuf.Timestamp offerAt = 2 [json_name = "offer_at"];
+  google.protobuf.Timestamp offerAt = 2 [json_name = "offer_at"]; // TODO: OpenAPI
 
   // Indicates the message is dead, will not be retried regardless of the number of attempts
   // remaining. If set to true the defer will place the message in the dead letter queue for
@@ -131,7 +144,7 @@ message QueueCompleteRequest {
   string messageId = 4 [json_name = "message_id"];
 }
 
-message QueueOption {
+message QueueOptions {
   // The name of the queue
   string name = 1;
 
@@ -149,17 +162,17 @@ message QueueOption {
   // Examples: "jake@statefarm.com", "stapler@office-space.com", "account-0001"
   string reference = 5;
 
-  // The default reservation timeout for this queue
+  // The reservation timeout for this queue.
   // Example: '60m', '24h', '10s'
   string reserveTimeout = 6  [json_name = "reserve_timeout"];
 
   // How long the message can wait in the queue regardless of attempts before it is moved
   // to the dead letter queue.
-  string deadline = 7;
+  string deadTimeout = 7 [json_name = "dead_timeout"];
 }
 
 message QueueListResponse {
-  repeated QueueOption items = 1;
+  repeated QueueOptions items = 1;
 }
 
 message QueueDeleteRequest {

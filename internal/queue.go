@@ -3,6 +3,7 @@ package internal
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/duh-rpc/duh-go"
 	"github.com/kapetan-io/querator/internal/maps"
 	"github.com/kapetan-io/querator/store"
@@ -13,17 +14,22 @@ import (
 )
 
 var (
-	ErrDuplicateClientID     = errors.New("duplicate client id")
-	ErrReserveRequestExpired = errors.New("reserve request expired")
+	ErrDuplicateClientID = errors.New("duplicate client id")
+	ErrRequestTimeout    = errors.New("request timeout")
 )
 
 const (
 	queueChSize = 20_000
-	// TODO: This should be based on the reservation timeout set on the queue.
-	dataStoreTimeout = time.Minute
+	// TODO: This should be based on the minimum request timeout provided by the client
+	dataStoreTimeout  = time.Minute
+	maxRequestTimeout = 15 * time.Minute
 )
 
 type QueueOptions struct {
+	// The name of the queue
+	Name string
+
+	// If defined, is the logger used by the queue
 	Logger duh.StandardLogger
 
 	// ReserveTimeout is how long the reservation is valid for.
@@ -35,6 +41,9 @@ type QueueOptions struct {
 	// DeadLine is how long the message can wait in the queue regardless
 	// of attempts before it is moved to the dead letter queue.
 	DeadLine time.Duration
+
+	// QueueStorage is the store interface used to persist items for this specific queue
+	QueueStorage store.QueueStorage
 }
 
 // Queue manages job is to evenly distribute and consume items from a single queue. Ensuring consumers and
@@ -44,17 +53,17 @@ type QueueOptions struct {
 type Queue struct {
 	reserveQueueCh atomic.Pointer[chan *ReserveRequest]
 	produceQueueCh atomic.Pointer[chan *ProduceRequest]
-	store          store.QueueStorage
 	shutdownCh     chan struct{}
 	opts           QueueOptions
-	name           string
 }
 
-func NewQueue(opts QueueOptions) *Queue {
+func NewQueue(opts QueueOptions) (*Queue, error) {
 	set.Default(&opts.Logger, slog.Default())
+	if opts.QueueStorage == nil {
+		return nil, errors.New("QueueOptions.QueueStorage cannot be nil")
+	}
 
 	q := &Queue{
-		// TODO: Init the QueueStorage
 		shutdownCh: make(chan struct{}),
 	}
 
@@ -62,7 +71,7 @@ func NewQueue(opts QueueOptions) *Queue {
 	ch := make(chan *ReserveRequest, queueChSize)
 	q.reserveQueueCh.Store(&ch)
 
-	return q
+	return q, nil
 }
 
 // TODO(thrawn01): Consider creating a pool of ReserveRequest and QueueItem to avoid GC
@@ -70,9 +79,9 @@ func NewQueue(opts QueueOptions) *Queue {
 type ReserveRequest struct {
 	// The number of messages requested from the queue.
 	BatchSize int32
-	// A time in the future when the caller expects Reserve() to return
-	// if no items are available to be reserved.
-	TimeoutDeadline time.Time
+	// How long the caller expects Reserve() to block before returning
+	// if no items are available to be reserved. Max duration is 5 minutes.
+	RequestTimeout time.Duration
 	// The id of the client
 	ClientID string
 	// The context of the requesting client
@@ -80,6 +89,9 @@ type ReserveRequest struct {
 	// The result of the reservation
 	Items []*store.QueueItem
 
+	// Is calculated from RequestTimeout and specifies a time in the future when this request
+	// should be cancelled.
+	requestDeadline time.Time
 	// Used by Reserve() to wait for this request to complete
 	readyCh chan struct{}
 	// The error to be returned to the caller
@@ -89,21 +101,45 @@ type ReserveRequest struct {
 type ProduceRequest struct {
 	// The id of the client
 	ClientID string
+	// How long the caller expects Produce() to block before returning
+	// if no items are available to be reserved. Max duration is 5 minutes.
+	RequestTimeout time.Duration
 	// The context of the requesting client
 	Context context.Context
 	// The items to produce
 	Items []*store.QueueItem
 
+	// Is calculated from RequestTimeout and specifies a time in the future when this request
+	// should be cancelled.
+	requestDeadline time.Time
 	// Used by Produce() to wait for this request to complete
 	readyCh chan struct{}
 	// The error to be returned to the caller
 	err error
 }
 
-func (q *Queue) Produce(req *ReserveRequest) error {
+// Produce is called by clients who wish to produce an item to the queue. This
+// call will block until the item has been written to the queue or until the request
+// is cancelled via the passed context or the RequestTimeout is reached.
+//
+// ### Context
+func (q *Queue) Produce(req *ProduceRequest) error {
 	req.readyCh = make(chan struct{})
 
-	*q.reserveQueueCh.Load() <- req
+	if req.ClientID == "" {
+		return fmt.Errorf("ClientID is invalid; cannot be empty")
+	}
+
+	if req.RequestTimeout > maxRequestTimeout {
+		return fmt.Errorf("RequestTimeout '%s' is invalid; maximum timeout is '15m'", req.RequestTimeout.String())
+	}
+
+	if req.RequestTimeout == time.Duration(0) {
+		req.RequestTimeout = maxRequestTimeout
+	}
+	req.requestDeadline = time.Now().Add(req.RequestTimeout)
+
+	*q.produceQueueCh.Load() <- req
 
 	// Wait until the request has been processed
 	select {
@@ -113,16 +149,16 @@ func (q *Queue) Produce(req *ReserveRequest) error {
 }
 
 // Reserve is called by clients wanting to reserve a new item from the queue. This call
-// will block until the request is cancelled via the passed context or the TimeoutDeadline
+// will block until the request is cancelled via the passed context or the RequestTimeout
 // is reached.
 //
 // ### Context
-// DO NOT use with context.WithTimeout() or context.WithDeadline(). Reserve() will block
-// until the duration provided via ReserveRequest.WaitTimeout has been reached. You may cancel
-// the context if the client has gone away. In this case Queue will abort the reservation
+// IT IS NOT recommend to use context.WithTimeout() or context.WithDeadline() with Reserve() since
+// Reserve() will block until the duration provided via ReserveRequest.RequestTimeout has been reached.
+// You may cancel the context if the client has gone away. In this case Queue will abort the reservation
 // request. If the context is cancelled after reservation has been written to the data store
-// then those requests will be lost until they can be offered to another client after the
-// `reserve_timeout` has been reached.
+// then those reservations will remain reserved until they can be offered to another client after the
+// ReserveDeadline has been reached.
 //
 // ### Unique Requests
 // ClientID must NOT be empty and each request must have a unique id, or it will
@@ -134,6 +170,19 @@ func (q *Queue) Produce(req *ReserveRequest) error {
 func (q *Queue) Reserve(req *ReserveRequest) error {
 	req.readyCh = make(chan struct{})
 
+	if req.ClientID == "" {
+		return fmt.Errorf("ClientID is invalid; cannot be empty")
+	}
+
+	if req.RequestTimeout > maxRequestTimeout {
+		return fmt.Errorf("RequestTimeout '%s' is invalid; maximum timeout is '15m'", req.RequestTimeout.String())
+	}
+
+	if req.RequestTimeout == time.Duration(0) {
+		req.RequestTimeout = maxRequestTimeout
+	}
+
+	req.requestDeadline = time.Now().Add(req.RequestTimeout)
 	*q.reserveQueueCh.Load() <- req
 
 	// Wait until the request has been processed
@@ -174,19 +223,20 @@ func (q *Queue) Reserve(req *ReserveRequest) error {
 // * Pre-fetching reservable items from the queue into memory, if we know items are in high demand.
 // * Reserving items as soon as they are produced (avoiding the second write)
 //
-// ### Consumer Groups
-// Allow users to combine multiple queues by creating a "Consumer Group". Then a client can
-// produce/reserve from the consumer group, and the consumer group round robins the request to each queue
+// ### Queue Groups
+// Allow users to combine multiple queues by creating a "Queue Group". Then a client can
+// produce/reserve from the queue group, and the queue group round robins the request to each queue
 // in the group. Doing so destroys any ordering of queued items, but in some applications ordering might
-// not be important to the consumer, but Exactly Once Delivery is still desired.
+// not be important to the consumer, but Almost Exactly Once Delivery is still desired.
 //
 // ### Audit Trail
 // If users need to track which client picked up the item, we should implement an optional audit log which
 // follows the progress of each item in the queue. In this way, the audit log shows which clients picked up the
 // item and for how long. This especially helpful in understanding how an item got into the dead letter queue.
+// Implementing this adds an additional write burden on our disk, as such it should be optional.
 func (q *Queue) processQueues() {
 
-	// TODO: Refeactor this into a smaller loop with handler functions which pass around a state object with
+	// TODO: Refactor this into a smaller loop with handler functions which pass around a state object with
 	//  State.AddToWPR() and State.AddToWRR() etc....
 	wrr := waitingReserveRequests{
 		Requests: make(map[string]*ReserveRequest, 5_000),
@@ -243,11 +293,17 @@ func (q *Queue) processQueues() {
 
 			items := make([]*store.QueueItem, wpr.Total)
 			for _, req := range wpr.Requests {
+				// Cancel produce requests that have timed out
+				if time.Now().After(req.requestDeadline) {
+					req.err = ErrRequestTimeout
+					close(req.readyCh)
+				}
 				items = append(items, req.Items...)
 			}
 
+			// TODO: Timeout should based on the req.RequestTimeout
 			ctx, cancel := context.WithTimeout(context.Background(), dataStoreTimeout)
-			if err := q.store.Write(ctx, items); err != nil {
+			if err := q.opts.QueueStorage.Write(ctx, items); err != nil {
 				q.opts.Logger.Warn("while calling QueueStorage.Write()", "error", err)
 				cancel()
 				continue
@@ -284,7 +340,7 @@ func (q *Queue) processQueues() {
 			// Fetch all the reservable items in the store
 			ctx, cancel := context.WithTimeout(context.Background(), dataStoreTimeout)
 			var items []*store.QueueItem
-			if err := q.store.Reserve(ctx, &items, store.ReserveOptions{
+			if err := q.opts.QueueStorage.Reserve(ctx, &items, store.ReserveOptions{
 				ReserveExpireAt: time.Now().Add(q.opts.ReserveTimeout),
 				Limit:           wrr.Total,
 			}); err != nil {
@@ -304,16 +360,7 @@ func (q *Queue) processQueues() {
 				if idx > len(keys)-1 {
 					idx = 0
 				}
-				// TODO: Update the ExpiredAt and IsReserved field
 			}
-
-			// Now mark the records as reserved
-			//ctx, cancel = context.WithTimeout(context.Background(), dataStoreTimeout)
-			//if err := q.store.Write(ctx, q.name, items); err != nil {
-			//	q.opts.Logger.Warn("while calling QueueStorage.MarkAsReserved()", "error", err)
-			//	continue
-			//}
-			//cancel()
 
 			// Inform clients they have reservations ready
 			for _, req := range wrr.Requests {
@@ -325,6 +372,7 @@ func (q *Queue) processQueues() {
 			}
 
 			// Set a timer for remaining open reserve requests
+			// Or when next reservation will expire
 			next := findNextTimeout(&wrr)
 			if next.Nanoseconds() != 0 {
 				timerCh = time.After(next)
@@ -350,9 +398,9 @@ func findNextTimeout(r *waitingReserveRequests) time.Duration {
 
 	for _, req := range r.Requests {
 		// If request has already expired
-		if req.TimeoutDeadline.After(time.Now()) {
+		if req.requestDeadline.After(time.Now()) {
 			// Inform our waiting client
-			req.err = ErrReserveRequestExpired
+			req.err = ErrRequestTimeout
 			close(req.readyCh)
 			r.Total -= int(req.BatchSize)
 			delete(r.Requests, req.ClientID)
@@ -375,7 +423,7 @@ func findNextTimeout(r *waitingReserveRequests) time.Duration {
 		}
 
 		// Will this happen soon?
-		if req.TimeoutDeadline.Before(soon.TimeoutDeadline) {
+		if req.requestDeadline.Before(soon.requestDeadline) {
 			soon = req
 		}
 	}
@@ -386,7 +434,7 @@ func findNextTimeout(r *waitingReserveRequests) time.Duration {
 	}
 
 	// How soon is it? =)
-	return soon.TimeoutDeadline.Sub(time.Now())
+	return soon.requestDeadline.Sub(time.Now())
 }
 
 type waitingReserveRequests struct {

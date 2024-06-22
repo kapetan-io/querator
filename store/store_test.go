@@ -52,8 +52,8 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		var items []*store.QueueItem
 		items = append(items, &store.QueueItem{
 			IsReserved:      true,
-			ExpireAt:        now.Add(100_000 * time.Minute),
-			ReserveExpireAt: now.Add(3_000 * time.Minute),
+			ExpireDeadline:  now.Add(100_000 * time.Minute),
+			ReserveDeadline: now.Add(3_000 * time.Minute),
 			Attempts:        5,
 			Reference:       "rainbow@dash.com",
 			Encoding:        "rainbows",
@@ -63,8 +63,8 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		})
 		items = append(items, &store.QueueItem{
 			IsReserved:      false,
-			ExpireAt:        now.Add(1_000_000 * time.Minute),
-			ReserveExpireAt: now.Add(3_000 * time.Minute),
+			ExpireDeadline:  now.Add(1_000_000 * time.Minute),
+			ReserveDeadline: now.Add(3_000 * time.Minute),
 			Attempts:        10_000,
 			Reference:       "rarity@dash.com",
 			Encoding:        "beauty",
@@ -86,8 +86,8 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		// Ensure all the fields are indeed the same
 		assert.Equal(t, reads[0].ID, items[0].ID)
 		assert.Equal(t, reads[0].IsReserved, items[0].IsReserved)
-		assert.Equal(t, 0, reads[0].ExpireAt.Compare(items[0].ExpireAt))
-		assert.Equal(t, 0, reads[0].ReserveExpireAt.Compare(items[0].ReserveExpireAt))
+		assert.Equal(t, 0, reads[0].ExpireDeadline.Compare(items[0].ExpireDeadline))
+		assert.Equal(t, 0, reads[0].ReserveDeadline.Compare(items[0].ReserveDeadline))
 		assert.Equal(t, reads[0].Attempts, items[0].Attempts)
 		assert.Equal(t, reads[0].Reference, items[0].Reference)
 		assert.Equal(t, reads[0].Encoding, items[0].Encoding)
@@ -96,8 +96,8 @@ func testSuite(t *testing.T, newStore NewFunc) {
 
 		assert.Equal(t, reads[1].ID, items[1].ID)
 		assert.Equal(t, reads[1].IsReserved, items[1].IsReserved)
-		assert.Equal(t, 0, reads[1].ExpireAt.Compare(items[1].ExpireAt))
-		assert.Equal(t, 0, reads[1].ReserveExpireAt.Compare(items[1].ReserveExpireAt))
+		assert.Equal(t, 0, reads[1].ExpireDeadline.Compare(items[1].ExpireDeadline))
+		assert.Equal(t, 0, reads[1].ReserveDeadline.Compare(items[1].ReserveDeadline))
 		assert.Equal(t, reads[1].Attempts, items[1].Attempts)
 		assert.Equal(t, reads[1].Reference, items[1].Reference)
 		assert.Equal(t, reads[1].Encoding, items[1].Encoding)
@@ -106,8 +106,8 @@ func testSuite(t *testing.T, newStore NewFunc) {
 
 		cmp := &store.QueueItem{
 			IsReserved:      false,
-			ExpireAt:        now.Add(1_000_000 * time.Minute),
-			ReserveExpireAt: now.Add(2_000 * time.Minute),
+			ExpireDeadline:  now.Add(1_000_000 * time.Minute),
+			ReserveDeadline: now.Add(2_000 * time.Minute),
 			Attempts:        100_000,
 			Reference:       "discord@dash.com",
 			Encoding:        "Lord of Chaos",
@@ -117,8 +117,8 @@ func testSuite(t *testing.T, newStore NewFunc) {
 
 		assert.True(t, cmp.Compare(&store.QueueItem{
 			IsReserved:      false,
-			ExpireAt:        now.Add(1_000_000 * time.Minute),
-			ReserveExpireAt: now.Add(2_000 * time.Minute),
+			ExpireDeadline:  now.Add(1_000_000 * time.Minute),
+			ReserveDeadline: now.Add(2_000 * time.Minute),
 			Attempts:        100_000,
 			Reference:       "discord@dash.com",
 			Encoding:        "Lord of Chaos",
@@ -129,10 +129,10 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		cpy.IsReserved = true
 		assert.False(t, cmp.Compare(&cpy))
 		cpy = *cmp
-		cpy.ExpireAt = time.Now()
+		cpy.ExpireDeadline = time.Now()
 		assert.False(t, cmp.Compare(&cpy))
 		cpy = *cmp
-		cpy.ReserveExpireAt = time.Now()
+		cpy.ReserveDeadline = time.Now()
 		assert.False(t, cmp.Compare(&cpy))
 		cpy = *cmp
 		cpy.Attempts = 2
@@ -254,7 +254,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 			for i := range reserved {
 				assert.Equal(t, read[i].ID, reserved[i].ID)
 				assert.Equal(t, true, read[i].IsReserved)
-				assert.True(t, expire.Equal(read[i].ReserveExpireAt))
+				assert.True(t, expire.Equal(read[i].ReserveDeadline))
 			}
 
 			// Reserve some more items
@@ -274,7 +274,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 			for i := range reserved {
 				assert.Equal(t, read[i].ID, reserved[i].ID)
 				assert.Equal(t, true, read[i].IsReserved)
-				assert.True(t, expire.Equal(read[i].ReserveExpireAt))
+				assert.True(t, expire.Equal(read[i].ReserveDeadline))
 			}
 		})
 
@@ -349,12 +349,12 @@ func writeRandomItems(t *testing.T, ctx context.Context, s store.QueueStorage, c
 	var items []*store.QueueItem
 	for i := 0; i < count; i++ {
 		items = append(items, &store.QueueItem{
-			ExpireAt:  expire,
-			Attempts:  rand.Intn(10),
-			Reference: random.String("ref-", 10),
-			Encoding:  random.String("enc-", 10),
-			Kind:      random.String("kind-", 10),
-			Body:      []byte(fmt.Sprintf("message-%d", i)),
+			ExpireDeadline: expire,
+			Attempts:       rand.Intn(10),
+			Reference:      random.String("ref-", 10),
+			Encoding:       random.String("enc-", 10),
+			Kind:           random.String("kind-", 10),
+			Body:           []byte(fmt.Sprintf("message-%d", i)),
 		})
 	}
 	err := s.Write(ctx, items)

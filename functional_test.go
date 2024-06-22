@@ -21,28 +21,44 @@ func TestProduceAndConsume(t *testing.T) {
 	defer func() { _ = d.Shutdown(context.Background()) }()
 	c := d.MustClient()
 
+	ref := random.String("ref-", 10)
+	enc := random.String("enc-", 10)
+	kind := random.String("kind-", 10)
+	body := []byte("I didn't learn a thing. I was right all along")
 	// Produce a single message
 	var produce pb.QueueProduceResponse
 	require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
-		QueueName:   "test-queue",
-		Reference:   random.String("ref-", 10),
-		Encoding:    random.String("enc-", 10),
-		Kind:        random.String("kind-", 10),
-		Deadline:    "1m",
-		MaxAttempts: 10,
-		Body:        []byte("I didn't learn a thing. I was right all along"),
+		QueueName:      "test-queue",
+		Reference:      ref,
+		Encoding:       enc,
+		Kind:           kind,
+		DeadTimeout:    "24h",
+		RequestTimeout: "1m",
+		MaxAttempts:    10,
+		Body:           body,
 	}, &produce))
-	assert.Equal(t, "queue-p-12048123098", produce.MessageId)
-
-	// TODO: Finish this
+	assert.Equal(t, "queue-p-12048123098", produce.ItemId)
 
 	// Reserve a single message
 	var reserve pb.QueueReserveResponse
 	require.NoError(t, c.QueueReserve(ctx, &pb.QueueReserveRequest{
 		QueueName: "test-queue",
 		BatchSize: 1,
-	}, &produce))
+	}, &reserve))
+
+	// Ensure we got the item we produced
+	assert.Equal(t, 1, len(reserve.Items))
+	item := reserve.Items[0]
+	assert.Equal(t, ref, item.Reference)
+	assert.Equal(t, enc, item.Encoding)
+	assert.Equal(t, kind, item.Kind)
+	assert.Equal(t, 0, item.Attempts)
+	assert.Equal(t, body, item.Body)
+
+	// TODO: Complete the queue item
+	// TODO: Ensure it's gone from the database
 
 }
 
+// TODO: Defer
 // TODO: Implement clock style thingy so we can freeze time and advance time in order to test Deadlines and such.

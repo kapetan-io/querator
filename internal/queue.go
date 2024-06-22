@@ -38,7 +38,7 @@ type QueueOptions struct {
 	// DeadQueue is the name of the dead letter queue for this queue.
 	DeadQueue string
 
-	// DeadLine is how long the message can wait in the queue regardless
+	// DeadLine is how long the item can wait in the queue regardless
 	// of attempts before it is moved to the dead letter queue.
 	DeadLine time.Duration
 
@@ -77,7 +77,7 @@ func NewQueue(opts QueueOptions) (*Queue, error) {
 // TODO(thrawn01): Consider creating a pool of ReserveRequest and QueueItem to avoid GC
 
 type ReserveRequest struct {
-	// The number of messages requested from the queue.
+	// The number of items requested from the queue.
 	BatchSize int32
 	// How long the caller expects Reserve() to block before returning
 	// if no items are available to be reserved. Max duration is 5 minutes.
@@ -282,12 +282,12 @@ func (q *Queue) processQueues() {
 			}
 			produceQueueCh = nil
 
-			// FUTURE: Inspect the Waiting Reserve Requests, and attempt to assign produced messages with
+			// FUTURE: Inspect the Waiting Reserve Requests, and attempt to assign produced items with
 			//  waiting reserve requests if our queue is caught up.
 			//  (Check for cancel or expire reserve requests first)
 
-			// FUTURE: Buffer the produced messages at the top of the queue into memory, so we don't need
-			//  to query them from the database when we reserve messages later. Doing so avoids the ListReservable()
+			// FUTURE: Buffer the produced items at the top of the queue into memory, so we don't need
+			//  to query them from the database when we reserve items later. Doing so avoids the ListReservable()
 			//  step, in addition, we can back fill reservable items into memory when processQueues() isn't
 			//  actively producing or consuming.
 

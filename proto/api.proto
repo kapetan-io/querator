@@ -40,7 +40,7 @@ message QueueProduceRequest {
   int32  maxAttempts = 5 [json_name = "max_attempts"];
   // How long the message can wait in the queue regardless of attempts before it is moved
   // to the dead letter queue. Example: '24h', '60m', '10s'
-  string queueTimeout = 6 [json_name = "produce_timeout"]; // TODO: OpenAPI
+  string deadTimeout = 6 [json_name = "dead_timeout"]; // TODO: OpenAPI
   // How long the client should wait until this produce request accepted into the queue. If this
   // duration elapses and the server hasn't responded the client should assume the item was not
   // produced. If the server detects a client has been waiting for to long, it will cancel the
@@ -53,16 +53,16 @@ message QueueProduceRequest {
 }
 
 message QueueProduceResponse {
-  // A unique ID which is in the form <queue_name>-<unique_id>. The message id changes
-  // everytime the item is deferred. If you need a reliable method for tracking a message
-  // through all the stages of it's life time, then you can use the reference field or
+  // A unique ID which is in the form <queue_name>-<unique_id>. The item id changes
+  // everytime the item is deferred. If you need a reliable method for tracking an item
+  // through all the stages of it's life cycle, then you can use the reference field or
   // encode this information in the body of the queue item. The unique_id is dependent
   // upon the data store implementation used to store the items in the queue.
   //
   // FUTURE: Perhaps if the 'reference' field is empty we generate a uid which can then
-  //  be used to query the dead letter queue if our message ends up there.
+  //  be used to query the dead letter queue if our item ends up there.
   // Examples: 'queue1-0ujsswThIGTUYm2K8FjOOfXtY1K', 'queue2-0001'
-  string messageId = 1 [json_name = "message_id"]; // TODO: OpenAPI
+  string ItemId = 1 [json_name = "item_id"]; // TODO: OpenAPI
 }
 
 message QueueReserveRequest {
@@ -70,7 +70,7 @@ message QueueReserveRequest {
   // Example: 'http-send'
   string queueName = 1  [json_name = "queue_name"];
 
-  // The number of messages requested from the queue.
+  // The number of queue items requested from the queue.
   int32 batchSize = 2 [json_name = "batch_size"];
 
   // A user supplied unique string which identifies the client making this request. This
@@ -79,7 +79,7 @@ message QueueReserveRequest {
   // size instead.
   string clientId = 3 [json_name = "client_id"]; // TODO: OpenAPI
 
-  // The duration the client expects to wait for a message to consume before timing out.
+  // The duration the client expects to wait for a queue item to be reserved before timing out.
   // Maximum timeout duration is 15 minutes
   // Example: '5m', '10s'
   string requestTimeout = 4 [json_name = "wait_timeout"]; // TODO: OpenAPI
@@ -94,26 +94,26 @@ message QueueReserveItem {
   string kind = 2;
 
   // This is a user specified field that can be used by the consumer to determine handling
-  // of the message without needing to unmarshall the body.
+  // of the queue item without needing to unmarshall the body.
   // Examples: 'account-0001', 'john.smith', 'id-hIGTUYm2'
   string reference = 3;
 
   // A unique ID which is in the form <queue_name>-<unique_id>.
   // Example: 'queue1-0ujsswThIGTUYm2K8FjOOfXtY1K'
-  string messageId = 4 [json_name = "message_id"]; // TODO: OpenAPI
+  string itemId = 4 [json_name = "item_id"]; // TODO: OpenAPI
 
-  // The number of times this message has been deferred or reservation timed out during
+  // The number of times this item has been deferred or reservation timed out during
   // processing by a consumer.
   int32  attempts = 5;
 
-  // The date time that Querator will offer up this message to another consumer
-  // If the consumer reserving this message has not marked it complete.
+  // The date time that Querator will offer up this item to another consumer
+  // If the consumer reserving this item has not marked it complete.
   //
   // The consumer can use this date to decide if it should finalize it's work
   // if the timeout date has expired.
   google.protobuf.Timestamp reserveDeadline = 6 [json_name = "reserve_deadline"]; // TODO: OpenAPI
 
-  //  The body of the message, it's encoding is specified by the 'encoding' field.
+  //  The body of the item, it's encoding is specified by the 'encoding' field.
   // Example: '{"key": "value"}'
   bytes  body = 7;
 }
@@ -125,15 +125,15 @@ message QueueReserveResponse {
 message QueueDeferRequest {
   // A unique ID which is in the form <queue_name>-<unique_id>.
   // Example: 'queue1-0ujsswThIGTUYm2K8FjOOfXtY1K'
-  string messageId = 4 [json_name = "message_id"];
+  string itemId = 4 [json_name = "item_id"];
 
-  // The date after which the message will be added to the queue specified.
+  // The date after which the item will be added to the queue specified.
   // The date can be empty, the current time or a past date/time, in which
-  // case the message will be immediately added to the queue.
+  // case the item will be immediately added to the queue.
   google.protobuf.Timestamp offerAt = 2 [json_name = "offer_at"]; // TODO: OpenAPI
 
-  // Indicates the message is dead, will not be retried regardless of the number of attempts
-  // remaining. If set to true the defer will place the message in the dead letter queue for
+  // Indicates the item is dead, will not be retried regardless of the number of attempts
+  // remaining. If set to true the defer will place the item in the dead letter queue for
   // the specified queue.
   bool dead = 3;
 }
@@ -141,7 +141,7 @@ message QueueDeferRequest {
 message QueueCompleteRequest {
   // A unique ID which is in the form <queue_name>-<unique_id>.
   // Example: 'queue1-0ujsswThIGTUYm2K8FjOOfXtY1K'
-  string messageId = 4 [json_name = "message_id"];
+  string itemId = 4 [json_name = "item_id"];
 }
 
 message QueueOptions {
@@ -166,7 +166,7 @@ message QueueOptions {
   // Example: '60m', '24h', '10s'
   string reserveTimeout = 6  [json_name = "reserve_timeout"];
 
-  // How long the message can wait in the queue regardless of attempts before it is moved
+  // How long the item can wait in the queue regardless of attempts before it is moved
   // to the dead letter queue.
   string deadTimeout = 7 [json_name = "dead_timeout"];
 }

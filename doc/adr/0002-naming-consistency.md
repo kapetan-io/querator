@@ -26,6 +26,22 @@ If you have a type of `time.Duration` it should be named `<thing>Timeout` for ex
 However, if your type is `time.Time` then it should be named `ReservationDeadline`. This is consistent with many
 golang libraries like `context.Context`.  For example, `context.WithTimeout(context.Context, time.Duration)`.
 
+#### Items vs Messages
+* An *item* typically refers to a single entry or element in a collection or queue. An item can be any type
+  of data or object that is stored and processed in the queue.
+* A *message* is the basic unit of data that is transmitted between applications or services.
+
+While both "message" and "item" can refer to a single unit of data in a queue, the term "message" often carries
+a more specific meaning related to communication and messaging systems, whereas "item" is more generic and can be
+used in various queue-based contexts. Since Querator can be used for many different applications beyond "message"
+delivery. We prefer to use the term "item" or more specifically "Queue Item" when discussing "items" in the queue
+and avoid using the term "message" in code and our API.
+
+One could make the argument that Querator delivers a "message" to a consumer regardless of how it is used. You could
+also make the argument that anything in the body of an HTTP request or websocket payload is a "message". But I don't
+apply broad terms to such things. I may yet live to regret this, but, Querator manages "items" in a queue, not 
+"messages". I have spoken. `<insert mandalorian meme here>`
+
 ## Consequences
 
 Emotional Turmoil, aka a big storm of feelings inside that can be hard to handle.

@@ -66,6 +66,22 @@ func (c *Client) QueueProduce(ctx context.Context, req *pb.QueueProduceRequest, 
 	return c.client.Do(r, res)
 }
 
+func (c *Client) QueueReserve(ctx context.Context, req *pb.QueueReserveRequest, res *pb.QueueReserveResponse) error {
+	payload, err := proto.Marshal(req)
+	if err != nil {
+		return duh.NewClientError("while marshaling request payload: %w", err, nil)
+	}
+
+	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("%s%s", c.opts.Endpoint, internal.RPCQueueReserve), bytes.NewReader(payload))
+	if err != nil {
+		return duh.NewClientError("", err, nil)
+	}
+
+	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	return c.client.Do(r, res)
+}
+
 // WithNoTLS returns ClientOptions suitable for use with NON-TLS clients
 func WithNoTLS(address string) ClientOptions {
 	return ClientOptions{

@@ -31,6 +31,6 @@ func NewService(opts ...ServiceOptions) *Service {
 }
 
 func (s *Service) QueueProduce(ctx context.Context, req *proto.QueueProduceRequest, res *proto.QueueProduceResponse) error {
-	res.MessageId = "queue-p-12048123098"
+	res.ItemId = "queue-p-12048123098"
 	return nil
 }

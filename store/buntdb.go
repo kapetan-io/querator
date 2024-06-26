@@ -52,7 +52,7 @@ func (s *Bunt) Stats(ctx context.Context, stats *Stats) error {
 		}
 
 		stats.Total++
-		stats.AverageAge += item.ExpireDeadline.Sub(now)
+		stats.AverageAge += item.DeadDeadline.Sub(now)
 		if item.IsReserved {
 			stats.AverageReservedAge += item.ReserveDeadline.Sub(now)
 			stats.TotalReserved++
@@ -102,7 +102,7 @@ func (s *Bunt) Reserve(_ context.Context, items *[]*QueueItem, opts ReserveOptio
 			return true
 		}
 
-		item.ReserveDeadline = opts.ReserveExpireAt
+		item.ReserveDeadline = opts.ReserveDeadline
 		item.IsReserved = true
 		*items = append(*items, item)
 		count++

@@ -16,11 +16,11 @@ func TestStorage(t *testing.T) {
 
 	testCases := []struct {
 		Name string
-		New  func() (store.QueueStorage, error)
+		New  func() (store.Queue, error)
 	}{
 		{
 			Name: "BuntDB",
-			New: func() (store.QueueStorage, error) {
+			New: func() (store.Queue, error) {
 				return store.NewBuntStore(store.BuntOptions{})
 			},
 		},
@@ -36,7 +36,7 @@ func TestStorage(t *testing.T) {
 	}
 }
 
-type NewFunc func() (store.QueueStorage, error)
+type NewFunc func() (store.Queue, error)
 
 func testSuite(t *testing.T, newStore NewFunc) {
 
@@ -52,7 +52,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		var items []*store.QueueItem
 		items = append(items, &store.QueueItem{
 			IsReserved:      true,
-			ExpireDeadline:  now.Add(100_000 * time.Minute),
+			DeadDeadline:    now.Add(100_000 * time.Minute),
 			ReserveDeadline: now.Add(3_000 * time.Minute),
 			Attempts:        5,
 			Reference:       "rainbow@dash.com",
@@ -63,7 +63,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		})
 		items = append(items, &store.QueueItem{
 			IsReserved:      false,
-			ExpireDeadline:  now.Add(1_000_000 * time.Minute),
+			DeadDeadline:    now.Add(1_000_000 * time.Minute),
 			ReserveDeadline: now.Add(3_000 * time.Minute),
 			Attempts:        10_000,
 			Reference:       "rarity@dash.com",
@@ -86,7 +86,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		// Ensure all the fields are indeed the same
 		assert.Equal(t, reads[0].ID, items[0].ID)
 		assert.Equal(t, reads[0].IsReserved, items[0].IsReserved)
-		assert.Equal(t, 0, reads[0].ExpireDeadline.Compare(items[0].ExpireDeadline))
+		assert.Equal(t, 0, reads[0].DeadDeadline.Compare(items[0].DeadDeadline))
 		assert.Equal(t, 0, reads[0].ReserveDeadline.Compare(items[0].ReserveDeadline))
 		assert.Equal(t, reads[0].Attempts, items[0].Attempts)
 		assert.Equal(t, reads[0].Reference, items[0].Reference)
@@ -96,7 +96,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 
 		assert.Equal(t, reads[1].ID, items[1].ID)
 		assert.Equal(t, reads[1].IsReserved, items[1].IsReserved)
-		assert.Equal(t, 0, reads[1].ExpireDeadline.Compare(items[1].ExpireDeadline))
+		assert.Equal(t, 0, reads[1].DeadDeadline.Compare(items[1].DeadDeadline))
 		assert.Equal(t, 0, reads[1].ReserveDeadline.Compare(items[1].ReserveDeadline))
 		assert.Equal(t, reads[1].Attempts, items[1].Attempts)
 		assert.Equal(t, reads[1].Reference, items[1].Reference)
@@ -106,7 +106,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 
 		cmp := &store.QueueItem{
 			IsReserved:      false,
-			ExpireDeadline:  now.Add(1_000_000 * time.Minute),
+			DeadDeadline:    now.Add(1_000_000 * time.Minute),
 			ReserveDeadline: now.Add(2_000 * time.Minute),
 			Attempts:        100_000,
 			Reference:       "discord@dash.com",
@@ -117,7 +117,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 
 		assert.True(t, cmp.Compare(&store.QueueItem{
 			IsReserved:      false,
-			ExpireDeadline:  now.Add(1_000_000 * time.Minute),
+			DeadDeadline:    now.Add(1_000_000 * time.Minute),
 			ReserveDeadline: now.Add(2_000 * time.Minute),
 			Attempts:        100_000,
 			Reference:       "discord@dash.com",
@@ -129,7 +129,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		cpy.IsReserved = true
 		assert.False(t, cmp.Compare(&cpy))
 		cpy = *cmp
-		cpy.ExpireDeadline = time.Now()
+		cpy.DeadDeadline = time.Now()
 		assert.False(t, cmp.Compare(&cpy))
 		cpy = *cmp
 		cpy.ReserveDeadline = time.Now()
@@ -242,7 +242,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 			var reserved []*store.QueueItem
 			expire := time.Now().Add(2_000 * time.Minute)
 
-			err = s.Reserve(ctx, &reserved, store.ReserveOptions{ReserveExpireAt: expire, Limit: 10})
+			err = s.Reserve(ctx, &reserved, store.ReserveOptions{ReserveDeadline: expire, Limit: 10})
 			require.NoError(t, err)
 			assert.Equal(t, 10, len(reserved))
 
@@ -259,7 +259,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 
 			// Reserve some more items
 			var secondReserve []*store.QueueItem
-			err = s.Reserve(ctx, &secondReserve, store.ReserveOptions{ReserveExpireAt: expire, Limit: 10})
+			err = s.Reserve(ctx, &secondReserve, store.ReserveOptions{ReserveDeadline: expire, Limit: 10})
 			require.NoError(t, err)
 
 			var combined []*store.QueueItem
@@ -293,7 +293,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 			var reserved []*store.QueueItem
 			expire := time.Now().Add(time.Minute)
 
-			err = s.Reserve(ctx, &reserved, store.ReserveOptions{ReserveExpireAt: expire, Limit: 100})
+			err = s.Reserve(ctx, &reserved, store.ReserveOptions{ReserveDeadline: expire, Limit: 100})
 			require.NoError(t, err)
 			assert.Equal(t, 100, len(reserved))
 
@@ -342,19 +342,19 @@ func testSuite(t *testing.T, newStore NewFunc) {
 	})
 }
 
-func writeRandomItems(t *testing.T, ctx context.Context, s store.QueueStorage, count int) []*store.QueueItem {
+func writeRandomItems(t *testing.T, ctx context.Context, s store.Queue, count int) []*store.QueueItem {
 	t.Helper()
 	expire := time.Now().Add(random.Duration(time.Minute))
 
 	var items []*store.QueueItem
 	for i := 0; i < count; i++ {
 		items = append(items, &store.QueueItem{
-			ExpireDeadline: expire,
-			Attempts:       rand.Intn(10),
-			Reference:      random.String("ref-", 10),
-			Encoding:       random.String("enc-", 10),
-			Kind:           random.String("kind-", 10),
-			Body:           []byte(fmt.Sprintf("message-%d", i)),
+			DeadDeadline: expire,
+			Attempts:     rand.Intn(10),
+			Reference:    random.String("ref-", 10),
+			Encoding:     random.String("enc-", 10),
+			Kind:         random.String("kind-", 10),
+			Body:         []byte(fmt.Sprintf("message-%d", i)),
 		})
 	}
 	err := s.Write(ctx, items)

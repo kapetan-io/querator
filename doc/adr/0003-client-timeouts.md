@@ -14,7 +14,7 @@ and the consequences of that behavior.
 
 ## Decision
 
-Our recommendation is that HTTP clients should NOT time out without providing the server with the time at which they
+Our decision is that HTTP clients should NOT time out without providing the server with the time at which they
 will time out. The rational is that during times of saturation, degradation or catastrophic failure the server should 
 always do the right thing to avoid losing an in flight request. In addition, the client should prefer a longer timeout
 duration to allow time for the server to handle any in-flight requests during saturation events. If the client decides

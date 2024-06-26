@@ -3,7 +3,6 @@ package internal
 import (
 	"context"
 	"errors"
-	"fmt"
 	"github.com/duh-rpc/duh-go"
 	"github.com/kapetan-io/querator/internal/maps"
 	"github.com/kapetan-io/querator/store"
@@ -23,6 +22,7 @@ const (
 	// TODO: This should be based on the minimum request timeout provided by the client
 	dataStoreTimeout  = time.Minute
 	maxRequestTimeout = 15 * time.Minute
+	minWriteTimeout   = 5 * time.Second
 )
 
 type QueueOptions struct {
@@ -33,17 +33,18 @@ type QueueOptions struct {
 	Logger duh.StandardLogger
 
 	// ReserveTimeout is how long the reservation is valid for.
+	// TODO: We must ensure the DefaultDeadTimeout is not less than the ReserveTimeout
 	ReserveTimeout time.Duration
 
 	// DeadQueue is the name of the dead letter queue for this queue.
 	DeadQueue string
 
-	// DeadLine is how long the item can wait in the queue regardless
+	// DefaultDeadTimeout is the default time an item can wait in the queue regardless
 	// of attempts before it is moved to the dead letter queue.
-	DeadLine time.Duration
+	DefaultDeadTimeout time.Duration
 
 	// QueueStorage is the store interface used to persist items for this specific queue
-	QueueStorage store.QueueStorage
+	QueueStorage store.Queue
 }
 
 // Queue manages job is to evenly distribute and consume items from a single queue. Ensuring consumers and
@@ -60,7 +61,7 @@ type Queue struct {
 func NewQueue(opts QueueOptions) (*Queue, error) {
 	set.Default(&opts.Logger, slog.Default())
 	if opts.QueueStorage == nil {
-		return nil, errors.New("QueueOptions.QueueStorage cannot be nil")
+		return nil, errors.New("QueueOptions.Queue cannot be nil")
 	}
 
 	q := &Queue{
@@ -99,15 +100,13 @@ type ReserveRequest struct {
 }
 
 type ProduceRequest struct {
-	// The id of the client
-	ClientID string
 	// How long the caller expects Produce() to block before returning
 	// if no items are available to be reserved. Max duration is 5 minutes.
 	RequestTimeout time.Duration
 	// The context of the requesting client
 	Context context.Context
 	// The items to produce
-	Items []*store.QueueItem
+	Items []*ProduceItem
 
 	// Is calculated from RequestTimeout and specifies a time in the future when this request
 	// should be cancelled.
@@ -118,27 +117,43 @@ type ProduceRequest struct {
 	err error
 }
 
+type ProduceItem struct {
+	DeadTimeout time.Duration
+	Item        store.QueueItem
+}
+
 // Produce is called by clients who wish to produce an item to the queue. This
 // call will block until the item has been written to the queue or until the request
-// is cancelled via the passed context or the RequestTimeout is reached.
-//
-// ### Context
-func (q *Queue) Produce(req *ProduceRequest) error {
+// is cancelled via the passed context or RequestTimeout is reached.
+func (q *Queue) Produce(ctx context.Context, req *ProduceRequest) error {
 	req.readyCh = make(chan struct{})
 
-	if req.ClientID == "" {
-		return fmt.Errorf("ClientID is invalid; cannot be empty")
-	}
-
+	// --- Verify all the things ---
+	req.requestDeadline = time.Now().Add(req.RequestTimeout)
 	if req.RequestTimeout > maxRequestTimeout {
-		return fmt.Errorf("RequestTimeout '%s' is invalid; maximum timeout is '15m'", req.RequestTimeout.String())
+		return NewBadRequest("RequestTimeout '%s' is invalid; maximum timeout is '15m'",
+			req.RequestTimeout.String())
 	}
 
 	if req.RequestTimeout == time.Duration(0) {
 		req.RequestTimeout = maxRequestTimeout
 	}
-	req.requestDeadline = time.Now().Add(req.RequestTimeout)
 
+	for i, item := range req.Items {
+		if item.DeadTimeout == time.Duration(0) {
+			item.DeadTimeout = q.opts.DefaultDeadTimeout
+		}
+		if item.DeadTimeout < q.opts.ReserveTimeout {
+			return NewBadRequest("Items[%d].DeadTimeout '%s', cannot be less than the "+
+				"defined ReserveTimeout '%s', for '%s' queue", i, item.DeadTimeout.String(),
+				q.opts.ReserveTimeout.String(), q.opts.Name)
+		}
+	}
+	// -----------------------------
+
+	// The context is passed to processQueues which will check
+	// for context cancel and do the right thing.
+	req.Context = ctx
 	*q.produceQueueCh.Load() <- req
 
 	// Wait until the request has been processed
@@ -171,11 +186,11 @@ func (q *Queue) Reserve(req *ReserveRequest) error {
 	req.readyCh = make(chan struct{})
 
 	if req.ClientID == "" {
-		return fmt.Errorf("ClientID is invalid; cannot be empty")
+		return NewBadRequest("ClientID is invalid; cannot be empty")
 	}
 
 	if req.RequestTimeout > maxRequestTimeout {
-		return fmt.Errorf("RequestTimeout '%s' is invalid; maximum timeout is '15m'", req.RequestTimeout.String())
+		return NewBadRequest("RequestTimeout '%s' is invalid; maximum timeout is '15m'", req.RequestTimeout.String())
 	}
 
 	if req.RequestTimeout == time.Duration(0) {
@@ -291,26 +306,48 @@ func (q *Queue) processQueues() {
 			//  step, in addition, we can back fill reservable items into memory when processQueues() isn't
 			//  actively producing or consuming.
 
+			// Place all the queued produce requests in to the `items` list, which is a complete list of
+			// all the items each producer provided us with.
 			items := make([]*store.QueueItem, wpr.Total)
+			writeTimeout := 15 * time.Minute
 			for _, req := range wpr.Requests {
-				// Cancel produce requests that have timed out
+				// Cancel any produce requests that have timed out
 				if time.Now().After(req.requestDeadline) {
-					req.err = ErrRequestTimeout
+					// TODO: Change to NewRequestRetry (DUH-RPC Update)
+					req.err = NewRequestFailed("request timeout while producing item; try again")
 					close(req.readyCh)
 				}
-				items = append(items, req.Items...)
+				for _, item := range req.Items {
+					// Record the appropriate dead deadline just before we write to the data store
+					item.Item.DeadDeadline = time.Now().Add(item.DeadTimeout)
+					items = append(items, &item.Item)
+				}
+				// Attempt to get a timeout that is within the request
+				// with the least amount of time left to wait
+				timeLeft := time.Now().Sub(req.requestDeadline)
+				if timeLeft < writeTimeout {
+					writeTimeout = timeLeft
+				}
 			}
 
-			// TODO: Timeout should based on the req.RequestTimeout
-			ctx, cancel := context.WithTimeout(context.Background(), dataStoreTimeout)
+			// If we allow a calculated write timeout to be a few milliseconds, then the store.Write()
+			// is almost guaranteed to fail, so we ensure the write timeout is something reasonable.
+			if writeTimeout < q.opts.QueueStorage.Options().MinWriteTimeout {
+				// MinWriteTimeout comes from the storage implementation as the user who configured the
+				// storage option should know a reasonable timeout value for the configuration chosen.
+				writeTimeout = q.opts.QueueStorage.Options().MinWriteTimeout
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
 			if err := q.opts.QueueStorage.Write(ctx, items); err != nil {
 				q.opts.Logger.Warn("while calling QueueStorage.Write()", "error", err)
 				cancel()
+				// TODO: Let clients that are timed out, know we are done with them.
 				continue
 			}
 			cancel()
 
-			// TODO: Tell the waiting clients the items have been produced
+			// Tell the waiting clients the items have been produced
 			for _, req := range wpr.Requests {
 				close(req.readyCh)
 			}
@@ -341,10 +378,10 @@ func (q *Queue) processQueues() {
 			ctx, cancel := context.WithTimeout(context.Background(), dataStoreTimeout)
 			var items []*store.QueueItem
 			if err := q.opts.QueueStorage.Reserve(ctx, &items, store.ReserveOptions{
-				ReserveExpireAt: time.Now().Add(q.opts.ReserveTimeout),
+				ReserveDeadline: time.Now().Add(q.opts.ReserveTimeout),
 				Limit:           wrr.Total,
 			}); err != nil {
-				q.opts.Logger.Warn("while calling QueueStorage.Reserve", "error", err)
+				q.opts.Logger.Warn("while calling Queue.Reserve", "error", err)
 				continue
 			}
 			cancel()
@@ -355,8 +392,6 @@ func (q *Queue) processQueues() {
 			for _, item := range items {
 				req = wrr.Requests[keys[idx]]
 				req.Items = append(req.Items, item)
-				// QueueStorage each item assigned to be updated in the database with the reservation
-				item.ClientID = req.ClientID
 				if idx > len(keys)-1 {
 					idx = 0
 				}

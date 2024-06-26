@@ -55,7 +55,7 @@ func NewDaemon(ctx context.Context, conf Config) (*Daemon, error) {
 func (d *Daemon) Start(ctx context.Context) error {
 	registry := prometheus.NewRegistry()
 
-	handler := internal.NewHandler(d.service, promhttp.InstrumentMetricHandler(
+	handler := internal.NewHTTPHandler(d.service, promhttp.InstrumentMetricHandler(
 		registry, promhttp.HandlerFor(registry, promhttp.HandlerOpts{}),
 	))
 	registry.MustRegister(handler)

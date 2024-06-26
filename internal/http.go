@@ -36,14 +36,14 @@ const (
 	RPCInspectQueue  = "/v1/queue.inspect"
 )
 
-type Handler struct {
+type HTTPHandler struct {
 	duration *prometheus.SummaryVec
 	metrics  http.Handler
 	service  *Service
 }
 
-func NewHandler(s *Service, metrics http.Handler) *Handler {
-	return &Handler{
+func NewHTTPHandler(s *Service, metrics http.Handler) *HTTPHandler {
+	return &HTTPHandler{
 		duration: prometheus.NewSummaryVec(prometheus.SummaryOpts{
 			Name: "http_handler_duration",
 			Help: "The timings of http requests handled by the service",
@@ -57,7 +57,7 @@ func NewHandler(s *Service, metrics http.Handler) *Handler {
 	}
 }
 
-func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer prometheus.NewTimer(h.duration.WithLabelValues(r.URL.Path)).ObserveDuration()
 	ctx := r.Context()
 
@@ -79,7 +79,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	duh.ReplyWithCode(w, r, duh.CodeNotImplemented, nil, "no such method; "+r.URL.Path)
 }
 
-func (h *Handler) QueueProduce(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+func (h *HTTPHandler) QueueProduce(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		duh.ReplyWithCode(w, r, duh.CodeBadRequest, nil,
 			fmt.Sprintf("http method '%s' not allowed; only POST", r.Method))
@@ -100,11 +100,11 @@ func (h *Handler) QueueProduce(ctx context.Context, w http.ResponseWriter, r *ht
 }
 
 // Describe fetches prometheus metrics to be registered
-func (h *Handler) Describe(ch chan<- *prometheus.Desc) {
+func (h *HTTPHandler) Describe(ch chan<- *prometheus.Desc) {
 	h.duration.Describe(ch)
 }
 
 // Collect fetches metrics from the server for use by prometheus
-func (h *Handler) Collect(ch chan<- prometheus.Metric) {
+func (h *HTTPHandler) Collect(ch chan<- prometheus.Metric) {
 	h.duration.Collect(ch)
 }

@@ -18,19 +18,59 @@ package internal
 
 import (
 	"context"
+	"errors"
 	"github.com/kapetan-io/querator/proto"
 )
 
+var ErrNoQueueExists = errors.New("no queue exists")
+
+// QueueManager manages access to queues
+type QueueManager interface {
+	Get(ctx context.Context, name string, queue *Queue) error
+}
+
+type ServiceOptions struct {
+	// QueueManager manages queues
+	QueueManager QueueManager
+}
+
 type Service struct {
-	//opts ServiceOptions
+	opts ServiceOptions
 	//log  slog.Logger
 }
 
-func NewService(opts ...ServiceOptions) *Service {
-	return &Service{}
+func NewService(opts ServiceOptions) *Service {
+	return &Service{
+		opts: opts,
+	}
 }
 
 func (s *Service) QueueProduce(ctx context.Context, req *proto.QueueProduceRequest, res *proto.QueueProduceResponse) error {
-	res.ItemId = "queue-p-12048123098"
+	var queue Queue
+	if err := s.opts.QueueManager.Get(ctx, req.QueueName, &queue); err != nil {
+		return err
+	}
+
+	var r ProduceRequest
+	if err := validateQueueProduceProto(req, &r); err != nil {
+		return err
+	}
+
+	// TODO: Forward the request to a different instance of querator if needed
+
+	// Produce will block until success, context cancel or timeout
+	if err := queue.Produce(ctx, &r); err != nil {
+		return err
+	}
+
 	return nil
 }
+
+func (s *Service) QueueReserve(ctx context.Context, req *proto.QueueReserveRequest, res *proto.QueueReserveResponse) error {
+	// TODO: Lookup the queue
+	// TODO: Forward the request
+	// TODO: Handle the response
+	return nil
+}
+
+// TODO: Manage Queue Methods

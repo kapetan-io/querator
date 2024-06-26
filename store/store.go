@@ -3,15 +3,20 @@ package store
 import (
 	"bytes"
 	"context"
+	pb "github.com/kapetan-io/querator/proto"
 	"time"
 )
 
 type ReserveOptions struct {
-	// ReserveExpireAt is time in the future when a reservation should expire
-	ReserveExpireAt time.Time
+	// ReserveDeadline is time in the future when a reservation should expire
+	ReserveDeadline time.Time
 
 	// Limit is the max number of items to reserve
 	Limit int
+}
+
+type QueueStorageOptions struct {
+	MinWriteTimeout time.Duration
 }
 
 type Stats struct {
@@ -28,7 +33,18 @@ type Stats struct {
 	AverageReservedAge time.Duration
 }
 
+// QueueStorage represents storage for all the queues
 type QueueStorage interface {
+	// Get returns a store.Queue from storage ready to be used
+	Get(ctx context.Context, name string, queue *Queue) error
+
+	// List returns a list of available queues
+	// Create a new queue in queue storage
+	// Delete a queue from queue storage
+}
+
+// Queue represents storage for a single queue
+type Queue interface {
 	// Stats returns stats about the queue
 	Stats(ctx context.Context, stats *Stats) error
 
@@ -47,6 +63,8 @@ type QueueStorage interface {
 	Delete(ctx context.Context, items []*QueueItem) error
 
 	Close(ctx context.Context) error
+
+	Options() QueueStorageOptions
 }
 
 // TODO: ScheduledStorage interface {} - A place to store scheduled items to be queued. (Defer)
@@ -58,9 +76,6 @@ type QueueItem struct {
 	// implementation, and does not include the queue name.
 	ID string
 
-	// ClientID is the id of the client which reserved this item
-	ClientID string // TODO: Remove the ClientID
-
 	// IsReserved is true if the item has been reserved by a client
 	IsReserved bool
 
@@ -68,11 +83,16 @@ type QueueItem struct {
 	// expired and can be reserved by another consumer
 	ReserveDeadline time.Time
 
-	// ExpireDeadline is the time in the future the item will expire
-	ExpireDeadline time.Time
+	// DeadDeadline is the time in the future the item must be consumed,
+	// before it is considered dead and moved to the dead letter queue if configured.
+	DeadDeadline time.Time
 
 	// Attempts is how many attempts this item has seen
 	Attempts int
+
+	// MaxAttempts is the maximum number of times this message can be deferred by a consumer before it is
+	// placed in the dead letter queue
+	MaxAttempts int
 
 	// Reference is a user supplied field which could contain metadata or specify who owns this queue
 	// Examples: "jake@statefarm.com", "stapler@office-space.com", "account-0001"
@@ -93,13 +113,10 @@ func (l *QueueItem) Compare(r *QueueItem) bool {
 	if l.ID != r.ID {
 		return false
 	}
-	if l.ClientID != r.ClientID {
-		return false
-	}
 	if l.IsReserved != r.IsReserved {
 		return false
 	}
-	if l.ExpireDeadline.Compare(r.ExpireDeadline) != 0 {
+	if l.DeadDeadline.Compare(r.DeadDeadline) != 0 {
 		return false
 	}
 	if l.ReserveDeadline.Compare(r.ReserveDeadline) != 0 {
@@ -121,4 +138,14 @@ func (l *QueueItem) Compare(r *QueueItem) bool {
 		return false
 	}
 	return true
+}
+
+func (l *QueueItem) FromProtoProduceItem(r *pb.QueueProduceItem) {
+	l.Encoding = r.Encoding
+	l.Kind = r.Kind
+	l.Reference = r.Reference
+	l.MaxAttempts = int(r.MaxAttempts)
+	l.Body = r.Body
+	// DeadDeadline is calculated from DeadTimeout at
+	// the moment we write to the data store
 }

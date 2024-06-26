@@ -21,10 +21,21 @@ import "google/protobuf/timestamp.proto";
 
 package querator;
 
-
 message QueueProduceRequest {
-  // The name of the queue this message is to be queued to.
+  // The name of the queue this item is to be queued to.
   string queueName = 1  [json_name = "queue_name"];
+  // How long the client should wait until the items in this produce request are accepted into the queue.
+  // If this duration elapses and the server hasn't responded the client should assume the item was not
+  // produced. If the server detects a client has been waiting for to long, it will cancel the produce
+  // request and return an error to the client.
+  //
+  // Example: '1m', '20s'. Default timeout is '1m' and the maximum timeout is 15 minutes.
+  string requestTimeout = 2 [json_name = "request_timeout"]; // TODO: OpenAPI
+  // A list of items to be queued
+  repeated QueueProduceItem items = 3;
+}
+
+message QueueProduceItem {
   // A user specified field which indicates the encoding used to encode the 'body'
   string encoding = 2;
   // A Kind or Type the body contains. Consumers can use this field to determine handling
@@ -38,16 +49,10 @@ message QueueProduceRequest {
   // placed in the dead letter queue. This includes cases where the 'QueueOptions.Deadline' was exceeded
   // and the message was retried.
   int32  maxAttempts = 5 [json_name = "max_attempts"];
-  // How long the message can wait in the queue regardless of attempts before it is moved
+  // How long the item can wait in the queue regardless of attempts before it is moved
   // to the dead letter queue. Example: '24h', '60m', '10s'
   string deadTimeout = 6 [json_name = "dead_timeout"]; // TODO: OpenAPI
-  // How long the client should wait until this produce request accepted into the queue. If this
-  // duration elapses and the server hasn't responded the client should assume the item was not
-  // produced. If the server detects a client has been waiting for to long, it will cancel the
-  // produce request and return an error to the client.
-  // Example: '1m', '20s'. Default timeout is '1m' and the maximum timeout is 15 minutes.
-  string requestTimeout = 7 [json_name = "request_timeout"]; // TODO: OpenAPI
-  //  The body of the message, it's encoding is specified by the 'encoding' field.
+  //  The body of the item, it's encoding is specified by the 'encoding' field.
   // Example: '{"key": "value"}'
   bytes  body = 8;
 }

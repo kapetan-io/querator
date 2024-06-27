@@ -13,6 +13,7 @@ import (
 )
 
 type BuntOptions struct {
+	File   string
 	Logger duh.StandardLogger
 }
 
@@ -24,8 +25,13 @@ type Bunt struct {
 
 func NewBuntStore(opts BuntOptions) (*Bunt, error) {
 	set.Default(&opts.Logger, slog.Default())
+	if opts.File == "" {
+		return nil, NewInvalidOption("BuntOptions.File cannot be empty")
+	}
 
-	db, err := buntdb.Open(":memory:")
+	// TODO: Check if the file exists
+
+	db, err := buntdb.Open(opts.File)
 	if err != nil {
 		return nil, fmt.Errorf("opening buntdb: %w", err)
 	}

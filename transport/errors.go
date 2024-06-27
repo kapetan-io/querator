@@ -7,6 +7,7 @@ import (
 
 // ErrInternal is any error un handled by ErrRequestFailed or ErrInvalidRequest. The message
 // and any additional fields are logged but not returned to the client
+// TODO: Consider removing if not used
 type ErrInternal errors.Fields
 
 // ErrRequestFailed is used to tell the client that the request was valid, but it failed for some reason.

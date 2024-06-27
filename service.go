@@ -67,4 +67,17 @@ func (s *Service) QueueReserve(ctx context.Context, req *proto.QueueReserveReque
 }
 
 // TODO: Manage Queue Methods
-//func (s *Service) QueueCreate(ctx context.Context, req *proto.Queue, res *proto.QueueReserveResponse) error {
+
+func (s *Service) QueueCreate(ctx context.Context, req *proto.QueueOptions) error {
+	var opts internal.QueueOptions
+
+	if err := validateQueueOptionsProto(req, &opts); err != nil {
+		return err
+	}
+
+	_, err := s.opts.QueueManager.Create(ctx, opts)
+	if err != nil {
+		return err
+	}
+	return nil
+}

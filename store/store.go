@@ -141,6 +141,7 @@ func (l *QueueItem) Compare(r *QueueItem) bool {
 }
 
 func (l *QueueItem) FromProtoProduceItem(r *pb.QueueProduceItem) {
+	// TODO: Consider moving this into validation.go
 	l.Encoding = r.Encoding
 	l.Kind = r.Kind
 	l.Reference = r.Reference

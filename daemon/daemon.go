@@ -22,7 +22,7 @@ import (
 	"fmt"
 	"github.com/duh-rpc/duh-go"
 	"github.com/kapetan-io/querator"
-	"github.com/kapetan-io/querator/internal"
+	"github.com/kapetan-io/querator/transport"
 	"github.com/kapetan-io/tackle/set"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -34,7 +34,7 @@ import (
 )
 
 type Daemon struct {
-	service    *internal.Service
+	service    *querator.Service
 	logAdaptor *duh.HttpLogAdaptor
 	servers    []*http.Server
 	wg         sync.WaitGroup
@@ -46,7 +46,7 @@ func NewDaemon(ctx context.Context, conf Config) (*Daemon, error) {
 	set.Default(&conf.Logger, slog.Default())
 
 	d := &Daemon{
-		service: internal.NewService(internal.ServiceOptions{}),
+		service: querator.NewService(querator.ServiceOptions{}),
 		conf:    conf,
 	}
 	return d, d.Start(ctx)
@@ -55,7 +55,7 @@ func NewDaemon(ctx context.Context, conf Config) (*Daemon, error) {
 func (d *Daemon) Start(ctx context.Context) error {
 	registry := prometheus.NewRegistry()
 
-	handler := internal.NewHTTPHandler(d.service, promhttp.InstrumentMetricHandler(
+	handler := transport.NewHTTPHandler(d.service, promhttp.InstrumentMetricHandler(
 		registry, promhttp.HandlerFor(registry, promhttp.HandlerOpts{}),
 	))
 	registry.MustRegister(handler)

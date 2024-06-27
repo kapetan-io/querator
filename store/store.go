@@ -144,7 +144,6 @@ func (l *QueueItem) FromProtoProduceItem(r *pb.QueueProduceItem) {
 	l.Encoding = r.Encoding
 	l.Kind = r.Kind
 	l.Reference = r.Reference
-	l.MaxAttempts = int(r.MaxAttempts)
 	l.Body = r.Body
 	// DeadDeadline is calculated from DeadTimeout at
 	// the moment we write to the data store

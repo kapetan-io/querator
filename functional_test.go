@@ -29,13 +29,15 @@ func TestProduceAndConsume(t *testing.T) {
 	var produce pb.QueueProduceResponse
 	require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
 		QueueName:      "test-queue",
-		Reference:      ref,
-		Encoding:       enc,
-		Kind:           kind,
-		DeadTimeout:    "24h",
 		RequestTimeout: "1m",
-		MaxAttempts:    10,
-		Body:           body,
+		Items: []*pb.QueueProduceItem{
+			{
+				Reference: ref,
+				Encoding:  enc,
+				Kind:      kind,
+				Body:      body,
+			},
+		},
 	}, &produce))
 	assert.Equal(t, "queue-p-12048123098", produce.ItemId)
 

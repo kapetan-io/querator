@@ -21,5 +21,5 @@ func TestNewClient(t *testing.T) {
 
 	var resp pb.QueueProduceResponse
 	require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{}, &resp))
-	assert.Equal(t, "queue-p-12048123098", resp.MessageId)
+	assert.Equal(t, "queue-p-12048123098", resp.ItemId)
 }

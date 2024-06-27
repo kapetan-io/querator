@@ -6,6 +6,7 @@ import (
 	"github.com/duh-rpc/duh-go"
 	"github.com/kapetan-io/querator/internal/maps"
 	"github.com/kapetan-io/querator/store"
+	"github.com/kapetan-io/querator/transport"
 	"github.com/kapetan-io/tackle/set"
 	"log/slog"
 	"sync/atomic"
@@ -33,15 +34,16 @@ type QueueOptions struct {
 	Logger duh.StandardLogger
 
 	// ReserveTimeout is how long the reservation is valid for.
-	// TODO: We must ensure the DefaultDeadTimeout is not less than the ReserveTimeout
+	// TODO: We must ensure the DeadTimeout is not less than the ReserveTimeout
 	ReserveTimeout time.Duration
 
 	// DeadQueue is the name of the dead letter queue for this queue.
 	DeadQueue string
 
-	// DefaultDeadTimeout is the default time an item can wait in the queue regardless
-	// of attempts before it is moved to the dead letter queue.
-	DefaultDeadTimeout time.Duration
+	// DeadTimeout is the time an item can wait in the queue regardless of attempts before
+	// it is moved to the dead letter queue. This value is used if no DeadTimeout is provided
+	// by the queued item.
+	DeadTimeout time.Duration
 
 	// QueueStorage is the store interface used to persist items for this specific queue
 	QueueStorage store.Queue
@@ -106,7 +108,7 @@ type ProduceRequest struct {
 	// The context of the requesting client
 	Context context.Context
 	// The items to produce
-	Items []*ProduceItem
+	Items []*store.QueueItem
 
 	// Is calculated from RequestTimeout and specifies a time in the future when this request
 	// should be cancelled.
@@ -115,11 +117,6 @@ type ProduceRequest struct {
 	readyCh chan struct{}
 	// The error to be returned to the caller
 	err error
-}
-
-type ProduceItem struct {
-	DeadTimeout time.Duration
-	Item        store.QueueItem
 }
 
 // Produce is called by clients who wish to produce an item to the queue. This
@@ -131,23 +128,12 @@ func (q *Queue) Produce(ctx context.Context, req *ProduceRequest) error {
 	// --- Verify all the things ---
 	req.requestDeadline = time.Now().Add(req.RequestTimeout)
 	if req.RequestTimeout > maxRequestTimeout {
-		return NewBadRequest("RequestTimeout '%s' is invalid; maximum timeout is '15m'",
+		return transport.NewInvalidRequest("RequestTimeout '%s' is invalid; maximum timeout is '15m'",
 			req.RequestTimeout.String())
 	}
 
 	if req.RequestTimeout == time.Duration(0) {
 		req.RequestTimeout = maxRequestTimeout
-	}
-
-	for i, item := range req.Items {
-		if item.DeadTimeout == time.Duration(0) {
-			item.DeadTimeout = q.opts.DefaultDeadTimeout
-		}
-		if item.DeadTimeout < q.opts.ReserveTimeout {
-			return NewBadRequest("Items[%d].DeadTimeout '%s', cannot be less than the "+
-				"defined ReserveTimeout '%s', for '%s' queue", i, item.DeadTimeout.String(),
-				q.opts.ReserveTimeout.String(), q.opts.Name)
-		}
 	}
 	// -----------------------------
 
@@ -186,11 +172,11 @@ func (q *Queue) Reserve(req *ReserveRequest) error {
 	req.readyCh = make(chan struct{})
 
 	if req.ClientID == "" {
-		return NewBadRequest("ClientID is invalid; cannot be empty")
+		return transport.NewInvalidRequest("ClientID is invalid; cannot be empty")
 	}
 
 	if req.RequestTimeout > maxRequestTimeout {
-		return NewBadRequest("RequestTimeout '%s' is invalid; maximum timeout is '15m'", req.RequestTimeout.String())
+		return transport.NewInvalidRequest("RequestTimeout '%s' is invalid; maximum timeout is '15m'", req.RequestTimeout.String())
 	}
 
 	if req.RequestTimeout == time.Duration(0) {
@@ -314,13 +300,13 @@ func (q *Queue) processQueues() {
 				// Cancel any produce requests that have timed out
 				if time.Now().After(req.requestDeadline) {
 					// TODO: Change to NewRequestRetry (DUH-RPC Update)
-					req.err = NewRequestFailed("request timeout while producing item; try again")
+					req.err = transport.NewRequestFailed("request timeout while producing item; try again")
 					close(req.readyCh)
 				}
 				for _, item := range req.Items {
 					// Record the appropriate dead deadline just before we write to the data store
-					item.Item.DeadDeadline = time.Now().Add(item.DeadTimeout)
-					items = append(items, &item.Item)
+					item.DeadDeadline = time.Now().Add(q.opts.DeadTimeout)
+					items = append(items, item)
 				}
 				// Attempt to get a timeout that is within the request
 				// with the least amount of time left to wait

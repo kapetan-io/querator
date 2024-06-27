@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package internal
+package transport
 
 import (
 	"context"
@@ -36,13 +36,17 @@ const (
 	RPCInspectQueue  = "/v1/queue.inspect"
 )
 
+type Service interface {
+	QueueProduce(context.Context, *proto.QueueProduceRequest, *proto.QueueProduceResponse) error
+}
+
 type HTTPHandler struct {
 	duration *prometheus.SummaryVec
 	metrics  http.Handler
-	service  *Service
+	service  Service
 }
 
-func NewHTTPHandler(s *Service, metrics http.Handler) *HTTPHandler {
+func NewHTTPHandler(s Service, metrics http.Handler) *HTTPHandler {
 	return &HTTPHandler{
 		duration: prometheus.NewSummaryVec(prometheus.SummaryOpts{
 			Name: "http_handler_duration",

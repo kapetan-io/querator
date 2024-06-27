@@ -14,24 +14,17 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package internal
+package querator
 
 import (
 	"context"
-	"errors"
+	"github.com/kapetan-io/querator/internal"
 	"github.com/kapetan-io/querator/proto"
 )
 
-var ErrNoQueueExists = errors.New("no queue exists")
-
-// QueueManager manages access to queues
-type QueueManager interface {
-	Get(ctx context.Context, name string, queue *Queue) error
-}
-
 type ServiceOptions struct {
 	// QueueManager manages queues
-	QueueManager QueueManager
+	QueueManager internal.QueueManager
 }
 
 type Service struct {
@@ -46,12 +39,12 @@ func NewService(opts ServiceOptions) *Service {
 }
 
 func (s *Service) QueueProduce(ctx context.Context, req *proto.QueueProduceRequest, res *proto.QueueProduceResponse) error {
-	var queue Queue
-	if err := s.opts.QueueManager.Get(ctx, req.QueueName, &queue); err != nil {
+	queue, err := s.opts.QueueManager.Get(ctx, req.QueueName)
+	if err != nil {
 		return err
 	}
 
-	var r ProduceRequest
+	var r internal.ProduceRequest
 	if err := validateQueueProduceProto(req, &r); err != nil {
 		return err
 	}
@@ -74,3 +67,4 @@ func (s *Service) QueueReserve(ctx context.Context, req *proto.QueueReserveReque
 }
 
 // TODO: Manage Queue Methods
+//func (s *Service) QueueCreate(ctx context.Context, req *proto.Queue, res *proto.QueueReserveResponse) error {

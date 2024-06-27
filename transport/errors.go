@@ -1,11 +1,11 @@
-package internal
+package transport
 
 import (
 	"fmt"
 	"github.com/kapetan-io/errors"
 )
 
-// ErrInternal is any error un handled by ErrRequestFailed or ErrBadRequest. The message
+// ErrInternal is any error un handled by ErrRequestFailed or ErrInvalidRequest. The message
 // and any additional fields are logged but not returned to the client
 type ErrInternal errors.Fields
 
@@ -46,20 +46,20 @@ func (e *ErrRetryRequest) Is(target error) bool {
 	return errors.As(target, &err)
 }
 
-// ErrBadRequest is used to indicate the client's request was invalid for some reason
-type ErrBadRequest struct {
+// ErrInvalidRequest is used to indicate the client's request was invalid for some reason
+type ErrInvalidRequest struct {
 	Msg string
 }
 
-func NewBadRequest(msg string, args ...any) *ErrBadRequest {
-	return &ErrBadRequest{Msg: fmt.Sprintf(msg, args...)}
+func NewInvalidRequest(msg string, args ...any) *ErrInvalidRequest {
+	return &ErrInvalidRequest{Msg: fmt.Sprintf(msg, args...)}
 }
 
-func (e *ErrBadRequest) Error() string {
+func (e *ErrInvalidRequest) Error() string {
 	return e.Msg
 }
 
-func (e *ErrBadRequest) Is(target error) bool {
-	var err *ErrBadRequest
+func (e *ErrInvalidRequest) Is(target error) bool {
+	var err *ErrInvalidRequest
 	return errors.As(target, &err)
 }

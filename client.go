@@ -7,8 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"github.com/duh-rpc/duh-go"
-	"github.com/kapetan-io/querator/internal"
 	pb "github.com/kapetan-io/querator/proto"
+	"github.com/kapetan-io/querator/transport"
 	"github.com/kapetan-io/tackle/set"
 	"google.golang.org/protobuf/proto"
 	"net/http"
@@ -57,7 +57,7 @@ func (c *Client) QueueProduce(ctx context.Context, req *pb.QueueProduceRequest, 
 	}
 
 	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		fmt.Sprintf("%s%s", c.opts.Endpoint, internal.RPCQueueProduce), bytes.NewReader(payload))
+		fmt.Sprintf("%s%s", c.opts.Endpoint, transport.RPCQueueProduce), bytes.NewReader(payload))
 	if err != nil {
 		return duh.NewClientError("", err, nil)
 	}
@@ -73,7 +73,7 @@ func (c *Client) QueueReserve(ctx context.Context, req *pb.QueueReserveRequest, 
 	}
 
 	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		fmt.Sprintf("%s%s", c.opts.Endpoint, internal.RPCQueueReserve), bytes.NewReader(payload))
+		fmt.Sprintf("%s%s", c.opts.Endpoint, transport.RPCQueueReserve), bytes.NewReader(payload))
 	if err != nil {
 		return duh.NewClientError("", err, nil)
 	}

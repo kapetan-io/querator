@@ -224,8 +224,14 @@ func (s *Bunt) Delete(ctx context.Context, items []*QueueItem) error {
 	return nil
 }
 
-func (s *Bunt) Close(ctx context.Context) error {
+func (s *Bunt) Close(_ context.Context) error {
 	return s.db.Close()
+}
+
+func (s *Bunt) Options() QueueStorageOptions {
+	return QueueStorageOptions{
+		MinWriteTimeout: 5 * time.Second,
+	}
 }
 
 func buntSet(tx *buntdb.Tx, item *QueueItem) error {

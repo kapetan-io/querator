@@ -3,12 +3,14 @@ package internal
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/duh-rpc/duh-go"
 	"github.com/kapetan-io/querator/internal/maps"
 	"github.com/kapetan-io/querator/store"
 	"github.com/kapetan-io/querator/transport"
 	"github.com/kapetan-io/tackle/set"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -23,7 +25,7 @@ const (
 	// TODO: This should be based on the minimum request timeout provided by the client
 	dataStoreTimeout  = time.Minute
 	maxRequestTimeout = 15 * time.Minute
-	minWriteTimeout   = 5 * time.Second
+	shutdownMsg       = "queue is shutting down"
 )
 
 type QueueOptions struct {
@@ -56,24 +58,30 @@ type QueueOptions struct {
 type Queue struct {
 	reserveQueueCh atomic.Pointer[chan *ReserveRequest]
 	produceQueueCh atomic.Pointer[chan *ProduceRequest]
-	shutdownCh     chan struct{}
+	shutdownCh     chan *ShutdownRequest
+	wg             sync.WaitGroup
 	opts           QueueOptions
+	inShutdown     atomic.Bool
 }
 
 func NewQueue(opts QueueOptions) (*Queue, error) {
 	set.Default(&opts.Logger, slog.Default())
 	if opts.QueueStorage == nil {
-		return nil, errors.New("QueueOptions.Queue cannot be nil")
+		return nil, errors.New("QueueOptions.QueueStorage cannot be nil")
 	}
 
 	q := &Queue{
-		shutdownCh: make(chan struct{}),
+		shutdownCh: make(chan *ShutdownRequest),
 	}
 
 	// Assign new wait queue
-	ch := make(chan *ReserveRequest, queueChSize)
-	q.reserveQueueCh.Store(&ch)
+	rch := make(chan *ReserveRequest, queueChSize)
+	q.reserveQueueCh.Store(&rch)
+	pch := make(chan *ProduceRequest, queueChSize)
+	q.produceQueueCh.Store(&pch)
 
+	q.wg.Add(1)
+	go q.processQueues()
 	return q, nil
 }
 
@@ -119,10 +127,19 @@ type ProduceRequest struct {
 	err error
 }
 
+type ShutdownRequest struct {
+	Context context.Context
+	readyCh chan struct{}
+	Err     error
+}
+
 // Produce is called by clients who wish to produce an item to the queue. This
 // call will block until the item has been written to the queue or until the request
 // is cancelled via the passed context or RequestTimeout is reached.
 func (q *Queue) Produce(ctx context.Context, req *ProduceRequest) error {
+	if q.inShutdown.Load() {
+		return transport.NewRequestFailed(shutdownMsg)
+	}
 	req.readyCh = make(chan struct{})
 
 	// --- Verify all the things ---
@@ -169,6 +186,9 @@ func (q *Queue) Produce(ctx context.Context, req *ProduceRequest) error {
 // who may attempt to issue many requests simultaneously in an attempt to increase throughput.
 // Increased throughput can instead be achieved by raising the batch size.
 func (q *Queue) Reserve(req *ReserveRequest) error {
+	if q.inShutdown.Load() {
+		return transport.NewRequestFailed(shutdownMsg)
+	}
 	req.readyCh = make(chan struct{})
 
 	if req.ClientID == "" {
@@ -236,6 +256,7 @@ func (q *Queue) Reserve(req *ReserveRequest) error {
 // item and for how long. This especially helpful in understanding how an item got into the dead letter queue.
 // Implementing this adds an additional write burden on our disk, as such it should be optional.
 func (q *Queue) processQueues() {
+	defer q.wg.Done()
 
 	// TODO: Refactor this into a smaller loop with handler functions which pass around a state object with
 	//  State.AddToWPR() and State.AddToWRR() etc....
@@ -269,6 +290,7 @@ func (q *Queue) processQueues() {
 
 		// Process the produce queue into the wpr list
 		case req := <-*produceQueueCh:
+			fmt.Println("ProduceCh")
 			// Swap the wait channel, so we can process the wait queue. Creating a
 			// new channel allows any incoming waiting produce requests (wpr) that occur
 			// while this routine is running to be queued into the new wait queue without
@@ -299,8 +321,7 @@ func (q *Queue) processQueues() {
 			for _, req := range wpr.Requests {
 				// Cancel any produce requests that have timed out
 				if time.Now().After(req.requestDeadline) {
-					// TODO: Change to NewRequestRetry (DUH-RPC Update)
-					req.err = transport.NewRequestFailed("request timeout while producing item; try again")
+					req.err = transport.NewRetryRequest("timeout while producing item; try again")
 					close(req.readyCh)
 				}
 				for _, item := range req.Items {
@@ -368,6 +389,7 @@ func (q *Queue) processQueues() {
 				Limit:           wrr.Total,
 			}); err != nil {
 				q.opts.Logger.Warn("while calling Queue.Reserve", "error", err)
+				cancel()
 				continue
 			}
 			cancel()
@@ -399,8 +421,20 @@ func (q *Queue) processQueues() {
 				timerCh = time.After(next)
 			}
 
-		case <-q.shutdownCh:
-			// TODO: Tell all the clients are are done, and flush everything then exit
+		case req := <-q.shutdownCh:
+			for _, r := range wpr.Requests {
+				r.err = transport.NewRequestFailed(shutdownMsg)
+				close(req.readyCh)
+			}
+			for _, r := range wrr.Requests {
+				r.err = transport.NewRequestFailed(shutdownMsg)
+				close(req.readyCh)
+			}
+			if err := q.opts.QueueStorage.Close(req.Context); err != nil {
+				req.Err = err
+			}
+			close(req.readyCh)
+			return
 		case <-timerCh:
 			// Find the next request that will time out, and notify any clients of expired wrr
 			next := findNextTimeout(&wrr)
@@ -411,6 +445,27 @@ func (q *Queue) processQueues() {
 			// TODO: Preform queue maintenance, cleaning up reserved items that have not been completed and
 			//  moving items into the dead letter queue.
 		}
+	}
+}
+
+func (q *Queue) Shutdown(ctx context.Context) error {
+	if q.inShutdown.Swap(true) {
+		return nil
+	}
+
+	req := &ShutdownRequest{
+		readyCh: make(chan struct{}),
+		Context: ctx,
+	}
+
+	// Wait until q.processQueues() shutdown is complete or until
+	// our context is cancelled.
+	select {
+	case q.shutdownCh <- req:
+		q.wg.Wait()
+		return req.Err
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

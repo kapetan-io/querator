@@ -8,5 +8,5 @@ import (
 func TestNewErrInvalid(t *testing.T) {
 	err := NewInvalidOption("invalid key")
 	assert.Equal(t, "invalid key", err.Error())
-	assert.True(t, IsErrInvalid(err))
+	assert.True(t, IsErrInvalidOption(err))
 }

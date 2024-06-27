@@ -20,26 +20,32 @@ import (
 	"context"
 	"github.com/kapetan-io/querator/internal"
 	"github.com/kapetan-io/querator/proto"
+	"github.com/kapetan-io/querator/store"
 )
 
 type ServiceOptions struct {
-	// QueueManager manages queues
-	QueueManager internal.QueueManager
+	NewQueueStorage func(name string) store.QueueStorage
 }
 
 type Service struct {
-	opts ServiceOptions
-	//log  slog.Logger
+	manager *internal.QueueManager
+	opts    ServiceOptions
 }
 
-func NewService(opts ServiceOptions) *Service {
+func NewService(opts ServiceOptions) (*Service, error) {
+
+	qm := internal.NewQueueManager(internal.QueueManagerOptions{
+		NewQueueStorage: opts.NewQueueStorage,
+	})
+
 	return &Service{
-		opts: opts,
-	}
+		opts:    opts,
+		manager: qm,
+	}, nil
 }
 
 func (s *Service) QueueProduce(ctx context.Context, req *proto.QueueProduceRequest, res *proto.QueueProduceResponse) error {
-	queue, err := s.opts.QueueManager.Get(ctx, req.QueueName)
+	queue, err := s.manager.Get(ctx, req.QueueName)
 	if err != nil {
 		return err
 	}
@@ -75,9 +81,13 @@ func (s *Service) QueueCreate(ctx context.Context, req *proto.QueueOptions) erro
 		return err
 	}
 
-	_, err := s.opts.QueueManager.Create(ctx, opts)
+	_, err := s.manager.Create(ctx, opts)
 	if err != nil {
 		return err
 	}
 	return nil
+}
+
+func (s *Service) Shutdown(ctx context.Context) error {
+	return s.manager.Shutdown(ctx)
 }

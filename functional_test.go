@@ -21,6 +21,11 @@ func TestProduceAndConsume(t *testing.T) {
 	defer func() { _ = d.Shutdown(context.Background()) }()
 	c := d.MustClient()
 
+	err = c.QueueCreate(ctx, &pb.QueueOptions{
+		Name: "test-queue",
+	})
+	require.NoError(t, err)
+
 	ref := random.String("ref-", 10)
 	enc := random.String("enc-", 10)
 	kind := random.String("kind-", 10)

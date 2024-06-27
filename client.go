@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/duh-rpc/duh-go"
+	v1 "github.com/duh-rpc/duh-go/proto/v1"
 	pb "github.com/kapetan-io/querator/proto"
 	"github.com/kapetan-io/querator/transport"
 	"github.com/kapetan-io/tackle/set"
@@ -80,6 +81,23 @@ func (c *Client) QueueReserve(ctx context.Context, req *pb.QueueReserveRequest, 
 
 	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
 	return c.client.Do(r, res)
+}
+
+func (c *Client) QueueCreate(ctx context.Context, req *pb.QueueOptions) error {
+	payload, err := proto.Marshal(req)
+	if err != nil {
+		return duh.NewClientError("while marshaling request payload: %w", err, nil)
+	}
+
+	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("%s%s", c.opts.Endpoint, transport.RPCCreateQueue), bytes.NewReader(payload))
+	if err != nil {
+		return duh.NewClientError("", err, nil)
+	}
+
+	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	var res v1.Reply
+	return c.client.Do(r, &res)
 }
 
 // WithNoTLS returns ClientOptions suitable for use with NON-TLS clients

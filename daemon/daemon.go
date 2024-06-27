@@ -45,8 +45,13 @@ type Daemon struct {
 func NewDaemon(ctx context.Context, conf Config) (*Daemon, error) {
 	set.Default(&conf.Logger, slog.Default())
 
+	s, err := querator.NewService(querator.ServiceOptions{})
+	if err != nil {
+		return nil, err
+	}
+
 	d := &Daemon{
-		service: querator.NewService(querator.ServiceOptions{}),
+		service: s,
 		conf:    conf,
 	}
 	return d, d.Start(ctx)
@@ -78,7 +83,7 @@ func (d *Daemon) Shutdown(ctx context.Context) error {
 		_ = srv.Shutdown(ctx)
 	}
 	d.servers = nil
-	return nil
+	return d.service.Shutdown(ctx)
 }
 
 func (d *Daemon) MustClient() *querator.Client {

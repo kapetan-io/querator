@@ -23,7 +23,7 @@ func (e *ErrInvalidOption) Is(target error) bool {
 	return errors.As(target, &err)
 }
 
-func IsErrInvalid(target error) bool {
+func IsErrInvalidOption(target error) bool {
 	var err *ErrInvalidOption
 	return errors.As(target, &err)
 }

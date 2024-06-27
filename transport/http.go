@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/duh-rpc/duh-go"
+	v1 "github.com/duh-rpc/duh-go/proto/v1"
 	"github.com/kapetan-io/querator/proto"
 	"github.com/prometheus/client_golang/prometheus"
 	"net/http"
@@ -38,6 +39,7 @@ const (
 
 type Service interface {
 	QueueProduce(context.Context, *proto.QueueProduceRequest, *proto.QueueProduceResponse) error
+	QueueCreate(context.Context, *proto.QueueOptions) error
 }
 
 type HTTPHandler struct {
@@ -77,6 +79,8 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case RPCQueueComplete:
 	case RPCListQueue:
 	case RPCCreateQueue:
+		h.QueueCreate(ctx, w, r)
+		return
 	case RPCDeleteQueue:
 	case RPCInspectQueue:
 	}
@@ -99,6 +103,29 @@ func (h *HTTPHandler) QueueProduce(ctx context.Context, w http.ResponseWriter, r
 	if err := h.service.QueueProduce(ctx, &req, &resp); err != nil {
 		duh.ReplyError(w, r, err)
 		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &resp)
+}
+
+func (h *HTTPHandler) QueueCreate(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		duh.ReplyWithCode(w, r, duh.CodeBadRequest, nil,
+			fmt.Sprintf("http method '%s' not allowed; only POST", r.Method))
+		return
+	}
+
+	var req proto.QueueOptions
+	if err := duh.ReadRequest(r, &req); err != nil {
+		duh.ReplyError(w, r, err)
+		return
+	}
+	if err := h.service.QueueCreate(ctx, &req); err != nil {
+		duh.ReplyError(w, r, err)
+		return
+	}
+	resp := v1.Reply{
+		Message: "queue created",
+		Code:    duh.CodeOK,
 	}
 	duh.Reply(w, r, duh.CodeOK, &resp)
 }

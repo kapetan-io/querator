@@ -38,8 +38,9 @@ const (
 )
 
 type Service interface {
-	QueueProduce(context.Context, *proto.QueueProduceRequest, *proto.QueueProduceResponse) error
+	QueueProduce(context.Context, *proto.QueueProduceRequest) error
 	QueueCreate(context.Context, *proto.QueueOptions) error
+	QueueReserve(context.Context, *proto.QueueReserveRequest, *proto.QueueReserveResponse) error
 }
 
 type HTTPHandler struct {
@@ -67,12 +68,15 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer prometheus.NewTimer(h.duration.WithLabelValues(r.URL.Path)).ObserveDuration()
 	ctx := r.Context()
 
+	if r.Method != http.MethodPost {
+		duh.ReplyWithCode(w, r, duh.CodeBadRequest, nil,
+			fmt.Sprintf("http method '%s' not allowed; only POST", r.Method))
+		return
+	}
+
 	switch r.URL.Path {
 	case RPCQueueProduce:
 		h.QueueProduce(ctx, w, r)
-		return
-	case "/metrics":
-		h.metrics.ServeHTTP(w, r)
 		return
 	case RPCQueueReserve:
 	case RPCQueueDefer:
@@ -83,51 +87,39 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	case RPCDeleteQueue:
 	case RPCInspectQueue:
+	case "/metrics":
+		h.metrics.ServeHTTP(w, r)
+		return
 	}
 	duh.ReplyWithCode(w, r, duh.CodeNotImplemented, nil, "no such method; "+r.URL.Path)
 }
 
 func (h *HTTPHandler) QueueProduce(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		duh.ReplyWithCode(w, r, duh.CodeBadRequest, nil,
-			fmt.Sprintf("http method '%s' not allowed; only POST", r.Method))
-		return
-	}
-
 	var req proto.QueueProduceRequest
 	if err := duh.ReadRequest(r, &req); err != nil {
 		duh.ReplyError(w, r, err)
 		return
 	}
-	var resp proto.QueueProduceResponse
-	if err := h.service.QueueProduce(ctx, &req, &resp); err != nil {
+
+	if err := h.service.QueueProduce(ctx, &req); err != nil {
 		duh.ReplyError(w, r, err)
 		return
 	}
-	duh.Reply(w, r, duh.CodeOK, &resp)
+	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
 }
 
 func (h *HTTPHandler) QueueCreate(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		duh.ReplyWithCode(w, r, duh.CodeBadRequest, nil,
-			fmt.Sprintf("http method '%s' not allowed; only POST", r.Method))
-		return
-	}
-
 	var req proto.QueueOptions
 	if err := duh.ReadRequest(r, &req); err != nil {
 		duh.ReplyError(w, r, err)
 		return
 	}
+
 	if err := h.service.QueueCreate(ctx, &req); err != nil {
 		duh.ReplyError(w, r, err)
 		return
 	}
-	resp := v1.Reply{
-		Message: "queue created",
-		Code:    duh.CodeOK,
-	}
-	duh.Reply(w, r, duh.CodeOK, &resp)
+	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
 }
 
 // Describe fetches prometheus metrics to be registered

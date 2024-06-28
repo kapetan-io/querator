@@ -21,10 +21,13 @@ import (
 	"github.com/kapetan-io/querator/internal"
 	"github.com/kapetan-io/querator/proto"
 	"github.com/kapetan-io/querator/store"
+	"github.com/kapetan-io/tackle/set"
 )
 
 type ServiceOptions struct {
-	NewQueueStorage func(name string) store.QueueStorage
+	NewQueueStorage     func(name string) store.QueueStorage
+	MaxReserveBatchSize int32 `json:"max_reserve_batch_size"`
+	MaxProduceBatchSize int   `json:"max_produce_batch_size"`
 }
 
 type Service struct {
@@ -33,6 +36,8 @@ type Service struct {
 }
 
 func NewService(opts ServiceOptions) (*Service, error) {
+	// TODO: Document this
+	set.Default(opts.MaxReserveBatchSize, 1_000)
 
 	qm := internal.NewQueueManager(internal.QueueManagerOptions{
 		NewQueueStorage: opts.NewQueueStorage,
@@ -44,18 +49,16 @@ func NewService(opts ServiceOptions) (*Service, error) {
 	}, nil
 }
 
-func (s *Service) QueueProduce(ctx context.Context, req *proto.QueueProduceRequest, res *proto.QueueProduceResponse) error {
+func (s *Service) QueueProduce(ctx context.Context, req *proto.QueueProduceRequest) error {
 	queue, err := s.manager.Get(ctx, req.QueueName)
 	if err != nil {
 		return err
 	}
 
 	var r internal.ProduceRequest
-	if err := validateQueueProduceProto(req, &r); err != nil {
+	if err := s.validateQueueProduceProto(req, &r); err != nil {
 		return err
 	}
-
-	// TODO: Forward the request to a different instance of querator if needed
 
 	// Produce will block until success, context cancel or timeout
 	if err := queue.Produce(ctx, &r); err != nil {
@@ -66,9 +69,21 @@ func (s *Service) QueueProduce(ctx context.Context, req *proto.QueueProduceReque
 }
 
 func (s *Service) QueueReserve(ctx context.Context, req *proto.QueueReserveRequest, res *proto.QueueReserveResponse) error {
-	// TODO: Lookup the queue
-	// TODO: Forward the request
-	// TODO: Handle the response
+	queue, err := s.manager.Get(ctx, req.QueueName)
+	if err != nil {
+		return err
+	}
+
+	var r internal.ReserveRequest
+	if err := s.validateQueueReserveProto(req, &r); err != nil {
+		return err
+	}
+
+	// Reserve will block until success, context cancel or timeout
+	if err := queue.Reserve(ctx, &r); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -77,7 +92,7 @@ func (s *Service) QueueReserve(ctx context.Context, req *proto.QueueReserveReque
 func (s *Service) QueueCreate(ctx context.Context, req *proto.QueueOptions) error {
 	var opts internal.QueueOptions
 
-	if err := validateQueueOptionsProto(req, &opts); err != nil {
+	if err := s.validateQueueOptionsProto(req, &opts); err != nil {
 		return err
 	}
 

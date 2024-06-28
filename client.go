@@ -51,7 +51,7 @@ func NewClient(opts ClientOptions) (*Client, error) {
 	}, nil
 }
 
-func (c *Client) QueueProduce(ctx context.Context, req *pb.QueueProduceRequest, res *pb.QueueProduceResponse) error {
+func (c *Client) QueueProduce(ctx context.Context, req *pb.QueueProduceRequest) error {
 	payload, err := proto.Marshal(req)
 	if err != nil {
 		return duh.NewClientError("while marshaling request payload: %w", err, nil)
@@ -64,7 +64,8 @@ func (c *Client) QueueProduce(ctx context.Context, req *pb.QueueProduceRequest, 
 	}
 
 	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
-	return c.client.Do(r, res)
+	var res v1.Reply
+	return c.client.Do(r, &res)
 }
 
 func (c *Client) QueueReserve(ctx context.Context, req *pb.QueueReserveRequest, res *pb.QueueReserveResponse) error {

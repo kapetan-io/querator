@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/davecgh/go-spew/spew"
 	"github.com/duh-rpc/duh-go"
 	"github.com/kapetan-io/querator/internal/maps"
 	"github.com/kapetan-io/querator/store"
@@ -72,6 +73,7 @@ func NewQueue(opts QueueOptions) (*Queue, error) {
 
 	q := &Queue{
 		shutdownCh: make(chan *ShutdownRequest),
+		opts:       opts,
 	}
 
 	// Assign new wait queue
@@ -140,9 +142,8 @@ func (q *Queue) Produce(ctx context.Context, req *ProduceRequest) error {
 	if q.inShutdown.Load() {
 		return transport.NewRequestFailed(shutdownMsg)
 	}
-	req.readyCh = make(chan struct{})
 
-	// --- Verify all the things ---
+	req.readyCh = make(chan struct{})
 	req.requestDeadline = time.Now().Add(req.RequestTimeout)
 	if req.RequestTimeout > maxRequestTimeout {
 		return transport.NewInvalidRequest("RequestTimeout '%s' is invalid; maximum timeout is '15m'",
@@ -152,7 +153,6 @@ func (q *Queue) Produce(ctx context.Context, req *ProduceRequest) error {
 	if req.RequestTimeout == time.Duration(0) {
 		req.RequestTimeout = maxRequestTimeout
 	}
-	// -----------------------------
 
 	// The context is passed to processQueues which will check
 	// for context cancel and do the right thing.
@@ -185,7 +185,7 @@ func (q *Queue) Produce(ctx context.Context, req *ProduceRequest) error {
 // to process items properly. It is so used to avoid poor performing or bad behavior from clients
 // who may attempt to issue many requests simultaneously in an attempt to increase throughput.
 // Increased throughput can instead be achieved by raising the batch size.
-func (q *Queue) Reserve(req *ReserveRequest) error {
+func (q *Queue) Reserve(ctx context.Context, req *ReserveRequest) error {
 	if q.inShutdown.Load() {
 		return transport.NewRequestFailed(shutdownMsg)
 	}
@@ -204,6 +204,9 @@ func (q *Queue) Reserve(req *ReserveRequest) error {
 	}
 
 	req.requestDeadline = time.Now().Add(req.RequestTimeout)
+	// The context is passed to processQueues which will check
+	// for context cancel and do the right thing.
+	req.Context = ctx
 	*q.reserveQueueCh.Load() <- req
 
 	// Wait until the request has been processed
@@ -264,7 +267,7 @@ func (q *Queue) processQueues() {
 		Requests: make(map[string]*ReserveRequest, 5_000),
 	}
 	wpr := waitingProduceRequests{
-		Requests: make([]*ProduceRequest, 5_000),
+		Requests: make([]*ProduceRequest, 0, 5_000),
 	}
 	var timerCh <-chan time.Time
 
@@ -290,7 +293,6 @@ func (q *Queue) processQueues() {
 
 		// Process the produce queue into the wpr list
 		case req := <-*produceQueueCh:
-			fmt.Println("ProduceCh")
 			// Swap the wait channel, so we can process the wait queue. Creating a
 			// new channel allows any incoming waiting produce requests (wpr) that occur
 			// while this routine is running to be queued into the new wait queue without
@@ -299,6 +301,7 @@ func (q *Queue) processQueues() {
 			q.produceQueueCh.Store(&ch)
 			close(*produceQueueCh)
 
+			fmt.Printf("ProduceCh: %+v\n", req)
 			addToWPR(req)
 			for req := range *produceQueueCh {
 				addToWPR(req)
@@ -316,9 +319,10 @@ func (q *Queue) processQueues() {
 
 			// Place all the queued produce requests in to the `items` list, which is a complete list of
 			// all the items each producer provided us with.
-			items := make([]*store.QueueItem, wpr.Total)
+			items := make([]*store.QueueItem, 0, wpr.Total)
 			writeTimeout := 15 * time.Minute
 			for _, req := range wpr.Requests {
+				spew.Dump(req)
 				// Cancel any produce requests that have timed out
 				if time.Now().After(req.requestDeadline) {
 					req.err = transport.NewRetryRequest("timeout while producing item; try again")

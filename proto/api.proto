@@ -50,19 +50,6 @@ message QueueProduceItem {
   bytes  body = 4;
 }
 
-message QueueProduceResponse {
-  // A unique ID which is in the form <queue_name>-<unique_id>. The item id changes
-  // everytime the item is deferred. If you need a reliable method for tracking an item
-  // through all the stages of it's life cycle, then you can use the reference field or
-  // encode this information in the body of the queue item. The unique_id is dependent
-  // upon the data store implementation used to store the items in the queue.
-  //
-  // FUTURE: Perhaps if the 'reference' field is empty we generate a uid which can then
-  //  be used to query the dead letter queue if our item ends up there.
-  // Examples: 'queue1-0ujsswThIGTUYm2K8FjOOfXtY1K', 'queue2-0001'
-  string ItemId = 1 [json_name = "item_id"]; // TODO: OpenAPI
-}
-
 message QueueReserveRequest {
   // The name of the queue to reserve work from
   // Example: 'http-send'

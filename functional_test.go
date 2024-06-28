@@ -31,7 +31,6 @@ func TestProduceAndConsume(t *testing.T) {
 	kind := random.String("kind-", 10)
 	body := []byte("I didn't learn a thing. I was right all along")
 	// Produce a single message
-	var produce pb.QueueProduceResponse
 	require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
 		QueueName:      "test-queue",
 		RequestTimeout: "1m",
@@ -43,8 +42,7 @@ func TestProduceAndConsume(t *testing.T) {
 				Body:      body,
 			},
 		},
-	}, &produce))
-	assert.Equal(t, "queue-p-12048123098", produce.ItemId)
+	}))
 
 	// Reserve a single message
 	var reserve pb.QueueReserveResponse

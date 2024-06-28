@@ -4,6 +4,7 @@ import (
 	"context"
 	"github.com/kapetan-io/querator/store"
 	"github.com/kapetan-io/querator/transport"
+	"strings"
 	"time"
 )
 
@@ -33,11 +34,15 @@ func (qm *QueueManager) Get(_ context.Context, name string) (*Queue, error) {
 }
 
 func (qm *QueueManager) Create(_ context.Context, opts QueueOptions) (*Queue, error) {
-	if _, ok := qm.queues[opts.Name]; ok {
-		return nil, transport.NewInvalidRequest("queue '%s' already exists", opts.Name)
+
+	if strings.TrimSpace(opts.Name) == "" {
+		return nil, transport.NewInvalidRequest("queue 'name' cannot be empty")
 	}
 
-	// Set Defaults if none are provided
+	if _, ok := qm.queues[opts.Name]; ok {
+		return nil, transport.NewInvalidRequest("duplicate queue name; '%s' already exists", opts.Name)
+	}
+
 	if opts.ReserveTimeout == 0 {
 		opts.ReserveTimeout = time.Minute
 	}

@@ -79,6 +79,8 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.QueueProduce(ctx, w, r)
 		return
 	case RPCQueueReserve:
+		h.QueueReserve(ctx, w, r)
+		return
 	case RPCQueueDefer:
 	case RPCQueueComplete:
 	case RPCListQueue:
@@ -106,6 +108,21 @@ func (h *HTTPHandler) QueueProduce(ctx context.Context, w http.ResponseWriter, r
 		return
 	}
 	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
+}
+
+func (h *HTTPHandler) QueueReserve(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req proto.QueueReserveRequest
+	if err := duh.ReadRequest(r, &req); err != nil {
+		duh.ReplyError(w, r, err)
+		return
+	}
+
+	var resp proto.QueueReserveResponse
+	if err := h.service.QueueReserve(ctx, &req, &resp); err != nil {
+		duh.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &resp)
 }
 
 func (h *HTTPHandler) QueueCreate(ctx context.Context, w http.ResponseWriter, r *http.Request) {

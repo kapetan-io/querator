@@ -21,7 +21,7 @@ func TestStorage(t *testing.T) {
 		{
 			Name: "BuntDB",
 			New: func() (store.Queue, error) {
-				return store.NewBuntStore(store.BuntOptions{})
+				return store.NewBuntStore(store.BuntOptions{File: ":memory:"})
 			},
 		},
 		//{
@@ -48,7 +48,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		defer func() { _ = s.Close(context.Background()) }()
 		require.NoError(t, err)
 
-		now := time.Now()
+		now := time.Now().UTC()
 		var items []*store.QueueItem
 		items = append(items, &store.QueueItem{
 			IsReserved:      true,
@@ -129,10 +129,10 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		cpy.IsReserved = true
 		assert.False(t, cmp.Compare(&cpy))
 		cpy = *cmp
-		cpy.DeadDeadline = time.Now()
+		cpy.DeadDeadline = time.Now().UTC()
 		assert.False(t, cmp.Compare(&cpy))
 		cpy = *cmp
-		cpy.ReserveDeadline = time.Now()
+		cpy.ReserveDeadline = time.Now().UTC()
 		assert.False(t, cmp.Compare(&cpy))
 		cpy = *cmp
 		cpy.Attempts = 2
@@ -240,7 +240,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 
 			// Reserve 10 items
 			var reserved []*store.QueueItem
-			expire := time.Now().Add(2_000 * time.Minute)
+			expire := time.Now().UTC().Add(2_000 * time.Minute)
 
 			err = s.Reserve(ctx, &reserved, store.ReserveOptions{ReserveDeadline: expire, Limit: 10})
 			require.NoError(t, err)
@@ -262,6 +262,10 @@ func testSuite(t *testing.T, newStore NewFunc) {
 			err = s.Reserve(ctx, &secondReserve, store.ReserveOptions{ReserveDeadline: expire, Limit: 10})
 			require.NoError(t, err)
 
+			read = read[:0]
+			err = s.Read(ctx, &read, "", 10_000)
+			require.NoError(t, err)
+
 			var combined []*store.QueueItem
 			combined = append(combined, reserved...)
 			combined = append(combined, secondReserve...)
@@ -269,10 +273,13 @@ func testSuite(t *testing.T, newStore NewFunc) {
 			err = s.Read(ctx, &read, "", 10_000)
 			require.NoError(t, err)
 			assert.NotEqual(t, reserved[0].ID, secondReserve[0].ID)
+			assert.Equal(t, combined[0].ID, read[0].ID)
+			require.Equal(t, 20, len(combined))
+			require.Equal(t, 20_000, len(read))
 
 			// Ensure all the items reserved are marked as reserved in the database
-			for i := range reserved {
-				assert.Equal(t, read[i].ID, reserved[i].ID)
+			for i := range combined {
+				assert.Equal(t, read[i].ID, combined[i].ID)
 				assert.Equal(t, true, read[i].IsReserved)
 				assert.True(t, expire.Equal(read[i].ReserveDeadline))
 			}
@@ -291,7 +298,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 
 			// Reserve 100 items
 			var reserved []*store.QueueItem
-			expire := time.Now().Add(time.Minute)
+			expire := time.Now().UTC().Add(time.Minute)
 
 			err = s.Reserve(ctx, &reserved, store.ReserveOptions{ReserveDeadline: expire, Limit: 100})
 			require.NoError(t, err)
@@ -344,7 +351,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 
 func writeRandomItems(t *testing.T, ctx context.Context, s store.Queue, count int) []*store.QueueItem {
 	t.Helper()
-	expire := time.Now().Add(random.Duration(time.Minute))
+	expire := time.Now().UTC().Add(random.Duration(time.Minute))
 
 	var items []*store.QueueItem
 	for i := 0; i < count; i++ {

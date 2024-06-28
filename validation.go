@@ -5,6 +5,7 @@ import (
 	"github.com/kapetan-io/querator/proto"
 	"github.com/kapetan-io/querator/store"
 	"github.com/kapetan-io/querator/transport"
+	"strings"
 	"time"
 )
 
@@ -39,6 +40,10 @@ func (s *Service) validateQueueProduceProto(in *proto.QueueProduceRequest, out *
 func (s *Service) validateQueueReserveProto(in *proto.QueueReserveRequest, out *internal.ReserveRequest) error {
 	var err error
 
+	if strings.TrimSpace(in.QueueName) == "" {
+		return transport.NewInvalidRequest("'queue_name' cannot be empty")
+	}
+
 	if in.RequestTimeout != "" {
 		out.RequestTimeout, err = time.ParseDuration(in.RequestTimeout)
 		if err != nil {
@@ -46,13 +51,13 @@ func (s *Service) validateQueueReserveProto(in *proto.QueueReserveRequest, out *
 		}
 	}
 
-	if in.BatchSize > s.opts.MaxReserveBatchSize {
-		return transport.NewInvalidRequest("requested batch_size is too large; max_reserve_batch_size is"+
-			" %d but requested %d", s.opts.MaxProduceBatchSize, in.BatchSize)
+	if int(in.BatchSize) > s.opts.MaxReserveBatchSize {
+		return transport.NewInvalidRequest("batch_size exceeds maximum limit; max_reserve_batch_size is %d, "+
+			"but %d was requested", s.opts.MaxProduceBatchSize, in.BatchSize)
 	}
 
-	// TODO: ADR about error messages '<unique error; <changing details about the error>'
-	// TODO: Validate the rest <-- DO THIS NEXT
+	out.ClientID = in.ClientId
+	out.BatchSize = in.BatchSize
 
 	return nil
 }

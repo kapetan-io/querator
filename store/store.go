@@ -16,7 +16,8 @@ type ReserveOptions struct {
 }
 
 type QueueStorageOptions struct {
-	MinWriteTimeout time.Duration
+	WriteTimeout time.Duration
+	ReadTimeout  time.Duration
 }
 
 type Stats struct {

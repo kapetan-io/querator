@@ -7,16 +7,18 @@ import (
 	"github.com/kapetan-io/tackle/random"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"io"
+	"log/slog"
 	"testing"
 	"time"
 )
 
 func TestProduceAndConsume(t *testing.T) {
-	// TODO: Simple produce and consume
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	d, err := daemon.NewDaemon(ctx, daemon.Config{})
+	d, err := daemon.NewDaemon(ctx, daemon.Config{
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
 	require.NoError(t, err)
 	defer func() { _ = d.Shutdown(context.Background()) }()
 	c := d.MustClient()
@@ -47,6 +49,7 @@ func TestProduceAndConsume(t *testing.T) {
 	// Reserve a single message
 	var reserve pb.QueueReserveResponse
 	require.NoError(t, c.QueueReserve(ctx, &pb.QueueReserveRequest{
+		ClientId:  random.String("client-", 10),
 		QueueName: "test-queue",
 		BatchSize: 1,
 	}, &reserve))
@@ -57,13 +60,16 @@ func TestProduceAndConsume(t *testing.T) {
 	assert.Equal(t, ref, item.Reference)
 	assert.Equal(t, enc, item.Encoding)
 	assert.Equal(t, kind, item.Kind)
-	assert.Equal(t, 0, item.Attempts)
+	assert.Equal(t, int32(0), item.Attempts)
 	assert.Equal(t, body, item.Body)
 
 	// TODO: Complete the queue item
-	// TODO: Ensure it's gone from the database
+	// TODO: Ensure it's gone from the database by using a new endpoint /storage.list  /storage.inspect
 
 }
 
 // TODO: Defer
 // TODO: Implement clock style thingy so we can freeze time and advance time in order to test Deadlines and such.
+// TODO: Test /queue.produce and all the possible incorrect way it could be called
+// TODO: Test /queue.reserve and all the possible incorrect way it could be called
+// TODO: Test /queue.complete and all the possible incorrect way it could be called

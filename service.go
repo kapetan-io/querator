@@ -22,12 +22,13 @@ import (
 	"github.com/kapetan-io/querator/proto"
 	"github.com/kapetan-io/querator/store"
 	"github.com/kapetan-io/tackle/set"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type ServiceOptions struct {
 	NewQueueStorage     func(name string) store.QueueStorage
-	MaxReserveBatchSize int32 `json:"max_reserve_batch_size"`
-	MaxProduceBatchSize int   `json:"max_produce_batch_size"`
+	MaxReserveBatchSize int `json:"max_reserve_batch_size"`
+	MaxProduceBatchSize int `json:"max_produce_batch_size"`
 }
 
 type Service struct {
@@ -37,7 +38,8 @@ type Service struct {
 
 func NewService(opts ServiceOptions) (*Service, error) {
 	// TODO: Document this
-	set.Default(opts.MaxReserveBatchSize, 1_000)
+	set.Default(&opts.MaxReserveBatchSize, 1_000)
+	set.Default(&opts.MaxProduceBatchSize, 1_000)
 
 	qm := internal.NewQueueManager(internal.QueueManagerOptions{
 		NewQueueStorage: opts.NewQueueStorage,
@@ -82,6 +84,18 @@ func (s *Service) QueueReserve(ctx context.Context, req *proto.QueueReserveReque
 	// Reserve will block until success, context cancel or timeout
 	if err := queue.Reserve(ctx, &r); err != nil {
 		return err
+	}
+
+	for _, item := range r.Items {
+		res.Items = append(res.Items, &proto.QueueReserveItem{
+			ReserveDeadline: timestamppb.New(item.ReserveDeadline),
+			Attempts:        int32(item.Attempts),
+			Reference:       item.Reference,
+			Encoding:        item.Encoding,
+			Kind:            item.Kind,
+			Body:            item.Body,
+			ItemId:          item.ID,
+		})
 	}
 
 	return nil

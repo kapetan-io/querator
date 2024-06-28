@@ -3,22 +3,21 @@ package internal
 import (
 	"context"
 	"errors"
-	"fmt"
-	"github.com/davecgh/go-spew/spew"
 	"github.com/duh-rpc/duh-go"
 	"github.com/kapetan-io/querator/internal/maps"
 	"github.com/kapetan-io/querator/store"
 	"github.com/kapetan-io/querator/transport"
 	"github.com/kapetan-io/tackle/set"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 )
 
 var (
-	ErrDuplicateClientID = errors.New("duplicate client id")
-	ErrRequestTimeout    = errors.New("request timeout")
+	ErrDuplicateClientID = transport.NewInvalidRequest("duplicate client id")
+	ErrRequestTimeout    = transport.NewRetryRequest("request timeout, try again")
 )
 
 const (
@@ -143,8 +142,6 @@ func (q *Queue) Produce(ctx context.Context, req *ProduceRequest) error {
 		return transport.NewRequestFailed(shutdownMsg)
 	}
 
-	req.readyCh = make(chan struct{})
-	req.requestDeadline = time.Now().Add(req.RequestTimeout)
 	if req.RequestTimeout > maxRequestTimeout {
 		return transport.NewInvalidRequest("RequestTimeout '%s' is invalid; maximum timeout is '15m'",
 			req.RequestTimeout.String())
@@ -154,16 +151,14 @@ func (q *Queue) Produce(ctx context.Context, req *ProduceRequest) error {
 		req.RequestTimeout = maxRequestTimeout
 	}
 
-	// The context is passed to processQueues which will check
-	// for context cancel and do the right thing.
 	req.Context = ctx
+	req.readyCh = make(chan struct{})
+	req.requestDeadline = time.Now().UTC().Add(req.RequestTimeout)
 	*q.produceQueueCh.Load() <- req
 
 	// Wait until the request has been processed
-	select {
-	case <-req.readyCh:
-		return req.err
-	}
+	<-req.readyCh
+	return req.err
 }
 
 // Reserve is called by clients wanting to reserve a new item from the queue. This call
@@ -189,31 +184,32 @@ func (q *Queue) Reserve(ctx context.Context, req *ReserveRequest) error {
 	if q.inShutdown.Load() {
 		return transport.NewRequestFailed(shutdownMsg)
 	}
-	req.readyCh = make(chan struct{})
 
-	if req.ClientID == "" {
-		return transport.NewInvalidRequest("ClientID is invalid; cannot be empty")
+	if strings.TrimSpace(req.ClientID) == "" {
+		return transport.NewInvalidRequest("client_id cannot be empty")
+	}
+
+	if req.BatchSize <= 0 {
+		return transport.NewInvalidRequest("batch_size must be greater than zero")
 	}
 
 	if req.RequestTimeout > maxRequestTimeout {
-		return transport.NewInvalidRequest("RequestTimeout '%s' is invalid; maximum timeout is '15m'", req.RequestTimeout.String())
+		return transport.NewInvalidRequest("request_timeout is invalid; maximum timeout is '15m' but '%s' "+
+			"requested", req.RequestTimeout.String())
 	}
 
 	if req.RequestTimeout == time.Duration(0) {
 		req.RequestTimeout = maxRequestTimeout
 	}
 
-	req.requestDeadline = time.Now().Add(req.RequestTimeout)
-	// The context is passed to processQueues which will check
-	// for context cancel and do the right thing.
 	req.Context = ctx
+	req.readyCh = make(chan struct{})
+	req.requestDeadline = time.Now().UTC().Add(req.RequestTimeout)
 	*q.reserveQueueCh.Load() <- req
 
 	// Wait until the request has been processed
-	select {
-	case <-req.readyCh:
-		return req.err
-	}
+	<-req.readyCh
+	return req.err
 }
 
 // processQueues processes the queues of both producing and reserving clients. It is the synchronization
@@ -273,7 +269,7 @@ func (q *Queue) processQueues() {
 
 	addToWPR := func(req *ProduceRequest) {
 		wpr.Requests = append(wpr.Requests, req)
-		wpr.Total += len(req.Items)
+		wpr.TotalItems += len(req.Items)
 	}
 
 	addToWRR := func(req *ReserveRequest) {
@@ -301,12 +297,10 @@ func (q *Queue) processQueues() {
 			q.produceQueueCh.Store(&ch)
 			close(*produceQueueCh)
 
-			fmt.Printf("ProduceCh: %+v\n", req)
 			addToWPR(req)
 			for req := range *produceQueueCh {
 				addToWPR(req)
 			}
-			produceQueueCh = nil
 
 			// FUTURE: Inspect the Waiting Reserve Requests, and attempt to assign produced items with
 			//  waiting reserve requests if our queue is caught up.
@@ -317,25 +311,22 @@ func (q *Queue) processQueues() {
 			//  step, in addition, we can back fill reservable items into memory when processQueues() isn't
 			//  actively producing or consuming.
 
-			// Place all the queued produce requests in to the `items` list, which is a complete list of
-			// all the items each producer provided us with.
-			items := make([]*store.QueueItem, 0, wpr.Total)
+			// `items` list is a complete list of all the items each producer provided us with.
+			items := make([]*store.QueueItem, 0, wpr.TotalItems)
 			writeTimeout := 15 * time.Minute
 			for _, req := range wpr.Requests {
-				spew.Dump(req)
 				// Cancel any produce requests that have timed out
-				if time.Now().After(req.requestDeadline) {
-					req.err = transport.NewRetryRequest("timeout while producing item; try again")
+				if time.Now().UTC().After(req.requestDeadline) {
+					req.err = ErrRequestTimeout
 					close(req.readyCh)
+					continue
 				}
 				for _, item := range req.Items {
-					// Record the appropriate dead deadline just before we write to the data store
-					item.DeadDeadline = time.Now().Add(q.opts.DeadTimeout)
+					item.DeadDeadline = time.Now().UTC().Add(q.opts.DeadTimeout)
 					items = append(items, item)
 				}
-				// Attempt to get a timeout that is within the request
-				// with the least amount of time left to wait
-				timeLeft := time.Now().Sub(req.requestDeadline)
+				// The writeTimeout should be equal to the request with the least amount of request timeout left.
+				timeLeft := time.Now().UTC().Sub(req.requestDeadline)
 				if timeLeft < writeTimeout {
 					writeTimeout = timeLeft
 				}
@@ -343,26 +334,38 @@ func (q *Queue) processQueues() {
 
 			// If we allow a calculated write timeout to be a few milliseconds, then the store.Write()
 			// is almost guaranteed to fail, so we ensure the write timeout is something reasonable.
-			if writeTimeout < q.opts.QueueStorage.Options().MinWriteTimeout {
-				// MinWriteTimeout comes from the storage implementation as the user who configured the
+			if writeTimeout < q.opts.QueueStorage.Options().WriteTimeout {
+				// WriteTimeout comes from the storage implementation as the user who configured the
 				// storage option should know a reasonable timeout value for the configuration chosen.
-				writeTimeout = q.opts.QueueStorage.Options().MinWriteTimeout
+				writeTimeout = q.opts.QueueStorage.Options().WriteTimeout
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
 			if err := q.opts.QueueStorage.Write(ctx, items); err != nil {
 				q.opts.Logger.Warn("while calling QueueStorage.Write()", "error", err)
 				cancel()
-				// TODO: Let clients that are timed out, know we are done with them.
+				// Let clients that are timed out, know we are done with them.
+				for _, req := range wpr.Requests {
+					if time.Now().UTC().After(req.requestDeadline) {
+						req.err = ErrRequestTimeout
+						close(req.readyCh)
+						continue
+					}
+				}
 				continue
 			}
 			cancel()
 
 			// Tell the waiting clients the items have been produced
-			for _, req := range wpr.Requests {
+			for i, req := range wpr.Requests {
 				close(req.readyCh)
+				// Allow the GC to collect these requests
+				wpr.Requests[i] = nil
 			}
-			wpr.Total = 0
+
+			// Reset the slice without re-allocating
+			wpr.Requests = wpr.Requests[:0]
+			wpr.TotalItems = 0
 
 		// Process the reserve queue into the waiting reserve request (wrr) list.
 		case req := <-*reserveQueueCh:
@@ -378,27 +381,26 @@ func (q *Queue) processQueues() {
 			for req := range *reserveQueueCh {
 				addToWRR(req)
 			}
-			reserveQueueCh = nil
 
 			// NOTE: V0 doing the simplest thing that works now, we can get fancy & efficient later.
 
-			// Remove any clients that have expired
+			// Remove any clients that have timed out
 			_ = findNextTimeout(&wrr)
 
 			// Fetch all the reservable items in the store
-			ctx, cancel := context.WithTimeout(context.Background(), dataStoreTimeout)
+			ctx, cancel := context.WithTimeout(context.Background(), q.opts.QueueStorage.Options().ReadTimeout)
 			var items []*store.QueueItem
 			if err := q.opts.QueueStorage.Reserve(ctx, &items, store.ReserveOptions{
-				ReserveDeadline: time.Now().Add(q.opts.ReserveTimeout),
+				ReserveDeadline: time.Now().UTC().Add(q.opts.ReserveTimeout),
 				Limit:           wrr.Total,
 			}); err != nil {
-				q.opts.Logger.Warn("while calling Queue.Reserve", "error", err)
+				q.opts.Logger.Warn("while calling QueueStorage.Reserve()", "error", err)
 				cancel()
 				continue
 			}
 			cancel()
 
-			// Distribute the records evenly to all the reserve clients
+			// Distribute the items evenly to all the reserve clients
 			keys := maps.Keys(wrr.Requests)
 			var idx int
 			for _, item := range items {
@@ -428,17 +430,18 @@ func (q *Queue) processQueues() {
 		case req := <-q.shutdownCh:
 			for _, r := range wpr.Requests {
 				r.err = transport.NewRequestFailed(shutdownMsg)
-				close(req.readyCh)
+				close(r.readyCh)
 			}
 			for _, r := range wrr.Requests {
 				r.err = transport.NewRequestFailed(shutdownMsg)
-				close(req.readyCh)
+				close(r.readyCh)
 			}
 			if err := q.opts.QueueStorage.Close(req.Context); err != nil {
 				req.Err = err
 			}
 			close(req.readyCh)
 			return
+
 		case <-timerCh:
 			// Find the next request that will time out, and notify any clients of expired wrr
 			next := findNextTimeout(&wrr)
@@ -478,7 +481,7 @@ func findNextTimeout(r *waitingReserveRequests) time.Duration {
 
 	for _, req := range r.Requests {
 		// If request has already expired
-		if req.requestDeadline.After(time.Now()) {
+		if time.Now().UTC().After(req.requestDeadline) {
 			// Inform our waiting client
 			req.err = ErrRequestTimeout
 			close(req.readyCh)
@@ -502,7 +505,7 @@ func findNextTimeout(r *waitingReserveRequests) time.Duration {
 			continue
 		}
 
-		// Will this happen soon?
+		// Will this happen sooner?
 		if req.requestDeadline.Before(soon.requestDeadline) {
 			soon = req
 		}
@@ -514,7 +517,7 @@ func findNextTimeout(r *waitingReserveRequests) time.Duration {
 	}
 
 	// How soon is it? =)
-	return soon.requestDeadline.Sub(time.Now())
+	return time.Now().UTC().Sub(soon.requestDeadline)
 }
 
 type waitingReserveRequests struct {
@@ -523,6 +526,6 @@ type waitingReserveRequests struct {
 }
 
 type waitingProduceRequests struct {
-	Requests []*ProduceRequest
-	Total    int
+	Requests   []*ProduceRequest
+	TotalItems int
 }

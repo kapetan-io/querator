@@ -36,8 +36,9 @@ func NewBuntStore(opts BuntOptions) (*Bunt, error) {
 		return nil, fmt.Errorf("opening buntdb: %w", err)
 	}
 	return &Bunt{
-		db:  db,
-		uid: ksuid.New(),
+		uid:  ksuid.New(),
+		opts: opts,
+		db:   db,
 	}, nil
 }
 
@@ -48,7 +49,7 @@ func (s *Bunt) Stats(ctx context.Context, stats *Stats) error {
 	}
 
 	var iterErr error
-	now := time.Now()
+	now := time.Now().UTC()
 
 	err = tx.AscendGreaterOrEqual("", "", func(key, value string) bool {
 		var item QueueItem
@@ -236,7 +237,9 @@ func (s *Bunt) Close(_ context.Context) error {
 
 func (s *Bunt) Options() QueueStorageOptions {
 	return QueueStorageOptions{
-		MinWriteTimeout: 5 * time.Second,
+		// TODO: Make these configurable
+		WriteTimeout: 5 * time.Second,
+		ReadTimeout:  5 * time.Second,
 	}
 }
 

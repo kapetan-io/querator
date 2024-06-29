@@ -84,14 +84,14 @@ func (c *Client) QueueReserve(ctx context.Context, req *pb.QueueReserveRequest, 
 	return c.client.Do(r, res)
 }
 
-func (c *Client) QueueCreate(ctx context.Context, req *pb.QueueOptions) error {
+func (c *Client) QueueComplete(ctx context.Context, req *pb.QueueCompleteRequest) error {
 	payload, err := proto.Marshal(req)
 	if err != nil {
 		return duh.NewClientError("while marshaling request payload: %w", err, nil)
 	}
 
 	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		fmt.Sprintf("%s%s", c.opts.Endpoint, transport.RPCCreateQueue), bytes.NewReader(payload))
+		fmt.Sprintf("%s%s", c.opts.Endpoint, transport.RPCQueueComplete), bytes.NewReader(payload))
 	if err != nil {
 		return duh.NewClientError("", err, nil)
 	}
@@ -99,6 +99,55 @@ func (c *Client) QueueCreate(ctx context.Context, req *pb.QueueOptions) error {
 	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
 	var res v1.Reply
 	return c.client.Do(r, &res)
+}
+
+func (c *Client) QueueCreate(ctx context.Context, req *pb.QueueOptions) error {
+	payload, err := proto.Marshal(req)
+	if err != nil {
+		return duh.NewClientError("while marshaling request payload: %w", err, nil)
+	}
+
+	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("%s%s", c.opts.Endpoint, transport.RPCQueueCreate), bytes.NewReader(payload))
+	if err != nil {
+		return duh.NewClientError("", err, nil)
+	}
+
+	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	var res v1.Reply
+	return c.client.Do(r, &res)
+}
+
+func (c *Client) StorageList(ctx context.Context, req *pb.StorageListRequest, res *pb.StorageListResponse) error {
+	payload, err := proto.Marshal(req)
+	if err != nil {
+		return duh.NewClientError("while marshaling request payload: %w", err, nil)
+	}
+
+	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("%s%s", c.opts.Endpoint, transport.RPCStorageList), bytes.NewReader(payload))
+	if err != nil {
+		return duh.NewClientError("", err, nil)
+	}
+
+	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	return c.client.Do(r, res)
+}
+
+func (c *Client) StorageInspect(ctx context.Context, id string, res *pb.StorageItem) error {
+	payload, err := proto.Marshal(&pb.StorageInspectRequest{Id: id})
+	if err != nil {
+		return duh.NewClientError("while marshaling request payload: %w", err, nil)
+	}
+
+	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("%s%s", c.opts.Endpoint, transport.RPCStorageInspect), bytes.NewReader(payload))
+	if err != nil {
+		return duh.NewClientError("", err, nil)
+	}
+
+	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	return c.client.Do(r, res)
 }
 
 // WithNoTLS returns ClientOptions suitable for use with NON-TLS clients

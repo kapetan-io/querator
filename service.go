@@ -18,17 +18,23 @@ package querator
 
 import (
 	"context"
+	"errors"
+	"github.com/duh-rpc/duh-go"
 	"github.com/kapetan-io/querator/internal"
 	"github.com/kapetan-io/querator/proto"
 	"github.com/kapetan-io/querator/store"
+	"github.com/kapetan-io/querator/transport"
 	"github.com/kapetan-io/tackle/set"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"log/slog"
 )
 
+// TODO: Document this and make it configurable via the daemon
 type ServiceOptions struct {
-	NewQueueStorage     func(name string) store.QueueStorage
-	MaxReserveBatchSize int `json:"max_reserve_batch_size"`
-	MaxProduceBatchSize int `json:"max_produce_batch_size"`
+	Logger              duh.StandardLogger
+	Storage             store.Storage
+	MaxReserveBatchSize int
+	MaxProduceBatchSize int
 }
 
 type Service struct {
@@ -37,12 +43,16 @@ type Service struct {
 }
 
 func NewService(opts ServiceOptions) (*Service, error) {
-	// TODO: Document this
 	set.Default(&opts.MaxReserveBatchSize, 1_000)
 	set.Default(&opts.MaxProduceBatchSize, 1_000)
+	set.Default(&opts.Logger, slog.Default())
+
+	if opts.Storage == nil {
+		return nil, errors.New("storage is required")
+	}
 
 	qm := internal.NewQueueManager(internal.QueueManagerOptions{
-		NewQueueStorage: opts.NewQueueStorage,
+		NewQueue: opts.Storage.NewQueue,
 	})
 
 	return &Service{
@@ -94,8 +104,27 @@ func (s *Service) QueueReserve(ctx context.Context, req *proto.QueueReserveReque
 			Encoding:        item.Encoding,
 			Kind:            item.Kind,
 			Body:            item.Body,
-			ItemId:          item.ID,
+			Id:              item.ID,
 		})
+	}
+
+	return nil
+}
+
+func (s *Service) QueueComplete(ctx context.Context, req *proto.QueueCompleteRequest) error {
+	queue, err := s.manager.Get(ctx, req.QueueName)
+	if err != nil {
+		return err
+	}
+
+	var r internal.CompleteRequest
+	if err := s.validateQueueCompleteProto(req, &r); err != nil {
+		return err
+	}
+
+	// Complete will block until success, context cancel or timeout
+	if err := queue.Complete(ctx, &r); err != nil {
+		return err
 	}
 
 	return nil
@@ -114,6 +143,51 @@ func (s *Service) QueueCreate(ctx context.Context, req *proto.QueueOptions) erro
 	if err != nil {
 		return err
 	}
+	return nil
+}
+
+func (s *Service) StorageList(ctx context.Context, req *proto.StorageListRequest, res *proto.StorageListResponse) error {
+	if req.Limit > 1_000 {
+		return transport.NewInvalidRequest("limit exceeds maximum limit;"+
+			" max limit is 1,000 requested '%d'", req.Limit)
+	}
+
+	queue, err := s.manager.Get(ctx, req.QueueName)
+	if err != nil {
+		return err
+	}
+
+	r := internal.StorageRequest{Pivot: req.Pivot, Limit: int(req.Limit)}
+	if err := queue.Storage(ctx, &r); err != nil {
+		return transport.NewRequestFailed("list request failed; error is '%s'", err)
+	}
+
+	for _, item := range r.Items {
+		res.Items = append(res.Items, item.ToStorageItemProto(new(proto.StorageItem)))
+	}
+
+	return nil
+}
+
+func (s *Service) StorageInspect(ctx context.Context, req *proto.StorageInspectRequest, res *proto.StorageItem) error {
+	var name, id string
+
+	// TODO: Implement ParseID and CreateID to create the public facing id's which this storage knows how to parse
+	if err := s.opts.Storage.ParseID(req.Id, &name, &id); err != nil {
+		return transport.NewInvalidRequest("invalid queue id; error is '%s'", err)
+	}
+
+	queue, err := s.manager.Get(ctx, name)
+	if err != nil {
+		return err
+	}
+
+	r := internal.StorageRequest{ID: id}
+	if err := queue.Storage(ctx, &r); err != nil {
+		return transport.NewRequestFailed("inspect request failed; error is '%s'", err)
+	}
+
+	r.Items[0].ToStorageItemProto(res)
 	return nil
 }
 

@@ -4,8 +4,17 @@ import (
 	"bytes"
 	"context"
 	pb "github.com/kapetan-io/querator/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"time"
 )
+
+// TODO: Implement a concrete version of this for BuntDB
+
+// Storage is the primary storage interface
+type Storage interface {
+	NewQueue(name string) (Queue, error)
+	ParseID(parse string, queue, id *string) error
+}
 
 type ReserveOptions struct {
 	// ReserveDeadline is time in the future when a reservation should expire
@@ -34,7 +43,7 @@ type Stats struct {
 	AverageReservedAge time.Duration
 }
 
-// QueueStorage represents storage for all the queues
+// QueueStorage is storage for listing and storing metadata about queues
 type QueueStorage interface {
 	// Get returns a store.Queue from storage ready to be used
 	Get(ctx context.Context, name string, queue *Queue) error
@@ -50,18 +59,18 @@ type Queue interface {
 	Stats(ctx context.Context, stats *Stats) error
 
 	// Reserve list up to 'limit' reservable items from the queue and marks the items as reserved.
-	Reserve(ctx context.Context, items *[]*QueueItem, opts ReserveOptions) error
+	Reserve(ctx context.Context, items *[]*Item, opts ReserveOptions) error
 
 	// Read reads items in a queue. limit and offset allow the user to page through all the items
 	// in the queue.
-	Read(ctx context.Context, items *[]*QueueItem, pivot string, limit int) error
+	Read(ctx context.Context, items *[]*Item, pivot string, limit int) error
 
 	// Write writes the item to the queue and updates the item with the
 	// unique id.
-	Write(ctx context.Context, items []*QueueItem) error
+	Write(ctx context.Context, items []*Item) error
 
-	// Delete removes the provided items from the queue
-	Delete(ctx context.Context, items []*QueueItem) error
+	// Delete removes the provided ids from the queue
+	Delete(ctx context.Context, items []string) error
 
 	Close(ctx context.Context) error
 
@@ -71,8 +80,8 @@ type Queue interface {
 // TODO: ScheduledStorage interface {} - A place to store scheduled items to be queued. (Defer)
 // TODO: QueueOptionStorage interface {} - A place to store queue options and a list of valid queues
 
-// QueueItem is the store and queue representation of an item in the queue.
-type QueueItem struct {
+// Item is the store and queue representation of an item in the queue.
+type Item struct {
 	// ID is unique to each item in the data store. The ID style is different depending on the data store
 	// implementation, and does not include the queue name.
 	ID string
@@ -110,43 +119,57 @@ type QueueItem struct {
 	Body []byte
 }
 
-func (l *QueueItem) Compare(r *QueueItem) bool {
-	if l.ID != r.ID {
+func (i *Item) Compare(r *Item) bool {
+	if i.ID != r.ID {
 		return false
 	}
-	if l.IsReserved != r.IsReserved {
+	if i.IsReserved != r.IsReserved {
 		return false
 	}
-	if l.DeadDeadline.Compare(r.DeadDeadline) != 0 {
+	if i.DeadDeadline.Compare(r.DeadDeadline) != 0 {
 		return false
 	}
-	if l.ReserveDeadline.Compare(r.ReserveDeadline) != 0 {
+	if i.ReserveDeadline.Compare(r.ReserveDeadline) != 0 {
 		return false
 	}
-	if l.Attempts != r.Attempts {
+	if i.Attempts != r.Attempts {
 		return false
 	}
-	if l.Reference != r.Reference {
+	if i.Reference != r.Reference {
 		return false
 	}
-	if l.Encoding != r.Encoding {
+	if i.Encoding != r.Encoding {
 		return false
 	}
-	if l.Kind != r.Kind {
+	if i.Kind != r.Kind {
 		return false
 	}
-	if l.Body != nil && !bytes.Equal(l.Body, r.Body) {
+	if i.Body != nil && !bytes.Equal(i.Body, r.Body) {
 		return false
 	}
 	return true
 }
 
-func (l *QueueItem) FromProtoProduceItem(r *pb.QueueProduceItem) {
-	// TODO: Consider moving this into validation.go
-	l.Encoding = r.Encoding
-	l.Kind = r.Kind
-	l.Reference = r.Reference
-	l.Body = r.Body
-	// DeadDeadline is calculated from DeadTimeout at
-	// the moment we write to the data store
+func (i *Item) ToStorageItemProto(in *pb.StorageItem) *pb.StorageItem {
+	in.ReserveDeadline = timestamppb.New(i.ReserveDeadline)
+	in.DeadDeadline = timestamppb.New(i.DeadDeadline)
+	in.Attempts = int32(i.Attempts)
+	in.MaxAttempts = int32(i.MaxAttempts)
+	in.IsReserved = i.IsReserved
+	in.Reference = i.Reference
+	in.Encoding = i.Encoding
+	in.Kind = i.Kind
+	in.Body = i.Body
+	in.Id = i.ID
+	return in
+}
+
+// CollectIDs is a convenience function which assists in calling QueueStorage.Delete()
+// when a list of items to be deleted is needed.
+func CollectIDs(items []*Item) []string {
+	var result []string
+	for _, v := range items {
+		result = append(result, v.ID)
+	}
+	return result
 }

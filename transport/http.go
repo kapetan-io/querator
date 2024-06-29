@@ -27,20 +27,25 @@ import (
 )
 
 const (
-	RPCQueueProduce  = "/v1/queue.produce"
-	RPCQueueReserve  = "/v1/queue.reserve"
-	RPCQueueDefer    = "/v1/queue.defer"
-	RPCQueueComplete = "/v1/queue.complete"
-	RPCListQueue     = "/v1/queue.list"
-	RPCCreateQueue   = "/v1/queue.create"
-	RPCDeleteQueue   = "/v1/queue.delete"
-	RPCInspectQueue  = "/v1/queue.inspect"
+	RPCQueueProduce   = "/v1/queue.produce"
+	RPCQueueReserve   = "/v1/queue.reserve"
+	RPCQueueDefer     = "/v1/queue.defer"
+	RPCQueueComplete  = "/v1/queue.complete"
+	RPCQueueList      = "/v1/queue.list"
+	RPCQueueCreate    = "/v1/queue.create"
+	RPCQueueDelete    = "/v1/queue.delete"
+	RPCQueueInspect   = "/v1/queue.inspect"
+	RPCStorageInspect = "/v1/storage.inspect"
+	RPCStorageList    = "/v1/storage.list"
 )
 
 type Service interface {
 	QueueProduce(context.Context, *proto.QueueProduceRequest) error
 	QueueCreate(context.Context, *proto.QueueOptions) error
 	QueueReserve(context.Context, *proto.QueueReserveRequest, *proto.QueueReserveResponse) error
+	QueueComplete(context.Context, *proto.QueueCompleteRequest) error
+	StorageList(context.Context, *proto.StorageListRequest, *proto.StorageListResponse) error
+	StorageInspect(context.Context, *proto.StorageInspectRequest, *proto.StorageItem) error
 }
 
 type HTTPHandler struct {
@@ -83,12 +88,20 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	case RPCQueueDefer:
 	case RPCQueueComplete:
-	case RPCListQueue:
-	case RPCCreateQueue:
+		h.QueueComplete(ctx, w, r)
+		return
+	case RPCQueueList:
+	case RPCQueueCreate:
 		h.QueueCreate(ctx, w, r)
 		return
-	case RPCDeleteQueue:
-	case RPCInspectQueue:
+	case RPCQueueDelete:
+	case RPCQueueInspect:
+	case RPCStorageInspect:
+		h.StorageInspect(ctx, w, r)
+		return
+	case RPCStorageList:
+		h.StorageList(ctx, w, r)
+		return
 	case "/metrics":
 		h.metrics.ServeHTTP(w, r)
 		return
@@ -125,6 +138,20 @@ func (h *HTTPHandler) QueueReserve(ctx context.Context, w http.ResponseWriter, r
 	duh.Reply(w, r, duh.CodeOK, &resp)
 }
 
+func (h *HTTPHandler) QueueComplete(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req proto.QueueCompleteRequest
+	if err := duh.ReadRequest(r, &req); err != nil {
+		duh.ReplyError(w, r, err)
+		return
+	}
+
+	if err := h.service.QueueComplete(ctx, &req); err != nil {
+		duh.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
+}
+
 func (h *HTTPHandler) QueueCreate(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req proto.QueueOptions
 	if err := duh.ReadRequest(r, &req); err != nil {
@@ -137,6 +164,36 @@ func (h *HTTPHandler) QueueCreate(ctx context.Context, w http.ResponseWriter, r 
 		return
 	}
 	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
+}
+
+func (h *HTTPHandler) StorageList(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req proto.StorageListRequest
+	if err := duh.ReadRequest(r, &req); err != nil {
+		duh.ReplyError(w, r, err)
+		return
+	}
+
+	var resp proto.StorageListResponse
+	if err := h.service.StorageList(ctx, &req, &resp); err != nil {
+		duh.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &resp)
+}
+
+func (h *HTTPHandler) StorageInspect(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req proto.StorageInspectRequest
+	if err := duh.ReadRequest(r, &req); err != nil {
+		duh.ReplyError(w, r, err)
+		return
+	}
+
+	var resp proto.StorageItem
+	if err := h.service.StorageInspect(ctx, &req, &resp); err != nil {
+		duh.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &resp)
 }
 
 // Describe fetches prometheus metrics to be registered

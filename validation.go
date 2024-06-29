@@ -30,8 +30,11 @@ func (s *Service) validateQueueProduceProto(in *proto.QueueProduceRequest, out *
 
 	for _, item := range in.Items {
 		// TODO: From Memory Pool
-		var qi store.QueueItem
-		qi.FromProtoProduceItem(item)
+		var qi store.Item
+		qi.Encoding = item.Encoding
+		qi.Kind = item.Kind
+		qi.Reference = item.Reference
+		qi.Body = item.Body
 		out.Items = append(out.Items, &qi)
 	}
 	return nil
@@ -62,20 +65,39 @@ func (s *Service) validateQueueReserveProto(in *proto.QueueReserveRequest, out *
 	return nil
 }
 
+func (s *Service) validateQueueCompleteProto(in *proto.QueueCompleteRequest, out *internal.CompleteRequest) error {
+	var err error
+
+	if strings.TrimSpace(in.QueueName) == "" {
+		return transport.NewInvalidRequest("'queue_name' cannot be empty")
+	}
+
+	if in.RequestTimeout != "" {
+		out.RequestTimeout, err = time.ParseDuration(in.RequestTimeout)
+		if err != nil {
+			return transport.NewInvalidRequest("reserve request_timeout is invalid; %s", err.Error())
+		}
+	}
+
+	out.Ids = in.Ids
+
+	return nil
+}
+
 func (s *Service) validateQueueOptionsProto(in *proto.QueueOptions, out *internal.QueueOptions) error {
 	var err error
 
 	if in.DeadTimeout != "" {
 		out.DeadTimeout, err = time.ParseDuration(in.DeadTimeout)
 		if err != nil {
-			return transport.NewInvalidRequest("DeadTimeout is invalid; %s", err.Error())
+			return transport.NewInvalidRequest("dead_timeout is invalid; %s", err.Error())
 		}
 	}
 
 	if in.ReserveTimeout != "" {
 		out.ReserveTimeout, err = time.ParseDuration(in.ReserveTimeout)
 		if err != nil {
-			return transport.NewInvalidRequest("ReserveTimeout is invalid; %s", err.Error())
+			return transport.NewInvalidRequest("res is invalid; %s", err.Error())
 		}
 	}
 

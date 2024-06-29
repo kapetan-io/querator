@@ -3,6 +3,7 @@ package internal
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/duh-rpc/duh-go"
 	"github.com/kapetan-io/querator/internal/maps"
 	"github.com/kapetan-io/querator/store"
@@ -18,14 +19,12 @@ import (
 var (
 	ErrDuplicateClientID = transport.NewInvalidRequest("duplicate client id")
 	ErrRequestTimeout    = transport.NewRetryRequest("request timeout, try again")
+	ErrQueueShutdown     = transport.NewRequestFailed("queue is shutting down")
 )
 
 const (
-	queueChSize = 20_000
-	// TODO: This should be based on the minimum request timeout provided by the client
-	dataStoreTimeout  = time.Minute
+	queueChSize       = 20_000
 	maxRequestTimeout = 15 * time.Minute
-	shutdownMsg       = "queue is shutting down"
 )
 
 type QueueOptions struct {
@@ -56,12 +55,14 @@ type QueueOptions struct {
 // there can ONLY BE ONE instance of a Queue running anywhere in the cluster at any given time. All consume
 // and produce requests MUST go through this queue singleton.
 type Queue struct {
-	reserveQueueCh atomic.Pointer[chan *ReserveRequest]
-	produceQueueCh atomic.Pointer[chan *ProduceRequest]
-	shutdownCh     chan *ShutdownRequest
-	wg             sync.WaitGroup
-	opts           QueueOptions
-	inShutdown     atomic.Bool
+	reserveQueueCh  atomic.Pointer[chan *ReserveRequest]
+	produceQueueCh  atomic.Pointer[chan *ProduceRequest]
+	completeQueueCh atomic.Pointer[chan *CompleteRequest]
+	storageQueueCh  chan *StorageRequest
+	shutdownCh      chan *ShutdownRequest
+	wg              sync.WaitGroup
+	opts            QueueOptions
+	inShutdown      atomic.Bool
 }
 
 func NewQueue(opts QueueOptions) (*Queue, error) {
@@ -71,8 +72,9 @@ func NewQueue(opts QueueOptions) (*Queue, error) {
 	}
 
 	q := &Queue{
-		shutdownCh: make(chan *ShutdownRequest),
-		opts:       opts,
+		shutdownCh:     make(chan *ShutdownRequest),
+		storageQueueCh: make(chan *StorageRequest),
+		opts:           opts,
 	}
 
 	// Assign new wait queue
@@ -80,58 +82,34 @@ func NewQueue(opts QueueOptions) (*Queue, error) {
 	q.reserveQueueCh.Store(&rch)
 	pch := make(chan *ProduceRequest, queueChSize)
 	q.produceQueueCh.Store(&pch)
+	cch := make(chan *CompleteRequest, queueChSize)
+	q.completeQueueCh.Store(&cch)
 
 	q.wg.Add(1)
 	go q.processQueues()
 	return q, nil
 }
 
-// TODO(thrawn01): Consider creating a pool of ReserveRequest and QueueItem to avoid GC
+func (q *Queue) Storage(ctx context.Context, req *StorageRequest) error {
+	if q.inShutdown.Load() {
+		return ErrQueueShutdown
+	}
 
-type ReserveRequest struct {
-	// The number of items requested from the queue.
-	BatchSize int32
-	// How long the caller expects Reserve() to block before returning
-	// if no items are available to be reserved. Max duration is 5 minutes.
-	RequestTimeout time.Duration
-	// The id of the client
-	ClientID string
-	// The context of the requesting client
-	Context context.Context
-	// The result of the reservation
-	Items []*store.QueueItem
+	req.Context = ctx
+	req.readyCh = make(chan struct{})
 
-	// Is calculated from RequestTimeout and specifies a time in the future when this request
-	// should be cancelled.
-	requestDeadline time.Time
-	// Used by Reserve() to wait for this request to complete
-	readyCh chan struct{}
-	// The error to be returned to the caller
-	err error
-}
+	select {
+	case q.storageQueueCh <- req:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 
-type ProduceRequest struct {
-	// How long the caller expects Produce() to block before returning
-	// if no items are available to be reserved. Max duration is 5 minutes.
-	RequestTimeout time.Duration
-	// The context of the requesting client
-	Context context.Context
-	// The items to produce
-	Items []*store.QueueItem
-
-	// Is calculated from RequestTimeout and specifies a time in the future when this request
-	// should be cancelled.
-	requestDeadline time.Time
-	// Used by Produce() to wait for this request to complete
-	readyCh chan struct{}
-	// The error to be returned to the caller
-	err error
-}
-
-type ShutdownRequest struct {
-	Context context.Context
-	readyCh chan struct{}
-	Err     error
+	select {
+	case <-req.readyCh:
+		return req.err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // Produce is called by clients who wish to produce an item to the queue. This
@@ -139,12 +117,12 @@ type ShutdownRequest struct {
 // is cancelled via the passed context or RequestTimeout is reached.
 func (q *Queue) Produce(ctx context.Context, req *ProduceRequest) error {
 	if q.inShutdown.Load() {
-		return transport.NewRequestFailed(shutdownMsg)
+		return ErrQueueShutdown
 	}
 
 	if req.RequestTimeout > maxRequestTimeout {
-		return transport.NewInvalidRequest("RequestTimeout '%s' is invalid; maximum timeout is '15m'",
-			req.RequestTimeout.String())
+		return transport.NewInvalidRequest("request_timeout is invalid; maximum timeout is '15m' but"+
+			" '%s' was requested", req.RequestTimeout.String())
 	}
 
 	if req.RequestTimeout == time.Duration(0) {
@@ -182,7 +160,7 @@ func (q *Queue) Produce(ctx context.Context, req *ProduceRequest) error {
 // Increased throughput can instead be achieved by raising the batch size.
 func (q *Queue) Reserve(ctx context.Context, req *ReserveRequest) error {
 	if q.inShutdown.Load() {
-		return transport.NewRequestFailed(shutdownMsg)
+		return ErrQueueShutdown
 	}
 
 	if strings.TrimSpace(req.ClientID) == "" {
@@ -206,6 +184,30 @@ func (q *Queue) Reserve(ctx context.Context, req *ReserveRequest) error {
 	req.readyCh = make(chan struct{})
 	req.requestDeadline = time.Now().UTC().Add(req.RequestTimeout)
 	*q.reserveQueueCh.Load() <- req
+
+	// Wait until the request has been processed
+	<-req.readyCh
+	return req.err
+}
+
+func (q *Queue) Complete(ctx context.Context, req *CompleteRequest) error {
+	if q.inShutdown.Load() {
+		return ErrQueueShutdown
+	}
+
+	if req.RequestTimeout > maxRequestTimeout {
+		return transport.NewInvalidRequest("request_timeout is invalid; maximum timeout is '15m' but '%s' "+
+			"requested", req.RequestTimeout.String())
+	}
+
+	if req.RequestTimeout == time.Duration(0) {
+		req.RequestTimeout = maxRequestTimeout
+	}
+
+	req.Context = ctx
+	req.readyCh = make(chan struct{})
+	req.requestDeadline = time.Now().UTC().Add(req.RequestTimeout)
+	*q.completeQueueCh.Load() <- req
 
 	// Wait until the request has been processed
 	<-req.readyCh
@@ -265,11 +267,19 @@ func (q *Queue) processQueues() {
 	wpr := waitingProduceRequests{
 		Requests: make([]*ProduceRequest, 0, 5_000),
 	}
+	wcr := waitingCompleteRequests{
+		Requests: make([]*CompleteRequest, 0, 5_000),
+	}
 	var timerCh <-chan time.Time
 
 	addToWPR := func(req *ProduceRequest) {
 		wpr.Requests = append(wpr.Requests, req)
 		wpr.TotalItems += len(req.Items)
+	}
+
+	addToWCR := func(req *CompleteRequest) {
+		wcr.Requests = append(wcr.Requests, req)
+		wcr.TotalIDs += len(req.Ids)
 	}
 
 	addToWRR := func(req *ReserveRequest) {
@@ -285,9 +295,10 @@ func (q *Queue) processQueues() {
 	for {
 		reserveQueueCh := q.reserveQueueCh.Load()
 		produceQueueCh := q.produceQueueCh.Load()
+		completeQueueCh := q.completeQueueCh.Load()
 		select {
 
-		// Process the produce queue into the wpr list
+		// -----------------------------------------------
 		case req := <-*produceQueueCh:
 			// Swap the wait channel, so we can process the wait queue. Creating a
 			// new channel allows any incoming waiting produce requests (wpr) that occur
@@ -312,7 +323,7 @@ func (q *Queue) processQueues() {
 			//  actively producing or consuming.
 
 			// `items` list is a complete list of all the items each producer provided us with.
-			items := make([]*store.QueueItem, 0, wpr.TotalItems)
+			items := make([]*store.Item, 0, wpr.TotalItems)
 			writeTimeout := 15 * time.Minute
 			for _, req := range wpr.Requests {
 				// Cancel any produce requests that have timed out
@@ -367,7 +378,7 @@ func (q *Queue) processQueues() {
 			wpr.Requests = wpr.Requests[:0]
 			wpr.TotalItems = 0
 
-		// Process the reserve queue into the waiting reserve request (wrr) list.
+		// -----------------------------------------------
 		case req := <-*reserveQueueCh:
 			// Swap the wait channel, so we can process the wait queue. Creating a
 			// new channel allows any incoming wrr that occur while this routine
@@ -389,7 +400,7 @@ func (q *Queue) processQueues() {
 
 			// Fetch all the reservable items in the store
 			ctx, cancel := context.WithTimeout(context.Background(), q.opts.QueueStorage.Options().ReadTimeout)
-			var items []*store.QueueItem
+			var items []*store.Item
 			if err := q.opts.QueueStorage.Reserve(ctx, &items, store.ReserveOptions{
 				ReserveDeadline: time.Now().UTC().Add(q.opts.ReserveTimeout),
 				Limit:           wrr.Total,
@@ -427,13 +438,50 @@ func (q *Queue) processQueues() {
 				timerCh = time.After(next)
 			}
 
+		// -----------------------------------------------
+		case req := <-*completeQueueCh:
+			ch := make(chan *CompleteRequest, queueChSize)
+			q.completeQueueCh.Store(&ch)
+			close(*completeQueueCh)
+
+			addToWCR(req)
+			for req := range *completeQueueCh {
+				addToWCR(req)
+			}
+
+			ids := make([]string, wcr.TotalIDs, 0)
+			for _, req := range wcr.Requests {
+				ids = append(ids, req.Ids...)
+			}
+
+			if err := q.opts.QueueStorage.Delete(req.Context, ids); err != nil {
+				req.err = fmt.Errorf("during inspect QueueStorage.Read(): %w", err)
+			}
+
+			wcr.Requests = wcr.Requests[:0]
+			wcr.TotalIDs = 0
+
+		// -----------------------------------------------
+		case req := <-q.storageQueueCh:
+			if req.ID != "" {
+				if err := q.opts.QueueStorage.Read(req.Context, &req.Items, req.ID, 1); err != nil {
+					req.err = fmt.Errorf("during inspect QueueStorage.Read(): %w", err)
+				}
+			} else {
+				if err := q.opts.QueueStorage.Read(req.Context, &req.Items, req.Pivot, req.Limit); err != nil {
+					req.err = fmt.Errorf("during list QueueStorage.Read(): %w", err)
+				}
+			}
+			close(req.readyCh)
+
+		// -----------------------------------------------
 		case req := <-q.shutdownCh:
 			for _, r := range wpr.Requests {
-				r.err = transport.NewRequestFailed(shutdownMsg)
+				r.err = ErrQueueShutdown
 				close(r.readyCh)
 			}
 			for _, r := range wrr.Requests {
-				r.err = transport.NewRequestFailed(shutdownMsg)
+				r.err = ErrQueueShutdown
 				close(r.readyCh)
 			}
 			if err := q.opts.QueueStorage.Close(req.Context); err != nil {
@@ -442,6 +490,7 @@ func (q *Queue) processQueues() {
 			close(req.readyCh)
 			return
 
+		// -----------------------------------------------
 		case <-timerCh:
 			// Find the next request that will time out, and notify any clients of expired wrr
 			next := findNextTimeout(&wrr)
@@ -528,4 +577,9 @@ type waitingReserveRequests struct {
 type waitingProduceRequests struct {
 	Requests   []*ProduceRequest
 	TotalItems int
+}
+
+type waitingCompleteRequests struct {
+	Requests []*CompleteRequest
+	TotalIDs int
 }

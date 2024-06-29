@@ -52,7 +52,6 @@ message QueueProduceItem {
 
 message QueueReserveRequest {
   // The name of the queue to reserve work from
-  // Example: 'http-send'
   string queueName = 1  [json_name = "queue_name"];
 
   // The number of queue items requested from the queue.
@@ -67,7 +66,7 @@ message QueueReserveRequest {
   // The duration the client expects to wait for a queue item to be reserved before timing out.
   // Maximum timeout duration is 15 minutes
   // Example: '5m', '10s'
-  string requestTimeout = 4 [json_name = "wait_timeout"]; // TODO: OpenAPI
+  string requestTimeout = 4 [json_name = "request_timeout"]; // TODO: OpenAPI
 }
 
 message QueueReserveItem {
@@ -83,9 +82,8 @@ message QueueReserveItem {
   // Examples: 'account-0001', 'john.smith', 'id-hIGTUYm2'
   string reference = 3;
 
-  // A unique ID which is in the form <queue_name>-<unique_id>.
-  // Example: 'queue1-0ujsswThIGTUYm2K8FjOOfXtY1K'
-  string itemId = 4 [json_name = "item_id"]; // TODO: OpenAPI
+  // A unique id which identifies an item in a queue
+  string id = 4;
 
   // The number of times this item has been deferred or reservation timed out during
   // processing by a consumer.
@@ -108,9 +106,12 @@ message QueueReserveResponse {
 }
 
 message QueueDeferRequest {
-  // A unique ID which is in the form <queue_name>-<unique_id>.
-  // Example: 'queue1-0ujsswThIGTUYm2K8FjOOfXtY1K'
-  string itemId = 4 [json_name = "item_id"];
+  repeated QueueDeferItem items = 1;
+}
+
+message QueueDeferItem {
+  // A unique id which identifies a unique item in a queue.
+  string id = 1;
 
   // The date after which the item will be added to the queue specified.
   // The date can be empty, the current time or a past date/time, in which
@@ -124,9 +125,14 @@ message QueueDeferRequest {
 }
 
 message QueueCompleteRequest {
-  // A unique ID which is in the form <queue_name>-<unique_id>.
-  // Example: 'queue1-0ujsswThIGTUYm2K8FjOOfXtY1K'
-  string itemId = 4 [json_name = "item_id"];
+  string queueName = 1  [json_name = "queue_name"];
+  // The duration the client expects to wait for a queue item to be reserved before timing out.
+  // Maximum timeout duration is 15 minutes
+  // Example: '5m', '10s'
+  string requestTimeout = 2 [json_name = "request_timeout"]; // TODO: OpenAPI
+
+  // A list of ids to mark complete
+  repeated string ids = 3;
 }
 
 message QueueOptions {

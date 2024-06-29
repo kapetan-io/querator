@@ -4,6 +4,7 @@ import (
 	"context"
 	"github.com/kapetan-io/querator/daemon"
 	pb "github.com/kapetan-io/querator/proto"
+	"github.com/kapetan-io/querator/store"
 	"github.com/kapetan-io/tackle/random"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -14,10 +15,13 @@ import (
 )
 
 func TestProduceAndConsume(t *testing.T) {
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+
 	d, err := daemon.NewDaemon(ctx, daemon.Config{
-		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Store:  store.NewBuntStorage(store.BuntOptions{Logger: log}),
+		Logger: log,
 	})
 	require.NoError(t, err)
 	defer func() { _ = d.Shutdown(context.Background()) }()
@@ -63,9 +67,32 @@ func TestProduceAndConsume(t *testing.T) {
 	assert.Equal(t, int32(0), item.Attempts)
 	assert.Equal(t, body, item.Body)
 
-	// TODO: Complete the queue item
-	// TODO: Ensure it's gone from the database by using a new endpoint /storage.list  /storage.inspect
+	// Ensure the item is in storage
+	var inspect pb.StorageItem
+	require.NoError(t, c.StorageInspect(ctx, item.Id, &inspect))
 
+	assert.Equal(t, ref, inspect.Reference)
+	assert.Equal(t, kind, inspect.Kind)
+	assert.Equal(t, int32(0), inspect.Attempts)
+	assert.Equal(t, body, inspect.Body)
+	assert.Equal(t, item.Id, inspect.Id)
+	assert.Equal(t, true, inspect.IsReserved)
+
+	// Mark the item as complete
+	require.NoError(t, c.QueueComplete(ctx, &pb.QueueCompleteRequest{
+		Ids: []string{
+			item.Id,
+		},
+	}))
+
+	// Storage should be empty
+	var list pb.StorageListResponse
+	require.NoError(t, c.StorageList(ctx, &pb.StorageListRequest{
+		Pivot: "",
+		Limit: 10,
+	}, &list))
+
+	assert.Equal(t, 0, len(list.Items))
 }
 
 // TODO: Defer

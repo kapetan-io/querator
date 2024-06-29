@@ -9,40 +9,62 @@ import (
 	"github.com/segmentio/ksuid"
 	"github.com/tidwall/buntdb"
 	"log/slog"
+	"strings"
 	"time"
 )
 
 type BuntOptions struct {
-	File   string
 	Logger duh.StandardLogger
 }
 
-type Bunt struct {
+type BuntStorage struct {
+	opts BuntOptions
+}
+
+var _ Storage = &BuntStorage{}
+
+func (b *BuntStorage) NewQueue(name string) (Queue, error) {
+	return NewBuntQueue(b.opts, name)
+}
+
+func (b *BuntStorage) ParseID(parse string, queue, id *string) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func NewBuntStorage(opts BuntOptions) *BuntStorage {
+	return &BuntStorage{opts: opts}
+}
+
+type BuntQueue struct {
 	db   *buntdb.DB
 	opts BuntOptions
 	uid  ksuid.KSUID
 }
 
-func NewBuntStore(opts BuntOptions) (*Bunt, error) {
+var _ Queue = &BuntQueue{}
+
+// NewBuntQueue TODO: make this private
+func NewBuntQueue(opts BuntOptions, file string) (*BuntQueue, error) {
 	set.Default(&opts.Logger, slog.Default())
-	if opts.File == "" {
-		return nil, NewInvalidOption("BuntOptions.File cannot be empty")
+	if strings.TrimSpace(file) == "" {
+		return nil, NewInvalidOption("'file' cannot be empty")
 	}
 
 	// TODO: Check if the file exists
 
-	db, err := buntdb.Open(opts.File)
+	db, err := buntdb.Open(file)
 	if err != nil {
 		return nil, fmt.Errorf("opening buntdb: %w", err)
 	}
-	return &Bunt{
+	return &BuntQueue{
 		uid:  ksuid.New(),
 		opts: opts,
 		db:   db,
 	}, nil
 }
 
-func (s *Bunt) Stats(ctx context.Context, stats *Stats) error {
+func (s *BuntQueue) Stats(ctx context.Context, stats *Stats) error {
 	tx, err := s.db.Begin(false)
 	if err != nil {
 		return fmt.Errorf("during begin: %w", err)
@@ -52,7 +74,7 @@ func (s *Bunt) Stats(ctx context.Context, stats *Stats) error {
 	now := time.Now().UTC()
 
 	err = tx.AscendGreaterOrEqual("", "", func(key, value string) bool {
-		var item QueueItem
+		var item Item
 		if err := json.Unmarshal([]byte(value), &item); err != nil {
 			iterErr = fmt.Errorf("during unmarshal of db value: %w", err)
 			return false
@@ -85,7 +107,7 @@ func (s *Bunt) Stats(ctx context.Context, stats *Stats) error {
 	return nil
 }
 
-func (s *Bunt) Reserve(_ context.Context, items *[]*QueueItem, opts ReserveOptions) error {
+func (s *BuntQueue) Reserve(_ context.Context, items *[]*Item, opts ReserveOptions) error {
 	tx, err := s.db.Begin(false)
 	if err != nil {
 		return fmt.Errorf("during begin: %w", err)
@@ -99,7 +121,7 @@ func (s *Bunt) Reserve(_ context.Context, items *[]*QueueItem, opts ReserveOptio
 			return false
 		}
 		// TODO: Grab from the memory pool
-		item := new(QueueItem)
+		item := new(Item)
 		if err := json.Unmarshal([]byte(value), item); err != nil {
 			iterErr = fmt.Errorf("during unmarshal of db value: %w", err)
 			return false
@@ -148,7 +170,7 @@ func (s *Bunt) Reserve(_ context.Context, items *[]*QueueItem, opts ReserveOptio
 	return nil
 }
 
-func (s *Bunt) Read(_ context.Context, items *[]*QueueItem, pivot string, limit int) error {
+func (s *BuntQueue) Read(_ context.Context, items *[]*Item, pivot string, limit int) error {
 	tx, err := s.db.Begin(false)
 	if err != nil {
 		return fmt.Errorf("during begin: %w", err)
@@ -162,7 +184,7 @@ func (s *Bunt) Read(_ context.Context, items *[]*QueueItem, pivot string, limit 
 			return false
 		}
 		// TODO: Grab from the memory pool
-		item := new(QueueItem)
+		item := new(Item)
 		if err := json.Unmarshal([]byte(value), item); err != nil {
 			iterErr = fmt.Errorf("during unmarshal of db value: %w", err)
 			return false
@@ -185,7 +207,7 @@ func (s *Bunt) Read(_ context.Context, items *[]*QueueItem, pivot string, limit 
 	return nil
 }
 
-func (s *Bunt) Write(_ context.Context, items []*QueueItem) error {
+func (s *BuntQueue) Write(_ context.Context, items []*Item) error {
 	tx, err := s.db.Begin(true)
 	if err != nil {
 		return fmt.Errorf("during begin: %w", err)
@@ -211,14 +233,14 @@ func (s *Bunt) Write(_ context.Context, items []*QueueItem) error {
 	return nil
 }
 
-func (s *Bunt) Delete(ctx context.Context, items []*QueueItem) error {
+func (s *BuntQueue) Delete(_ context.Context, ids []string) error {
 	tx, err := s.db.Begin(true)
 	if err != nil {
 		return fmt.Errorf("during begin: %w", err)
 	}
 
-	for _, item := range items {
-		_, err := tx.Delete(item.ID)
+	for _, id := range ids {
+		_, err := tx.Delete(id)
 		if err != nil {
 			return fmt.Errorf("during delete: %w", err)
 		}
@@ -231,11 +253,11 @@ func (s *Bunt) Delete(ctx context.Context, items []*QueueItem) error {
 	return nil
 }
 
-func (s *Bunt) Close(_ context.Context) error {
+func (s *BuntQueue) Close(_ context.Context) error {
 	return s.db.Close()
 }
 
-func (s *Bunt) Options() QueueStorageOptions {
+func (s *BuntQueue) Options() QueueStorageOptions {
 	return QueueStorageOptions{
 		// TODO: Make these configurable
 		WriteTimeout: 5 * time.Second,
@@ -243,7 +265,7 @@ func (s *Bunt) Options() QueueStorageOptions {
 	}
 }
 
-func buntSet(tx *buntdb.Tx, item *QueueItem) error {
+func buntSet(tx *buntdb.Tx, item *Item) error {
 	// TODO: Use something more efficient like protobuf,
 	//	gob or https://github.com/capnproto/go-capnp
 	b, err := json.Marshal(item)

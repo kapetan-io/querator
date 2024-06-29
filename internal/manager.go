@@ -9,8 +9,8 @@ import (
 )
 
 type QueueManagerOptions struct {
-	// Instantiates a new store for the given queue name
-	NewQueueStorage func(name string) store.QueueStorage
+	// Instantiates a new store for the given queue
+	NewQueue func(name string) (store.Queue, error)
 }
 
 type QueueManager struct {
@@ -28,7 +28,7 @@ func NewQueueManager(opts QueueManagerOptions) *QueueManager {
 func (qm *QueueManager) Get(_ context.Context, name string) (*Queue, error) {
 	q, ok := qm.queues[name]
 	if !ok {
-		return nil, transport.NewInvalidRequest("queue '%s' does not exist", name)
+		return nil, transport.NewInvalidRequest("queue does not exist; no such queue named '%s'", name)
 	}
 	return q, nil
 }
@@ -52,14 +52,13 @@ func (qm *QueueManager) Create(_ context.Context, opts QueueOptions) (*Queue, er
 	}
 
 	if opts.ReserveTimeout > opts.DeadTimeout {
-		return nil, transport.NewInvalidRequest("ReserveTimeout cannot be longer than the DeadTimeout (%s > %s)",
-			opts.ReserveTimeout.String(), opts.DeadTimeout.String())
+		return nil, transport.NewInvalidRequest("reserve_timeout is too long; %s cannot be greater than the "+
+			"dead_timeout %s", opts.ReserveTimeout.String(), opts.DeadTimeout.String())
 	}
 
-	// TODO: Use the user chosen store via qm.opts.NewQueueStorage()
-
 	var err error
-	opts.QueueStorage, err = store.NewBuntStore(store.BuntOptions{File: ":memory:"})
+	// TODO: Use the user chosen store via qm.opts.NewQueue()
+	opts.QueueStorage, err = store.NewBuntQueue(store.BuntOptions{}, ":memory:")
 	if err != nil {
 		if store.IsErrInvalidOption(err) {
 			return nil, transport.NewInvalidRequest(err.Error())
@@ -81,7 +80,7 @@ func (qm *QueueManager) Create(_ context.Context, opts QueueOptions) (*Queue, er
 func (qm *QueueManager) Delete(ctx context.Context, name string) error {
 	q, ok := qm.queues[name]
 	if !ok {
-		return transport.NewInvalidRequest("queue '%s' does not exist", name)
+		return transport.NewInvalidRequest("queue does not exist; no such queue named '%s'", name)
 	}
 
 	if err := q.Shutdown(ctx); err != nil {

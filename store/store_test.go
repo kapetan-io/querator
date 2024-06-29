@@ -21,7 +21,7 @@ func TestStorage(t *testing.T) {
 		{
 			Name: "BuntDB",
 			New: func() (store.Queue, error) {
-				return store.NewBuntStore(store.BuntOptions{File: ":memory:"})
+				return store.NewBuntQueue(store.BuntOptions{}, ":memory:")
 			},
 		},
 		//{
@@ -49,8 +49,8 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		require.NoError(t, err)
 
 		now := time.Now().UTC()
-		var items []*store.QueueItem
-		items = append(items, &store.QueueItem{
+		var items []*store.Item
+		items = append(items, &store.Item{
 			IsReserved:      true,
 			DeadDeadline:    now.Add(100_000 * time.Minute),
 			ReserveDeadline: now.Add(3_000 * time.Minute),
@@ -61,7 +61,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 			Body: []byte("I mean... have I changed? Same sleek body. Same " +
 				"flowing mane. Same spectacular hooves. Nope, I'm still awesome"),
 		})
-		items = append(items, &store.QueueItem{
+		items = append(items, &store.Item{
 			IsReserved:      false,
 			DeadDeadline:    now.Add(1_000_000 * time.Minute),
 			ReserveDeadline: now.Add(3_000 * time.Minute),
@@ -75,7 +75,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		err = s.Write(ctx, items)
 		require.NoError(t, err)
 
-		var reads []*store.QueueItem
+		var reads []*store.Item
 		err = s.Read(ctx, &reads, "", 2)
 		require.NoError(t, err)
 
@@ -104,7 +104,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		assert.Equal(t, reads[1].Kind, items[1].Kind)
 		assert.Equal(t, reads[1].Body, items[1].Body)
 
-		cmp := &store.QueueItem{
+		cmp := &store.Item{
 			IsReserved:      false,
 			DeadDeadline:    now.Add(1_000_000 * time.Minute),
 			ReserveDeadline: now.Add(2_000 * time.Minute),
@@ -115,7 +115,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 			Body:            []byte("Make sense? Oh, what fun is there in making sense?"),
 		}
 
-		assert.True(t, cmp.Compare(&store.QueueItem{
+		assert.True(t, cmp.Compare(&store.Item{
 			IsReserved:      false,
 			DeadDeadline:    now.Add(1_000_000 * time.Minute),
 			ReserveDeadline: now.Add(2_000 * time.Minute),
@@ -160,7 +160,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 
 			items := writeRandomItems(t, ctx, s, 10_000)
 
-			var read []*store.QueueItem
+			var read []*store.Item
 			err = s.Read(ctx, &read, "", 10_000)
 			require.NoError(t, err)
 
@@ -176,7 +176,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 			}
 
 			// Ensure if we ask for more than is available, we only get what is in the db.
-			var more []*store.QueueItem
+			var more []*store.Item
 			err = s.Read(ctx, &more, "", 20_000)
 			require.NoError(t, err)
 			assert.Equal(t, 10_000, len(more))
@@ -186,7 +186,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 				"%+v != %+v", *items[10_000-1], *more[len(more)-1])
 
 			// Ensure if we limit the read, we get only the amount requested
-			var limit []*store.QueueItem
+			var limit []*store.Item
 			err = s.Read(ctx, &limit, "", 1_000)
 			require.NoError(t, err)
 			assert.Equal(t, 1_000, len(limit))
@@ -208,7 +208,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 			require.Len(t, items, 10_000)
 
 			id := items[1000].ID
-			var read []*store.QueueItem
+			var read []*store.Item
 			err = s.Read(ctx, &read, id, 10)
 			require.NoError(t, err)
 
@@ -239,7 +239,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 			require.Len(t, items, 10_000)
 
 			// Reserve 10 items
-			var reserved []*store.QueueItem
+			var reserved []*store.Item
 			expire := time.Now().UTC().Add(2_000 * time.Minute)
 
 			err = s.Reserve(ctx, &reserved, store.ReserveOptions{ReserveDeadline: expire, Limit: 10})
@@ -247,7 +247,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 			assert.Equal(t, 10, len(reserved))
 
 			// Ensure the items reserved are marked as reserved in the database
-			var read []*store.QueueItem
+			var read []*store.Item
 			err = s.Read(ctx, &read, "", 10_000)
 			require.NoError(t, err)
 
@@ -258,7 +258,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 			}
 
 			// Reserve some more items
-			var secondReserve []*store.QueueItem
+			var secondReserve []*store.Item
 			err = s.Reserve(ctx, &secondReserve, store.ReserveOptions{ReserveDeadline: expire, Limit: 10})
 			require.NoError(t, err)
 
@@ -266,7 +266,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 			err = s.Read(ctx, &read, "", 10_000)
 			require.NoError(t, err)
 
-			var combined []*store.QueueItem
+			var combined []*store.Item
 			combined = append(combined, reserved...)
 			combined = append(combined, secondReserve...)
 
@@ -297,7 +297,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 			require.Len(t, items, 10_000)
 
 			// Reserve 100 items
-			var reserved []*store.QueueItem
+			var reserved []*store.Item
 			expire := time.Now().UTC().Add(time.Minute)
 
 			err = s.Reserve(ctx, &reserved, store.ReserveOptions{ReserveDeadline: expire, Limit: 100})
@@ -317,6 +317,10 @@ func testSuite(t *testing.T, newStore NewFunc) {
 				stats.Total, stats.AverageAge, stats.TotalReserved, stats.AverageReservedAge)
 		})
 
+		t.Run("Get One", func(t *testing.T) {
+			// TODO: Ensure Read() can fetch only one item using pivot and limit of 1
+		})
+
 		t.Run("Delete", func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
@@ -329,10 +333,10 @@ func testSuite(t *testing.T, newStore NewFunc) {
 			require.Len(t, items, 10_000)
 
 			// Delete 1_000 items
-			err = s.Delete(ctx, items[0:1_000])
+			err = s.Delete(ctx, store.CollectIDs(items[0:1_000]))
 			require.NoError(t, err)
 
-			var read []*store.QueueItem
+			var read []*store.Item
 			err = s.Read(ctx, &read, "", 10_000)
 			require.NoError(t, err)
 			assert.Equal(t, 9_000, len(read))
@@ -349,13 +353,13 @@ func testSuite(t *testing.T, newStore NewFunc) {
 	})
 }
 
-func writeRandomItems(t *testing.T, ctx context.Context, s store.Queue, count int) []*store.QueueItem {
+func writeRandomItems(t *testing.T, ctx context.Context, s store.Queue, count int) []*store.Item {
 	t.Helper()
 	expire := time.Now().UTC().Add(random.Duration(time.Minute))
 
-	var items []*store.QueueItem
+	var items []*store.Item
 	for i := 0; i < count; i++ {
-		items = append(items, &store.QueueItem{
+		items = append(items, &store.Item{
 			DeadDeadline: expire,
 			Attempts:     rand.Intn(10),
 			Reference:    random.String("ref-", 10),

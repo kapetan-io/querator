@@ -79,6 +79,9 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// TODO: Implement a custom duh.Reply method to capture internal errors and log them instead of returning them
+	//  to the caller.
+
 	switch r.URL.Path {
 	case RPCQueueProduce:
 		h.QueueProduce(ctx, w, r)

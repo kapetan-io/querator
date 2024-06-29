@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-func TestStorage(t *testing.T) {
+func TestQueue(t *testing.T) {
 
 	testCases := []struct {
 		Name string
@@ -21,7 +21,7 @@ func TestStorage(t *testing.T) {
 		{
 			Name: "BuntDB",
 			New: func() (store.Queue, error) {
-				return store.NewBuntQueue(store.BuntOptions{}, ":memory:")
+				return store.NewBuntStorage(store.BuntOptions{}).NewQueue(store.QueueOptions{Name: "test-queue"})
 			},
 		},
 		//{

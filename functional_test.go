@@ -15,6 +15,8 @@ import (
 )
 
 func TestProduceAndConsume(t *testing.T) {
+	var queueName = "test-queue"
+
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -27,9 +29,7 @@ func TestProduceAndConsume(t *testing.T) {
 	defer func() { _ = d.Shutdown(context.Background()) }()
 	c := d.MustClient()
 
-	err = c.QueueCreate(ctx, &pb.QueueOptions{
-		Name: "test-queue",
-	})
+	err = c.QueueCreate(ctx, &pb.QueueOptions{Name: queueName})
 	require.NoError(t, err)
 
 	ref := random.String("ref-", 10)
@@ -54,7 +54,7 @@ func TestProduceAndConsume(t *testing.T) {
 	var reserve pb.QueueReserveResponse
 	require.NoError(t, c.QueueReserve(ctx, &pb.QueueReserveRequest{
 		ClientId:  random.String("client-", 10),
-		QueueName: "test-queue",
+		QueueName: queueName,
 		BatchSize: 1,
 	}, &reserve))
 
@@ -67,7 +67,7 @@ func TestProduceAndConsume(t *testing.T) {
 	assert.Equal(t, int32(0), item.Attempts)
 	assert.Equal(t, body, item.Body)
 
-	// Ensure the item is in storage
+	// Ensure the item is in storage and marked as reserved
 	var inspect pb.StorageItem
 	require.NoError(t, c.StorageInspect(ctx, item.Id, &inspect))
 
@@ -78,18 +78,28 @@ func TestProduceAndConsume(t *testing.T) {
 	assert.Equal(t, item.Id, inspect.Id)
 	assert.Equal(t, true, inspect.IsReserved)
 
+	// Storage should have only one item
+	var list pb.StorageListResponse
+	require.NoError(t, c.StorageList(ctx, &pb.StorageListRequest{
+		QueueName: queueName,
+		Pivot:     "",
+		Limit:     10,
+	}, &list))
+	assert.Equal(t, 1, len(list.Items))
+
 	// Mark the item as complete
 	require.NoError(t, c.QueueComplete(ctx, &pb.QueueCompleteRequest{
+		QueueName: queueName,
 		Ids: []string{
 			item.Id,
 		},
 	}))
 
 	// Storage should be empty
-	var list pb.StorageListResponse
 	require.NoError(t, c.StorageList(ctx, &pb.StorageListRequest{
-		Pivot: "",
-		Limit: 10,
+		QueueName: queueName,
+		Pivot:     "",
+		Limit:     10,
 	}, &list))
 
 	assert.Equal(t, 0, len(list.Items))

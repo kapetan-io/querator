@@ -27,6 +27,7 @@ import (
 	"github.com/kapetan-io/tackle/set"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"log/slog"
+	"strings"
 )
 
 // TODO: Document this and make it configurable via the daemon
@@ -52,7 +53,7 @@ func NewService(opts ServiceOptions) (*Service, error) {
 	}
 
 	qm := internal.NewQueueManager(internal.QueueManagerOptions{
-		NewQueue: opts.Storage.NewQueue,
+		Storage: opts.Storage,
 	})
 
 	return &Service{
@@ -152,6 +153,10 @@ func (s *Service) StorageList(ctx context.Context, req *proto.StorageListRequest
 			" max limit is 1,000 requested '%d'", req.Limit)
 	}
 
+	if strings.TrimSpace(req.QueueName) == "" {
+		return transport.NewInvalidRequest("queue name cannot be empty")
+	}
+
 	queue, err := s.manager.Get(ctx, req.QueueName)
 	if err != nil {
 		return err
@@ -159,7 +164,7 @@ func (s *Service) StorageList(ctx context.Context, req *proto.StorageListRequest
 
 	r := internal.StorageRequest{Pivot: req.Pivot, Limit: int(req.Limit)}
 	if err := queue.Storage(ctx, &r); err != nil {
-		return transport.NewRequestFailed("list request failed; error is '%s'", err)
+		return transport.NewRequestFailed("list request failed; %s", err)
 	}
 
 	for _, item := range r.Items {
@@ -170,21 +175,20 @@ func (s *Service) StorageList(ctx context.Context, req *proto.StorageListRequest
 }
 
 func (s *Service) StorageInspect(ctx context.Context, req *proto.StorageInspectRequest, res *proto.StorageItem) error {
-	var name, id string
 
-	// TODO: Implement ParseID and CreateID to create the public facing id's which this storage knows how to parse
-	if err := s.opts.Storage.ParseID(req.Id, &name, &id); err != nil {
-		return transport.NewInvalidRequest("invalid queue id; error is '%s'", err)
+	var sid store.StorageID
+	if err := s.opts.Storage.ParseID(req.Id, &sid); err != nil {
+		return transport.NewInvalidRequest("invalid storage id; %s", err)
 	}
 
-	queue, err := s.manager.Get(ctx, name)
+	queue, err := s.manager.Get(ctx, sid.Queue)
 	if err != nil {
 		return err
 	}
 
-	r := internal.StorageRequest{ID: id}
+	r := internal.StorageRequest{ID: req.Id}
 	if err := queue.Storage(ctx, &r); err != nil {
-		return transport.NewRequestFailed("inspect request failed; error is '%s'", err)
+		return transport.NewRequestFailed("inspect request failed; %s", err)
 	}
 
 	r.Items[0].ToStorageItemProto(res)

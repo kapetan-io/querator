@@ -9,8 +9,7 @@ import (
 )
 
 type QueueManagerOptions struct {
-	// Instantiates a new store for the given queue
-	NewQueue func(name string) (store.Queue, error)
+	Storage store.Storage
 }
 
 type QueueManager struct {
@@ -58,7 +57,7 @@ func (qm *QueueManager) Create(_ context.Context, opts QueueOptions) (*Queue, er
 
 	var err error
 	// TODO: Use the user chosen store via qm.opts.NewQueue()
-	opts.QueueStorage, err = store.NewBuntQueue(store.BuntOptions{}, ":memory:")
+	opts.QueueStore, err = qm.opts.Storage.NewQueue(store.QueueOptions{Name: opts.Name})
 	if err != nil {
 		if store.IsErrInvalidOption(err) {
 			return nil, transport.NewInvalidRequest(err.Error())

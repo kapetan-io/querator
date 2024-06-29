@@ -8,12 +8,27 @@ import (
 	"time"
 )
 
-// TODO: Implement a concrete version of this for BuntDB
+// StorageID is the decoded storage StorageID
+type StorageID struct {
+	Queue string
+	ID    string
+}
+
+// QueueOptions are options used when creating a new store.Queue
+type QueueOptions struct {
+	// The name of the queue
+	Name string
+	// WriteTimeout (Optional) The time it should take for a single batched write to complete
+	WriteTimeout time.Duration
+	// ReadTimeout (Optional) The time it should take for a single batched read to complete
+	ReadTimeout time.Duration
+}
 
 // Storage is the primary storage interface
 type Storage interface {
-	NewQueue(name string) (Queue, error)
-	ParseID(parse string, queue, id *string) error
+	NewQueue(opts QueueOptions) (Queue, error)
+	ParseID(parse string, id *StorageID) error
+	CreateID(queue, id string) string
 }
 
 type ReserveOptions struct {
@@ -22,11 +37,6 @@ type ReserveOptions struct {
 
 	// Limit is the max number of items to reserve
 	Limit int
-}
-
-type QueueStorageOptions struct {
-	WriteTimeout time.Duration
-	ReadTimeout  time.Duration
 }
 
 type Stats struct {
@@ -74,7 +84,7 @@ type Queue interface {
 
 	Close(ctx context.Context) error
 
-	Options() QueueStorageOptions
+	Options() QueueOptions
 }
 
 // TODO: ScheduledStorage interface {} - A place to store scheduled items to be queued. (Defer)
@@ -164,7 +174,7 @@ func (i *Item) ToStorageItemProto(in *pb.StorageItem) *pb.StorageItem {
 	return in
 }
 
-// CollectIDs is a convenience function which assists in calling QueueStorage.Delete()
+// CollectIDs is a convenience function which assists in calling QueueStore.Delete()
 // when a list of items to be deleted is needed.
 func CollectIDs(items []*Item) []string {
 	var result []string

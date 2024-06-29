@@ -46,8 +46,8 @@ type QueueOptions struct {
 	// by the queued item.
 	DeadTimeout time.Duration
 
-	// QueueStorage is the store interface used to persist items for this specific queue
-	QueueStorage store.Queue
+	// QueueStore is the store interface used to persist items for this specific queue
+	QueueStore store.Queue
 }
 
 // Queue manages job is to evenly distribute and consume items from a single queue. Ensuring consumers and
@@ -67,8 +67,8 @@ type Queue struct {
 
 func NewQueue(opts QueueOptions) (*Queue, error) {
 	set.Default(&opts.Logger, slog.Default())
-	if opts.QueueStorage == nil {
-		return nil, errors.New("QueueOptions.QueueStorage cannot be nil")
+	if opts.QueueStore == nil {
+		return nil, errors.New("QueueOptions.QueueStore cannot be nil")
 	}
 
 	q := &Queue{
@@ -345,15 +345,15 @@ func (q *Queue) processQueues() {
 
 			// If we allow a calculated write timeout to be a few milliseconds, then the store.Write()
 			// is almost guaranteed to fail, so we ensure the write timeout is something reasonable.
-			if writeTimeout < q.opts.QueueStorage.Options().WriteTimeout {
+			if writeTimeout < q.opts.QueueStore.Options().WriteTimeout {
 				// WriteTimeout comes from the storage implementation as the user who configured the
 				// storage option should know a reasonable timeout value for the configuration chosen.
-				writeTimeout = q.opts.QueueStorage.Options().WriteTimeout
+				writeTimeout = q.opts.QueueStore.Options().WriteTimeout
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
-			if err := q.opts.QueueStorage.Write(ctx, items); err != nil {
-				q.opts.Logger.Warn("while calling QueueStorage.Write()", "error", err)
+			if err := q.opts.QueueStore.Write(ctx, items); err != nil {
+				q.opts.Logger.Warn("while calling QueueStore.Write()", "error", err)
 				cancel()
 				// Let clients that are timed out, know we are done with them.
 				for _, req := range wpr.Requests {
@@ -399,13 +399,13 @@ func (q *Queue) processQueues() {
 			_ = findNextTimeout(&wrr)
 
 			// Fetch all the reservable items in the store
-			ctx, cancel := context.WithTimeout(context.Background(), q.opts.QueueStorage.Options().ReadTimeout)
+			ctx, cancel := context.WithTimeout(context.Background(), q.opts.QueueStore.Options().ReadTimeout)
 			var items []*store.Item
-			if err := q.opts.QueueStorage.Reserve(ctx, &items, store.ReserveOptions{
+			if err := q.opts.QueueStore.Reserve(ctx, &items, store.ReserveOptions{
 				ReserveDeadline: time.Now().UTC().Add(q.opts.ReserveTimeout),
 				Limit:           wrr.Total,
 			}); err != nil {
-				q.opts.Logger.Warn("while calling QueueStorage.Reserve()", "error", err)
+				q.opts.Logger.Warn("while calling QueueStore.Reserve()", "error", err)
 				cancel()
 				continue
 			}
@@ -449,13 +449,20 @@ func (q *Queue) processQueues() {
 				addToWCR(req)
 			}
 
-			ids := make([]string, wcr.TotalIDs, 0)
+			ids := make([]string, 0, wcr.TotalIDs)
 			for _, req := range wcr.Requests {
 				ids = append(ids, req.Ids...)
 			}
 
-			if err := q.opts.QueueStorage.Delete(req.Context, ids); err != nil {
-				req.err = fmt.Errorf("during inspect QueueStorage.Read(): %w", err)
+			if err := q.opts.QueueStore.Delete(req.Context, ids); err != nil {
+				req.err = fmt.Errorf("during complete QueueStore.Delete(): %w", err)
+			}
+
+			// Tell the waiting clients the items have been marked as complete
+			for i, req := range wcr.Requests {
+				close(req.readyCh)
+				// Allow the GC to collect these requests
+				wcr.Requests[i] = nil
 			}
 
 			wcr.Requests = wcr.Requests[:0]
@@ -464,12 +471,12 @@ func (q *Queue) processQueues() {
 		// -----------------------------------------------
 		case req := <-q.storageQueueCh:
 			if req.ID != "" {
-				if err := q.opts.QueueStorage.Read(req.Context, &req.Items, req.ID, 1); err != nil {
-					req.err = fmt.Errorf("during inspect QueueStorage.Read(): %w", err)
+				if err := q.opts.QueueStore.Read(req.Context, &req.Items, req.ID, 1); err != nil {
+					req.err = fmt.Errorf("during inspect QueueStore.Read(): %w", err)
 				}
 			} else {
-				if err := q.opts.QueueStorage.Read(req.Context, &req.Items, req.Pivot, req.Limit); err != nil {
-					req.err = fmt.Errorf("during list QueueStorage.Read(): %w", err)
+				if err := q.opts.QueueStore.Read(req.Context, &req.Items, req.Pivot, req.Limit); err != nil {
+					req.err = fmt.Errorf("during list QueueStore.Read(): %w", err)
 				}
 			}
 			close(req.readyCh)
@@ -484,7 +491,7 @@ func (q *Queue) processQueues() {
 				r.err = ErrQueueShutdown
 				close(r.readyCh)
 			}
-			if err := q.opts.QueueStorage.Close(req.Context); err != nil {
+			if err := q.opts.QueueStore.Close(req.Context); err != nil {
 				req.Err = err
 			}
 			close(req.readyCh)

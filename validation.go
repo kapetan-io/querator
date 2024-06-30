@@ -19,15 +19,6 @@ func (s *Service) validateQueueProduceProto(in *proto.QueueProduceRequest, out *
 		}
 	}
 
-	if len(in.Items) == 0 {
-		return transport.NewInvalidRequest("items cannot be empty; at least one item is required")
-	}
-
-	if len(in.Items) > s.opts.MaxProduceBatchSize {
-		return transport.NewInvalidRequest("too many items in request; max_produce_batch_size is"+
-			" %d but received %d", s.opts.MaxProduceBatchSize, len(in.Items))
-	}
-
 	for _, item := range in.Items {
 		// TODO: From Memory Pool
 		var qi store.Item
@@ -52,11 +43,6 @@ func (s *Service) validateQueueReserveProto(in *proto.QueueReserveRequest, out *
 		if err != nil {
 			return transport.NewInvalidRequest("reserve request_timeout is invalid; %s", err.Error())
 		}
-	}
-
-	if int(in.BatchSize) > s.opts.MaxReserveBatchSize {
-		return transport.NewInvalidRequest("batch_size exceeds maximum limit; max_reserve_batch_size is %d, "+
-			"but %d was requested", s.opts.MaxProduceBatchSize, in.BatchSize)
 	}
 
 	out.ClientID = in.ClientId

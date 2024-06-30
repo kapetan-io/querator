@@ -223,8 +223,29 @@ func testSuite(t *testing.T, newStore NewFunc) {
 				assert.Equal(t, items[i+1000].Body, read[i].Body)
 			}
 
-			// TODO: Pivot through more pages and ensure the pivot allows us to page through items
+			// The read includes the pivot
+			item := read[9]
+			read = read[:0]
+			err = s.Read(ctx, &read, item.ID, 1)
+			require.NoError(t, err)
 
+			require.Equal(t, 1, len(read))
+			assert.Equal(t, item.ID, read[0].ID)
+			assert.True(t, read[0].Compare(item), "%+v != %+v", *read[0], item)
+
+			// Pivot through more pages and ensure the pivot allows us to page through items
+			read = read[0:]
+			err = s.Read(ctx, &read, item.ID, 10)
+			require.NoError(t, err)
+
+			item = read[9]
+			read = read[:0]
+			err = s.Read(ctx, &read, item.ID, 10)
+			require.NoError(t, err)
+
+			// The last item on the last page, should match the items written
+			assert.True(t, items[1026].Compare(read[9]),
+				"%+v != %+v", *items[1026], *read[9])
 		})
 
 		t.Run("Reserve", func(t *testing.T) {
@@ -318,7 +339,25 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		})
 
 		t.Run("Get One", func(t *testing.T) {
-			// TODO: Ensure Read() can fetch only one item using pivot and limit of 1
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			s, err := newStore()
+			defer func() { _ = s.Close(context.Background()) }()
+			require.NoError(t, err)
+
+			items := writeRandomItems(t, ctx, s, 10_000)
+			require.Len(t, items, 10_000)
+
+			// Ensure Read() can fetch one item using pivot, and the item returned is the pivot
+			item := items[1000]
+			var read []*store.Item
+			err = s.Read(ctx, &read, item.ID, 1)
+			require.NoError(t, err)
+
+			require.Equal(t, 1, len(read))
+			assert.Equal(t, item.ID, read[0].ID)
+			assert.True(t, read[0].Compare(item), "%+v != %+v", *read[0], item)
 		})
 
 		t.Run("Delete", func(t *testing.T) {

@@ -9,7 +9,8 @@ import (
 )
 
 type QueueManagerOptions struct {
-	Storage store.Storage
+	Storage      store.Storage
+	QueueOptions QueueOptions
 }
 
 type QueueManager struct {
@@ -25,6 +26,15 @@ func NewQueueManager(opts QueueManagerOptions) *QueueManager {
 }
 
 func (qm *QueueManager) Get(_ context.Context, name string) (*Queue, error) {
+
+	if strings.TrimSpace(name) == "" {
+		return nil, transport.NewInvalidRequest("invalid queue name; cannot be empty")
+	}
+
+	if strings.Contains(name, "~") {
+		return nil, transport.NewInvalidRequest("invalid queue name; '%s' cannot be contain '~' character", name)
+	}
+
 	q, ok := qm.queues[name]
 	if !ok {
 		return nil, transport.NewInvalidRequest("queue does not exist; no such queue named '%s'", name)

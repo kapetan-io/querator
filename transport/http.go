@@ -27,16 +27,18 @@ import (
 )
 
 const (
-	RPCQueueProduce   = "/v1/queue.produce"
-	RPCQueueReserve   = "/v1/queue.reserve"
-	RPCQueueDefer     = "/v1/queue.defer"
-	RPCQueueComplete  = "/v1/queue.complete"
-	RPCQueueList      = "/v1/queue.list"
-	RPCQueueCreate    = "/v1/queue.create"
-	RPCQueueDelete    = "/v1/queue.delete"
-	RPCQueueInspect   = "/v1/queue.inspect"
+	RPCQueueProduce  = "/v1/queue.produce"
+	RPCQueueReserve  = "/v1/queue.reserve"
+	RPCQueueDefer    = "/v1/queue.defer"
+	RPCQueueComplete = "/v1/queue.complete"
+	RPCQueueList     = "/v1/queue.list"
+	RPCQueueCreate   = "/v1/queue.create"
+	RPCQueueDelete   = "/v1/queue.delete"
+	RPCQueueInspect  = "/v1/queue.inspect"
+
 	RPCStorageInspect = "/v1/storage.inspect"
 	RPCStorageList    = "/v1/storage.list"
+	// TODO: How do we inspect scheduled items?
 )
 
 type Service interface {

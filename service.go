@@ -44,8 +44,6 @@ type Service struct {
 }
 
 func NewService(opts ServiceOptions) (*Service, error) {
-	set.Default(&opts.MaxReserveBatchSize, 1_000)
-	set.Default(&opts.MaxProduceBatchSize, 1_000)
 	set.Default(&opts.Logger, slog.Default())
 
 	if opts.Storage == nil {
@@ -53,6 +51,10 @@ func NewService(opts ServiceOptions) (*Service, error) {
 	}
 
 	qm := internal.NewQueueManager(internal.QueueManagerOptions{
+		QueueOptions: internal.QueueOptions{
+			MaxReserveBatchSize: opts.MaxReserveBatchSize,
+			MaxProduceBatchSize: opts.MaxProduceBatchSize,
+		},
 		Storage: opts.Storage,
 	})
 

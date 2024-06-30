@@ -48,6 +48,9 @@ type QueueOptions struct {
 
 	// QueueStore is the store interface used to persist items for this specific queue
 	QueueStore store.Queue
+
+	MaxReserveBatchSize int
+	MaxProduceBatchSize int
 }
 
 // Queue manages job is to evenly distribute and consume items from a single queue. Ensuring consumers and
@@ -67,6 +70,9 @@ type Queue struct {
 
 func NewQueue(opts QueueOptions) (*Queue, error) {
 	set.Default(&opts.Logger, slog.Default())
+	set.Default(&opts.MaxReserveBatchSize, 1_000)
+	set.Default(&opts.MaxProduceBatchSize, 1_000)
+
 	if opts.QueueStore == nil {
 		return nil, errors.New("QueueOptions.QueueStore cannot be nil")
 	}
@@ -118,6 +124,15 @@ func (q *Queue) Storage(ctx context.Context, req *StorageRequest) error {
 func (q *Queue) Produce(ctx context.Context, req *ProduceRequest) error {
 	if q.inShutdown.Load() {
 		return ErrQueueShutdown
+	}
+
+	if len(req.Items) == 0 {
+		return transport.NewInvalidRequest("items cannot be empty; at least one item is required")
+	}
+
+	if len(req.Items) > q.opts.MaxProduceBatchSize {
+		return transport.NewInvalidRequest("too many items in request; max_produce_batch_size is"+
+			" %d but received %d", q.opts.MaxProduceBatchSize, len(req.Items))
 	}
 
 	if req.RequestTimeout > maxRequestTimeout {
@@ -174,6 +189,11 @@ func (q *Queue) Reserve(ctx context.Context, req *ReserveRequest) error {
 	if req.RequestTimeout > maxRequestTimeout {
 		return transport.NewInvalidRequest("request_timeout is invalid; maximum timeout is '15m' but '%s' "+
 			"requested", req.RequestTimeout.String())
+	}
+
+	if int(req.BatchSize) > q.opts.MaxReserveBatchSize {
+		return transport.NewInvalidRequest("batch_size exceeds maximum limit; max_reserve_batch_size is %d, "+
+			"but %d was requested", q.opts.MaxProduceBatchSize, req.BatchSize)
 	}
 
 	if req.RequestTimeout == time.Duration(0) {

@@ -28,11 +28,11 @@ func NewQueueManager(opts QueueManagerOptions) *QueueManager {
 func (qm *QueueManager) Get(_ context.Context, name string) (*Queue, error) {
 
 	if strings.TrimSpace(name) == "" {
-		return nil, transport.NewInvalidRequest("invalid queue name; cannot be empty")
+		return nil, transport.NewInvalidRequest("invalid queue_name; cannot be empty")
 	}
 
 	if strings.Contains(name, "~") {
-		return nil, transport.NewInvalidRequest("invalid queue name; '%s' cannot be contain '~' character", name)
+		return nil, transport.NewInvalidRequest("invalid queue_name; '%s' cannot be contain '~' character", name)
 	}
 
 	q, ok := qm.queues[name]

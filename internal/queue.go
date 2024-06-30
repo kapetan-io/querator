@@ -141,7 +141,7 @@ func (q *Queue) Produce(ctx context.Context, req *ProduceRequest) error {
 	}
 
 	if req.RequestTimeout == time.Duration(0) {
-		req.RequestTimeout = maxRequestTimeout
+		return transport.NewInvalidRequest("request_timeout is required; '5m' is recommended, 15m is the maximum")
 	}
 
 	req.Context = ctx
@@ -179,25 +179,25 @@ func (q *Queue) Reserve(ctx context.Context, req *ReserveRequest) error {
 	}
 
 	if strings.TrimSpace(req.ClientID) == "" {
-		return transport.NewInvalidRequest("client_id cannot be empty")
+		return transport.NewInvalidRequest("invalid client_id; cannot be empty")
 	}
 
 	if req.BatchSize <= 0 {
-		return transport.NewInvalidRequest("batch_size must be greater than zero")
-	}
-
-	if req.RequestTimeout > maxRequestTimeout {
-		return transport.NewInvalidRequest("request_timeout is invalid; maximum timeout is '15m' but '%s' "+
-			"requested", req.RequestTimeout.String())
+		return transport.NewInvalidRequest("invalid batch_size; must be greater than zero")
 	}
 
 	if int(req.BatchSize) > q.opts.MaxReserveBatchSize {
-		return transport.NewInvalidRequest("batch_size exceeds maximum limit; max_reserve_batch_size is %d, "+
+		return transport.NewInvalidRequest("invalid batch_size; exceeds maximum limit max_reserve_batch_size is %d, "+
 			"but %d was requested", q.opts.MaxProduceBatchSize, req.BatchSize)
 	}
 
+	if req.RequestTimeout > maxRequestTimeout {
+		return transport.NewInvalidRequest("invalid request_timeout; maximum timeout is '15m' but '%s' "+
+			"requested", req.RequestTimeout.String())
+	}
+
 	if req.RequestTimeout == time.Duration(0) {
-		req.RequestTimeout = maxRequestTimeout
+		return transport.NewInvalidRequest("request_timeout is required; '5m' is recommended, 15m is the maximum")
 	}
 
 	req.Context = ctx
@@ -221,7 +221,7 @@ func (q *Queue) Complete(ctx context.Context, req *CompleteRequest) error {
 	}
 
 	if req.RequestTimeout == time.Duration(0) {
-		req.RequestTimeout = maxRequestTimeout
+		return transport.NewInvalidRequest("request_timeout is required; '5m' is recommended, 15m is the maximum")
 	}
 
 	req.Context = ctx

@@ -45,9 +45,9 @@ func TestFunctionalSuite(t *testing.T) {
 }
 
 func testSuite(t *testing.T, newStore NewFunc) {
-	var queueName = random.String("queue-", 10)
 
 	t.Run("ProduceAndConsume", func(t *testing.T) {
+		var queueName = random.String("queue-", 10)
 		d, c, ctx := newDaemon(t, newStore, 5*time.Second)
 		defer d.Shutdown(t)
 
@@ -76,9 +76,10 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		// Reserve a single message
 		var reserve pb.QueueReserveResponse
 		require.NoError(t, c.QueueReserve(ctx, &pb.QueueReserveRequest{
-			ClientId:  random.String("client-", 10),
-			QueueName: queueName,
-			BatchSize: 1,
+			ClientId:       random.String("client-", 10),
+			RequestTimeout: "5m",
+			QueueName:      queueName,
+			BatchSize:      1,
 		}, &reserve))
 
 		// Ensure we got the item we produced
@@ -112,7 +113,8 @@ func testSuite(t *testing.T, newStore NewFunc) {
 
 		// Mark the item as complete
 		require.NoError(t, c.QueueComplete(ctx, &pb.QueueCompleteRequest{
-			QueueName: queueName,
+			QueueName:      queueName,
+			RequestTimeout: "5m",
 			Ids: []string{
 				item.Id,
 			},
@@ -131,8 +133,11 @@ func testSuite(t *testing.T, newStore NewFunc) {
 	})
 
 	t.Run("QueueProduceErrors", func(t *testing.T) {
+		var queueName = random.String("queue-", 10)
 		d, c, ctx := newDaemon(t, newStore, 5*time.Second)
 		defer d.Shutdown(t)
+
+		require.NoError(t, c.QueueCreate(ctx, &pb.QueueOptions{Name: queueName}))
 
 		for _, tc := range []struct {
 			Name string
@@ -143,7 +148,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 			{
 				Name: "empty request",
 				Req:  &pb.QueueProduceRequest{},
-				Msg:  "invalid queue name; cannot be empty",
+				Msg:  "invalid queue_name; cannot be empty",
 				Code: duh.CodeBadRequest,
 			},
 			{
@@ -151,17 +156,179 @@ func testSuite(t *testing.T, newStore NewFunc) {
 				Req: &pb.QueueProduceRequest{
 					QueueName: "invalid~queue",
 				},
-				Msg:  "invalid queue name; 'invalid~queue' cannot be contain '~' character",
+				Msg:  "invalid queue_name; 'invalid~queue' cannot be contain '~' character",
 				Code: duh.CodeBadRequest,
 			},
-			// TODO: Keep going <--- NEXT
+			{
+				Name: "no items, nil pointer",
+				Req: &pb.QueueProduceRequest{
+					QueueName: queueName,
+					Items:     nil,
+				},
+				Msg:  "items cannot be empty; at least one item is required",
+				Code: duh.CodeBadRequest,
+			},
+			{
+				Name: "no items, empty list",
+				Req: &pb.QueueProduceRequest{
+					QueueName: queueName,
+					Items:     []*pb.QueueProduceItem{},
+				},
+				Msg:  "items cannot be empty; at least one item is required",
+				Code: duh.CodeBadRequest,
+			},
+			{
+				Name: "items with no body are okay",
+				Req: &pb.QueueProduceRequest{
+					QueueName:      queueName,
+					RequestTimeout: "5m",
+					Items: []*pb.QueueProduceItem{
+						{},
+						{},
+					},
+				},
+				Code: duh.CodeOK,
+			},
+			{
+				Name: "request_timeout is required",
+				Req: &pb.QueueProduceRequest{
+					QueueName: queueName,
+					Items: []*pb.QueueProduceItem{
+						{},
+					},
+				},
+				Msg:  "request_timeout is required; '5m' is recommended, 15m is the maximum",
+				Code: duh.CodeBadRequest,
+			},
+			{
+				Name: "request_timeout too long",
+				Req: &pb.QueueProduceRequest{
+					QueueName:      queueName,
+					RequestTimeout: "16m",
+					Items: []*pb.QueueProduceItem{
+						{},
+					},
+				},
+				Msg:  "request_timeout is invalid; maximum timeout is '15m' but '16m0s' was requested",
+				Code: duh.CodeBadRequest,
+			},
+			{
+				Name: "invalid request_timeout",
+				Req: &pb.QueueProduceRequest{
+					QueueName:      queueName,
+					RequestTimeout: "foo",
+					Items: []*pb.QueueProduceItem{
+						{},
+					},
+				},
+				Msg:  "request_timeout is invalid; time: invalid duration \"foo\" - expected format: 900ms, 5m or 15m",
+				Code: duh.CodeBadRequest,
+			},
+			// TODO: Max items reached
 		} {
 			t.Run(tc.Name, func(t *testing.T) {
 				err := c.QueueProduce(ctx, tc.Req)
-				var e duh.Error
-				require.True(t, errors.As(err, &e))
-				assert.Equal(t, e.Message(), tc.Msg)
-				assert.Equal(t, e.Code(), tc.Code)
+				if tc.Code != duh.CodeOK {
+					var e duh.Error
+					require.True(t, errors.As(err, &e))
+					assert.Equal(t, e.Message(), tc.Msg)
+					assert.Equal(t, e.Code(), tc.Code)
+				}
+			})
+		}
+	})
+
+	t.Run("QueueReserveErrors", func(t *testing.T) {
+		var queueName = random.String("queue-", 10)
+		var clientID = random.String("client-", 10)
+		d, c, ctx := newDaemon(t, newStore, 5*time.Second)
+		defer d.Shutdown(t)
+
+		require.NoError(t, c.QueueCreate(ctx, &pb.QueueOptions{Name: queueName}))
+
+		for _, tc := range []struct {
+			Name string
+			Req  *pb.QueueReserveRequest
+			Msg  string
+			Code int
+		}{
+			{
+				Name: "empty request",
+				Req:  &pb.QueueReserveRequest{},
+				Msg:  "invalid queue_name; cannot be empty",
+				Code: duh.CodeBadRequest,
+			},
+			{
+				Name: "client id missing",
+				Req: &pb.QueueReserveRequest{
+					QueueName: queueName,
+				},
+				Msg:  "invalid client_id; cannot be empty",
+				Code: duh.CodeBadRequest,
+			},
+			{
+				Name: "batch size cannot be empty",
+				Req: &pb.QueueReserveRequest{
+					QueueName: queueName,
+					ClientId:  clientID,
+				},
+				Msg:  "invalid batch_size; must be greater than zero",
+				Code: duh.CodeBadRequest,
+			},
+			{
+				Name: "batch size maximum",
+				Req: &pb.QueueReserveRequest{
+					QueueName: queueName,
+					ClientId:  clientID,
+					BatchSize: 1_001,
+				},
+				Msg:  "invalid batch_size; exceeds maximum limit max_reserve_batch_size is 1000, but 1001 was requested",
+				Code: duh.CodeBadRequest,
+			},
+			{
+				Name: "request_timeout required",
+				Req: &pb.QueueReserveRequest{
+					QueueName: queueName,
+					ClientId:  clientID,
+					BatchSize: 111,
+				},
+				Msg:  "request_timeout is required; '5m' is recommended, 15m is the maximum",
+				Code: duh.CodeBadRequest,
+			},
+			{
+				Name: "request_timeout too long",
+				Req: &pb.QueueReserveRequest{
+					QueueName:      queueName,
+					ClientId:       clientID,
+					BatchSize:      1_000,
+					RequestTimeout: "16m",
+				},
+				Msg:  "invalid request_timeout; maximum timeout is '15m' but '16m0s' requested",
+				Code: duh.CodeBadRequest,
+			},
+			{
+				Name: "request_timeout invalid",
+				Req: &pb.QueueReserveRequest{
+					QueueName:      queueName,
+					ClientId:       clientID,
+					BatchSize:      1_000,
+					RequestTimeout: "foo",
+				},
+				Msg:  "request_timeout is invalid; time: invalid duration \"foo\" - expected format: 900ms, 5m or 15m",
+				Code: duh.CodeBadRequest,
+			},
+			// TODO: Consider setting a minimum request_timeout of 10ms, anything less would almost guarantee a cancelled request before fulfillment.
+			//   ^^^^^ THIS NEXT
+		} {
+			t.Run(tc.Name, func(t *testing.T) {
+				var res pb.QueueReserveResponse
+				err := c.QueueReserve(ctx, tc.Req, &res)
+				if tc.Code != duh.CodeOK {
+					var e duh.Error
+					require.True(t, errors.As(err, &e))
+					assert.Equal(t, e.Message(), tc.Msg)
+					assert.Equal(t, e.Code(), tc.Code)
+				}
 			})
 		}
 	})

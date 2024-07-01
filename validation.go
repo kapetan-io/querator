@@ -24,7 +24,7 @@ func (s *Service) validateQueueProduceProto(in *proto.QueueProduceRequest, out *
 		qi.Encoding = item.Encoding
 		qi.Kind = item.Kind
 		qi.Reference = item.Reference
-		qi.Body = item.Body
+		qi.Payload = item.Bytes
 		out.Items = append(out.Items, &qi)
 	}
 	return nil

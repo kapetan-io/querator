@@ -32,7 +32,7 @@ func (qm *QueueManager) Get(_ context.Context, name string) (*Queue, error) {
 	}
 
 	if strings.Contains(name, "~") {
-		return nil, transport.NewInvalidRequest("invalid queue_name; '%s' cannot be contain '~' character", name)
+		return nil, transport.NewInvalidRequest("invalid queue_name; '%s' cannot contain '~' character", name)
 	}
 
 	q, ok := qm.queues[name]

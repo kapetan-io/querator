@@ -106,7 +106,7 @@ func (s *Service) QueueReserve(ctx context.Context, req *proto.QueueReserveReque
 			Reference:       item.Reference,
 			Encoding:        item.Encoding,
 			Kind:            item.Kind,
-			Body:            item.Body,
+			Bytes:           item.Payload,
 			Id:              item.ID,
 		})
 	}

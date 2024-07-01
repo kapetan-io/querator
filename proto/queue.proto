@@ -36,18 +36,35 @@ message QueueProduceRequest {
 }
 
 message QueueProduceItem {
-  // A user specified field which indicates the encoding used to encode the 'body'
+  // A user specified field which indicates the encoding used to encode the 'payload'
   string encoding = 1;
-  // A Kind or Type the body contains. Consumers can use this field to determine handling
-  // of the body prior to unmarshalling. Examples: 'webhook-v2', 'webhook-v1',
+  // A Kind or Type the payload contains. Consumers can use this field to determine handling
+  // of the payload prior to unmarshalling. Examples: 'webhook-v2', 'webhook-v1',
   string kind = 2;
   // This is a user specified field that can be used by the consumer to determine handling
-  // of the message without needing to unmarshall the body.
+  // of the message without needing to unmarshall the payload.
   // Examples: 'account-0001', 'john.smith'
   string reference = 3;
-  //  The body of the item, it's encoding is specified by the 'encoding' field.
-  // Example: '{"key": "value"}'
-  bytes  body = 4;
+  // The payload of the item as an array of raw bytes with no predetermined character set.
+  // Clients who communicate with Querator with `Content-Type: application/protobuf`
+  // (which is the default for golang clients) should use this field instead of `strings`.
+  //
+  // NOTE: If `Content-Type: application/json` is used when communicating with Querator, the
+  // 'bytes' field will be encoded as base64. This is because byte fields (unlike string fields)
+  // can contain non-UTF8 binary data, and since that cannot be directly represented in JSON, we
+  // have to base64 encode it.
+  bytes bytes = 4;
+  // This is an a convenience field useful for clients that are communicating with Querator via
+  // `Content-Type: application/json`. This field assumes a utf8 encoded payload and does not
+  // require the payload to be encoded as base64. As such is is an excellent choice for clients
+  // who do not have access to a base64 encoder and can't use the `bytes` field for their payload.
+  //
+  // NOTE: Both `bytes` and `utf8` can be set, but `bytes` takes precedence. If `bytes` is set,
+  // then that will be used as the payload. If `utf8` is set and `bytes` is empty, then `utf8`
+  // will be used. If both `bytes` and `utf8` are set, then `bytes` will be used and `utf8` will
+  // be dropped.
+  // Example: 'Hello, I am a UTF-8 payload' , '{"key", "value"}'
+  string utf8 = 5;
 }
 
 message QueueReserveRequest {
@@ -70,15 +87,15 @@ message QueueReserveRequest {
 }
 
 message QueueReserveItem {
-  // A user specified field which indicates the encoding used to encode the 'body'
+  // A user specified field which indicates the encoding the user used to encode the 'payload'
   string encoding = 1;
 
-  // A Kind or Type the body contains. Consumers can use this field to determine handling
-  // of the body prior to unmarshalling. Examples: 'webhook-v2', 'webhook-v1',
+  // A Kind or Type the payload contains. Consumers can use this field to determine handling
+  // of the payload prior to unmarshalling. Examples: 'webhook-v2', 'webhook-v1',
   string kind = 2;
 
   // This is a user specified field that can be used by the consumer to determine handling
-  // of the queue item without needing to unmarshall the body.
+  // of the queue item without needing to unmarshall the payload.
   // Examples: 'account-0001', 'john.smith', 'id-hIGTUYm2'
   string reference = 3;
 
@@ -96,9 +113,13 @@ message QueueReserveItem {
   // if the timeout date has expired.
   google.protobuf.Timestamp reserveDeadline = 6 [json_name = "reserve_deadline"]; // TODO: OpenAPI
 
-  //  The body of the item, it's encoding is specified by the 'encoding' field.
-  // Example: '{"key": "value"}'
-  bytes  body = 7;
+  // The payload of the item as an array of raw bytes with no predetermined character set.
+  //
+  // NOTE: If `Content-Type: application/json` is used when communicating with Querator, the
+  // 'bytes' field will be encoded as base64. This is because byte fields (unlike string fields)
+  // can contain non-UTF8 binary data, and since that cannot be directly represented in JSON, we
+  // have to base64 encode it.
+  bytes  bytes = 7;
 }
 
 message QueueReserveResponse {

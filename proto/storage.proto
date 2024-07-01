@@ -45,5 +45,5 @@ message StorageItem {
   string reference = 7;
   string encoding = 8;
   string kind = 9;
-  bytes body = 10;
+  bytes payload = 10;
 }

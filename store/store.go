@@ -118,15 +118,15 @@ type Item struct {
 	// Examples: "jake@statefarm.com", "stapler@office-space.com", "account-0001"
 	Reference string
 
-	// Encoding is a user specified field which indicates the encoding used to encode the 'body'
+	// Encoding is a user specified field which indicates the encoding the user used to encode the 'payload'
 	Encoding string
 
-	// Kind is the Kind or Type the body contains. Consumers can use this field to determine handling
-	// of the body prior to unmarshalling. Examples: 'webhook-v2', 'webhook-v1',
+	// Kind is the Kind or Type the payload contains. Consumers can use this field to determine handling
+	// of the payload prior to unmarshalling. Examples: 'webhook-v2', 'webhook-v1',
 	Kind string
 
-	// Body is the body of the queue item
-	Body []byte
+	// Payload is the payload of the queue item
+	Payload []byte
 }
 
 func (i *Item) Compare(r *Item) bool {
@@ -154,7 +154,7 @@ func (i *Item) Compare(r *Item) bool {
 	if i.Kind != r.Kind {
 		return false
 	}
-	if i.Body != nil && !bytes.Equal(i.Body, r.Body) {
+	if i.Payload != nil && !bytes.Equal(i.Payload, r.Payload) {
 		return false
 	}
 	return true
@@ -168,8 +168,8 @@ func (i *Item) ToStorageItemProto(in *pb.StorageItem) *pb.StorageItem {
 	in.IsReserved = i.IsReserved
 	in.Reference = i.Reference
 	in.Encoding = i.Encoding
+	in.Payload = i.Payload
 	in.Kind = i.Kind
-	in.Body = i.Body
 	in.Id = i.ID
 	return in
 }

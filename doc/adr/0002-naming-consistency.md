@@ -44,4 +44,4 @@ apply broad terms to such things. I may yet live to regret this, but, Querator m
 
 ## Consequences
 
-Emotional Turmoil, aka a big storm of feelings inside you that can be hard to handle.
+Emotional Turmoil, aka a big storm of feelings inside that can be hard to handle.

@@ -58,7 +58,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 			Reference:       "rainbow@dash.com",
 			Encoding:        "rainbows",
 			Kind:            "20% cooler",
-			Body: []byte("I mean... have I changed? Same sleek body. Same " +
+			Payload: []byte("I mean... have I changed? Same sleek body. Same " +
 				"flowing mane. Same spectacular hooves. Nope, I'm still awesome"),
 		})
 		items = append(items, &store.Item{
@@ -69,7 +69,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 			Reference:       "rarity@dash.com",
 			Encoding:        "beauty",
 			Kind:            "sparkles",
-			Body:            []byte("Whining? I am not whining, I am complaining"),
+			Payload:         []byte("Whining? I am not whining, I am complaining"),
 		})
 
 		err = s.Write(ctx, items)
@@ -92,7 +92,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		assert.Equal(t, reads[0].Reference, items[0].Reference)
 		assert.Equal(t, reads[0].Encoding, items[0].Encoding)
 		assert.Equal(t, reads[0].Kind, items[0].Kind)
-		assert.Equal(t, reads[0].Body, items[0].Body)
+		assert.Equal(t, reads[0].Payload, items[0].Payload)
 
 		assert.Equal(t, reads[1].ID, items[1].ID)
 		assert.Equal(t, reads[1].IsReserved, items[1].IsReserved)
@@ -102,7 +102,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		assert.Equal(t, reads[1].Reference, items[1].Reference)
 		assert.Equal(t, reads[1].Encoding, items[1].Encoding)
 		assert.Equal(t, reads[1].Kind, items[1].Kind)
-		assert.Equal(t, reads[1].Body, items[1].Body)
+		assert.Equal(t, reads[1].Payload, items[1].Payload)
 
 		cmp := &store.Item{
 			IsReserved:      false,
@@ -112,7 +112,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 			Reference:       "discord@dash.com",
 			Encoding:        "Lord of Chaos",
 			Kind:            "Captain Good guy",
-			Body:            []byte("Make sense? Oh, what fun is there in making sense?"),
+			Payload:         []byte("Make sense? Oh, what fun is there in making sense?"),
 		}
 
 		assert.True(t, cmp.Compare(&store.Item{
@@ -123,7 +123,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 			Reference:       "discord@dash.com",
 			Encoding:        "Lord of Chaos",
 			Kind:            "Captain Good guy",
-			Body:            []byte("Make sense? Oh, what fun is there in making sense?"),
+			Payload:         []byte("Make sense? Oh, what fun is there in making sense?"),
 		}))
 		cpy := *cmp
 		cpy.IsReserved = true
@@ -147,7 +147,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		cpy.Kind = ""
 		assert.False(t, cmp.Compare(&cpy))
 		cpy = *cmp
-		cpy.Body = []byte("Debugging is like being the detective in a crime movie where you are also the murderer")
+		cpy.Payload = []byte("Debugging is like being the detective in a crime movie where you are also the murderer")
 		assert.False(t, cmp.Compare(&cpy))
 
 		t.Run("ReadAndWrite", func(t *testing.T) {
@@ -172,7 +172,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 				assert.Equal(t, items[i].Reference, read[i].Reference)
 				assert.Equal(t, items[i].Encoding, read[i].Encoding)
 				assert.Equal(t, items[i].Kind, read[i].Kind)
-				assert.Equal(t, items[i].Body, read[i].Body)
+				assert.Equal(t, items[i].Payload, read[i].Payload)
 			}
 
 			// Ensure if we ask for more than is available, we only get what is in the db.
@@ -220,7 +220,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 				assert.Equal(t, items[i+1000].Reference, read[i].Reference)
 				assert.Equal(t, items[i+1000].Encoding, read[i].Encoding)
 				assert.Equal(t, items[i+1000].Kind, read[i].Kind)
-				assert.Equal(t, items[i+1000].Body, read[i].Body)
+				assert.Equal(t, items[i+1000].Payload, read[i].Payload)
 			}
 
 			// The read includes the pivot
@@ -404,7 +404,7 @@ func writeRandomItems(t *testing.T, ctx context.Context, s store.Queue, count in
 			Reference:    random.String("ref-", 10),
 			Encoding:     random.String("enc-", 10),
 			Kind:         random.String("kind-", 10),
-			Body:         []byte(fmt.Sprintf("message-%d", i)),
+			Payload:      []byte(fmt.Sprintf("message-%d", i)),
 		})
 	}
 	err := s.Write(ctx, items)

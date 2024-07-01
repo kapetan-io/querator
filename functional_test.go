@@ -59,7 +59,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		ref := random.String("ref-", 10)
 		enc := random.String("enc-", 10)
 		kind := random.String("kind-", 10)
-		body := []byte("I didn't learn a thing. I was right all along")
+		payload := []byte("I didn't learn a thing. I was right all along")
 		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
 			QueueName:      queueName,
 			RequestTimeout: "1m",
@@ -68,7 +68,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 					Reference: ref,
 					Encoding:  enc,
 					Kind:      kind,
-					Body:      body,
+					Bytes:     payload,
 				},
 			},
 		}))
@@ -89,7 +89,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		assert.Equal(t, enc, item.Encoding)
 		assert.Equal(t, kind, item.Kind)
 		assert.Equal(t, int32(0), item.Attempts)
-		assert.Equal(t, body, item.Body)
+		assert.Equal(t, payload, item.Bytes)
 
 		// Ensure the item is in storage and marked as reserved
 		var inspect pb.StorageItem
@@ -98,7 +98,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		assert.Equal(t, ref, inspect.Reference)
 		assert.Equal(t, kind, inspect.Kind)
 		assert.Equal(t, int32(0), inspect.Attempts)
-		assert.Equal(t, body, inspect.Body)
+		assert.Equal(t, payload, inspect.Payload)
 		assert.Equal(t, item.Id, inspect.Id)
 		assert.Equal(t, true, inspect.IsReserved)
 
@@ -156,7 +156,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 				Req: &pb.QueueProduceRequest{
 					QueueName: "invalid~queue",
 				},
-				Msg:  "invalid queue_name; 'invalid~queue' cannot be contain '~' character",
+				Msg:  "invalid queue_name; 'invalid~queue' cannot contain '~' character",
 				Code: duh.CodeBadRequest,
 			},
 			{
@@ -178,7 +178,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 				Code: duh.CodeBadRequest,
 			},
 			{
-				Name: "items with no body are okay",
+				Name: "items with no payload are okay",
 				Req: &pb.QueueProduceRequest{
 					QueueName:      queueName,
 					RequestTimeout: "5m",

@@ -334,6 +334,8 @@ func testSuite(t *testing.T, newStore NewFunc) {
 	})
 }
 
+// TODO: Ensure the completed item is actually in reserved status before marking complete.
+
 type testDaemon struct {
 	cancel context.CancelFunc
 	ctx    context.Context

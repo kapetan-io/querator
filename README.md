@@ -31,3 +31,6 @@ about trade-offs](https://www.infoq.com/articles/cap-twelve-years-later-how-the-
 
 ### API
 See [Querator OSS API Reference](https://thrawn01-llc.stoplight.io/docs/querator-oss/924788fc33955-querator-oss-api) for and idea of what the API looks like.
+
+### Design
+See our [Architecture Decision Docs](doc/adr) for details on our current implementation design.

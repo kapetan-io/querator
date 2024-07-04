@@ -234,48 +234,8 @@ func (q *Queue) Complete(ctx context.Context, req *CompleteRequest) error {
 	return req.err
 }
 
-// processQueues processes the queues of both producing and reserving clients. It is the synchronization
-// point where reads and writes to the queue are handled. Because reads and writes to the queue are
-// handled by a single go routine (single threaded). We can preform optimizations where items produced to
-// the queue can be marked as reserved before they are written to the data store.
-//
-// Single threaded design also allows batching reads and writes in the same transaction. Most databases
-// benefit from batching R/W paths as it reduces IOPs, transaction overheard, network overhead, results
-// in fewer locks, and logging. In addition, by preforming the R/W synchronization here in code, we avoid
-// pushing that synchronization on to the datastore, which reduces datastore costs.
-// TODO(thrawn01) reference my blog post(s) about this.
-//
-// ### Queue all the things
-// The design goal here is that when this go routine is woken up by the go scheduler it can do as much work as
-// possible without giving the scheduler an excuse to steal away our CPU time. In other words,
-// the code path to get an item into or out of the queue should result in as little blocking or mutex lock
-// contention as possible. While we can't avoid R/W to the data store, we can have producers and consumers
-// 'queue' as much work as possible so when we are active, we get as much done as quickly as possible.
-//
-// If a single queue becomes a bottle neck for throughput, users should create more queues.
-//
-// ### The Write Path
-// The best cast scenario is that each item will have 3 writes.
-// * 1st Write - Add item to the Queue
-// * 2nd Write - Fetch Reservable items from the queue and mark them as Reserved
-// * 3rd Write - Write the item in the queue as complete (delete the item)
-//
-// In addition, our single threaded synchronized design may allow for several optimizations and probably
-// some I'm not thinking of.
-// * Pre-fetching reservable items from the queue into memory, if we know items are in high demand.
-// * Reserving items as soon as they are produced (avoiding the second write)
-//
-// ### Queue Groups
-// Allow users to combine multiple queues by creating a "Queue Group". Then a client can
-// produce/reserve from the queue group, and the queue group round robins the request to each queue
-// in the group. Doing so destroys any ordering of queued items, but in some applications ordering might
-// not be important to the consumer, but Almost Exactly Once Delivery is still desired.
-//
-// ### Audit Trail
-// If users need to track which client picked up the item, we should implement an optional audit log which
-// follows the progress of each item in the queue. In this way, the audit log shows which clients picked up the
-// item and for how long. This especially helpful in understanding how an item got into the dead letter queue.
-// Implementing this adds an additional write burden on our disk, as such it should be optional.
+// processQueues See doc/adr/0003-rw-sync-point.md for an explanation of this design
+
 func (q *Queue) processQueues() {
 	defer q.wg.Done()
 

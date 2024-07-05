@@ -1,4 +1,4 @@
-# 6. Error Message Format
+# 6. Error Handling
 
 Date: 2024-06-28
 
@@ -8,13 +8,32 @@ Accepted
 
 ## Context
 
-Consistent error message reporting from the server so clients can easily capture the cause in a machine and human
-friendly manner.
+Consistent error message reporting and handling from the server so clients can easily capture the cause in a 
+machine and human friendly manner.
 
 ## Decision
 
-#### Error Message Format
-All server errors will be in the format `<const message>;<details of the error>`. This format allows clients to
+#### Error Structs
+The code will use the same error structs throughout all the abstraction layers. Both internal and public abstraction
+layers will use the same error structs. Ideally abstractions should never leak their details across boundaries, however
+since the main purpose of this code base is to implement a service accessible via some network protocol, there is 
+no need to hide nor complicate error handling in order to preserve abstraction layer separation.
+
+There are essentially 2 classes of errors.
+1. Human / Client readable errors that will be returned to the client.
+2. Internal Errors which contain details about the internal workings of the service. These errors will be logged
+   and a generic `Internal Error` message will be returned to the client.
+
+The `transport` package holds all the Human / Client readable errors. If you wish to return a message to the 
+client use one of the errors defined in `transport/errors.go`. All other non `duh.Error` errors will be treated
+as internal errors.
+
+Internal errors should include as much detail about the error as possible and will use `github.com/kapetan-io/errors`
+to provide context about the error which will be extracted and logged. Internal errors should also include the
+name of the function call which caused the error. For example `return fmt.Errorf("during Begin(): %w", err)`
+
+#### Client Readable Message Format
+All client errors will be in the format `<const message>;<details of the error>`. This format allows clients to
 extract the `const message` by splitting the error message on the `;` character. The `const message` is static,
 meaning it remains the same for each error type. This allows the client to compare the `const message` to a list
 of known messages and take some predetermined action based on the message. In contrast, the `details of the error`

@@ -3,9 +3,9 @@ package store
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"github.com/duh-rpc/duh-go"
+	"github.com/kapetan-io/errors"
 	"github.com/kapetan-io/querator/transport"
 	"github.com/kapetan-io/tackle/set"
 	"github.com/segmentio/ksuid"
@@ -67,8 +67,10 @@ type BuntQueue struct {
 var _ Queue = &BuntQueue{}
 
 func (b *BuntStorage) NewQueue(opts QueueOptions) (Queue, error) {
+	f := errors.Fields{"category", "bunt-db", "func", "NewQueue"}
+
 	if strings.TrimSpace(opts.Name) == "" {
-		return nil, NewInvalidOption("'name' cannot be empty; must be a valid queue name")
+		return nil, transport.NewInvalidOption("'name' cannot be empty; must be a valid queue name")
 	}
 	set.Default(&opts.ReadTimeout, b.opts.ReadTimeout)
 	set.Default(&opts.WriteTimeout, b.opts.WriteTimeout)
@@ -79,7 +81,7 @@ func (b *BuntStorage) NewQueue(opts QueueOptions) (Queue, error) {
 	// TODO: All queues are currently in memory, need to fix this
 	db, err := buntdb.Open(":memory:")
 	if err != nil {
-		return nil, fmt.Errorf("opening buntdb: %w", err)
+		return nil, f.Errorf("opening buntdb: %w", err)
 	}
 	return &BuntQueue{
 		uid:     ksuid.New(),
@@ -89,10 +91,12 @@ func (b *BuntStorage) NewQueue(opts QueueOptions) (Queue, error) {
 	}, nil
 }
 
-func (s *BuntQueue) Stats(ctx context.Context, stats *Stats) error {
+func (s *BuntQueue) Stats(_ context.Context, stats *Stats) error {
+	f := errors.Fields{"category", "bunt-db", "func", "Stats"}
+
 	tx, err := s.db.Begin(false)
 	if err != nil {
-		return fmt.Errorf("during begin: %w", err)
+		return f.Errorf("during Begin(): %w", err)
 	}
 
 	var iterErr error
@@ -101,7 +105,7 @@ func (s *BuntQueue) Stats(ctx context.Context, stats *Stats) error {
 	err = tx.AscendGreaterOrEqual("", "", func(key, value string) bool {
 		var item Item
 		if err := json.Unmarshal([]byte(value), &item); err != nil {
-			iterErr = fmt.Errorf("during unmarshal of db value: %w", err)
+			iterErr = f.Errorf("during json.Unmarshal(): %w", err)
 			return false
 		}
 
@@ -115,11 +119,11 @@ func (s *BuntQueue) Stats(ctx context.Context, stats *Stats) error {
 		return true
 	})
 	if err != nil {
-		return fmt.Errorf("during AscendGreaterOrEqual(): %w", err)
+		return f.Errorf("during AscendGreaterOrEqual(): %w", err)
 	}
 
 	if err = tx.Rollback(); err != nil {
-		return fmt.Errorf("during rollback: %w", err)
+		return f.Errorf("during Rollback(): %w", err)
 	}
 
 	if iterErr != nil {
@@ -133,9 +137,11 @@ func (s *BuntQueue) Stats(ctx context.Context, stats *Stats) error {
 }
 
 func (s *BuntQueue) Reserve(_ context.Context, items *[]*Item, opts ReserveOptions) error {
+	f := errors.Fields{"category", "bunt-db", "func", "Reserve"}
+
 	tx, err := s.db.Begin(false)
 	if err != nil {
-		return fmt.Errorf("during begin: %w", err)
+		return f.Errorf("during Begin(false): %w", err)
 	}
 
 	var iterErr error
@@ -148,7 +154,7 @@ func (s *BuntQueue) Reserve(_ context.Context, items *[]*Item, opts ReserveOptio
 		// TODO: Grab from the memory pool
 		item := new(Item)
 		if err := json.Unmarshal([]byte(value), item); err != nil {
-			iterErr = fmt.Errorf("during unmarshal of db value: %w", err)
+			iterErr = f.Errorf("during json.Unmarshal(): %w", err)
 			return false
 		}
 
@@ -164,11 +170,11 @@ func (s *BuntQueue) Reserve(_ context.Context, items *[]*Item, opts ReserveOptio
 	})
 
 	if err != nil {
-		return fmt.Errorf("during AscendGreaterOrEqual(): %w", err)
+		return f.Errorf("during AscendGreaterOrEqual(): %w", err)
 	}
 
 	if err = tx.Rollback(); err != nil {
-		return fmt.Errorf("during rollback: %w", err)
+		return f.Errorf("during Rollback(): %w", err)
 	}
 
 	if iterErr != nil {
@@ -178,27 +184,29 @@ func (s *BuntQueue) Reserve(_ context.Context, items *[]*Item, opts ReserveOptio
 	// Update all the reserved items in the database
 	tx, err = s.db.Begin(true)
 	if err != nil {
-		return fmt.Errorf("during writable begin: %w", err)
+		return f.Errorf("during Begin(true): %w", err)
 	}
 
 	for i := 0; i < len(*items); i++ {
-		if err := buntSet(tx, (*items)[i]); err != nil {
+		if err := buntSet(f, tx, (*items)[i]); err != nil {
 			return err
 		}
 		(*items)[i].ID = s.storage.CreateID(s.opts.Name, (*items)[i].ID)
 	}
 
 	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("during writable commit: %w", err)
+		return f.Errorf("during Commit(): %w", err)
 	}
 
 	return nil
 }
 
 func (s *BuntQueue) Read(_ context.Context, items *[]*Item, pivot string, limit int) error {
+	f := errors.Fields{"category", "bunt-db", "func", "Read"}
+
 	tx, err := s.db.Begin(false)
 	if err != nil {
-		return fmt.Errorf("during begin: %w", err)
+		return f.Errorf("during Begin(): %w", err)
 	}
 
 	var iterErr error
@@ -206,7 +214,7 @@ func (s *BuntQueue) Read(_ context.Context, items *[]*Item, pivot string, limit 
 	var sid StorageID
 	if pivot != "" {
 		if err := s.storage.ParseID(pivot, &sid); err != nil {
-			return transport.NewInvalidRequest("invalid storage id; '%s': %s", pivot, err)
+			return transport.NewInvalidOption("invalid storage id; '%s': %s", pivot, err)
 		}
 	}
 
@@ -217,7 +225,7 @@ func (s *BuntQueue) Read(_ context.Context, items *[]*Item, pivot string, limit 
 		// TODO: Grab from the memory pool
 		item := new(Item)
 		if err := json.Unmarshal([]byte(value), item); err != nil {
-			iterErr = fmt.Errorf("during unmarshal of db value: %w", err)
+			iterErr = f.Errorf("during json.Unmarshal(): %w", err)
 			return false
 		}
 		item.ID = s.storage.CreateID(s.opts.Name, item.ID)
@@ -226,11 +234,11 @@ func (s *BuntQueue) Read(_ context.Context, items *[]*Item, pivot string, limit 
 		return true
 	})
 	if err != nil {
-		return fmt.Errorf("during AscendGreaterOrEqual(): %w", err)
+		return f.Errorf("during AscendGreaterOrEqual(): %w", err)
 	}
 
 	if err = tx.Rollback(); err != nil {
-		return fmt.Errorf("during rollback: %w", err)
+		return fmt.Errorf("during Rollback(): %w", err)
 	}
 
 	if iterErr != nil {
@@ -240,16 +248,18 @@ func (s *BuntQueue) Read(_ context.Context, items *[]*Item, pivot string, limit 
 }
 
 func (s *BuntQueue) Write(_ context.Context, items []*Item) error {
+	f := errors.Fields{"category", "bunt-db", "func", "Write"}
+
 	tx, err := s.db.Begin(true)
 	if err != nil {
-		return fmt.Errorf("during begin: %w", err)
+		return f.Errorf("during Begin(): %w", err)
 	}
 
 	for _, item := range items {
 		s.uid = s.uid.Next()
 		item.ID = s.uid.String()
 
-		if err := buntSet(tx, item); err != nil {
+		if err := buntSet(f, tx, item); err != nil {
 			return err
 		}
 		item.ID = s.storage.CreateID(s.opts.Name, item.ID)
@@ -257,7 +267,48 @@ func (s *BuntQueue) Write(_ context.Context, items []*Item) error {
 
 	err = tx.Commit()
 	if err != nil {
-		return fmt.Errorf("during commit: %w", err)
+		return fmt.Errorf("during Commit(): %w", err)
+	}
+	return nil
+}
+
+func (s *BuntQueue) Complete(_ context.Context, ids []string) error {
+	f := errors.Fields{"category", "bunt-db", "func", "Complete"}
+
+	tx, err := s.db.Begin(true)
+	if err != nil {
+		return f.Errorf("during Begin(): %w", err)
+	}
+
+	for _, id := range ids {
+		var sid StorageID
+		if err := s.storage.ParseID(id, &sid); err != nil {
+			return transport.NewInvalidOption("invalid storage id; '%s': %s", id, err)
+		}
+
+		value, err := tx.Get(sid.ID)
+		if err != nil {
+			return fmt.Errorf("during Get(%s): %w", sid, err)
+		}
+
+		item := new(Item)
+		if err := json.Unmarshal([]byte(value), item); err != nil {
+			return f.Errorf("during json.Unmarshal() of id '%s': %w", sid, err)
+		}
+
+		if !item.IsReserved {
+			return transport.NewConflict("item(s) cannot be completed; '%s' is not "+
+				"marked as reserved", sid.ID)
+		}
+
+		if _, err = tx.Delete(sid.ID); err != nil {
+			return f.Errorf("during Delete(%s): %w", sid.ID, err)
+		}
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		return f.Errorf("during Commit(): %w", err)
 	}
 	return nil
 }
@@ -271,10 +322,15 @@ func (s *BuntQueue) Delete(_ context.Context, ids []string) error {
 	for _, id := range ids {
 		var sid StorageID
 		if err := s.storage.ParseID(id, &sid); err != nil {
-			return transport.NewInvalidRequest("invalid storage id; '%s': %s", id, err)
+			return transport.NewInvalidOption("invalid storage id; '%s': %s", id, err)
 		}
 		_, err := tx.Delete(sid.ID)
 		if err != nil {
+			// I can't think of a reason why we would want alert the
+			// caller that the ids they want to delete are already deleted.
+			if errors.Is(err, buntdb.ErrNotFound) {
+				continue
+			}
 			return fmt.Errorf("during delete: %w", err)
 		}
 	}
@@ -294,17 +350,17 @@ func (s *BuntQueue) Options() QueueOptions {
 	return s.opts
 }
 
-func buntSet(tx *buntdb.Tx, item *Item) error {
+func buntSet(f errors.Fields, tx *buntdb.Tx, item *Item) error {
 	// TODO: Use something more efficient like protobuf,
 	//	gob or https://github.com/capnproto/go-capnp
 	b, err := json.Marshal(item)
 	if err != nil {
-		return fmt.Errorf("marshalling item: %w", err)
+		return f.Errorf("during json.Marshal(): %w", err)
 	}
 
 	_, _, err = tx.Set(item.ID, string(b), nil)
 	if err != nil {
-		return fmt.Errorf("while writing item: %w", err)
+		return f.Errorf("during Set(%s): %w", item.ID, err)
 	}
 	return nil
 }

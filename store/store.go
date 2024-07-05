@@ -3,6 +3,7 @@ package store
 import (
 	"bytes"
 	"context"
+	"fmt"
 	pb "github.com/kapetan-io/querator/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"time"
@@ -12,6 +13,10 @@ import (
 type StorageID struct {
 	Queue string
 	ID    string
+}
+
+func (id StorageID) String() string {
+	return fmt.Sprintf("%s/%s", id.Queue, id.ID)
 }
 
 // QueueOptions are options used when creating a new store.Queue
@@ -68,8 +73,14 @@ type Queue interface {
 	// Stats returns stats about the queue
 	Stats(ctx context.Context, stats *Stats) error
 
-	// Reserve list up to 'limit' reservable items from the queue and marks the items as reserved.
+	// Reserve lists up to 'limit' reservable items from the queue and marks the items as reserved.
 	Reserve(ctx context.Context, items *[]*Item, opts ReserveOptions) error
+
+	Complete(ctx context.Context, ids []string) error
+
+	// TODO: Convert Produce and Complete to batch operations
+	// Complete(ctx context.Context, batches []Batch) error
+	// Produce(ctx context.Context, batches []Batch) error
 
 	// Read reads items in a queue. limit and offset allow the user to page through all the items
 	// in the queue.
@@ -80,11 +91,16 @@ type Queue interface {
 	Write(ctx context.Context, items []*Item) error
 
 	// Delete removes the provided ids from the queue
-	Delete(ctx context.Context, items []string) error
+	Delete(ctx context.Context, ids []string) error
 
 	Close(ctx context.Context) error
 
 	Options() QueueOptions
+}
+
+type Batch struct {
+	Items []Item
+	Err   error
 }
 
 // TODO: ScheduledStorage interface {} - A place to store scheduled items to be queued. (Defer)

@@ -2,8 +2,6 @@ package internal
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"github.com/duh-rpc/duh-go"
 	"github.com/kapetan-io/querator/internal/maps"
 	"github.com/kapetan-io/querator/store"
@@ -17,7 +15,7 @@ import (
 )
 
 var (
-	ErrDuplicateClientID = transport.NewInvalidRequest("duplicate client id")
+	ErrDuplicateClientID = transport.NewInvalidOption("duplicate client id")
 	ErrRequestTimeout    = transport.NewRetryRequest("request timeout, try again")
 	ErrQueueShutdown     = transport.NewRequestFailed("queue is shutting down")
 )
@@ -25,6 +23,7 @@ var (
 const (
 	queueChSize       = 20_000
 	maxRequestTimeout = 15 * time.Minute
+	minRequestTimeout = 10 * time.Millisecond
 )
 
 type QueueOptions struct {
@@ -58,14 +57,18 @@ type QueueOptions struct {
 // there can ONLY BE ONE instance of a Queue running anywhere in the cluster at any given time. All consume
 // and produce requests MUST go through this queue singleton.
 type Queue struct {
+	// TODO: I would love to see a lock free ring queue here, based on an array, such that we don't need
+	//  to throw away the channel after we process all the items in the channel. An array would allow the L3
+	//  cache to pre load that data and avoid expensive calls to DRAM.
 	reserveQueueCh  atomic.Pointer[chan *ReserveRequest]
 	produceQueueCh  atomic.Pointer[chan *ProduceRequest]
 	completeQueueCh atomic.Pointer[chan *CompleteRequest]
-	storageQueueCh  chan *StorageRequest
-	shutdownCh      chan *ShutdownRequest
-	wg              sync.WaitGroup
-	opts            QueueOptions
-	inShutdown      atomic.Bool
+
+	storageQueueCh chan *StorageRequest
+	shutdownCh     chan *ShutdownRequest
+	wg             sync.WaitGroup
+	opts           QueueOptions
+	inShutdown     atomic.Bool
 }
 
 func NewQueue(opts QueueOptions) (*Queue, error) {
@@ -74,7 +77,7 @@ func NewQueue(opts QueueOptions) (*Queue, error) {
 	set.Default(&opts.MaxProduceBatchSize, 1_000)
 
 	if opts.QueueStore == nil {
-		return nil, errors.New("QueueOptions.QueueStore cannot be nil")
+		return nil, transport.NewInvalidOption("QueueOptions.QueueStore cannot be nil")
 	}
 
 	q := &Queue{
@@ -127,21 +130,26 @@ func (q *Queue) Produce(ctx context.Context, req *ProduceRequest) error {
 	}
 
 	if len(req.Items) == 0 {
-		return transport.NewInvalidRequest("items cannot be empty; at least one item is required")
+		return transport.NewInvalidOption("items cannot be empty; at least one item is required")
 	}
 
 	if len(req.Items) > q.opts.MaxProduceBatchSize {
-		return transport.NewInvalidRequest("too many items in request; max_produce_batch_size is"+
+		return transport.NewInvalidOption("too many items in request; max_produce_batch_size is"+
 			" %d but received %d", q.opts.MaxProduceBatchSize, len(req.Items))
 	}
 
-	if req.RequestTimeout > maxRequestTimeout {
-		return transport.NewInvalidRequest("request_timeout is invalid; maximum timeout is '15m' but"+
+	if req.RequestTimeout == time.Duration(0) {
+		return transport.NewInvalidOption("request_timeout is required; '5m' is recommended, 15m is the maximum")
+	}
+
+	if req.RequestTimeout >= maxRequestTimeout {
+		return transport.NewInvalidOption("request_timeout is invalid; maximum timeout is '15m' but"+
 			" '%s' was requested", req.RequestTimeout.String())
 	}
 
-	if req.RequestTimeout == time.Duration(0) {
-		return transport.NewInvalidRequest("request_timeout is required; '5m' is recommended, 15m is the maximum")
+	if req.RequestTimeout <= minRequestTimeout {
+		return transport.NewInvalidOption("request_timeout is invalid; minimum timeout is '10ms' but"+
+			" '%s' was requested", req.RequestTimeout.String())
 	}
 
 	req.Context = ctx
@@ -179,25 +187,30 @@ func (q *Queue) Reserve(ctx context.Context, req *ReserveRequest) error {
 	}
 
 	if strings.TrimSpace(req.ClientID) == "" {
-		return transport.NewInvalidRequest("invalid client_id; cannot be empty")
+		return transport.NewInvalidOption("invalid client_id; cannot be empty")
 	}
 
 	if req.BatchSize <= 0 {
-		return transport.NewInvalidRequest("invalid batch_size; must be greater than zero")
+		return transport.NewInvalidOption("invalid batch_size; must be greater than zero")
 	}
 
 	if int(req.BatchSize) > q.opts.MaxReserveBatchSize {
-		return transport.NewInvalidRequest("invalid batch_size; exceeds maximum limit max_reserve_batch_size is %d, "+
+		return transport.NewInvalidOption("invalid batch_size; exceeds maximum limit max_reserve_batch_size is %d, "+
 			"but %d was requested", q.opts.MaxProduceBatchSize, req.BatchSize)
 	}
 
+	if req.RequestTimeout == time.Duration(0) {
+		return transport.NewInvalidOption("request_timeout is required; '5m' is recommended, 15m is the maximum")
+	}
+
 	if req.RequestTimeout > maxRequestTimeout {
-		return transport.NewInvalidRequest("invalid request_timeout; maximum timeout is '15m' but '%s' "+
+		return transport.NewInvalidOption("invalid request_timeout; maximum timeout is '15m' but '%s' "+
 			"requested", req.RequestTimeout.String())
 	}
 
-	if req.RequestTimeout == time.Duration(0) {
-		return transport.NewInvalidRequest("request_timeout is required; '5m' is recommended, 15m is the maximum")
+	if req.RequestTimeout <= minRequestTimeout {
+		return transport.NewInvalidOption("request_timeout is invalid; minimum timeout is '10ms' but"+
+			" '%s' was requested", req.RequestTimeout.String())
 	}
 
 	req.Context = ctx
@@ -216,12 +229,12 @@ func (q *Queue) Complete(ctx context.Context, req *CompleteRequest) error {
 	}
 
 	if req.RequestTimeout > maxRequestTimeout {
-		return transport.NewInvalidRequest("request_timeout is invalid; maximum timeout is '15m' but '%s' "+
+		return transport.NewInvalidOption("request_timeout is invalid; maximum timeout is '15m' but '%s' "+
 			"requested", req.RequestTimeout.String())
 	}
 
 	if req.RequestTimeout == time.Duration(0) {
-		return transport.NewInvalidRequest("request_timeout is required; '5m' is recommended, 15m is the maximum")
+		return transport.NewInvalidOption("request_timeout is required; '5m' is recommended, 15m is the maximum")
 	}
 
 	req.Context = ctx
@@ -434,8 +447,9 @@ func (q *Queue) processQueues() {
 				ids = append(ids, req.Ids...)
 			}
 
-			if err := q.opts.QueueStore.Delete(req.Context, ids); err != nil {
-				req.err = fmt.Errorf("during complete QueueStore.Delete(): %w", err)
+			// TODO: We need to ensure all the id's are in reservation before we call complete
+			if err := q.opts.QueueStore.Complete(req.Context, ids); err != nil {
+				req.err = err
 			}
 
 			// Tell the waiting clients the items have been marked as complete
@@ -452,11 +466,11 @@ func (q *Queue) processQueues() {
 		case req := <-q.storageQueueCh:
 			if req.ID != "" {
 				if err := q.opts.QueueStore.Read(req.Context, &req.Items, req.ID, 1); err != nil {
-					req.err = fmt.Errorf("during inspect QueueStore.Read(): %w", err)
+					req.err = err
 				}
 			} else {
 				if err := q.opts.QueueStore.Read(req.Context, &req.Items, req.Pivot, req.Limit); err != nil {
-					req.err = fmt.Errorf("during list QueueStore.Read(): %w", err)
+					req.err = err
 				}
 			}
 			close(req.readyCh)

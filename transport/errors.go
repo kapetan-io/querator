@@ -8,24 +8,19 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// ErrInternal is any error un handled by ErrRequestFailed or ErrInvalidRequest. The message
-// and any additional fields are logged but not returned to the client
-// TODO: Consider removing if not used
-type ErrInternal errors.Fields
-
 // -------------------------------------------------
 
 // ErrRequestFailed is used to tell the client that the request was valid, but it failed for some reason.
 type ErrRequestFailed struct {
-	Msg string
+	msg string
 }
 
 func NewRequestFailed(msg string, args ...any) *ErrRequestFailed {
-	return &ErrRequestFailed{Msg: fmt.Sprintf(msg, args...)}
+	return &ErrRequestFailed{msg: fmt.Sprintf(msg, args...)}
 }
 
 func (e *ErrRequestFailed) Error() string {
-	return e.Msg
+	return e.msg
 }
 
 func (e *ErrRequestFailed) Is(target error) bool {
@@ -39,7 +34,7 @@ func (e *ErrRequestFailed) Code() int {
 
 func (e *ErrRequestFailed) ProtoMessage() proto.Message {
 	return &v1.Reply{
-		Message:  e.Msg,
+		Message:  e.msg,
 		CodeText: duh.CodeText(duh.CodeRequestFailed),
 		Code:     int32(duh.CodeRequestFailed),
 		Details:  nil,
@@ -51,68 +46,68 @@ func (e *ErrRequestFailed) Details() map[string]string {
 }
 
 func (e *ErrRequestFailed) Message() string {
-	return e.Msg
+	return e.msg
 }
 
 var _ duh.Error = &ErrRequestFailed{}
 
 // -------------------------------------------------
 
-// ErrInvalidRequest is used to indicate the client's request was invalid for some reason
-type ErrInvalidRequest struct {
-	Msg string
+// ErrInvalidOption is used to indicate an option provided was invalid for some reason
+type ErrInvalidOption struct {
+	msg string
 }
 
-func NewInvalidRequest(msg string, args ...any) *ErrInvalidRequest {
-	return &ErrInvalidRequest{Msg: fmt.Sprintf(msg, args...)}
+func NewInvalidOption(msg string, args ...any) *ErrInvalidOption {
+	return &ErrInvalidOption{msg: fmt.Sprintf(msg, args...)}
 }
 
-func (e *ErrInvalidRequest) Error() string {
-	return e.Msg
+func (e *ErrInvalidOption) Error() string {
+	return e.msg
 }
 
-func (e *ErrInvalidRequest) Is(target error) bool {
-	var err *ErrInvalidRequest
+func (e *ErrInvalidOption) Is(target error) bool {
+	var err *ErrInvalidOption
 	return errors.As(target, &err)
 }
 
-func (e *ErrInvalidRequest) Code() int {
+func (e *ErrInvalidOption) Code() int {
 	return duh.CodeBadRequest
 }
 
-func (e *ErrInvalidRequest) ProtoMessage() proto.Message {
+func (e *ErrInvalidOption) ProtoMessage() proto.Message {
 	return &v1.Reply{
-		Message:  e.Msg,
+		Message:  e.msg,
 		CodeText: duh.CodeText(duh.CodeBadRequest),
 		Code:     int32(duh.CodeBadRequest),
 		Details:  nil,
 	}
 }
 
-func (e *ErrInvalidRequest) Details() map[string]string {
+func (e *ErrInvalidOption) Details() map[string]string {
 	return nil
 }
 
-func (e *ErrInvalidRequest) Message() string {
-	return e.Msg
+func (e *ErrInvalidOption) Message() string {
+	return e.msg
 }
 
-var _ duh.Error = &ErrInvalidRequest{}
+var _ duh.Error = &ErrInvalidOption{}
 
 // -------------------------------------------------
 
 // ErrRetryRequest is used to tell the client that the request was valid, the server did not encounter a failure, but
 // the request did not succeed. The client should retry
 type ErrRetryRequest struct {
-	Msg string
+	msg string
 }
 
 func NewRetryRequest(msg string, args ...any) *ErrRetryRequest {
-	return &ErrRetryRequest{Msg: fmt.Sprintf(msg, args...)}
+	return &ErrRetryRequest{msg: fmt.Sprintf(msg, args...)}
 }
 
 func (e *ErrRetryRequest) Error() string {
-	return e.Msg
+	return e.msg
 }
 
 func (e *ErrRetryRequest) Is(target error) bool {
@@ -126,7 +121,7 @@ func (e *ErrRetryRequest) Code() int {
 
 func (e *ErrRetryRequest) ProtoMessage() proto.Message {
 	return &v1.Reply{
-		Message:  e.Msg,
+		Message:  e.msg,
 		CodeText: duh.CodeText(duh.CodeRetryRequest),
 		Code:     int32(duh.CodeRetryRequest),
 		Details:  nil,
@@ -138,7 +133,52 @@ func (e *ErrRetryRequest) Details() map[string]string {
 }
 
 func (e *ErrRetryRequest) Message() string {
-	return e.Msg
+	return e.msg
 }
 
 var _ duh.Error = &ErrRetryRequest{}
+
+// -------------------------------------------------
+
+// ErrConflict is used to indicate there was a conflict
+type ErrConflict struct {
+	msg string
+}
+
+func NewConflict(msg string, args ...any) *ErrConflict {
+	return &ErrConflict{
+		msg: fmt.Sprintf(msg, args...),
+	}
+}
+
+func (e *ErrConflict) Error() string {
+	return e.msg
+}
+
+func (e *ErrConflict) Is(target error) bool {
+	var err *ErrConflict
+	return errors.As(target, &err)
+}
+
+func (e *ErrConflict) Code() int {
+	return duh.CodeBadRequest
+}
+
+func (e *ErrConflict) ProtoMessage() proto.Message {
+	return &v1.Reply{
+		Message:  e.msg,
+		CodeText: duh.CodeText(duh.CodeBadRequest),
+		Code:     int32(duh.CodeBadRequest),
+		Details:  nil,
+	}
+}
+
+func (e *ErrConflict) Details() map[string]string {
+	return nil
+}
+
+func (e *ErrConflict) Message() string {
+	return e.msg
+}
+
+var _ duh.Error = &ErrConflict{}

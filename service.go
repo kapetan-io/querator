@@ -151,12 +151,12 @@ func (s *Service) QueueCreate(ctx context.Context, req *proto.QueueOptions) erro
 
 func (s *Service) StorageList(ctx context.Context, req *proto.StorageListRequest, res *proto.StorageListResponse) error {
 	if req.Limit > 1_000 {
-		return transport.NewInvalidRequest("limit exceeds maximum limit;"+
+		return transport.NewInvalidOption("limit exceeds maximum limit;"+
 			" max limit is 1,000 requested '%d'", req.Limit)
 	}
 
 	if strings.TrimSpace(req.QueueName) == "" {
-		return transport.NewInvalidRequest("queue name cannot be empty")
+		return transport.NewInvalidOption("queue name cannot be empty")
 	}
 
 	queue, err := s.manager.Get(ctx, req.QueueName)
@@ -180,7 +180,7 @@ func (s *Service) StorageInspect(ctx context.Context, req *proto.StorageInspectR
 
 	var sid store.StorageID
 	if err := s.opts.Storage.ParseID(req.Id, &sid); err != nil {
-		return transport.NewInvalidRequest("invalid storage id; %s", err)
+		return transport.NewInvalidOption("invalid storage id; %s", err)
 	}
 
 	queue, err := s.manager.Get(ctx, sid.Queue)

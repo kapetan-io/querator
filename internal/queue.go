@@ -3,7 +3,6 @@ package internal
 import (
 	"context"
 	"github.com/duh-rpc/duh-go"
-	"github.com/kapetan-io/querator/internal/maps"
 	"github.com/kapetan-io/querator/store"
 	"github.com/kapetan-io/querator/transport"
 	"github.com/kapetan-io/tackle/set"
@@ -272,7 +271,7 @@ func (q *Queue) processQueues() {
 
 	addToWCR := func(req *CompleteRequest) {
 		wcr.Requests = append(wcr.Requests, req)
-		wcr.TotalIDs += len(req.Ids)
+		wcr.TotalIDs += len(req.Batch.Ids)
 	}
 
 	addToWRR := func(req *ReserveRequest) {
@@ -391,12 +390,19 @@ func (q *Queue) processQueues() {
 			// Remove any clients that have timed out
 			_ = findNextTimeout(&wrr)
 
-			// Fetch all the reservable items in the store
+			// Each request has a batch of items it requests, place all those batch requests in an array
+			var batch store.Batch[store.ItemBatch]
+			batch.Requests = make([]*store.ItemBatch, 0, len(wrr.Requests))
+			for _, req := range wrr.Requests {
+				batch.Requests = append(batch.Requests, &req.Batch)
+				batch.Limit += int(req.BatchSize)
+			}
+
+			// Send the batch that each request wants to the store. If there are items that can be reserved the
+			// store will assign items to each batch request.
 			ctx, cancel := context.WithTimeout(context.Background(), q.opts.QueueStore.Options().ReadTimeout)
-			var items []*store.Item
-			if err := q.opts.QueueStore.Reserve(ctx, &items, store.ReserveOptions{
+			if err := q.opts.QueueStore.Reserve(ctx, batch, store.ReserveOptions{
 				ReserveDeadline: time.Now().UTC().Add(q.opts.ReserveTimeout),
-				Limit:           wrr.Total,
 			}); err != nil {
 				q.opts.Logger.Warn("while calling QueueStore.Reserve()", "error", err)
 				cancel()
@@ -404,22 +410,12 @@ func (q *Queue) processQueues() {
 			}
 			cancel()
 
-			// Distribute the items evenly to all the reserve clients
-			keys := maps.Keys(wrr.Requests)
-			var idx int
-			for _, item := range items {
-				req = wrr.Requests[keys[idx]]
-				req.Items = append(req.Items, item)
-				if idx > len(keys)-1 {
-					idx = 0
-				}
-			}
-
-			// Inform clients they have reservations ready
+			// Inform clients they have reservations ready or if there was an error
 			for _, req := range wrr.Requests {
-				if len(req.Items) != 0 {
+				if len(req.Batch.Items) != 0 || req.Batch.Err != nil {
+					req.err = req.Batch.Err
 					close(req.readyCh)
-					wrr.Total -= len(req.Items)
+					wrr.Total -= len(req.Batch.Items)
 					delete(wrr.Requests, req.ClientID)
 				}
 			}
@@ -572,7 +568,8 @@ func findNextTimeout(r *waitingReserveRequests) time.Duration {
 
 type waitingReserveRequests struct {
 	Requests map[string]*ReserveRequest
-	Total    int
+	// TODO: I think this is redundant now that we are using batches
+	Total int
 }
 
 type waitingProduceRequests struct {

@@ -8,6 +8,14 @@ import (
 
 // TODO(thrawn01): Consider creating a pool of ReserveRequest and Item to avoid GC
 
+type Response struct {
+	requestDeadline time.Time
+	// Used by Reserve() to wait for this request to complete
+	readyCh chan struct{}
+	// The error to be returned to the caller
+	err error
+}
+
 type ReserveRequest struct {
 	// The number of items requested from the queue.
 	BatchSize int32
@@ -20,14 +28,8 @@ type ReserveRequest struct {
 	Context context.Context
 	// The result of the reservation
 	Items []*store.Item
-
-	// Is calculated from RequestTimeout and specifies a time in the future when this request
-	// should be cancelled.
-	requestDeadline time.Time
-	// Used by Reserve() to wait for this request to complete
-	readyCh chan struct{}
-	// The error to be returned to the caller
-	err error
+	// The internal representation of the response
+	Response Response
 }
 
 type ProduceRequest struct {
@@ -52,8 +54,8 @@ type CompleteRequest struct {
 	RequestTimeout time.Duration
 	// The context of the requesting client
 	Context context.Context
-	// The ids to complete
-	Ids []string
+	// The ids to mark as complete
+	Batch store.IDBatch
 
 	// Is calculated from RequestTimeout and specifies a time in the future when this request
 	// should be cancelled.

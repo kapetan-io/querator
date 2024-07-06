@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/kapetan-io/querator/internal"
 	pb "github.com/kapetan-io/querator/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"time"
@@ -37,11 +38,8 @@ type Storage interface {
 }
 
 type ReserveOptions struct {
-	// ReserveDeadline is time in the future when a reservation should expire
+	// ReserveDeadline is a time in the future when the reservation should expire
 	ReserveDeadline time.Time
-
-	// Limit is the max number of items to reserve
-	Limit int
 }
 
 type Stats struct {
@@ -73,14 +71,20 @@ type Queue interface {
 	// Stats returns stats about the queue
 	Stats(ctx context.Context, stats *Stats) error
 
-	// Reserve lists up to 'limit' reservable items from the queue and marks the items as reserved.
-	Reserve(ctx context.Context, items *[]*Item, opts ReserveOptions) error
+	// TODO: Move Request objects to transport  <--- DO THIS NEXT
+	// TODO: Refactor the code to use Batch Request objects and replace wwr, wcr structs with Request objects
 
-	Complete(ctx context.Context, ids []string) error
+	// Reserve attempts to reserve items for each request in the provided batch.
+	Reserve(ctx context.Context, batch Batch[internal.ReserveRequest], opts ReserveOptions) error
 
-	// TODO: Convert Produce and Complete to batch operations
-	// Complete(ctx context.Context, batches []Batch) error
-	// Produce(ctx context.Context, batches []Batch) error
+	// Complete marks ids in the batch as complete, assigning an error for each batch that fails.
+	// If the underlying data storage fails for some reason, this call returns an error. In that case
+	// the caller should assume none of the batched items were marked as "complete"
+	Complete(ctx context.Context, batch Batch[internal.CompleteRequest]) error
+
+	// Produce writes the items for each batch to the data store, assigning an error for each
+	// batch that fails.
+	Produce(ctx context.Context, batch Batch[internal.ProduceRequest]) error
 
 	// Read reads items in a queue. limit and offset allow the user to page through all the items
 	// in the queue.
@@ -98,9 +102,9 @@ type Queue interface {
 	Options() QueueOptions
 }
 
-type Batch struct {
-	Items []Item
-	Err   error
+type Batch[T any] struct {
+	Requests []T
+	Limit    int
 }
 
 // TODO: ScheduledStorage interface {} - A place to store scheduled items to be queued. (Defer)

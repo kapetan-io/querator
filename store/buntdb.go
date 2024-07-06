@@ -136,7 +136,7 @@ func (s *BuntQueue) Stats(_ context.Context, stats *Stats) error {
 	return nil
 }
 
-func (s *BuntQueue) Reserve(_ context.Context, items *[]*Item, opts ReserveOptions) error {
+func (s *BuntQueue) Reserve(_ context.Context, batch Batch[ItemBatch], opts ReserveOptions) error {
 	f := errors.Fields{"category", "bunt-db", "func", "Reserve"}
 
 	tx, err := s.db.Begin(false)
@@ -145,12 +145,13 @@ func (s *BuntQueue) Reserve(_ context.Context, items *[]*Item, opts ReserveOptio
 	}
 
 	var iterErr error
-	var count int
+	var count, idx int
 
 	err = tx.AscendGreaterOrEqual("", "", func(key, value string) bool {
-		if count >= opts.Limit {
+		if count >= batch.Limit {
 			return false
 		}
+
 		// TODO: Grab from the memory pool
 		item := new(Item)
 		if err := json.Unmarshal([]byte(value), item); err != nil {
@@ -164,8 +165,14 @@ func (s *BuntQueue) Reserve(_ context.Context, items *[]*Item, opts ReserveOptio
 
 		item.ReserveDeadline = opts.ReserveDeadline
 		item.IsReserved = true
-		*items = append(*items, item)
 		count++
+
+		// Spread the items evenly across all the batches
+		batch.Requests[idx].Items = append(batch.Requests[idx].Items, item)
+		idx++
+		if idx == len(batch.Requests) {
+			idx = 0
+		}
 		return true
 	})
 
@@ -187,11 +194,13 @@ func (s *BuntQueue) Reserve(_ context.Context, items *[]*Item, opts ReserveOptio
 		return f.Errorf("during Begin(true): %w", err)
 	}
 
-	for i := 0; i < len(*items); i++ {
-		if err := buntSet(f, tx, (*items)[i]); err != nil {
-			return err
+	for i := 0; i < len(batch.Requests); i++ {
+		for _, item := range batch.Requests[i].Items {
+			if err := buntSet(f, tx, item); err != nil {
+				return err
+			}
+			item.ID = s.storage.CreateID(s.opts.Name, item.ID)
 		}
-		(*items)[i].ID = s.storage.CreateID(s.opts.Name, (*items)[i].ID)
 	}
 
 	if err = tx.Commit(); err != nil {
@@ -272,7 +281,7 @@ func (s *BuntQueue) Write(_ context.Context, items []*Item) error {
 	return nil
 }
 
-func (s *BuntQueue) Complete(_ context.Context, ids []string) error {
+func (s *BuntQueue) Complete(_ context.Context, batch Batch[IDBatch]) error {
 	f := errors.Fields{"category", "bunt-db", "func", "Complete"}
 
 	tx, err := s.db.Begin(true)
@@ -280,29 +289,34 @@ func (s *BuntQueue) Complete(_ context.Context, ids []string) error {
 		return f.Errorf("during Begin(): %w", err)
 	}
 
-	for _, id := range ids {
-		var sid StorageID
-		if err := s.storage.ParseID(id, &sid); err != nil {
-			return transport.NewInvalidOption("invalid storage id; '%s': %s", id, err)
-		}
+batch:
+	for _, b := range batch.Requests {
+		for _, id := range b.Ids {
+			var sid StorageID
+			if err := s.storage.ParseID(id, &sid); err != nil {
+				b.Err = transport.NewInvalidOption("invalid storage id; '%s': %s", id, err)
+				continue batch
+			}
 
-		value, err := tx.Get(sid.ID)
-		if err != nil {
-			return fmt.Errorf("during Get(%s): %w", sid, err)
-		}
+			value, err := tx.Get(sid.ID)
+			if err != nil {
+				return fmt.Errorf("during Get(%s): %w", sid, err)
+			}
 
-		item := new(Item)
-		if err := json.Unmarshal([]byte(value), item); err != nil {
-			return f.Errorf("during json.Unmarshal() of id '%s': %w", sid, err)
-		}
+			item := new(Item)
+			if err := json.Unmarshal([]byte(value), item); err != nil {
+				return f.Errorf("during json.Unmarshal() of id '%s': %w", sid, err)
+			}
 
-		if !item.IsReserved {
-			return transport.NewConflict("item(s) cannot be completed; '%s' is not "+
-				"marked as reserved", sid.ID)
-		}
+			if !item.IsReserved {
+				b.Err = transport.NewConflict("item(s) cannot be completed; '%s' is not "+
+					"marked as reserved", sid.ID)
+				continue batch
+			}
 
-		if _, err = tx.Delete(sid.ID); err != nil {
-			return f.Errorf("during Delete(%s): %w", sid.ID, err)
+			if _, err = tx.Delete(sid.ID); err != nil {
+				return f.Errorf("during Delete(%s): %w", sid.ID, err)
+			}
 		}
 	}
 

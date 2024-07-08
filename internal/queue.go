@@ -59,12 +59,12 @@ type Queue struct {
 	// TODO: I would love to see a lock free ring queue here, based on an array, such that we don't need
 	//  to throw away the channel after we process all the items in the channel. An array would allow the L3
 	//  cache to pre load that data and avoid expensive calls to DRAM.
-	reserveQueueCh  atomic.Pointer[chan *ReserveRequest]
-	produceQueueCh  atomic.Pointer[chan *ProduceRequest]
-	completeQueueCh atomic.Pointer[chan *CompleteRequest]
+	reserveQueueCh  atomic.Pointer[chan *transport.ReserveRequest]
+	produceQueueCh  atomic.Pointer[chan *transport.ProduceRequest]
+	completeQueueCh atomic.Pointer[chan *transport.CompleteRequest]
 
-	storageQueueCh chan *StorageRequest
-	shutdownCh     chan *ShutdownRequest
+	storageQueueCh chan *transport.StorageRequest
+	shutdownCh     chan *transport.ShutdownRequest
 	wg             sync.WaitGroup
 	opts           QueueOptions
 	inShutdown     atomic.Bool
@@ -80,17 +80,17 @@ func NewQueue(opts QueueOptions) (*Queue, error) {
 	}
 
 	q := &Queue{
-		shutdownCh:     make(chan *ShutdownRequest),
-		storageQueueCh: make(chan *StorageRequest),
+		shutdownCh:     make(chan *transport.ShutdownRequest),
+		storageQueueCh: make(chan *transport.StorageRequest),
 		opts:           opts,
 	}
 
 	// Assign new wait queue
-	rch := make(chan *ReserveRequest, queueChSize)
+	rch := make(chan *transport.ReserveRequest, queueChSize)
 	q.reserveQueueCh.Store(&rch)
-	pch := make(chan *ProduceRequest, queueChSize)
+	pch := make(chan *transport.ProduceRequest, queueChSize)
 	q.produceQueueCh.Store(&pch)
-	cch := make(chan *CompleteRequest, queueChSize)
+	cch := make(chan *transport.CompleteRequest, queueChSize)
 	q.completeQueueCh.Store(&cch)
 
 	q.wg.Add(1)
@@ -98,7 +98,7 @@ func NewQueue(opts QueueOptions) (*Queue, error) {
 	return q, nil
 }
 
-func (q *Queue) Storage(ctx context.Context, req *StorageRequest) error {
+func (q *Queue) Storage(ctx context.Context, req *transport.StorageRequest) error {
 	if q.inShutdown.Load() {
 		return ErrQueueShutdown
 	}
@@ -123,7 +123,7 @@ func (q *Queue) Storage(ctx context.Context, req *StorageRequest) error {
 // Produce is called by clients who wish to produce an item to the queue. This
 // call will block until the item has been written to the queue or until the request
 // is cancelled via the passed context or RequestTimeout is reached.
-func (q *Queue) Produce(ctx context.Context, req *ProduceRequest) error {
+func (q *Queue) Produce(ctx context.Context, req *transport.ProduceRequest) error {
 	if q.inShutdown.Load() {
 		return ErrQueueShutdown
 	}
@@ -180,7 +180,7 @@ func (q *Queue) Produce(ctx context.Context, req *ProduceRequest) error {
 // to process items properly. It is so used to avoid poor performing or bad behavior from clients
 // who may attempt to issue many requests simultaneously in an attempt to increase throughput.
 // Increased throughput can instead be achieved by raising the batch size.
-func (q *Queue) Reserve(ctx context.Context, req *ReserveRequest) error {
+func (q *Queue) Reserve(ctx context.Context, req *transport.ReserveRequest) error {
 	if q.inShutdown.Load() {
 		return ErrQueueShutdown
 	}
@@ -189,13 +189,13 @@ func (q *Queue) Reserve(ctx context.Context, req *ReserveRequest) error {
 		return transport.NewInvalidOption("invalid client_id; cannot be empty")
 	}
 
-	if req.BatchSize <= 0 {
+	if req.NumRequested <= 0 {
 		return transport.NewInvalidOption("invalid batch_size; must be greater than zero")
 	}
 
-	if int(req.BatchSize) > q.opts.MaxReserveBatchSize {
+	if int(req.NumRequested) > q.opts.MaxReserveBatchSize {
 		return transport.NewInvalidOption("invalid batch_size; exceeds maximum limit max_reserve_batch_size is %d, "+
-			"but %d was requested", q.opts.MaxProduceBatchSize, req.BatchSize)
+			"but %d was requested", q.opts.MaxProduceBatchSize, req.NumRequested)
 	}
 
 	if req.RequestTimeout == time.Duration(0) {
@@ -222,7 +222,7 @@ func (q *Queue) Reserve(ctx context.Context, req *ReserveRequest) error {
 	return req.err
 }
 
-func (q *Queue) Complete(ctx context.Context, req *CompleteRequest) error {
+func (q *Queue) Complete(ctx context.Context, req *transport.CompleteRequest) error {
 	if q.inShutdown.Load() {
 		return ErrQueueShutdown
 	}
@@ -248,40 +248,41 @@ func (q *Queue) Complete(ctx context.Context, req *CompleteRequest) error {
 
 // processQueues See doc/adr/0003-rw-sync-point.md for an explanation of this design
 
+// TODO: Refactor the queue.go code to use Batch Request objects and replace wwr, wcr structs with Request objects
 func (q *Queue) processQueues() {
 	defer q.wg.Done()
 
 	// TODO: Refactor this into a smaller loop with handler functions which pass around a state object with
 	//  State.AddToWPR() and State.AddToWRR() etc....
 	wrr := waitingReserveRequests{
-		Requests: make(map[string]*ReserveRequest, 5_000),
+		Requests: make(map[string]*transport.ReserveRequest, 5_000),
 	}
 	wpr := waitingProduceRequests{
-		Requests: make([]*ProduceRequest, 0, 5_000),
+		Requests: make([]*transport.ProduceRequest, 0, 5_000),
 	}
 	wcr := waitingCompleteRequests{
-		Requests: make([]*CompleteRequest, 0, 5_000),
+		Requests: make([]*transport.CompleteRequest, 0, 5_000),
 	}
 	var timerCh <-chan time.Time
 
-	addToWPR := func(req *ProduceRequest) {
+	addToWPR := func(req *transport.ProduceRequest) {
 		wpr.Requests = append(wpr.Requests, req)
 		wpr.TotalItems += len(req.Items)
 	}
 
-	addToWCR := func(req *CompleteRequest) {
+	addToWCR := func(req *transport.CompleteRequest) {
 		wcr.Requests = append(wcr.Requests, req)
 		wcr.TotalIDs += len(req.Batch.Ids)
 	}
 
-	addToWRR := func(req *ReserveRequest) {
+	addToWRR := func(req *transport.ReserveRequest) {
 		if _, ok := wrr.Requests[req.ClientID]; ok {
 			req.err = ErrDuplicateClientID
 			close(req.readyCh)
 			return
 		}
 		wrr.Requests[req.ClientID] = req
-		wrr.Total += int(req.BatchSize)
+		wrr.Total += int(req.NumRequested)
 	}
 
 	for {
@@ -296,7 +297,7 @@ func (q *Queue) processQueues() {
 			// new channel allows any incoming waiting produce requests (wpr) that occur
 			// while this routine is running to be queued into the new wait queue without
 			// interfering with anything we are doing here.
-			ch := make(chan *ProduceRequest, queueChSize)
+			ch := make(chan *transport.ProduceRequest, queueChSize)
 			q.produceQueueCh.Store(&ch)
 			close(*produceQueueCh)
 
@@ -376,7 +377,7 @@ func (q *Queue) processQueues() {
 			// new channel allows any incoming wrr that occur while this routine
 			// is running to be queued into the new wait queue without interfering with
 			// anything we are doing here.
-			ch := make(chan *ReserveRequest, queueChSize)
+			ch := make(chan *transport.ReserveRequest, queueChSize)
 			q.reserveQueueCh.Store(&ch)
 			close(*reserveQueueCh)
 
@@ -395,7 +396,7 @@ func (q *Queue) processQueues() {
 			batch.Requests = make([]*store.ItemBatch, 0, len(wrr.Requests))
 			for _, req := range wrr.Requests {
 				batch.Requests = append(batch.Requests, &req.Batch)
-				batch.Limit += int(req.BatchSize)
+				batch.TotalRequested += int(req.NumRequested)
 			}
 
 			// Send the batch that each request wants to the store. If there are items that can be reserved the
@@ -429,7 +430,7 @@ func (q *Queue) processQueues() {
 
 		// -----------------------------------------------
 		case req := <-*completeQueueCh:
-			ch := make(chan *CompleteRequest, queueChSize)
+			ch := make(chan *transport.CompleteRequest, queueChSize)
 			q.completeQueueCh.Store(&ch)
 			close(*completeQueueCh)
 
@@ -506,7 +507,7 @@ func (q *Queue) Shutdown(ctx context.Context) error {
 		return nil
 	}
 
-	req := &ShutdownRequest{
+	req := &transport.ShutdownRequest{
 		readyCh: make(chan struct{}),
 		Context: ctx,
 	}
@@ -523,7 +524,7 @@ func (q *Queue) Shutdown(ctx context.Context) error {
 }
 
 func findNextTimeout(r *waitingReserveRequests) time.Duration {
-	var soon *ReserveRequest
+	var soon *transport.ReserveRequest
 
 	for _, req := range r.Requests {
 		// If request has already expired
@@ -531,7 +532,7 @@ func findNextTimeout(r *waitingReserveRequests) time.Duration {
 			// Inform our waiting client
 			req.err = ErrRequestTimeout
 			close(req.readyCh)
-			r.Total -= int(req.BatchSize)
+			r.Total -= int(req.NumRequested)
 			delete(r.Requests, req.ClientID)
 			continue
 		}
@@ -539,7 +540,7 @@ func findNextTimeout(r *waitingReserveRequests) time.Duration {
 		// If client has gone away
 		if req.Context.Err() != nil {
 			close(req.readyCh)
-			r.Total -= int(req.BatchSize)
+			r.Total -= int(req.NumRequested)
 			req.err = req.Context.Err()
 			delete(r.Requests, req.ClientID)
 			continue
@@ -567,17 +568,17 @@ func findNextTimeout(r *waitingReserveRequests) time.Duration {
 }
 
 type waitingReserveRequests struct {
-	Requests map[string]*ReserveRequest
+	Requests map[string]*transport.ReserveRequest
 	// TODO: I think this is redundant now that we are using batches
 	Total int
 }
 
 type waitingProduceRequests struct {
-	Requests   []*ProduceRequest
+	Requests   []*transport.ProduceRequest
 	TotalItems int
 }
 
 type waitingCompleteRequests struct {
-	Requests []*CompleteRequest
+	Requests []*transport.CompleteRequest
 	TotalIDs int
 }

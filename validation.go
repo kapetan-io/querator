@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-func (s *Service) validateQueueProduceProto(in *proto.QueueProduceRequest, out *internal.ProduceRequest) error {
+func (s *Service) validateQueueProduceProto(in *proto.QueueProduceRequest, out *transport.ProduceRequest) error {
 	var err error
 
 	if in.RequestTimeout != "" {
@@ -30,7 +30,7 @@ func (s *Service) validateQueueProduceProto(in *proto.QueueProduceRequest, out *
 	return nil
 }
 
-func (s *Service) validateQueueReserveProto(in *proto.QueueReserveRequest, out *internal.ReserveRequest) error {
+func (s *Service) validateQueueReserveProto(in *proto.QueueReserveRequest, out *transport.ReserveRequest) error {
 	var err error
 
 	if in.RequestTimeout != "" {
@@ -41,12 +41,12 @@ func (s *Service) validateQueueReserveProto(in *proto.QueueReserveRequest, out *
 	}
 
 	out.ClientID = in.ClientId
-	out.BatchSize = in.BatchSize
+	out.NumRequested = in.BatchSize
 
 	return nil
 }
 
-func (s *Service) validateQueueCompleteProto(in *proto.QueueCompleteRequest, out *internal.CompleteRequest) error {
+func (s *Service) validateQueueCompleteProto(in *proto.QueueCompleteRequest, out *transport.CompleteRequest) error {
 	var err error
 
 	// TODO: Move this into Queue.Complete()

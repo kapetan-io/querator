@@ -41,6 +41,15 @@ const (
 	// TODO: How do we inspect scheduled items?
 )
 
+// Service exists to provide an abstraction from other public capabilities.
+//
+// Abstraction rules dictate that the `transport` package should NOT access any other public interfaces other
+// than `Service`. To expose other public interface capabilities via the HTTP interface, we must first add that
+// capability to the `Service` first.
+//
+// NOTE: Golang circular dependency rules work with us to help remind developers that we should not break our
+// public HTTP abstraction rule. The `Service` interface avoids a circular dependency on any other part of the
+// code because `transport` package is imported by most packages in the code base.
 type Service interface {
 	QueueProduce(context.Context, *proto.QueueProduceRequest) error
 	QueueCreate(context.Context, *proto.QueueOptions) error

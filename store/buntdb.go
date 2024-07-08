@@ -91,52 +91,34 @@ func (b *BuntStorage) NewQueue(opts QueueOptions) (Queue, error) {
 	}, nil
 }
 
-func (s *BuntQueue) Stats(_ context.Context, stats *Stats) error {
-	f := errors.Fields{"category", "bunt-db", "func", "Stats"}
+func (s *BuntQueue) Produce(_ context.Context, batch Batch[transport.ProduceRequest]) error {
+	f := errors.Fields{"category", "bunt-db", "func", "Produce"}
 
-	tx, err := s.db.Begin(false)
+	tx, err := s.db.Begin(true)
 	if err != nil {
 		return f.Errorf("during Begin(): %w", err)
 	}
 
-	var iterErr error
-	now := time.Now().UTC()
+	for _, r := range batch.Requests {
+		for _, item := range r.Items {
+			s.uid = s.uid.Next()
+			item.ID = s.uid.String()
 
-	err = tx.AscendGreaterOrEqual("", "", func(key, value string) bool {
-		var item Item
-		if err := json.Unmarshal([]byte(value), &item); err != nil {
-			iterErr = f.Errorf("during json.Unmarshal(): %w", err)
-			return false
+			if err := buntSet(f, tx, item); err != nil {
+				return err
+			}
+			item.ID = s.storage.CreateID(s.opts.Name, item.ID)
 		}
+	}
 
-		stats.Total++
-		stats.AverageAge += item.DeadDeadline.Sub(now)
-		if item.IsReserved {
-			stats.AverageReservedAge += item.ReserveDeadline.Sub(now)
-			stats.TotalReserved++
-		}
-
-		return true
-	})
+	err = tx.Commit()
 	if err != nil {
-		return f.Errorf("during AscendGreaterOrEqual(): %w", err)
+		return fmt.Errorf("during Commit(): %w", err)
 	}
-
-	if err = tx.Rollback(); err != nil {
-		return f.Errorf("during Rollback(): %w", err)
-	}
-
-	if iterErr != nil {
-		return iterErr
-	}
-
-	stats.AverageAge = time.Duration(int64(stats.AverageAge) / int64(stats.Total))
-	stats.AverageReservedAge = time.Duration(int64(stats.AverageReservedAge) / int64(stats.TotalReserved))
-
 	return nil
 }
 
-func (s *BuntQueue) Reserve(_ context.Context, batch Batch[ItemBatch], opts ReserveOptions) error {
+func (s *BuntQueue) Reserve(_ context.Context, batch Batch[transport.ReserveRequest], opts ReserveOptions) error {
 	f := errors.Fields{"category", "bunt-db", "func", "Reserve"}
 
 	tx, err := s.db.Begin(false)
@@ -148,12 +130,12 @@ func (s *BuntQueue) Reserve(_ context.Context, batch Batch[ItemBatch], opts Rese
 	var count, idx int
 
 	err = tx.AscendGreaterOrEqual("", "", func(key, value string) bool {
-		if count >= batch.Limit {
+		if count >= batch.TotalRequested {
 			return false
 		}
 
 		// TODO: Grab from the memory pool
-		item := new(Item)
+		item := new(transport.Item)
 		if err := json.Unmarshal([]byte(value), item); err != nil {
 			iterErr = f.Errorf("during json.Unmarshal(): %w", err)
 			return false
@@ -167,7 +149,18 @@ func (s *BuntQueue) Reserve(_ context.Context, batch Batch[ItemBatch], opts Rese
 		item.IsReserved = true
 		count++
 
-		// Spread the items evenly across all the batches
+		// The following code attempts to spread the items evenly across all the batches
+
+		// Find the next request in the batch which has not met its NumRequested limit
+		for len(batch.Requests[idx].Items) == batch.Requests[idx].NumRequested {
+			// If TotalRequested is more than the total of all the ReserveRequest.NumRequested
+			// then this code could get stuck in a loop
+			idx++
+			if idx == len(batch.Requests) {
+				idx = 0
+			}
+		}
+
 		batch.Requests[idx].Items = append(batch.Requests[idx].Items, item)
 		idx++
 		if idx == len(batch.Requests) {
@@ -210,7 +203,53 @@ func (s *BuntQueue) Reserve(_ context.Context, batch Batch[ItemBatch], opts Rese
 	return nil
 }
 
-func (s *BuntQueue) Read(_ context.Context, items *[]*Item, pivot string, limit int) error {
+func (s *BuntQueue) Complete(_ context.Context, batch Batch[transport.CompleteRequest]) error {
+	f := errors.Fields{"category", "bunt-db", "func", "Complete"}
+
+	tx, err := s.db.Begin(true)
+	if err != nil {
+		return f.Errorf("during Begin(): %w", err)
+	}
+
+nextBatch:
+	for i := range batch.Requests {
+		for _, id := range batch.Requests[i].Ids {
+			var sid StorageID
+			if err := s.storage.ParseID(id, &sid); err != nil {
+				batch.Requests[i].Err = transport.NewInvalidOption("invalid storage id; '%s': %s", id, err)
+				continue nextBatch
+			}
+
+			value, err := tx.Get(sid.ID)
+			if err != nil {
+				return fmt.Errorf("during Get(%s): %w", sid, err)
+			}
+
+			item := new(transport.Item)
+			if err := json.Unmarshal([]byte(value), item); err != nil {
+				return f.Errorf("during json.Unmarshal() of id '%s': %w", sid, err)
+			}
+
+			if !item.IsReserved {
+				batch.Requests[i].Err = transport.NewConflict("item(s) cannot be completed; '%s' is not "+
+					"marked as reserved", sid.ID)
+				continue nextBatch
+			}
+
+			if _, err = tx.Delete(sid.ID); err != nil {
+				return f.Errorf("during Delete(%s): %w", sid.ID, err)
+			}
+		}
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		return f.Errorf("during Commit(): %w", err)
+	}
+	return nil
+}
+
+func (s *BuntQueue) Read(_ context.Context, items *[]*transport.Item, pivot string, limit int) error {
 	f := errors.Fields{"category", "bunt-db", "func", "Read"}
 
 	tx, err := s.db.Begin(false)
@@ -232,7 +271,7 @@ func (s *BuntQueue) Read(_ context.Context, items *[]*Item, pivot string, limit 
 			return false
 		}
 		// TODO: Grab from the memory pool
-		item := new(Item)
+		item := new(transport.Item)
 		if err := json.Unmarshal([]byte(value), item); err != nil {
 			iterErr = f.Errorf("during json.Unmarshal(): %w", err)
 			return false
@@ -256,7 +295,7 @@ func (s *BuntQueue) Read(_ context.Context, items *[]*Item, pivot string, limit 
 	return nil
 }
 
-func (s *BuntQueue) Write(_ context.Context, items []*Item) error {
+func (s *BuntQueue) Write(_ context.Context, items []*transport.Item) error {
 	f := errors.Fields{"category", "bunt-db", "func", "Write"}
 
 	tx, err := s.db.Begin(true)
@@ -277,52 +316,6 @@ func (s *BuntQueue) Write(_ context.Context, items []*Item) error {
 	err = tx.Commit()
 	if err != nil {
 		return fmt.Errorf("during Commit(): %w", err)
-	}
-	return nil
-}
-
-func (s *BuntQueue) Complete(_ context.Context, batch Batch[IDBatch]) error {
-	f := errors.Fields{"category", "bunt-db", "func", "Complete"}
-
-	tx, err := s.db.Begin(true)
-	if err != nil {
-		return f.Errorf("during Begin(): %w", err)
-	}
-
-batch:
-	for _, b := range batch.Requests {
-		for _, id := range b.Ids {
-			var sid StorageID
-			if err := s.storage.ParseID(id, &sid); err != nil {
-				b.Err = transport.NewInvalidOption("invalid storage id; '%s': %s", id, err)
-				continue batch
-			}
-
-			value, err := tx.Get(sid.ID)
-			if err != nil {
-				return fmt.Errorf("during Get(%s): %w", sid, err)
-			}
-
-			item := new(Item)
-			if err := json.Unmarshal([]byte(value), item); err != nil {
-				return f.Errorf("during json.Unmarshal() of id '%s': %w", sid, err)
-			}
-
-			if !item.IsReserved {
-				b.Err = transport.NewConflict("item(s) cannot be completed; '%s' is not "+
-					"marked as reserved", sid.ID)
-				continue batch
-			}
-
-			if _, err = tx.Delete(sid.ID); err != nil {
-				return f.Errorf("during Delete(%s): %w", sid.ID, err)
-			}
-		}
-	}
-
-	err = tx.Commit()
-	if err != nil {
-		return f.Errorf("during Commit(): %w", err)
 	}
 	return nil
 }
@@ -356,6 +349,53 @@ func (s *BuntQueue) Delete(_ context.Context, ids []string) error {
 	return nil
 }
 
+// Stats returns some stats about the current state of the storage and the items within
+// TODO: Fix Stats, Stats items should be renamed and the stats collected corrected.
+func (s *BuntQueue) Stats(_ context.Context, stats *Stats) error {
+	f := errors.Fields{"category", "bunt-db", "func", "Stats"}
+
+	tx, err := s.db.Begin(false)
+	if err != nil {
+		return f.Errorf("during Begin(): %w", err)
+	}
+
+	var iterErr error
+	now := time.Now().UTC()
+
+	err = tx.AscendGreaterOrEqual("", "", func(key, value string) bool {
+		var item transport.Item
+		if err := json.Unmarshal([]byte(value), &item); err != nil {
+			iterErr = f.Errorf("during json.Unmarshal(): %w", err)
+			return false
+		}
+
+		stats.Total++
+		stats.AverageAge += item.DeadDeadline.Sub(now)
+		if item.IsReserved {
+			stats.AverageReservedAge += item.ReserveDeadline.Sub(now)
+			stats.TotalReserved++
+		}
+
+		return true
+	})
+	if err != nil {
+		return f.Errorf("during AscendGreaterOrEqual(): %w", err)
+	}
+
+	if err = tx.Rollback(); err != nil {
+		return f.Errorf("during Rollback(): %w", err)
+	}
+
+	if iterErr != nil {
+		return iterErr
+	}
+
+	stats.AverageAge = time.Duration(int64(stats.AverageAge) / int64(stats.Total))
+	stats.AverageReservedAge = time.Duration(int64(stats.AverageReservedAge) / int64(stats.TotalReserved))
+
+	return nil
+}
+
 func (s *BuntQueue) Close(_ context.Context) error {
 	return s.db.Close()
 }
@@ -364,7 +404,7 @@ func (s *BuntQueue) Options() QueueOptions {
 	return s.opts
 }
 
-func buntSet(f errors.Fields, tx *buntdb.Tx, item *Item) error {
+func buntSet(f errors.Fields, tx *buntdb.Tx, item *transport.Item) error {
 	// TODO: Use something more efficient like protobuf,
 	//	gob or https://github.com/capnproto/go-capnp
 	b, err := json.Marshal(item)

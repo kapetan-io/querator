@@ -70,7 +70,7 @@ func (s *Service) QueueProduce(ctx context.Context, req *proto.QueueProduceReque
 		return err
 	}
 
-	var r internal.ProduceRequest
+	var r transport.ProduceRequest
 	if err := s.validateQueueProduceProto(req, &r); err != nil {
 		return err
 	}
@@ -89,7 +89,7 @@ func (s *Service) QueueReserve(ctx context.Context, req *proto.QueueReserveReque
 		return err
 	}
 
-	var r internal.ReserveRequest
+	var r transport.ReserveRequest
 	if err := s.validateQueueReserveProto(req, &r); err != nil {
 		return err
 	}
@@ -120,7 +120,7 @@ func (s *Service) QueueComplete(ctx context.Context, req *proto.QueueCompleteReq
 		return err
 	}
 
-	var r internal.CompleteRequest
+	var r transport.CompleteRequest
 	if err := s.validateQueueCompleteProto(req, &r); err != nil {
 		return err
 	}
@@ -164,7 +164,7 @@ func (s *Service) StorageList(ctx context.Context, req *proto.StorageListRequest
 		return err
 	}
 
-	r := internal.StorageRequest{Pivot: req.Pivot, Limit: int(req.Limit)}
+	r := transport.StorageRequest{Pivot: req.Pivot, Limit: int(req.Limit)}
 	if err := queue.Storage(ctx, &r); err != nil {
 		return transport.NewRequestFailed("list request failed; %s", err)
 	}
@@ -188,7 +188,7 @@ func (s *Service) StorageInspect(ctx context.Context, req *proto.StorageInspectR
 		return err
 	}
 
-	r := internal.StorageRequest{ID: req.Id}
+	r := transport.StorageRequest{ID: req.Id}
 	if err := queue.Storage(ctx, &r); err != nil {
 		return transport.NewRequestFailed("inspect request failed; %s", err)
 	}

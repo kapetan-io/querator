@@ -280,7 +280,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		}
 
 		batch := types.Batch[types.ProduceRequest]{
-			Requests: []types.ProduceRequest{{Items: items}},
+			Requests: []*types.ProduceRequest{{Items: items}},
 		}
 
 		// Produce the items
@@ -494,7 +494,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 
 		// Produce the items
 		require.NoError(t, s.Produce(ctx, types.Batch[types.ProduceRequest]{
-			Requests: []types.ProduceRequest{{Items: items}},
+			Requests: []*types.ProduceRequest{{Items: items}},
 		}))
 
 		// Reserve the items
@@ -508,7 +508,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		ids := store.CollectIDs(reserve.Requests[0].Items)
 
 		complete := types.Batch[types.CompleteRequest]{
-			Requests: []types.CompleteRequest{{Ids: ids}},
+			Requests: []*types.CompleteRequest{{Ids: ids}},
 		}
 
 		var read []*types.Item
@@ -525,7 +525,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		t.Run("NotReserved", func(t *testing.T) {
 			// Attempt to complete an item that has not been reserved
 			complete = types.Batch[types.CompleteRequest]{
-				Requests: []types.CompleteRequest{{Ids: []string{read[0].ID}}},
+				Requests: []*types.CompleteRequest{{Ids: []string{read[0].ID}}},
 			}
 
 			require.NoError(t, s.Complete(ctx, complete))
@@ -540,7 +540,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 			assert.Equal(t, 1, len(read))
 
 			complete = types.Batch[types.CompleteRequest]{
-				Requests: []types.CompleteRequest{
+				Requests: []*types.CompleteRequest{
 					{Ids: []string{"invalid-id"}},
 					{Ids: []string{"another-invalid-id"}},
 				},

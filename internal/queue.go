@@ -15,9 +15,9 @@ import (
 )
 
 var (
+	ErrQueueShutdown     = transport.NewRequestFailed("queue is shutting down")
 	ErrDuplicateClientID = transport.NewInvalidOption("duplicate client id")
 	ErrRequestTimeout    = transport.NewRetryRequest("request timeout, try again")
-	ErrQueueShutdown     = transport.NewRequestFailed("queue is shutting down")
 )
 
 const (
@@ -255,40 +255,20 @@ func (q *Queue) synchronizationLoop() {
 	// TODO: Maybe introduce a types.ReserveBatch which ensures only unique clients are in the batch.
 	// TODO: Make an ADR on why we don't allow the same client to make multiple reserve requests
 
-	//reserves := types.Batch[types.ReserveRequest]{
-	//	Requests: make(map[string]*types.ReserveRequest, 0, 5_000),
-	//}
-
 	reserves := types.ReserveBatch{
-		Requests: make(map[string]types.ReserveRequest, 5_000),
+		Requests: make([]*types.ReserveRequest, 5_000),
 		Total:    0,
 	}
 
-	wpr := waitingProduceRequests{
+	producers := types.Batch[types.ProduceRequest]{
 		Requests: make([]*types.ProduceRequest, 0, 5_000),
 	}
-	wcr := waitingCompleteRequests{
+
+	completes := types.Batch[types.CompleteRequest]{
 		Requests: make([]*types.CompleteRequest, 0, 5_000),
 	}
+
 	var timerCh <-chan time.Time
-
-	addToWPR := func(req *types.ProduceRequest) {
-		wpr.Requests = append(wpr.Requests, req)
-	}
-
-	addToWCR := func(req *types.CompleteRequest) {
-		wcr.Requests = append(wcr.Requests, req)
-	}
-
-	addToWRR := func(req *types.ReserveRequest) {
-		if _, ok := reserves.Requests[req.ClientID]; ok {
-			req.err = ErrDuplicateClientID
-			close(req.readyCh)
-			return
-		}
-		reserves.Requests[req.ClientID] = req
-		reserves.Total += int(req.NumRequested)
-	}
 
 	for {
 		reserveQueueCh := q.reserveQueueCh.Load()
@@ -299,16 +279,16 @@ func (q *Queue) synchronizationLoop() {
 		// -----------------------------------------------
 		case req := <-*produceQueueCh:
 			// Swap the wait channel, so we can process the wait queue. Creating a
-			// new channel allows any incoming waiting produce requests (wpr) that occur
+			// new channel allows any incoming waiting produce requests (producers) that occur
 			// while this routine is running to be queued into the new wait queue without
 			// interfering with anything we are doing here.
 			ch := make(chan *types.ProduceRequest, queueChSize)
 			q.produceQueueCh.Store(&ch)
 			close(*produceQueueCh)
 
-			addToWPR(req)
+			producers.Add(req)
 			for req := range *produceQueueCh {
-				addToWPR(req)
+				producers.Add(req)
 			}
 
 			// FUTURE: Inspect the Waiting Reserve Requests, and attempt to assign produced items with
@@ -320,22 +300,21 @@ func (q *Queue) synchronizationLoop() {
 			//  step, in addition, we can back fill reservable items into memory when synchronizationLoop() isn't
 			//  actively producing or consuming.
 
-			// `items` list is a complete list of all the items each producer provided us with.
-			items := make([]*store.Item, 0, wpr.TotalItems)
-			writeTimeout := 15 * time.Minute
-			for _, req := range wpr.Requests {
+			writeTimeout := maxRequestTimeout
+			for _, req := range producers.Requests {
 				// Cancel any produce requests that have timed out
-				if time.Now().UTC().After(req.requestDeadline) {
-					req.err = ErrRequestTimeout
-					close(req.readyCh)
+				if time.Now().UTC().After(req.RequestDeadline) {
+					req.Err = ErrRequestTimeout
+					producers.Remove(req)
+					close(req.ReadyCh)
 					continue
 				}
+				// Assign a DeadTimeout to each item
 				for _, item := range req.Items {
 					item.DeadDeadline = time.Now().UTC().Add(q.opts.DeadTimeout)
-					items = append(items, item)
 				}
 				// The writeTimeout should be equal to the request with the least amount of request timeout left.
-				timeLeft := time.Now().UTC().Sub(req.requestDeadline)
+				timeLeft := time.Now().UTC().Sub(req.RequestDeadline)
 				if timeLeft < writeTimeout {
 					writeTimeout = timeLeft
 				}
@@ -350,14 +329,14 @@ func (q *Queue) synchronizationLoop() {
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
-			if err := q.opts.QueueStore.Write(ctx, items); err != nil {
+			if err := q.opts.QueueStore.Produce(ctx, producers); err != nil {
 				q.opts.Logger.Warn("while calling QueueStore.Write()", "error", err)
 				cancel()
 				// Let clients that are timed out, know we are done with them.
-				for _, req := range wpr.Requests {
-					if time.Now().UTC().After(req.requestDeadline) {
-						req.err = ErrRequestTimeout
-						close(req.readyCh)
+				for _, req := range producers.Requests {
+					if time.Now().UTC().After(req.RequestDeadline) {
+						req.Err = ErrRequestTimeout
+						close(req.ReadyCh)
 						continue
 					}
 				}
@@ -366,15 +345,14 @@ func (q *Queue) synchronizationLoop() {
 			cancel()
 
 			// Tell the waiting clients the items have been produced
-			for i, req := range wpr.Requests {
-				close(req.readyCh)
+			for i, req := range producers.Requests {
+				close(req.ReadyCh)
 				// Allow the GC to collect these requests
-				wpr.Requests[i] = nil
+				producers.Requests[i] = nil
 			}
 
 			// Reset the slice without re-allocating
-			wpr.Requests = wpr.Requests[:0]
-			wpr.TotalItems = 0
+			producers.Requests = producers.Requests[:0]
 
 		// -----------------------------------------------
 		case req := <-*reserveQueueCh:
@@ -386,22 +364,15 @@ func (q *Queue) synchronizationLoop() {
 			q.reserveQueueCh.Store(&ch)
 			close(*reserveQueueCh)
 
-			if !reserves.AddIfUnique(req) {
-				req.Err = ErrDuplicateClientID
-				close(req.ReadyCh)
-			}
-
+			AddIfUnique(reserves, req)
 			for req := range *reserveQueueCh {
-				if !reserves.AddIfUnique(req) {
-					req.Err = ErrDuplicateClientID
-					close(req.ReadyCh)
-				}
+				AddIfUnique(reserves, req)
 			}
 
 			// NOTE: V0 doing the simplest thing that works now, we can get fancy & efficient later.
 
-			// Remove any clients that have timed out
-			_ = findNextTimeout(&reserves)
+			// Remove any clients that have timed out and find the next request to timeout if any.
+			_ = NextTimeout(reserves)
 
 			// Each request has a batch of items it requests, place all those batch requests in an array
 			batch.Requests = make([]*store.ItemBatch, 0, len(reserves.Requests))
@@ -450,8 +421,8 @@ func (q *Queue) synchronizationLoop() {
 				addToWCR(req)
 			}
 
-			ids := make([]string, 0, wcr.TotalIDs)
-			for _, req := range wcr.Requests {
+			ids := make([]string, 0, completes.TotalIDs)
+			for _, req := range completes.Requests {
 				ids = append(ids, req.Ids...)
 			}
 
@@ -461,14 +432,14 @@ func (q *Queue) synchronizationLoop() {
 			}
 
 			// Tell the waiting clients the items have been marked as complete
-			for i, req := range wcr.Requests {
+			for i, req := range completes.Requests {
 				close(req.readyCh)
 				// Allow the GC to collect these requests
-				wcr.Requests[i] = nil
+				completes.Requests[i] = nil
 			}
 
-			wcr.Requests = wcr.Requests[:0]
-			wcr.TotalIDs = 0
+			completes.Requests = completes.Requests[:0]
+			completes.TotalIDs = 0
 
 		// -----------------------------------------------
 		case req := <-q.storageQueueCh:
@@ -485,7 +456,7 @@ func (q *Queue) synchronizationLoop() {
 
 		// -----------------------------------------------
 		case req := <-q.shutdownCh:
-			for _, r := range wpr.Requests {
+			for _, r := range producers.Requests {
 				r.err = ErrQueueShutdown
 				close(r.readyCh)
 			}
@@ -534,26 +505,41 @@ func (q *Queue) Shutdown(ctx context.Context) error {
 	}
 }
 
-func findNextTimeout(r *waitingReserveRequests) time.Duration {
+// AddIfUnique adds a ReserveRequest to the batch. Returns false if the ReserveRequest.ClientID is a duplicate
+// and the request was not added to the batch
+func AddIfUnique(r types.ReserveBatch, req *types.ReserveRequest) bool {
+	for _, existing := range r.Requests {
+		if existing.ClientID == req.ClientID {
+			req.Err = ErrDuplicateClientID
+			close(req.ReadyCh)
+			return false
+		}
+	}
+	r.Total += req.NumRequested
+	r.Requests = append(r.Requests, req)
+	return false
+}
+
+func NextTimeout(r types.ReserveBatch) time.Duration {
 	var soon *types.ReserveRequest
 
 	for _, req := range r.Requests {
 		// If request has already expired
-		if time.Now().UTC().After(req.requestDeadline) {
+		if time.Now().UTC().After(req.RequestDeadline) {
 			// Inform our waiting client
-			req.err = ErrRequestTimeout
-			close(req.readyCh)
+			req.Err = ErrRequestTimeout
+			close(req.ReadyCh)
 			r.Total -= int(req.NumRequested)
-			delete(r.Requests, req.ClientID)
+			r.Remove(req)
 			continue
 		}
 
 		// If client has gone away
 		if req.Context.Err() != nil {
-			close(req.readyCh)
+			close(req.ReadyCh)
 			r.Total -= int(req.NumRequested)
-			req.err = req.Context.Err()
-			delete(r.Requests, req.ClientID)
+			req.Err = req.Context.Err()
+			r.Remove(req)
 			continue
 		}
 
@@ -564,7 +550,7 @@ func findNextTimeout(r *waitingReserveRequests) time.Duration {
 		}
 
 		// Will this happen sooner?
-		if req.requestDeadline.Before(soon.requestDeadline) {
+		if req.RequestDeadline.Before(soon.RequestDeadline) {
 			soon = req
 		}
 	}
@@ -575,19 +561,5 @@ func findNextTimeout(r *waitingReserveRequests) time.Duration {
 	}
 
 	// How soon is it? =)
-	return time.Now().UTC().Sub(soon.requestDeadline)
-}
-
-type waitingReserveRequests struct {
-	Requests map[string]*types.ReserveRequest
-	// TODO: I think this is redundant now that we are using batches
-	Total int
-}
-
-type waitingProduceRequests struct {
-	Requests []*types.ProduceRequest
-}
-
-type waitingCompleteRequests struct {
-	Requests []*types.CompleteRequest
+	return time.Now().UTC().Sub(soon.RequestDeadline)
 }

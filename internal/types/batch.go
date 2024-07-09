@@ -1,8 +1,30 @@
 package types
 
+type Ptr[T any] interface {
+	*T
+}
+
 // Batch is a batch of requests structs
 type Batch[T any] struct {
-	Requests []T
+	Requests []*T
+}
+
+func (r *Batch[T]) Add(req *T) {
+	r.Requests = append(r.Requests, req)
+}
+
+// Remove removes the reserve request from the batch
+func (r *Batch[T]) Remove(req *T) {
+	// Filter in place algorithm. Removes the request and moves all
+	// items up the slice then resizes the slice
+	n := 0
+	for _, i := range r.Requests {
+		if i != req {
+			r.Requests[n] = i
+			n++
+		}
+	}
+	r.Requests = r.Requests[:n]
 }
 
 // ReserveBatch is a batch of reserve requests. It is unique from other Batch requests
@@ -13,17 +35,9 @@ type ReserveBatch struct {
 	Total    int
 }
 
-// AddIfUnique adds a ReserveRequest to the batch. Returns false if the ReserveRequest.ClientID is a duplicate
-// and the request was not added to the batch
-func (r *ReserveBatch) AddIfUnique(req *ReserveRequest) bool {
-	for _, existing := range r.Requests {
-		if existing.ClientID == req.ClientID {
-			return false
-		}
-	}
+func (r *ReserveBatch) Add(req *ReserveRequest) {
 	r.Total += req.NumRequested
 	r.Requests = append(r.Requests, req)
-	return false
 }
 
 // Remove removes the reserve request from the batch

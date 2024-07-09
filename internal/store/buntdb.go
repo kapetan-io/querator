@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/duh-rpc/duh-go"
 	"github.com/kapetan-io/errors"
+	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/transport"
 	"github.com/kapetan-io/tackle/set"
 	"github.com/segmentio/ksuid"
@@ -14,6 +15,44 @@ import (
 	"strings"
 	"time"
 )
+
+// BuntDB Implementation
+//
+// ### Issues using BuntDB for Querator
+// The indexes in BuntDB are for used for sorting during iteration. Which is exactly what I want. However, Bunt only
+// applies the index after set, and set doesn't allow custom index values to be passed via `Set()` I see this as a
+// perceived performance issue with Set() and Indices when using structure values. For example, calling Set  looks
+// like this
+//
+// ```go
+//  type Foo struct {
+//    Field1 string `json:"field1"`
+//    Field2 string `json:"field2"` // I want to index Field2
+//  }
+//  db, _ := buntdb.Open(":memory:")
+//  db.CreateIndex("field2-index", "*", buntdb.IndexJSON("field2"))
+//  b, err := json.Marshal(Foo{Field1: "boo", Field2: "foo"})
+//  tx.Set("mykey", string(b), &SetOptions{})
+// ```
+//
+// I see two performance problems with BuntDB's design here.
+//
+// 1. In order for the index to be applied, `Set()` must ask `IndexJSON()` to parse the marshaled data in order to
+//    extract the index field. This is sub optimal, and it would have been nice to have provided that index value
+//    via `SetOptions{SecondaryIndexValue: "foo"}` or some such thing, such that `Set()` doesn't need to unmarshal
+//    the data I just marshaled.
+// 2. Bunt uses `string` as it's `value` type. This requires an unnecessary conversion `string(b)` to occur when
+//    using anything but UTF-8 strings. IE: converting from json `[]byte` to string, or `protobuf` to string, or
+//    even using `gob` requires a full copy of the data into UTF-8 strings prior to storage in BuntDB. This seems
+//    like a poor decision for anything that stores marshalled data into bunt.
+//
+// This implementation ignores the need for a secondary index and preforms a full scan.
+//
+// ### Panic During Iteration
+// I just ran into a panic from an unbounded index, and BuntDB did something weird. I got caught in a sleep which
+// I couldn't identify. This leads me to think that using `AscendGreaterOrEqual()` captures the panic and attempts
+// to handle it in an undesirable way. I didn't spend time figuring it out.
+// TODO(thrawn01): Look into this.
 
 type BuntOptions struct {
 	Logger       duh.StandardLogger
@@ -91,7 +130,7 @@ func (b *BuntStorage) NewQueue(opts QueueOptions) (Queue, error) {
 	}, nil
 }
 
-func (s *BuntQueue) Produce(_ context.Context, batch Batch[transport.ProduceRequest]) error {
+func (s *BuntQueue) Produce(_ context.Context, batch types.Batch[types.ProduceRequest]) error {
 	f := errors.Fields{"category", "bunt-db", "func", "Produce"}
 
 	tx, err := s.db.Begin(true)
@@ -118,7 +157,7 @@ func (s *BuntQueue) Produce(_ context.Context, batch Batch[transport.ProduceRequ
 	return nil
 }
 
-func (s *BuntQueue) Reserve(_ context.Context, batch Batch[transport.ReserveRequest], opts ReserveOptions) error {
+func (s *BuntQueue) Reserve(_ context.Context, batch types.ReserveBatch, opts ReserveOptions) error {
 	f := errors.Fields{"category", "bunt-db", "func", "Reserve"}
 
 	tx, err := s.db.Begin(false)
@@ -126,16 +165,17 @@ func (s *BuntQueue) Reserve(_ context.Context, batch Batch[transport.ReserveRequ
 		return f.Errorf("during Begin(false): %w", err)
 	}
 
+	iter := batch.Iterator()
 	var iterErr error
-	var count, idx int
+	var count int
 
 	err = tx.AscendGreaterOrEqual("", "", func(key, value string) bool {
-		if count >= batch.TotalRequested {
+		if count >= batch.Total {
 			return false
 		}
 
 		// TODO: Grab from the memory pool
-		item := new(transport.Item)
+		item := new(types.Item)
 		if err := json.Unmarshal([]byte(value), item); err != nil {
 			iterErr = f.Errorf("during json.Unmarshal(): %w", err)
 			return false
@@ -149,22 +189,10 @@ func (s *BuntQueue) Reserve(_ context.Context, batch Batch[transport.ReserveRequ
 		item.IsReserved = true
 		count++
 
-		// The following code attempts to spread the items evenly across all the batches
-
-		// Find the next request in the batch which has not met its NumRequested limit
-		for len(batch.Requests[idx].Items) == batch.Requests[idx].NumRequested {
-			// If TotalRequested is more than the total of all the ReserveRequest.NumRequested
-			// then this code could get stuck in a loop
-			idx++
-			if idx == len(batch.Requests) {
-				idx = 0
-			}
-		}
-
-		batch.Requests[idx].Items = append(batch.Requests[idx].Items, item)
-		idx++
-		if idx == len(batch.Requests) {
-			idx = 0
+		// Assign the item to the next waiting reservation in the batch,
+		// returns false if there are no more reservations available to fill
+		if !iter.Next(item) {
+			return false
 		}
 		return true
 	})
@@ -203,7 +231,7 @@ func (s *BuntQueue) Reserve(_ context.Context, batch Batch[transport.ReserveRequ
 	return nil
 }
 
-func (s *BuntQueue) Complete(_ context.Context, batch Batch[transport.CompleteRequest]) error {
+func (s *BuntQueue) Complete(_ context.Context, batch types.Batch[types.CompleteRequest]) error {
 	f := errors.Fields{"category", "bunt-db", "func", "Complete"}
 
 	tx, err := s.db.Begin(true)
@@ -225,7 +253,7 @@ nextBatch:
 				return fmt.Errorf("during Get(%s): %w", sid, err)
 			}
 
-			item := new(transport.Item)
+			item := new(types.Item)
 			if err := json.Unmarshal([]byte(value), item); err != nil {
 				return f.Errorf("during json.Unmarshal() of id '%s': %w", sid, err)
 			}
@@ -249,7 +277,7 @@ nextBatch:
 	return nil
 }
 
-func (s *BuntQueue) Read(_ context.Context, items *[]*transport.Item, pivot string, limit int) error {
+func (s *BuntQueue) Read(_ context.Context, items *[]*types.Item, pivot string, limit int) error {
 	f := errors.Fields{"category", "bunt-db", "func", "Read"}
 
 	tx, err := s.db.Begin(false)
@@ -271,7 +299,7 @@ func (s *BuntQueue) Read(_ context.Context, items *[]*transport.Item, pivot stri
 			return false
 		}
 		// TODO: Grab from the memory pool
-		item := new(transport.Item)
+		item := new(types.Item)
 		if err := json.Unmarshal([]byte(value), item); err != nil {
 			iterErr = f.Errorf("during json.Unmarshal(): %w", err)
 			return false
@@ -295,7 +323,7 @@ func (s *BuntQueue) Read(_ context.Context, items *[]*transport.Item, pivot stri
 	return nil
 }
 
-func (s *BuntQueue) Write(_ context.Context, items []*transport.Item) error {
+func (s *BuntQueue) Write(_ context.Context, items []*types.Item) error {
 	f := errors.Fields{"category", "bunt-db", "func", "Write"}
 
 	tx, err := s.db.Begin(true)
@@ -363,7 +391,7 @@ func (s *BuntQueue) Stats(_ context.Context, stats *Stats) error {
 	now := time.Now().UTC()
 
 	err = tx.AscendGreaterOrEqual("", "", func(key, value string) bool {
-		var item transport.Item
+		var item types.Item
 		if err := json.Unmarshal([]byte(value), &item); err != nil {
 			iterErr = f.Errorf("during json.Unmarshal(): %w", err)
 			return false
@@ -404,7 +432,7 @@ func (s *BuntQueue) Options() QueueOptions {
 	return s.opts
 }
 
-func buntSet(f errors.Fields, tx *buntdb.Tx, item *transport.Item) error {
+func buntSet(f errors.Fields, tx *buntdb.Tx, item *types.Item) error {
 	// TODO: Use something more efficient like protobuf,
 	//	gob or https://github.com/capnproto/go-capnp
 	b, err := json.Marshal(item)

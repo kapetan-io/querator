@@ -21,8 +21,9 @@ import (
 	"errors"
 	"github.com/duh-rpc/duh-go"
 	"github.com/kapetan-io/querator/internal"
+	"github.com/kapetan-io/querator/internal/store"
+	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/proto"
-	"github.com/kapetan-io/querator/store"
 	"github.com/kapetan-io/querator/transport"
 	"github.com/kapetan-io/tackle/set"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -70,7 +71,7 @@ func (s *Service) QueueProduce(ctx context.Context, req *proto.QueueProduceReque
 		return err
 	}
 
-	var r transport.ProduceRequest
+	var r types.ProduceRequest
 	if err := s.validateQueueProduceProto(req, &r); err != nil {
 		return err
 	}
@@ -89,7 +90,7 @@ func (s *Service) QueueReserve(ctx context.Context, req *proto.QueueReserveReque
 		return err
 	}
 
-	var r transport.ReserveRequest
+	var r types.ReserveRequest
 	if err := s.validateQueueReserveProto(req, &r); err != nil {
 		return err
 	}
@@ -120,7 +121,7 @@ func (s *Service) QueueComplete(ctx context.Context, req *proto.QueueCompleteReq
 		return err
 	}
 
-	var r transport.CompleteRequest
+	var r types.CompleteRequest
 	if err := s.validateQueueCompleteProto(req, &r); err != nil {
 		return err
 	}
@@ -164,7 +165,7 @@ func (s *Service) StorageList(ctx context.Context, req *proto.StorageListRequest
 		return err
 	}
 
-	r := transport.StorageRequest{Pivot: req.Pivot, Limit: int(req.Limit)}
+	r := types.StorageRequest{Pivot: req.Pivot, Limit: int(req.Limit)}
 	if err := queue.Storage(ctx, &r); err != nil {
 		return transport.NewRequestFailed("list request failed; %s", err)
 	}
@@ -188,7 +189,7 @@ func (s *Service) StorageInspect(ctx context.Context, req *proto.StorageInspectR
 		return err
 	}
 
-	r := transport.StorageRequest{ID: req.Id}
+	r := types.StorageRequest{ID: req.Id}
 	if err := queue.Storage(ctx, &r); err != nil {
 		return transport.NewRequestFailed("inspect request failed; %s", err)
 	}

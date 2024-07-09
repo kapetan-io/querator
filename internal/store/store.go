@@ -3,7 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
-	"github.com/kapetan-io/querator/transport"
+	"github.com/kapetan-io/querator/internal/types"
 	"time"
 )
 
@@ -67,23 +67,23 @@ type QueueStorage interface {
 type Queue interface {
 	// Produce writes the items for each batch to the data store, assigning an error for each
 	// batch that fails.
-	Produce(ctx context.Context, batch Batch[transport.ProduceRequest]) error
+	Produce(ctx context.Context, batch types.Batch[types.ProduceRequest]) error
 
 	// Reserve attempts to reserve items for each request in the provided batch.
-	Reserve(ctx context.Context, batch Batch[transport.ReserveRequest], opts ReserveOptions) error
+	Reserve(ctx context.Context, batch types.ReserveBatch, opts ReserveOptions) error
 
 	// Complete marks ids in the batch as complete, assigning an error for each batch that fails.
 	// If the underlying data storage fails for some reason, this call returns an error. In that case
 	// the caller should assume none of the batched items were marked as "complete"
-	Complete(ctx context.Context, batch Batch[transport.CompleteRequest]) error
+	Complete(ctx context.Context, batch types.Batch[types.CompleteRequest]) error
 
 	// Read reads items in a queue. limit and offset allow the user to page through all the items
 	// in the queue.
-	Read(ctx context.Context, items *[]*transport.Item, pivot string, limit int) error
+	Read(ctx context.Context, items *[]*types.Item, pivot string, limit int) error
 
 	// Write writes the item to the queue and updates the item with the
 	// unique id.
-	Write(ctx context.Context, items []*transport.Item) error
+	Write(ctx context.Context, items []*types.Item) error
 
 	// Delete removes the provided ids from the queue
 	Delete(ctx context.Context, ids []string) error
@@ -96,18 +96,12 @@ type Queue interface {
 	Options() QueueOptions
 }
 
-type Batch[T any] struct {
-	Requests []T
-	// TotalRequested is currently only used by Queue.Reserve()
-	TotalRequested int
-}
-
 // TODO: ScheduledStorage interface {} - A place to store scheduled items to be queued. (Defer)
 // TODO: QueueOptionStorage interface {} - A place to store queue options and a list of valid queues
 
 // CollectIDs is a convenience function which assists in calling QueueStore.Delete()
 // when a list of items to be deleted is needed.
-func CollectIDs(items []*transport.Item) []string {
+func CollectIDs(items []*types.Item) []string {
 	var result []string
 	for _, v := range items {
 		result = append(result, v.ID)

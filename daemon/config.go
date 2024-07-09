@@ -3,7 +3,7 @@ package daemon
 import (
 	"crypto/tls"
 	"github.com/duh-rpc/duh-go"
-	"github.com/kapetan-io/querator/store"
+	"github.com/kapetan-io/querator/internal/store"
 )
 
 // TODO: Document and configure

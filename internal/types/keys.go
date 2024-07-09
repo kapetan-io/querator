@@ -1,4 +1,4 @@
-package maps
+package types
 
 // Keys returns the keys of the map m.
 // The keys will be in an indeterminate order.

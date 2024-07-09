@@ -3,7 +3,8 @@ package internal
 import (
 	"context"
 	"github.com/duh-rpc/duh-go"
-	"github.com/kapetan-io/querator/store"
+	"github.com/kapetan-io/querator/internal/store"
+	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/transport"
 	"github.com/kapetan-io/tackle/set"
 	"log/slog"
@@ -28,25 +29,21 @@ const (
 type QueueOptions struct {
 	// The name of the queue
 	Name string
-
 	// If defined, is the logger used by the queue
 	Logger duh.StandardLogger
-
 	// ReserveTimeout is how long the reservation is valid for.
 	// TODO: We must ensure the DeadTimeout is not less than the ReserveTimeout
 	ReserveTimeout time.Duration
-
 	// DeadQueue is the name of the dead letter queue for this queue.
 	DeadQueue string
-
 	// DeadTimeout is the time an item can wait in the queue regardless of attempts before
 	// it is moved to the dead letter queue. This value is used if no DeadTimeout is provided
 	// by the queued item.
 	DeadTimeout time.Duration
-
 	// QueueStore is the store interface used to persist items for this specific queue
 	QueueStore store.Queue
 
+	// TODO: Make these configurable
 	MaxReserveBatchSize int
 	MaxProduceBatchSize int
 }
@@ -57,14 +54,14 @@ type QueueOptions struct {
 // and produce requests MUST go through this queue singleton.
 type Queue struct {
 	// TODO: I would love to see a lock free ring queue here, based on an array, such that we don't need
-	//  to throw away the channel after we process all the items in the channel. An array would allow the L3
+	//  to throw away the channel after we process all the items in the channel. An array might allow the L3
 	//  cache to pre load that data and avoid expensive calls to DRAM.
-	reserveQueueCh  atomic.Pointer[chan *transport.ReserveRequest]
-	produceQueueCh  atomic.Pointer[chan *transport.ProduceRequest]
-	completeQueueCh atomic.Pointer[chan *transport.CompleteRequest]
+	reserveQueueCh  atomic.Pointer[chan *types.ReserveRequest]
+	produceQueueCh  atomic.Pointer[chan *types.ProduceRequest]
+	completeQueueCh atomic.Pointer[chan *types.CompleteRequest]
 
-	storageQueueCh chan *transport.StorageRequest
-	shutdownCh     chan *transport.ShutdownRequest
+	storageQueueCh chan *types.StorageRequest
+	shutdownCh     chan *types.ShutdownRequest
 	wg             sync.WaitGroup
 	opts           QueueOptions
 	inShutdown     atomic.Bool
@@ -80,31 +77,31 @@ func NewQueue(opts QueueOptions) (*Queue, error) {
 	}
 
 	q := &Queue{
-		shutdownCh:     make(chan *transport.ShutdownRequest),
-		storageQueueCh: make(chan *transport.StorageRequest),
+		shutdownCh:     make(chan *types.ShutdownRequest),
+		storageQueueCh: make(chan *types.StorageRequest),
 		opts:           opts,
 	}
 
-	// Assign new wait queue
-	rch := make(chan *transport.ReserveRequest, queueChSize)
+	// Next new wait queue
+	rch := make(chan *types.ReserveRequest, queueChSize)
 	q.reserveQueueCh.Store(&rch)
-	pch := make(chan *transport.ProduceRequest, queueChSize)
+	pch := make(chan *types.ProduceRequest, queueChSize)
 	q.produceQueueCh.Store(&pch)
-	cch := make(chan *transport.CompleteRequest, queueChSize)
+	cch := make(chan *types.CompleteRequest, queueChSize)
 	q.completeQueueCh.Store(&cch)
 
 	q.wg.Add(1)
-	go q.processQueues()
+	go q.synchronizationLoop()
 	return q, nil
 }
 
-func (q *Queue) Storage(ctx context.Context, req *transport.StorageRequest) error {
+func (q *Queue) Storage(ctx context.Context, req *types.StorageRequest) error {
 	if q.inShutdown.Load() {
 		return ErrQueueShutdown
 	}
 
 	req.Context = ctx
-	req.readyCh = make(chan struct{})
+	req.ReadyCh = make(chan struct{})
 
 	select {
 	case q.storageQueueCh <- req:
@@ -113,8 +110,8 @@ func (q *Queue) Storage(ctx context.Context, req *transport.StorageRequest) erro
 	}
 
 	select {
-	case <-req.readyCh:
-		return req.err
+	case <-req.ReadyCh:
+		return req.Err
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -123,7 +120,7 @@ func (q *Queue) Storage(ctx context.Context, req *transport.StorageRequest) erro
 // Produce is called by clients who wish to produce an item to the queue. This
 // call will block until the item has been written to the queue or until the request
 // is cancelled via the passed context or RequestTimeout is reached.
-func (q *Queue) Produce(ctx context.Context, req *transport.ProduceRequest) error {
+func (q *Queue) Produce(ctx context.Context, req *types.ProduceRequest) error {
 	if q.inShutdown.Load() {
 		return ErrQueueShutdown
 	}
@@ -152,13 +149,13 @@ func (q *Queue) Produce(ctx context.Context, req *transport.ProduceRequest) erro
 	}
 
 	req.Context = ctx
-	req.readyCh = make(chan struct{})
-	req.requestDeadline = time.Now().UTC().Add(req.RequestTimeout)
+	req.ReadyCh = make(chan struct{})
+	req.RequestDeadline = time.Now().UTC().Add(req.RequestTimeout)
 	*q.produceQueueCh.Load() <- req
 
 	// Wait until the request has been processed
-	<-req.readyCh
-	return req.err
+	<-req.ReadyCh
+	return req.Err
 }
 
 // Reserve is called by clients wanting to reserve a new item from the queue. This call
@@ -173,14 +170,14 @@ func (q *Queue) Produce(ctx context.Context, req *transport.ProduceRequest) erro
 // then those reservations will remain reserved until they can be offered to another client after the
 // ReserveDeadline has been reached.
 //
-// ### Unique Requests
+// ### Unique Requests (TODO: Update this comment, it's out of date)
 // ClientID must NOT be empty and each request must have a unique id, or it will
 // be rejected with ErrDuplicateClientID. When recording a reservation in the data store the ClientID
 // the reservation is for is also written. This can assist in diagnosing which clients are failing
 // to process items properly. It is so used to avoid poor performing or bad behavior from clients
 // who may attempt to issue many requests simultaneously in an attempt to increase throughput.
 // Increased throughput can instead be achieved by raising the batch size.
-func (q *Queue) Reserve(ctx context.Context, req *transport.ReserveRequest) error {
+func (q *Queue) Reserve(ctx context.Context, req *types.ReserveRequest) error {
 	if q.inShutdown.Load() {
 		return ErrQueueShutdown
 	}
@@ -213,16 +210,16 @@ func (q *Queue) Reserve(ctx context.Context, req *transport.ReserveRequest) erro
 	}
 
 	req.Context = ctx
-	req.readyCh = make(chan struct{})
-	req.requestDeadline = time.Now().UTC().Add(req.RequestTimeout)
+	req.ReadyCh = make(chan struct{})
+	req.RequestDeadline = time.Now().UTC().Add(req.RequestTimeout)
 	*q.reserveQueueCh.Load() <- req
 
 	// Wait until the request has been processed
-	<-req.readyCh
-	return req.err
+	<-req.ReadyCh
+	return req.Err
 }
 
-func (q *Queue) Complete(ctx context.Context, req *transport.CompleteRequest) error {
+func (q *Queue) Complete(ctx context.Context, req *types.CompleteRequest) error {
 	if q.inShutdown.Load() {
 		return ErrQueueShutdown
 	}
@@ -237,52 +234,60 @@ func (q *Queue) Complete(ctx context.Context, req *transport.CompleteRequest) er
 	}
 
 	req.Context = ctx
-	req.readyCh = make(chan struct{})
-	req.requestDeadline = time.Now().UTC().Add(req.RequestTimeout)
+	req.ReadyCh = make(chan struct{})
+	req.RequestDeadline = time.Now().UTC().Add(req.RequestTimeout)
 	*q.completeQueueCh.Load() <- req
 
 	// Wait until the request has been processed
-	<-req.readyCh
-	return req.err
+	<-req.ReadyCh
+	return req.Err
 }
 
-// processQueues See doc/adr/0003-rw-sync-point.md for an explanation of this design
+// synchronizationLoop See doc/adr/0003-rw-sync-point.md for an explanation of this design
 
 // TODO: Refactor the queue.go code to use Batch Request objects and replace wwr, wcr structs with Request objects
-func (q *Queue) processQueues() {
+func (q *Queue) synchronizationLoop() {
 	defer q.wg.Done()
 
 	// TODO: Refactor this into a smaller loop with handler functions which pass around a state object with
 	//  State.AddToWPR() and State.AddToWRR() etc....
-	wrr := waitingReserveRequests{
-		Requests: make(map[string]*transport.ReserveRequest, 5_000),
+
+	// TODO: Maybe introduce a types.ReserveBatch which ensures only unique clients are in the batch.
+	// TODO: Make an ADR on why we don't allow the same client to make multiple reserve requests
+
+	//reserves := types.Batch[types.ReserveRequest]{
+	//	Requests: make(map[string]*types.ReserveRequest, 0, 5_000),
+	//}
+
+	reserves := types.ReserveBatch{
+		Requests: make(map[string]types.ReserveRequest, 5_000),
+		Total:    0,
 	}
+
 	wpr := waitingProduceRequests{
-		Requests: make([]*transport.ProduceRequest, 0, 5_000),
+		Requests: make([]*types.ProduceRequest, 0, 5_000),
 	}
 	wcr := waitingCompleteRequests{
-		Requests: make([]*transport.CompleteRequest, 0, 5_000),
+		Requests: make([]*types.CompleteRequest, 0, 5_000),
 	}
 	var timerCh <-chan time.Time
 
-	addToWPR := func(req *transport.ProduceRequest) {
+	addToWPR := func(req *types.ProduceRequest) {
 		wpr.Requests = append(wpr.Requests, req)
-		wpr.TotalItems += len(req.Items)
 	}
 
-	addToWCR := func(req *transport.CompleteRequest) {
+	addToWCR := func(req *types.CompleteRequest) {
 		wcr.Requests = append(wcr.Requests, req)
-		wcr.TotalIDs += len(req.Batch.Ids)
 	}
 
-	addToWRR := func(req *transport.ReserveRequest) {
-		if _, ok := wrr.Requests[req.ClientID]; ok {
+	addToWRR := func(req *types.ReserveRequest) {
+		if _, ok := reserves.Requests[req.ClientID]; ok {
 			req.err = ErrDuplicateClientID
 			close(req.readyCh)
 			return
 		}
-		wrr.Requests[req.ClientID] = req
-		wrr.Total += int(req.NumRequested)
+		reserves.Requests[req.ClientID] = req
+		reserves.Total += int(req.NumRequested)
 	}
 
 	for {
@@ -297,7 +302,7 @@ func (q *Queue) processQueues() {
 			// new channel allows any incoming waiting produce requests (wpr) that occur
 			// while this routine is running to be queued into the new wait queue without
 			// interfering with anything we are doing here.
-			ch := make(chan *transport.ProduceRequest, queueChSize)
+			ch := make(chan *types.ProduceRequest, queueChSize)
 			q.produceQueueCh.Store(&ch)
 			close(*produceQueueCh)
 
@@ -312,7 +317,7 @@ func (q *Queue) processQueues() {
 
 			// FUTURE: Buffer the produced items at the top of the queue into memory, so we don't need
 			//  to query them from the database when we reserve items later. Doing so avoids the ListReservable()
-			//  step, in addition, we can back fill reservable items into memory when processQueues() isn't
+			//  step, in addition, we can back fill reservable items into memory when synchronizationLoop() isn't
 			//  actively producing or consuming.
 
 			// `items` list is a complete list of all the items each producer provided us with.
@@ -374,27 +379,33 @@ func (q *Queue) processQueues() {
 		// -----------------------------------------------
 		case req := <-*reserveQueueCh:
 			// Swap the wait channel, so we can process the wait queue. Creating a
-			// new channel allows any incoming wrr that occur while this routine
+			// new channel allows any incoming reserves that occur while this routine
 			// is running to be queued into the new wait queue without interfering with
 			// anything we are doing here.
-			ch := make(chan *transport.ReserveRequest, queueChSize)
+			ch := make(chan *types.ReserveRequest, queueChSize)
 			q.reserveQueueCh.Store(&ch)
 			close(*reserveQueueCh)
 
-			addToWRR(req)
+			if !reserves.AddIfUnique(req) {
+				req.Err = ErrDuplicateClientID
+				close(req.ReadyCh)
+			}
+
 			for req := range *reserveQueueCh {
-				addToWRR(req)
+				if !reserves.AddIfUnique(req) {
+					req.Err = ErrDuplicateClientID
+					close(req.ReadyCh)
+				}
 			}
 
 			// NOTE: V0 doing the simplest thing that works now, we can get fancy & efficient later.
 
 			// Remove any clients that have timed out
-			_ = findNextTimeout(&wrr)
+			_ = findNextTimeout(&reserves)
 
 			// Each request has a batch of items it requests, place all those batch requests in an array
-			var batch store.Batch[store.ItemBatch]
-			batch.Requests = make([]*store.ItemBatch, 0, len(wrr.Requests))
-			for _, req := range wrr.Requests {
+			batch.Requests = make([]*store.ItemBatch, 0, len(reserves.Requests))
+			for _, req := range reserves.Requests {
 				batch.Requests = append(batch.Requests, &req.Batch)
 				batch.TotalRequested += int(req.NumRequested)
 			}
@@ -412,25 +423,25 @@ func (q *Queue) processQueues() {
 			cancel()
 
 			// Inform clients they have reservations ready or if there was an error
-			for _, req := range wrr.Requests {
+			for _, req := range reserves.Requests {
 				if len(req.Batch.Items) != 0 || req.Batch.Err != nil {
 					req.err = req.Batch.Err
 					close(req.readyCh)
-					wrr.Total -= len(req.Batch.Items)
-					delete(wrr.Requests, req.ClientID)
+					reserves.Total -= len(req.Batch.Items)
+					delete(reserves.Requests, req.ClientID)
 				}
 			}
 
 			// Set a timer for remaining open reserve requests
 			// Or when next reservation will expire
-			next := findNextTimeout(&wrr)
+			next := findNextTimeout(&reserves)
 			if next.Nanoseconds() != 0 {
 				timerCh = time.After(next)
 			}
 
 		// -----------------------------------------------
 		case req := <-*completeQueueCh:
-			ch := make(chan *transport.CompleteRequest, queueChSize)
+			ch := make(chan *types.CompleteRequest, queueChSize)
 			q.completeQueueCh.Store(&ch)
 			close(*completeQueueCh)
 
@@ -478,7 +489,7 @@ func (q *Queue) processQueues() {
 				r.err = ErrQueueShutdown
 				close(r.readyCh)
 			}
-			for _, r := range wrr.Requests {
+			for _, r := range reserves.Requests {
 				r.err = ErrQueueShutdown
 				close(r.readyCh)
 			}
@@ -490,8 +501,8 @@ func (q *Queue) processQueues() {
 
 		// -----------------------------------------------
 		case <-timerCh:
-			// Find the next request that will time out, and notify any clients of expired wrr
-			next := findNextTimeout(&wrr)
+			// Find the next request that will time out, and notify any clients of expired reserves
+			next := findNextTimeout(&reserves)
 			if next.Nanoseconds() != 0 {
 				timerCh = time.After(next)
 			}
@@ -507,12 +518,12 @@ func (q *Queue) Shutdown(ctx context.Context) error {
 		return nil
 	}
 
-	req := &transport.ShutdownRequest{
+	req := &types.ShutdownRequest{
 		readyCh: make(chan struct{}),
 		Context: ctx,
 	}
 
-	// Wait until q.processQueues() shutdown is complete or until
+	// Wait until q.synchronizationLoop() shutdown is complete or until
 	// our context is cancelled.
 	select {
 	case q.shutdownCh <- req:
@@ -524,7 +535,7 @@ func (q *Queue) Shutdown(ctx context.Context) error {
 }
 
 func findNextTimeout(r *waitingReserveRequests) time.Duration {
-	var soon *transport.ReserveRequest
+	var soon *types.ReserveRequest
 
 	for _, req := range r.Requests {
 		// If request has already expired
@@ -568,17 +579,15 @@ func findNextTimeout(r *waitingReserveRequests) time.Duration {
 }
 
 type waitingReserveRequests struct {
-	Requests map[string]*transport.ReserveRequest
+	Requests map[string]*types.ReserveRequest
 	// TODO: I think this is redundant now that we are using batches
 	Total int
 }
 
 type waitingProduceRequests struct {
-	Requests   []*transport.ProduceRequest
-	TotalItems int
+	Requests []*types.ProduceRequest
 }
 
 type waitingCompleteRequests struct {
-	Requests []*transport.CompleteRequest
-	TotalIDs int
+	Requests []*types.CompleteRequest
 }

@@ -2,7 +2,7 @@ package internal
 
 import (
 	"context"
-	"github.com/kapetan-io/querator/store"
+	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/transport"
 	"strings"
 	"time"

@@ -2,13 +2,13 @@ package querator
 
 import (
 	"github.com/kapetan-io/querator/internal"
+	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/proto"
-	"github.com/kapetan-io/querator/store"
 	"github.com/kapetan-io/querator/transport"
 	"time"
 )
 
-func (s *Service) validateQueueProduceProto(in *proto.QueueProduceRequest, out *transport.ProduceRequest) error {
+func (s *Service) validateQueueProduceProto(in *proto.QueueProduceRequest, out *types.ProduceRequest) error {
 	var err error
 
 	if in.RequestTimeout != "" {
@@ -20,17 +20,17 @@ func (s *Service) validateQueueProduceProto(in *proto.QueueProduceRequest, out *
 
 	for _, item := range in.Items {
 		// TODO: From Memory Pool
-		var qi store.Item
+		qi := new(types.Item)
 		qi.Encoding = item.Encoding
 		qi.Kind = item.Kind
 		qi.Reference = item.Reference
 		qi.Payload = item.Bytes
-		out.Items = append(out.Items, &qi)
+		out.Items = append(out.Items, qi)
 	}
 	return nil
 }
 
-func (s *Service) validateQueueReserveProto(in *proto.QueueReserveRequest, out *transport.ReserveRequest) error {
+func (s *Service) validateQueueReserveProto(in *proto.QueueReserveRequest, out *types.ReserveRequest) error {
 	var err error
 
 	if in.RequestTimeout != "" {
@@ -46,7 +46,7 @@ func (s *Service) validateQueueReserveProto(in *proto.QueueReserveRequest, out *
 	return nil
 }
 
-func (s *Service) validateQueueCompleteProto(in *proto.QueueCompleteRequest, out *transport.CompleteRequest) error {
+func (s *Service) validateQueueCompleteProto(in *proto.QueueCompleteRequest, out *types.CompleteRequest) error {
 	var err error
 
 	// TODO: Move this into Queue.Complete()

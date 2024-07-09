@@ -3,8 +3,8 @@ package store_test
 import (
 	"context"
 	"fmt"
-	"github.com/kapetan-io/querator/store"
-	"github.com/kapetan-io/querator/transport"
+	"github.com/kapetan-io/querator/internal/store"
+	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/tackle/random"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -50,8 +50,8 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		require.NoError(t, err)
 
 		now := time.Now().UTC()
-		var items []*transport.Item
-		items = append(items, &transport.Item{
+		var items []*types.Item
+		items = append(items, &types.Item{
 			IsReserved:      true,
 			DeadDeadline:    now.Add(100_000 * time.Minute),
 			ReserveDeadline: now.Add(3_000 * time.Minute),
@@ -62,7 +62,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 			Payload: []byte("I mean... have I changed? Same sleek body. Same " +
 				"flowing mane. Same spectacular hooves. Nope, I'm still awesome"),
 		})
-		items = append(items, &transport.Item{
+		items = append(items, &types.Item{
 			IsReserved:      false,
 			DeadDeadline:    now.Add(1_000_000 * time.Minute),
 			ReserveDeadline: now.Add(3_000 * time.Minute),
@@ -76,7 +76,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		err = s.Write(ctx, items)
 		require.NoError(t, err)
 
-		var reads []*transport.Item
+		var reads []*types.Item
 		err = s.Read(ctx, &reads, "", 2)
 		require.NoError(t, err)
 
@@ -105,7 +105,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		assert.Equal(t, reads[1].Kind, items[1].Kind)
 		assert.Equal(t, reads[1].Payload, items[1].Payload)
 
-		cmp := &transport.Item{
+		cmp := &types.Item{
 			IsReserved:      false,
 			DeadDeadline:    now.Add(1_000_000 * time.Minute),
 			ReserveDeadline: now.Add(2_000 * time.Minute),
@@ -116,7 +116,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 			Payload:         []byte("Make sense? Oh, what fun is there in making sense?"),
 		}
 
-		assert.True(t, cmp.Compare(&transport.Item{
+		assert.True(t, cmp.Compare(&types.Item{
 			IsReserved:      false,
 			DeadDeadline:    now.Add(1_000_000 * time.Minute),
 			ReserveDeadline: now.Add(2_000 * time.Minute),
@@ -162,7 +162,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 
 		items := writeRandomItems(t, ctx, s, 10_000)
 
-		var read []*transport.Item
+		var read []*types.Item
 		err = s.Read(ctx, &read, "", 10_000)
 		require.NoError(t, err)
 
@@ -179,7 +179,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 
 		// Ensure if we ask for more than is available, we only get what is in the db.
 		t.Run("AskForMoreThanIsAvailable", func(t *testing.T) {
-			var more []*transport.Item
+			var more []*types.Item
 			err = s.Read(ctx, &more, "", 20_000)
 			require.NoError(t, err)
 			assert.Equal(t, 10_000, len(more))
@@ -189,7 +189,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 				"%+v != %+v", *items[10_000-1], *more[len(more)-1])
 
 			// Ensure if we limit the read, we get only the amount requested
-			var limit []*transport.Item
+			var limit []*types.Item
 			err = s.Read(ctx, &limit, "", 1_000)
 			require.NoError(t, err)
 			assert.Equal(t, 1_000, len(limit))
@@ -200,7 +200,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		})
 
 		t.Run("AskForLessThanIsAvailable", func(t *testing.T) {
-			var less []*transport.Item
+			var less []*types.Item
 			require.NoError(t, s.Read(ctx, &less, "", 10))
 			assert.Equal(t, 10, len(less))
 		})
@@ -218,7 +218,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		require.Len(t, items, 10_000)
 
 		id := items[1000].ID
-		var read []*transport.Item
+		var read []*types.Item
 		err = s.Read(ctx, &read, id, 10)
 		require.NoError(t, err)
 
@@ -267,9 +267,9 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		require.NoError(t, err)
 
 		expire := time.Now().UTC().Add(random.Duration(time.Minute))
-		var items []*transport.Item
+		var items []*types.Item
 		for i := 0; i < 10; i++ {
-			items = append(items, &transport.Item{
+			items = append(items, &types.Item{
 				DeadDeadline: expire,
 				Attempts:     rand.Intn(10),
 				Reference:    random.String("ref-", 10),
@@ -279,15 +279,15 @@ func testSuite(t *testing.T, newStore NewFunc) {
 			})
 		}
 
-		batch := store.Batch[transport.ProduceRequest]{
-			Requests: []transport.ProduceRequest{{Items: items}},
+		batch := types.Batch[types.ProduceRequest]{
+			Requests: []types.ProduceRequest{{Items: items}},
 		}
 
 		// Produce the items
 		require.NoError(t, s.Produce(ctx, batch))
 
 		// Ensure the items produced are in the database
-		var read []*transport.Item
+		var read []*types.Item
 		err = s.Read(ctx, &read, "", 10_000)
 		require.NoError(t, err)
 		require.Len(t, items, 10)
@@ -316,14 +316,14 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		require.Len(t, items, 10_000)
 
 		expire := time.Now().UTC().Add(2_000 * time.Minute)
-		var reserved, secondReserve, lastReserved []*transport.Item
-		var read []*transport.Item
+		var reserved, secondReserve, lastReserved []*types.Item
+		var read []*types.Item
 
 		// Reserve 10 items in one request
 		t.Run("TenItems", func(t *testing.T) {
-			batch := store.Batch[transport.ReserveRequest]{
-				Requests:       []transport.ReserveRequest{{NumRequested: 10}},
-				TotalRequested: 10,
+			batch := types.ReserveBatch{
+				Requests: []*types.ReserveRequest{{NumRequested: 10}},
+				Total:    10,
 			}
 
 			require.NoError(t, s.Reserve(ctx, batch, store.ReserveOptions{ReserveDeadline: expire}))
@@ -343,9 +343,9 @@ func testSuite(t *testing.T, newStore NewFunc) {
 
 		// Reserve 10 more items
 		t.Run("AnotherTenItems", func(t *testing.T) {
-			batch := store.Batch[transport.ReserveRequest]{
-				Requests:       []transport.ReserveRequest{{NumRequested: 10}},
-				TotalRequested: 10,
+			batch := types.ReserveBatch{
+				Requests: []*types.ReserveRequest{{NumRequested: 10}},
+				Total:    10,
 			}
 
 			require.NoError(t, s.Reserve(ctx, batch, store.ReserveOptions{ReserveDeadline: expire}))
@@ -355,7 +355,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 			err = s.Read(ctx, &read, "", 10_000)
 			require.NoError(t, err)
 
-			var combined []*transport.Item
+			var combined []*types.Item
 			combined = append(combined, reserved...)
 			combined = append(combined, secondReserve...)
 
@@ -377,13 +377,13 @@ func testSuite(t *testing.T, newStore NewFunc) {
 
 		t.Run("DistributeNumRequested", func(t *testing.T) {
 			// Ensure our requests are of different requested reservations
-			batch := store.Batch[transport.ReserveRequest]{
-				Requests: []transport.ReserveRequest{
+			batch := types.ReserveBatch{
+				Requests: []*types.ReserveRequest{
 					{NumRequested: 5},
 					{NumRequested: 10},
 					{NumRequested: 20},
 				},
-				TotalRequested: 35,
+				Total: 35,
 			}
 
 			require.NoError(t, s.Reserve(ctx, batch, store.ReserveOptions{ReserveDeadline: expire}))
@@ -423,13 +423,13 @@ func testSuite(t *testing.T, newStore NewFunc) {
 
 			expire := time.Now().UTC().Add(2_000 * time.Minute)
 
-			batch := store.Batch[transport.ReserveRequest]{
-				Requests: []transport.ReserveRequest{
+			batch := types.ReserveBatch{
+				Requests: []*types.ReserveRequest{
 					{NumRequested: 20},
 					{NumRequested: 6},
 					{NumRequested: 1},
 				},
-				TotalRequested: 27,
+				Total: 27,
 			}
 
 			// Reserve() should fairly distribute items across all requests
@@ -451,13 +451,13 @@ func testSuite(t *testing.T, newStore NewFunc) {
 			require.NoError(t, err)
 
 			expire := time.Now().UTC().Add(2_000 * time.Minute)
-			batch := store.Batch[transport.ReserveRequest]{
-				Requests: []transport.ReserveRequest{
+			batch := types.ReserveBatch{
+				Requests: []*types.ReserveRequest{
 					{NumRequested: 20},
 					{NumRequested: 6},
 					{NumRequested: 1},
 				},
-				TotalRequested: 27,
+				Total: 27,
 			}
 
 			// Reserve() should return no items and without error
@@ -480,9 +480,9 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		require.NoError(t, err)
 
 		expire := time.Now().UTC().Add(random.Duration(time.Minute))
-		var items []*transport.Item
+		var items []*types.Item
 		for i := 0; i < 10; i++ {
-			items = append(items, &transport.Item{
+			items = append(items, &types.Item{
 				DeadDeadline: expire,
 				Attempts:     rand.Intn(10),
 				Reference:    random.String("ref-", 10),
@@ -493,25 +493,25 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		}
 
 		// Produce the items
-		require.NoError(t, s.Produce(ctx, store.Batch[transport.ProduceRequest]{
-			Requests: []transport.ProduceRequest{{Items: items}},
+		require.NoError(t, s.Produce(ctx, types.Batch[types.ProduceRequest]{
+			Requests: []types.ProduceRequest{{Items: items}},
 		}))
 
 		// Reserve the items
-		reserve := store.Batch[transport.ReserveRequest]{
-			Requests:       []transport.ReserveRequest{{NumRequested: 9}},
-			TotalRequested: 9,
+		reserve := types.ReserveBatch{
+			Requests: []*types.ReserveRequest{{NumRequested: 9}},
+			Total:    9,
 		}
 
 		require.NoError(t, s.Reserve(ctx, reserve, store.ReserveOptions{ReserveDeadline: expire}))
 
 		ids := store.CollectIDs(reserve.Requests[0].Items)
 
-		complete := store.Batch[transport.CompleteRequest]{
-			Requests: []transport.CompleteRequest{{Ids: ids}},
+		complete := types.Batch[types.CompleteRequest]{
+			Requests: []types.CompleteRequest{{Ids: ids}},
 		}
 
-		var read []*transport.Item
+		var read []*types.Item
 		t.Run("Success", func(t *testing.T) {
 			// Complete the items
 			require.NoError(t, s.Complete(ctx, complete))
@@ -524,8 +524,8 @@ func testSuite(t *testing.T, newStore NewFunc) {
 
 		t.Run("NotReserved", func(t *testing.T) {
 			// Attempt to complete an item that has not been reserved
-			complete = store.Batch[transport.CompleteRequest]{
-				Requests: []transport.CompleteRequest{{Ids: []string{read[0].ID}}},
+			complete = types.Batch[types.CompleteRequest]{
+				Requests: []types.CompleteRequest{{Ids: []string{read[0].ID}}},
 			}
 
 			require.NoError(t, s.Complete(ctx, complete))
@@ -539,8 +539,8 @@ func testSuite(t *testing.T, newStore NewFunc) {
 			require.NoError(t, s.Read(ctx, &read, "", 10))
 			assert.Equal(t, 1, len(read))
 
-			complete = store.Batch[transport.CompleteRequest]{
-				Requests: []transport.CompleteRequest{
+			complete = types.Batch[types.CompleteRequest]{
+				Requests: []types.CompleteRequest{
 					{Ids: []string{"invalid-id"}},
 					{Ids: []string{"another-invalid-id"}},
 				},
@@ -572,7 +572,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 	//	expire := time.Now().UTC().Add(2_000 * time.Minute)
 	//	batch := store.Batch[transport.ItemBatch]{
 	//		Requests: []*transport.ItemBatch{{}},
-	//		TotalRequested:   100,
+	//		Total:   100,
 	//	}
 	//
 	//	err = s.Reserve(ctx, batch, store.ReserveOptions{ReserveDeadline: expire})
@@ -605,7 +605,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 
 		// Ensure Read() can fetch one item using pivot, and the item returned is the pivot
 		item := items[1000]
-		var read []*transport.Item
+		var read []*types.Item
 		err = s.Read(ctx, &read, item.ID, 1)
 		require.NoError(t, err)
 
@@ -629,7 +629,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		err = s.Delete(ctx, store.CollectIDs(items[0:1_000]))
 		require.NoError(t, err)
 
-		var read []*transport.Item
+		var read []*types.Item
 		err = s.Read(ctx, &read, "", 10_000)
 		require.NoError(t, err)
 		assert.Equal(t, 9_000, len(read))
@@ -645,13 +645,13 @@ func testSuite(t *testing.T, newStore NewFunc) {
 	})
 }
 
-func writeRandomItems(t *testing.T, ctx context.Context, s store.Queue, count int) []*transport.Item {
+func writeRandomItems(t *testing.T, ctx context.Context, s store.Queue, count int) []*types.Item {
 	t.Helper()
 	expire := time.Now().UTC().Add(random.Duration(time.Minute))
 
-	var items []*transport.Item
+	var items []*types.Item
 	for i := 0; i < count; i++ {
-		items = append(items, &transport.Item{
+		items = append(items, &types.Item{
 			DeadDeadline: expire,
 			Attempts:     rand.Intn(10),
 			Reference:    random.String("ref-", 10),
@@ -665,7 +665,7 @@ func writeRandomItems(t *testing.T, ctx context.Context, s store.Queue, count in
 	return items
 }
 
-func findInBatch(t *testing.T, batch store.Batch[transport.ReserveRequest], id string) bool {
+func findInBatch(t *testing.T, batch types.ReserveBatch, id string) bool {
 	t.Helper()
 
 	for _, item := range batch.Requests {

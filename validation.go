@@ -41,7 +41,7 @@ func (s *Service) validateQueueReserveProto(in *proto.QueueReserveRequest, out *
 	}
 
 	out.ClientID = in.ClientId
-	out.NumRequested = in.BatchSize
+	out.NumRequested = int(in.BatchSize)
 
 	return nil
 }

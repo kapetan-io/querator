@@ -191,10 +191,7 @@ func (s *BuntQueue) Reserve(_ context.Context, batch types.ReserveBatch, opts Re
 
 		// Assign the item to the next waiting reservation in the batch,
 		// returns false if there are no more reservations available to fill
-		if !iter.Next(item) {
-			return false
-		}
-		return true
+		return iter.Next(item)
 	})
 
 	if err != nil {

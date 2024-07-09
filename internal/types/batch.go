@@ -1,9 +1,5 @@
 package types
 
-type Ptr[T any] interface {
-	*T
-}
-
 // Batch is a batch of requests structs
 type Batch[T any] struct {
 	Requests []*T
@@ -25,6 +21,11 @@ func (r *Batch[T]) Remove(req *T) {
 		}
 	}
 	r.Requests = r.Requests[:n]
+}
+
+func (r *Batch[T]) Reset() {
+	// TODO: Do I need to nil out all the items in the request array before GC will collect them?
+	r.Requests = r.Requests[:0]
 }
 
 // ReserveBatch is a batch of reserve requests. It is unique from other Batch requests

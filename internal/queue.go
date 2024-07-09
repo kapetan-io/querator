@@ -18,6 +18,7 @@ var (
 	ErrQueueShutdown     = transport.NewRequestFailed("queue is shutting down")
 	ErrDuplicateClientID = transport.NewInvalidOption("duplicate client id")
 	ErrRequestTimeout    = transport.NewRetryRequest("request timeout, try again")
+	ErrInternalRetry     = transport.NewRetryRequest("internal error, try your request again")
 )
 
 const (
@@ -300,6 +301,8 @@ func (q *Queue) synchronizationLoop() {
 			//  step, in addition, we can back fill reservable items into memory when synchronizationLoop() isn't
 			//  actively producing or consuming.
 
+			// Assign a DeadTimeout and Calculate an appropriate write timeout such that we respect RequestDeadline
+			// if we are experiencing a saturation event
 			writeTimeout := maxRequestTimeout
 			for _, req := range producers.Requests {
 				// Cancel any produce requests that have timed out
@@ -330,7 +333,8 @@ func (q *Queue) synchronizationLoop() {
 
 			ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
 			if err := q.opts.QueueStore.Produce(ctx, producers); err != nil {
-				q.opts.Logger.Warn("while calling QueueStore.Write()", "error", err)
+				q.opts.Logger.Error("while calling QueueStore.Write()", "error", err,
+					"category", "queue", "queueName", q.opts.Name)
 				cancel()
 				// Let clients that are timed out, know we are done with them.
 				for _, req := range producers.Requests {
@@ -345,14 +349,10 @@ func (q *Queue) synchronizationLoop() {
 			cancel()
 
 			// Tell the waiting clients the items have been produced
-			for i, req := range producers.Requests {
+			for _, req := range producers.Requests {
 				close(req.ReadyCh)
-				// Allow the GC to collect these requests
-				producers.Requests[i] = nil
 			}
-
-			// Reset the slice without re-allocating
-			producers.Requests = producers.Requests[:0]
+			producers.Reset()
 
 		// -----------------------------------------------
 		case req := <-*reserveQueueCh:
@@ -364,30 +364,30 @@ func (q *Queue) synchronizationLoop() {
 			q.reserveQueueCh.Store(&ch)
 			close(*reserveQueueCh)
 
-			AddIfUnique(reserves, req)
+			addIfUnique(&reserves, req)
 			for req := range *reserveQueueCh {
-				AddIfUnique(reserves, req)
+				addIfUnique(&reserves, req)
 			}
 
-			// NOTE: V0 doing the simplest thing that works now, we can get fancy & efficient later.
+			// Remove any clients that have timed out and find the next request to timeout.
+			writeTimeout := nextTimeout(&reserves)
 
-			// Remove any clients that have timed out and find the next request to timeout if any.
-			_ = NextTimeout(reserves)
-
-			// Each request has a batch of items it requests, place all those batch requests in an array
-			batch.Requests = make([]*store.ItemBatch, 0, len(reserves.Requests))
-			for _, req := range reserves.Requests {
-				batch.Requests = append(batch.Requests, &req.Batch)
-				batch.TotalRequested += int(req.NumRequested)
+			// If we allow a calculated write timeout to be a few milliseconds, then the store.Write()
+			// is almost guaranteed to fail, so we ensure the write timeout is something reasonable.
+			if writeTimeout < q.opts.QueueStore.Options().WriteTimeout {
+				// WriteTimeout comes from the storage implementation as the user who configured the
+				// storage option should know a reasonable timeout value for the configuration chosen.
+				writeTimeout = q.opts.QueueStore.Options().WriteTimeout
 			}
 
 			// Send the batch that each request wants to the store. If there are items that can be reserved the
 			// store will assign items to each batch request.
-			ctx, cancel := context.WithTimeout(context.Background(), q.opts.QueueStore.Options().ReadTimeout)
-			if err := q.opts.QueueStore.Reserve(ctx, batch, store.ReserveOptions{
+			ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
+			if err := q.opts.QueueStore.Reserve(ctx, reserves, store.ReserveOptions{
 				ReserveDeadline: time.Now().UTC().Add(q.opts.ReserveTimeout),
 			}); err != nil {
-				q.opts.Logger.Warn("while calling QueueStore.Reserve()", "error", err)
+				q.opts.Logger.Error("while calling QueueStore.Reserve()", "error", err,
+					"category", "queue", "queueName", q.opts.Name)
 				cancel()
 				continue
 			}
@@ -395,17 +395,15 @@ func (q *Queue) synchronizationLoop() {
 
 			// Inform clients they have reservations ready or if there was an error
 			for _, req := range reserves.Requests {
-				if len(req.Batch.Items) != 0 || req.Batch.Err != nil {
-					req.err = req.Batch.Err
-					close(req.readyCh)
-					reserves.Total -= len(req.Batch.Items)
-					delete(reserves.Requests, req.ClientID)
+				if len(req.Items) != 0 || req.Err != nil {
+					close(req.ReadyCh)
+					reserves.Remove(req)
 				}
 			}
 
 			// Set a timer for remaining open reserve requests
 			// Or when next reservation will expire
-			next := findNextTimeout(&reserves)
+			next := nextTimeout(&reserves)
 			if next.Nanoseconds() != 0 {
 				timerCh = time.After(next)
 			}
@@ -416,64 +414,86 @@ func (q *Queue) synchronizationLoop() {
 			q.completeQueueCh.Store(&ch)
 			close(*completeQueueCh)
 
-			addToWCR(req)
+			completes.Add(req)
 			for req := range *completeQueueCh {
-				addToWCR(req)
+				completes.Add(req)
 			}
 
-			ids := make([]string, 0, completes.TotalIDs)
-			for _, req := range completes.Requests {
-				ids = append(ids, req.Ids...)
+			// TODO: Abstract the writeTimeout calc into a function call
+			writeTimeout := maxRequestTimeout
+			for _, req := range producers.Requests {
+				// Cancel any produce requests that have timed out
+				if time.Now().UTC().After(req.RequestDeadline) {
+					req.Err = ErrRequestTimeout
+					producers.Remove(req)
+					close(req.ReadyCh)
+					continue
+				}
+				// The writeTimeout should be equal to the request with the least amount of request timeout left.
+				timeLeft := time.Now().UTC().Sub(req.RequestDeadline)
+				if timeLeft < writeTimeout {
+					writeTimeout = timeLeft
+				}
 			}
 
-			// TODO: We need to ensure all the id's are in reservation before we call complete
-			if err := q.opts.QueueStore.Complete(req.Context, ids); err != nil {
-				req.err = err
+			// If we allow a calculated write timeout to be a few milliseconds, then the store.Write()
+			// is almost guaranteed to fail, so we ensure the write timeout is something reasonable.
+			if writeTimeout < q.opts.QueueStore.Options().WriteTimeout {
+				// WriteTimeout comes from the storage implementation as the user who configured the
+				// storage option should know a reasonable timeout value for the configuration chosen.
+				writeTimeout = q.opts.QueueStore.Options().WriteTimeout
 			}
+
+			var err error
+			ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
+			if err = q.opts.QueueStore.Complete(ctx, completes); err != nil {
+				q.opts.Logger.Error("while calling QueueStore.Complete()", "error", err,
+					"category", "queue", "queueName", q.opts.Name)
+			}
+			cancel()
 
 			// Tell the waiting clients the items have been marked as complete
-			for i, req := range completes.Requests {
-				close(req.readyCh)
-				// Allow the GC to collect these requests
-				completes.Requests[i] = nil
+			for _, req := range completes.Requests {
+				if err != nil {
+					req.Err = ErrInternalRetry
+				}
+				close(req.ReadyCh)
 			}
-
-			completes.Requests = completes.Requests[:0]
-			completes.TotalIDs = 0
+			completes.Reset()
 
 		// -----------------------------------------------
 		case req := <-q.storageQueueCh:
 			if req.ID != "" {
 				if err := q.opts.QueueStore.Read(req.Context, &req.Items, req.ID, 1); err != nil {
-					req.err = err
+					req.Err = err
 				}
 			} else {
 				if err := q.opts.QueueStore.Read(req.Context, &req.Items, req.Pivot, req.Limit); err != nil {
-					req.err = err
+					req.Err = err
 				}
 			}
-			close(req.readyCh)
+			close(req.ReadyCh)
 
 		// -----------------------------------------------
 		case req := <-q.shutdownCh:
 			for _, r := range producers.Requests {
-				r.err = ErrQueueShutdown
-				close(r.readyCh)
+				r.Err = ErrQueueShutdown
+				close(r.ReadyCh)
 			}
 			for _, r := range reserves.Requests {
-				r.err = ErrQueueShutdown
-				close(r.readyCh)
+				r.Err = ErrQueueShutdown
+				close(r.ReadyCh)
 			}
 			if err := q.opts.QueueStore.Close(req.Context); err != nil {
 				req.Err = err
 			}
-			close(req.readyCh)
+			close(req.ReadyCh)
 			return
 
 		// -----------------------------------------------
 		case <-timerCh:
-			// Find the next request that will time out, and notify any clients of expired reserves
-			next := findNextTimeout(&reserves)
+			// Find the next reserve request that will time out, and notify any clients of expired reserves
+			next := nextTimeout(&reserves)
 			if next.Nanoseconds() != 0 {
 				timerCh = time.After(next)
 			}
@@ -490,7 +510,7 @@ func (q *Queue) Shutdown(ctx context.Context) error {
 	}
 
 	req := &types.ShutdownRequest{
-		readyCh: make(chan struct{}),
+		ReadyCh: make(chan struct{}),
 		Context: ctx,
 	}
 
@@ -505,9 +525,9 @@ func (q *Queue) Shutdown(ctx context.Context) error {
 	}
 }
 
-// AddIfUnique adds a ReserveRequest to the batch. Returns false if the ReserveRequest.ClientID is a duplicate
+// addIfUnique adds a ReserveRequest to the batch. Returns false if the ReserveRequest.ClientID is a duplicate
 // and the request was not added to the batch
-func AddIfUnique(r types.ReserveBatch, req *types.ReserveRequest) bool {
+func addIfUnique(r *types.ReserveBatch, req *types.ReserveRequest) bool {
 	for _, existing := range r.Requests {
 		if existing.ClientID == req.ClientID {
 			req.Err = ErrDuplicateClientID
@@ -520,7 +540,8 @@ func AddIfUnique(r types.ReserveBatch, req *types.ReserveRequest) bool {
 	return false
 }
 
-func NextTimeout(r types.ReserveBatch) time.Duration {
+// TODO: I don't think we should pass by ref, but use escape analysis to decide
+func nextTimeout(r *types.ReserveBatch) time.Duration {
 	var soon *types.ReserveRequest
 
 	for _, req := range r.Requests {
@@ -529,7 +550,7 @@ func NextTimeout(r types.ReserveBatch) time.Duration {
 			// Inform our waiting client
 			req.Err = ErrRequestTimeout
 			close(req.ReadyCh)
-			r.Total -= int(req.NumRequested)
+			r.Total -= req.NumRequested
 			r.Remove(req)
 			continue
 		}
@@ -537,7 +558,7 @@ func NextTimeout(r types.ReserveBatch) time.Duration {
 		// If client has gone away
 		if req.Context.Err() != nil {
 			close(req.ReadyCh)
-			r.Total -= int(req.NumRequested)
+			r.Total -= req.NumRequested
 			req.Err = req.Context.Err()
 			r.Remove(req)
 			continue

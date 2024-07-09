@@ -166,7 +166,8 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		require.Error(t, err)
 		var e duh.Error
 		require.True(t, errors.As(err, &e))
-		assert.Equal(t, "!", e.Message())
+		assert.Contains(t, e.Message(), "item(s) cannot be completed;")
+		assert.Contains(t, e.Message(), " is not marked as reserved")
 		assert.Equal(t, 400, e.Code())
 
 	})

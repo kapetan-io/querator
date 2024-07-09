@@ -257,7 +257,7 @@ func (q *Queue) synchronizationLoop() {
 	// TODO: Make an ADR on why we don't allow the same client to make multiple reserve requests
 
 	reserves := types.ReserveBatch{
-		Requests: make([]*types.ReserveRequest, 5_000),
+		Requests: make([]*types.ReserveRequest, 0, 5_000),
 		Total:    0,
 	}
 
@@ -452,7 +452,7 @@ func (q *Queue) synchronizationLoop() {
 			}
 			cancel()
 
-			// Tell the waiting clients the items have been marked as complete
+			// Tell the waiting clients that items have been marked as complete
 			for _, req := range completes.Requests {
 				if err != nil {
 					req.Err = ErrInternalRetry

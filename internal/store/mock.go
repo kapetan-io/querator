@@ -36,7 +36,7 @@ func (m *MockStorage) ParseID(parse string, id *StorageID) error {
 		return errors.New("expected format <queue_name>~<storage_id>")
 	}
 	id.Queue = parts[0]
-	id.ID = parts[1]
+	id.ID = []byte(parts[1])
 	return nil
 }
 

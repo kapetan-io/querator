@@ -10,6 +10,7 @@ require (
 	github.com/segmentio/ksuid v1.0.4
 	github.com/stretchr/testify v1.9.0
 	github.com/tidwall/buntdb v1.3.1
+	go.etcd.io/bbolt v1.3.10
 	google.golang.org/protobuf v1.34.2
 )
 

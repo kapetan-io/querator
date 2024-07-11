@@ -10,7 +10,7 @@ import (
 // StorageID is the decoded storage StorageID
 type StorageID struct {
 	Queue string
-	ID    string
+	ID    []byte
 }
 
 func (id StorageID) String() string {
@@ -77,7 +77,8 @@ type QueueInfo struct {
 	Name string
 }
 
-// Queue represents storage for a single queue
+// Queue represents storage for a single queue. An instance of Queue should not be considered thread safe,
+// it is intended to be used from within the internal.Queue only!
 type Queue interface {
 	// Produce writes the items for each batch to the data store, assigning an error for each
 	// batch that fails.

@@ -77,7 +77,7 @@ func (b *BuntStorage) ParseID(parse string, id *StorageID) error {
 		return errors.New("expected format <queue_name>~<storage_id>")
 	}
 	id.Queue = parts[0]
-	id.ID = parts[1]
+	id.ID = []byte(parts[1])
 	return nil
 }
 
@@ -242,7 +242,7 @@ nextBatch:
 				continue nextBatch
 			}
 
-			value, err := tx.Get(sid.ID)
+			value, err := tx.Get(string(sid.ID))
 			if err != nil {
 				return fmt.Errorf("during Get(%s): %w", sid, err)
 			}
@@ -254,11 +254,11 @@ nextBatch:
 
 			if !item.IsReserved {
 				batch.Requests[i].Err = transport.NewConflict("item(s) cannot be completed; '%s' is not "+
-					"marked as reserved", sid.ID)
+					"marked as reserved", string(sid.ID))
 				continue nextBatch
 			}
 
-			if _, err = tx.Delete(sid.ID); err != nil {
+			if _, err = tx.Delete(string(sid.ID)); err != nil {
 				return f.Errorf("during Delete(%s): %w", sid.ID, err)
 			}
 		}
@@ -288,7 +288,7 @@ func (s *BuntQueue) Read(_ context.Context, items *[]*types.Item, pivot string, 
 		}
 	}
 
-	err = tx.AscendGreaterOrEqual("", sid.ID, func(key, value string) bool {
+	err = tx.AscendGreaterOrEqual("", string(sid.ID), func(key, value string) bool {
 		if count >= limit {
 			return false
 		}
@@ -353,7 +353,7 @@ func (s *BuntQueue) Delete(_ context.Context, ids []string) error {
 		if err := s.storage.ParseID(id, &sid); err != nil {
 			return transport.NewInvalidOption("invalid storage id; '%s': %s", id, err)
 		}
-		_, err := tx.Delete(sid.ID)
+		_, err := tx.Delete(string(sid.ID))
 		if err != nil {
 			// I can't think of a reason why we would want alert the
 			// caller that the ids they want to delete are already deleted.

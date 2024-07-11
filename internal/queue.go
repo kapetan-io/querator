@@ -44,6 +44,10 @@ type QueueOptions struct {
 	// QueueStore is the store interface used to persist items for this specific queue
 	QueueStore store.Queue
 
+	// WriteTimeout (Optional) The time it should take for a single batched write to complete
+	WriteTimeout time.Duration
+	// ReadTimeout (Optional) The time it should take for a single batched read to complete
+	ReadTimeout time.Duration
 	// TODO: Make these configurable
 	MaxReserveBatchSize int
 	MaxProduceBatchSize int
@@ -325,10 +329,10 @@ func (q *Queue) synchronizationLoop() {
 
 			// If we allow a calculated write timeout to be a few milliseconds, then the store.Write()
 			// is almost guaranteed to fail, so we ensure the write timeout is something reasonable.
-			if writeTimeout < q.opts.QueueStore.Options().WriteTimeout {
+			if writeTimeout < q.opts.WriteTimeout {
 				// WriteTimeout comes from the storage implementation as the user who configured the
 				// storage option should know a reasonable timeout value for the configuration chosen.
-				writeTimeout = q.opts.QueueStore.Options().WriteTimeout
+				writeTimeout = q.opts.WriteTimeout
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
@@ -374,10 +378,10 @@ func (q *Queue) synchronizationLoop() {
 
 			// If we allow a calculated write timeout to be a few milliseconds, then the store.Write()
 			// is almost guaranteed to fail, so we ensure the write timeout is something reasonable.
-			if writeTimeout < q.opts.QueueStore.Options().WriteTimeout {
+			if writeTimeout < q.opts.WriteTimeout {
 				// WriteTimeout comes from the storage implementation as the user who configured the
 				// storage option should know a reasonable timeout value for the configuration chosen.
-				writeTimeout = q.opts.QueueStore.Options().WriteTimeout
+				writeTimeout = q.opts.WriteTimeout
 			}
 
 			// Send the batch that each request wants to the store. If there are items that can be reserved the
@@ -438,10 +442,10 @@ func (q *Queue) synchronizationLoop() {
 
 			// If we allow a calculated write timeout to be a few milliseconds, then the store.Write()
 			// is almost guaranteed to fail, so we ensure the write timeout is something reasonable.
-			if writeTimeout < q.opts.QueueStore.Options().WriteTimeout {
+			if writeTimeout < q.opts.WriteTimeout {
 				// WriteTimeout comes from the storage implementation as the user who configured the
 				// storage option should know a reasonable timeout value for the configuration chosen.
-				writeTimeout = q.opts.QueueStore.Options().WriteTimeout
+				writeTimeout = q.opts.WriteTimeout
 			}
 
 			var err error

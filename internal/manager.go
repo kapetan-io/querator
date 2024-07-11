@@ -67,7 +67,7 @@ func (qm *QueueManager) Create(_ context.Context, opts QueueOptions) (*Queue, er
 
 	var err error
 	// TODO: Use the user chosen store via qm.opts.NewQueue()
-	opts.QueueStore, err = qm.opts.Storage.NewQueue(store.QueueOptions{Name: opts.Name})
+	opts.QueueStore, err = qm.opts.Storage.NewQueue(store.QueueInfo{Name: opts.Name})
 	if err != nil {
 		return nil, err
 	}

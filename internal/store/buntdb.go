@@ -18,6 +18,8 @@ import (
 
 // BuntDB Implementation
 //
+// I have no plans of using BuntDB for anything but an in-memory storage system. See below.
+//
 // ### Issues using BuntDB for Querator
 // The indexes in BuntDB are for used for sorting during iteration. Which is exactly what I want. However, Bunt only
 // applies the index after set, and set doesn't allow custom index values to be passed via `Set()` I see this as a
@@ -52,12 +54,11 @@ import (
 // I just ran into a panic from an unbounded index, and BuntDB did something weird. I got caught in a sleep which
 // I couldn't identify. This leads me to think that using `AscendGreaterOrEqual()` captures the panic and attempts
 // to handle it in an undesirable way. I didn't spend time figuring it out.
-// TODO(thrawn01): Look into this.
+
+var ErrQueueNotExist = transport.NewRequestFailed("queue does not exist")
 
 type BuntOptions struct {
-	Logger       duh.StandardLogger
-	WriteTimeout time.Duration
-	ReadTimeout  time.Duration
+	Logger duh.StandardLogger
 }
 
 // ---------------------------------------------
@@ -84,9 +85,11 @@ func (b *BuntStorage) CreateID(name, id string) string {
 	return fmt.Sprintf("%s~%s", name, id)
 }
 
+func (b *BuntStorage) Close(_ context.Context) error {
+	return nil
+}
+
 func NewBuntStorage(opts BuntOptions) *BuntStorage {
-	set.Default(&opts.WriteTimeout, 5*time.Second)
-	set.Default(&opts.ReadTimeout, 5*time.Second)
 	set.Default(&opts.Logger, slog.Default())
 
 	return &BuntStorage{opts: opts}
@@ -98,26 +101,20 @@ func NewBuntStorage(opts BuntOptions) *BuntStorage {
 
 type BuntQueue struct {
 	storage *BuntStorage
-	opts    QueueOptions
+	opts    QueueInfo
 	uid     ksuid.KSUID
 	db      *buntdb.DB
 }
 
 var _ Queue = &BuntQueue{}
 
-func (b *BuntStorage) NewQueue(opts QueueOptions) (Queue, error) {
+func (b *BuntStorage) NewQueue(opts QueueInfo) (Queue, error) {
 	f := errors.Fields{"category", "bunt-db", "func", "NewQueue"}
 
 	if strings.TrimSpace(opts.Name) == "" {
 		return nil, transport.NewInvalidOption("'name' cannot be empty; must be a valid queue name")
 	}
-	set.Default(&opts.ReadTimeout, b.opts.ReadTimeout)
-	set.Default(&opts.WriteTimeout, b.opts.WriteTimeout)
 
-	// TODO: Ensure we can access the storage location
-	// TODO: Check if the file exists
-
-	// TODO: All queues are currently in memory, need to fix this
 	db, err := buntdb.Open(":memory:")
 	if err != nil {
 		return nil, f.Errorf("opening buntdb: %w", err)
@@ -425,10 +422,6 @@ func (s *BuntQueue) Close(_ context.Context) error {
 	return s.db.Close()
 }
 
-func (s *BuntQueue) Options() QueueOptions {
-	return s.opts
-}
-
 func buntSet(f errors.Fields, tx *buntdb.Tx, item *types.Item) error {
 	// TODO: Use something more efficient like protobuf,
 	//	gob or https://github.com/capnproto/go-capnp
@@ -442,4 +435,153 @@ func buntSet(f errors.Fields, tx *buntdb.Tx, item *types.Item) error {
 		return f.Errorf("during Set(%s): %w", item.ID, err)
 	}
 	return nil
+}
+
+// ---------------------------------------------
+// Queue Store Implementation
+// ---------------------------------------------
+
+type BuntQueueStore struct {
+	opts QueueStoreOptions
+	db   *buntdb.DB
+}
+
+var _ QueueStore = &BuntQueueStore{}
+
+func (b *BuntStorage) NewQueueStore(opts QueueStoreOptions) (QueueStore, error) {
+	f := errors.Fields{"category", "bunt-db", "func", "NewQueueStore"}
+
+	db, err := buntdb.Open(":memory:")
+	if err != nil {
+		return nil, f.Errorf("opening buntdb: %w", err)
+	}
+	return &BuntQueueStore{
+		opts: opts,
+		db:   db,
+	}, nil
+}
+
+func (r BuntQueueStore) Get(_ context.Context, name string, opts *QueueInfo) error {
+	f := errors.Fields{"category", "bunt-db", "func", "QueueStore.Get"}
+
+	tx, err := r.db.Begin(false)
+	if err != nil {
+		return f.Errorf("during Begin(): %w", err)
+	}
+
+	value, err := tx.Get(name, true)
+	if err != nil {
+		if errors.Is(err, buntdb.ErrNotFound) {
+			return ErrQueueNotExist
+		}
+		return f.Errorf("during Get(): %w", err)
+	}
+
+	if err := json.Unmarshal([]byte(value), opts); err != nil {
+		return f.Errorf("during json.Unmarshal(): %w", err)
+	}
+
+	if err := tx.Rollback(); err != nil {
+		return fmt.Errorf("during Rollback(): %w", err)
+	}
+	return nil
+}
+
+func (r BuntQueueStore) Set(ctx context.Context, opts QueueInfo) error {
+	f := errors.Fields{"category", "bunt-db", "func", "QueueStore.Set"}
+
+	// TODO: Validate options in a function all store implementations can share
+
+	if strings.TrimSpace(opts.Name) == "" {
+		return transport.NewInvalidOption("invalid queue; name cannot by empty")
+	}
+
+	var q QueueInfo
+	if err := r.Get(ctx, opts.Name, &q); err == nil {
+		return transport.NewInvalidOption("invalid queue; '%s' already exists", opts.Name)
+	}
+
+	b, err := json.Marshal(opts)
+	if err != nil {
+		return f.Errorf("during json.Marshal(): %w", err)
+	}
+
+	tx, err := r.db.Begin(true)
+	if err != nil {
+		return f.Errorf("during Begin(): %w", err)
+	}
+
+	_, _, err = tx.Set(opts.Name, string(b), nil)
+	if err != nil {
+		return f.Errorf("during Set(): %w", err)
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		return fmt.Errorf("during Commit(): %w", err)
+	}
+	return nil
+}
+
+func (r BuntQueueStore) List(_ context.Context, queues *[]*QueueInfo, opts types.ListOptions) error {
+	f := errors.Fields{"category", "bunt-db", "func", "QueueStore.List"}
+
+	tx, err := r.db.Begin(false)
+	if err != nil {
+		return f.Errorf("during Begin(): %w", err)
+	}
+
+	var iterErr error
+	var count int
+	err = tx.AscendGreaterOrEqual("", opts.Pivot, func(key, value string) bool {
+		if count >= opts.Limit {
+			return false
+		}
+
+		queue := new(QueueInfo)
+		if err := json.Unmarshal([]byte(value), queue); err != nil {
+			iterErr = f.Errorf("during json.Unmarshal(): %w", err)
+			return false
+		}
+
+		*queues = append(*queues, queue)
+		return true
+	})
+	if err != nil {
+		return f.Errorf("during AscendGreaterOrEqual(): %w", err)
+	}
+
+	if err = tx.Rollback(); err != nil {
+		return f.Errorf("during Rollback(): %w", err)
+	}
+
+	if iterErr != nil {
+		return iterErr
+	}
+
+	return nil
+}
+
+func (r BuntQueueStore) Delete(ctx context.Context, name string) error {
+	tx, err := r.db.Begin(true)
+	if err != nil {
+		return fmt.Errorf("during begin: %w", err)
+	}
+
+	_, err = tx.Delete(name)
+	if err != nil {
+		if !errors.Is(err, buntdb.ErrNotFound) {
+			return ErrQueueNotExist
+		}
+	}
+
+	err = tx.Commit()
+	if err != nil {
+		return fmt.Errorf("during commit: %w", err)
+	}
+	return nil
+}
+
+func (r BuntQueueStore) Close(_ context.Context) error {
+	return r.db.Close()
 }

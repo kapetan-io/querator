@@ -81,3 +81,8 @@ type ShutdownRequest struct {
 	// The error to be returned to the caller
 	Err error
 }
+
+type ListOptions struct {
+	Pivot string
+	Limit int
+}

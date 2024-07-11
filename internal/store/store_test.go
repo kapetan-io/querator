@@ -13,40 +13,42 @@ import (
 	"time"
 )
 
-func TestQueue(t *testing.T) {
+type NewStorageFunc func() store.Storage
 
-	testCases := []struct {
+func TestQueue(t *testing.T) {
+	for _, tc := range []struct {
+		New  NewStorageFunc
 		Name string
-		New  func() (store.Queue, error)
 	}{
 		{
 			Name: "BuntDB",
-			New: func() (store.Queue, error) {
-				return store.NewBuntStorage(store.BuntOptions{}).NewQueue(store.QueueOptions{Name: "test-queue"})
+			New: func() store.Storage {
+				return store.NewBuntStorage(store.BuntOptions{})
 			},
 		},
 		//{
+		//	Name: "SurrealDB",
+		//},
+		//{
 		//	Name: "PostgresSQL",
 		//},
-	}
-
-	for _, tc := range testCases {
+	} {
 		t.Run(tc.Name, func(t *testing.T) {
-			testSuite(t, tc.New)
+			testQueue(t, tc.New)
 		})
 	}
 }
 
-type NewFunc func() (store.Queue, error)
-
-func testSuite(t *testing.T, newStore NewFunc) {
+func testQueue(t *testing.T, newStore NewStorageFunc) {
+	s := newStore()
+	defer func() { _ = s.Close(context.Background()) }()
 
 	t.Run("QueueItemCompare", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		s, err := newStore()
-		defer func() { _ = s.Close(context.Background()) }()
+		q, err := s.NewQueue(store.QueueInfo{Name: random.String("queue-", 10)})
+		defer func() { _ = q.Close(context.Background()) }()
 		require.NoError(t, err)
 
 		now := time.Now().UTC()
@@ -73,11 +75,11 @@ func testSuite(t *testing.T, newStore NewFunc) {
 			Payload:         []byte("Whining? I am not whining, I am complaining"),
 		})
 
-		err = s.Write(ctx, items)
+		err = q.Write(ctx, items)
 		require.NoError(t, err)
 
 		var reads []*types.Item
-		err = s.Read(ctx, &reads, "", 2)
+		err = q.Read(ctx, &reads, "", 2)
 		require.NoError(t, err)
 
 		assert.Equal(t, len(reads), len(items))
@@ -156,14 +158,14 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		s, err := newStore()
-		defer func() { _ = s.Close(context.Background()) }()
+		q, err := s.NewQueue(store.QueueInfo{Name: random.String("queue-", 10)})
+		defer func() { _ = q.Close(context.Background()) }()
 		require.NoError(t, err)
 
-		items := writeRandomItems(t, ctx, s, 10_000)
+		items := writeRandomItems(t, ctx, q, 10_000)
 
 		var read []*types.Item
-		err = s.Read(ctx, &read, "", 10_000)
+		err = q.Read(ctx, &read, "", 10_000)
 		require.NoError(t, err)
 
 		assert.Equal(t, len(items), len(read))
@@ -180,7 +182,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		// Ensure if we ask for more than is available, we only get what is in the db.
 		t.Run("AskForMoreThanIsAvailable", func(t *testing.T) {
 			var more []*types.Item
-			err = s.Read(ctx, &more, "", 20_000)
+			err = q.Read(ctx, &more, "", 20_000)
 			require.NoError(t, err)
 			assert.Equal(t, 10_000, len(more))
 			assert.True(t, items[0].Compare(more[0]),
@@ -190,7 +192,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 
 			// Ensure if we limit the read, we get only the amount requested
 			var limit []*types.Item
-			err = s.Read(ctx, &limit, "", 1_000)
+			err = q.Read(ctx, &limit, "", 1_000)
 			require.NoError(t, err)
 			assert.Equal(t, 1_000, len(limit))
 			assert.True(t, items[0].Compare(limit[0]),
@@ -201,7 +203,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 
 		t.Run("AskForLessThanIsAvailable", func(t *testing.T) {
 			var less []*types.Item
-			require.NoError(t, s.Read(ctx, &less, "", 10))
+			require.NoError(t, q.Read(ctx, &less, "", 10))
 			assert.Equal(t, 10, len(less))
 		})
 	})
@@ -210,16 +212,16 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		s, err := newStore()
-		defer func() { _ = s.Close(context.Background()) }()
+		q, err := s.NewQueue(store.QueueInfo{Name: random.String("queue-", 10)})
+		defer func() { _ = q.Close(context.Background()) }()
 		require.NoError(t, err)
 
-		items := writeRandomItems(t, ctx, s, 10_000)
+		items := writeRandomItems(t, ctx, q, 10_000)
 		require.Len(t, items, 10_000)
 
 		id := items[1000].ID
 		var read []*types.Item
-		err = s.Read(ctx, &read, id, 10)
+		err = q.Read(ctx, &read, id, 10)
 		require.NoError(t, err)
 
 		assert.Equal(t, 10, len(read))
@@ -236,7 +238,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		// The read includes the pivot
 		item := read[9]
 		read = read[:0]
-		err = s.Read(ctx, &read, item.ID, 1)
+		err = q.Read(ctx, &read, item.ID, 1)
 		require.NoError(t, err)
 
 		require.Equal(t, 1, len(read))
@@ -245,12 +247,12 @@ func testSuite(t *testing.T, newStore NewFunc) {
 
 		// Pivot through more pages and ensure the pivot allows us to page through items
 		read = read[0:]
-		err = s.Read(ctx, &read, item.ID, 10)
+		err = q.Read(ctx, &read, item.ID, 10)
 		require.NoError(t, err)
 
 		item = read[9]
 		read = read[:0]
-		err = s.Read(ctx, &read, item.ID, 10)
+		err = q.Read(ctx, &read, item.ID, 10)
 		require.NoError(t, err)
 
 		// The last item on the last page, should match the items written
@@ -262,8 +264,8 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		s, err := newStore()
-		defer func() { _ = s.Close(context.Background()) }()
+		q, err := s.NewQueue(store.QueueInfo{Name: random.String("queue-", 10)})
+		defer func() { _ = q.Close(context.Background()) }()
 		require.NoError(t, err)
 
 		expire := time.Now().UTC().Add(random.Duration(time.Minute))
@@ -284,11 +286,11 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		}
 
 		// Produce the items
-		require.NoError(t, s.Produce(ctx, batch))
+		require.NoError(t, q.Produce(ctx, batch))
 
 		// Ensure the items produced are in the database
 		var read []*types.Item
-		err = s.Read(ctx, &read, "", 10_000)
+		err = q.Read(ctx, &read, "", 10_000)
 		require.NoError(t, err)
 		require.Len(t, items, 10)
 
@@ -308,11 +310,11 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		s, err := newStore()
-		defer func() { _ = s.Close(context.Background()) }()
+		q, err := s.NewQueue(store.QueueInfo{Name: random.String("queue-", 10)})
+		defer func() { _ = q.Close(context.Background()) }()
 		require.NoError(t, err)
 
-		items := writeRandomItems(t, ctx, s, 10_000)
+		items := writeRandomItems(t, ctx, q, 10_000)
 		require.Len(t, items, 10_000)
 
 		expire := time.Now().UTC().Add(2_000 * time.Minute)
@@ -326,12 +328,12 @@ func testSuite(t *testing.T, newStore NewFunc) {
 				Total:    10,
 			}
 
-			require.NoError(t, s.Reserve(ctx, batch, store.ReserveOptions{ReserveDeadline: expire}))
+			require.NoError(t, q.Reserve(ctx, batch, store.ReserveOptions{ReserveDeadline: expire}))
 			reserved = batch.Requests[0].Items
 			require.Equal(t, 10, len(reserved))
 
 			// Ensure the items reserved are marked as reserved in the database
-			err = s.Read(ctx, &read, "", 10_000)
+			err = q.Read(ctx, &read, "", 10_000)
 			require.NoError(t, err)
 
 			for i := range reserved {
@@ -348,18 +350,18 @@ func testSuite(t *testing.T, newStore NewFunc) {
 				Total:    10,
 			}
 
-			require.NoError(t, s.Reserve(ctx, batch, store.ReserveOptions{ReserveDeadline: expire}))
+			require.NoError(t, q.Reserve(ctx, batch, store.ReserveOptions{ReserveDeadline: expire}))
 			secondReserve = batch.Requests[0].Items
 
 			read = read[:0]
-			err = s.Read(ctx, &read, "", 10_000)
+			err = q.Read(ctx, &read, "", 10_000)
 			require.NoError(t, err)
 
 			var combined []*types.Item
 			combined = append(combined, reserved...)
 			combined = append(combined, secondReserve...)
 
-			err = s.Read(ctx, &read, "", 10_000)
+			err = q.Read(ctx, &read, "", 10_000)
 			require.NoError(t, err)
 			assert.NotEqual(t, reserved[0].ID, secondReserve[0].ID)
 			assert.Equal(t, combined[0].ID, read[0].ID)
@@ -386,7 +388,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 				Total: 35,
 			}
 
-			require.NoError(t, s.Reserve(ctx, batch, store.ReserveOptions{ReserveDeadline: expire}))
+			require.NoError(t, q.Reserve(ctx, batch, store.ReserveOptions{ReserveDeadline: expire}))
 
 			assert.Equal(t, 5, batch.Requests[0].NumRequested)
 			assert.Equal(t, 5, len(batch.Requests[0].Items))
@@ -397,7 +399,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 
 			// Ensure all the items are reserved
 			read = read[:0]
-			require.NoError(t, s.Read(ctx, &read, lastReserved[0].ID, 10_000))
+			require.NoError(t, q.Read(ctx, &read, lastReserved[0].ID, 10_000))
 			require.Equal(t, 9_980, len(read))
 
 			for _, item := range read[0:35] {
@@ -414,11 +416,11 @@ func testSuite(t *testing.T, newStore NewFunc) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 
-			s, err := newStore()
-			defer func() { _ = s.Close(context.Background()) }()
+			q, err := s.NewQueue(store.QueueInfo{Name: random.String("queue-", 10)})
+			defer func() { _ = q.Close(context.Background()) }()
 			require.NoError(t, err)
 
-			items := writeRandomItems(t, ctx, s, 23)
+			items := writeRandomItems(t, ctx, q, 23)
 			require.Len(t, items, 23)
 
 			expire := time.Now().UTC().Add(2_000 * time.Minute)
@@ -433,7 +435,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 			}
 
 			// Reserve() should fairly distribute items across all requests
-			require.NoError(t, s.Reserve(ctx, batch, store.ReserveOptions{ReserveDeadline: expire}))
+			require.NoError(t, q.Reserve(ctx, batch, store.ReserveOptions{ReserveDeadline: expire}))
 			assert.Equal(t, 20, batch.Requests[0].NumRequested)
 			assert.Equal(t, 16, len(batch.Requests[0].Items))
 			assert.Equal(t, 6, batch.Requests[1].NumRequested)
@@ -446,8 +448,8 @@ func testSuite(t *testing.T, newStore NewFunc) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 
-			s, err := newStore()
-			defer func() { _ = s.Close(context.Background()) }()
+			q, err := s.NewQueue(store.QueueInfo{Name: random.String("queue-", 10)})
+			defer func() { _ = q.Close(context.Background()) }()
 			require.NoError(t, err)
 
 			expire := time.Now().UTC().Add(2_000 * time.Minute)
@@ -461,7 +463,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 			}
 
 			// Reserve() should return no items and without error
-			require.NoError(t, s.Reserve(ctx, batch, store.ReserveOptions{ReserveDeadline: expire}))
+			require.NoError(t, q.Reserve(ctx, batch, store.ReserveOptions{ReserveDeadline: expire}))
 			assert.Equal(t, 20, batch.Requests[0].NumRequested)
 			assert.Equal(t, 0, len(batch.Requests[0].Items))
 			assert.Equal(t, 6, batch.Requests[1].NumRequested)
@@ -475,8 +477,8 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		s, err := newStore()
-		defer func() { _ = s.Close(context.Background()) }()
+		q, err := s.NewQueue(store.QueueInfo{Name: random.String("queue-", 10)})
+		defer func() { _ = q.Close(context.Background()) }()
 		require.NoError(t, err)
 
 		expire := time.Now().UTC().Add(random.Duration(time.Minute))
@@ -493,7 +495,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		}
 
 		// Produce the items
-		require.NoError(t, s.Produce(ctx, types.Batch[types.ProduceRequest]{
+		require.NoError(t, q.Produce(ctx, types.Batch[types.ProduceRequest]{
 			Requests: []*types.ProduceRequest{{Items: items}},
 		}))
 
@@ -503,7 +505,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 			Total:    9,
 		}
 
-		require.NoError(t, s.Reserve(ctx, reserve, store.ReserveOptions{ReserveDeadline: expire}))
+		require.NoError(t, q.Reserve(ctx, reserve, store.ReserveOptions{ReserveDeadline: expire}))
 
 		ids := store.CollectIDs(reserve.Requests[0].Items)
 
@@ -514,11 +516,11 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		var read []*types.Item
 		t.Run("Success", func(t *testing.T) {
 			// Complete the items
-			require.NoError(t, s.Complete(ctx, complete))
+			require.NoError(t, q.Complete(ctx, complete))
 			require.NoError(t, complete.Requests[0].Err)
 
 			// Ensure the items completed are not in the database
-			require.NoError(t, s.Read(ctx, &read, "", 10))
+			require.NoError(t, q.Read(ctx, &read, "", 10))
 			assert.Equal(t, 1, len(read))
 		})
 
@@ -528,7 +530,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 				Requests: []*types.CompleteRequest{{Ids: []string{read[0].ID}}},
 			}
 
-			require.NoError(t, s.Complete(ctx, complete))
+			require.NoError(t, q.Complete(ctx, complete))
 			require.Error(t, complete.Requests[0].Err)
 			assert.Contains(t, complete.Requests[0].Err.Error(), "item(s) cannot be completed")
 			assert.Contains(t, complete.Requests[0].Err.Error(), "is not marked as reserved")
@@ -536,7 +538,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 
 		read = read[:0]
 		t.Run("InvalidID", func(t *testing.T) {
-			require.NoError(t, s.Read(ctx, &read, "", 10))
+			require.NoError(t, q.Read(ctx, &read, "", 10))
 			assert.Equal(t, 1, len(read))
 
 			complete = types.Batch[types.CompleteRequest]{
@@ -546,7 +548,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 				},
 			}
 
-			require.NoError(t, s.Complete(ctx, complete))
+			require.NoError(t, q.Complete(ctx, complete))
 			require.Error(t, complete.Requests[0].Err)
 			assert.Equal(t, "invalid storage id; 'invalid-id': expected format <queue_name>~<storage_id>",
 				complete.Requests[0].Err.Error())
@@ -596,17 +598,17 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		s, err := newStore()
-		defer func() { _ = s.Close(context.Background()) }()
+		q, err := s.NewQueue(store.QueueInfo{Name: random.String("queue-", 10)})
+		defer func() { _ = q.Close(context.Background()) }()
 		require.NoError(t, err)
 
-		items := writeRandomItems(t, ctx, s, 10_000)
+		items := writeRandomItems(t, ctx, q, 10_000)
 		require.Len(t, items, 10_000)
 
 		// Ensure Read() can fetch one item using pivot, and the item returned is the pivot
 		item := items[1000]
 		var read []*types.Item
-		err = s.Read(ctx, &read, item.ID, 1)
+		err = q.Read(ctx, &read, item.ID, 1)
 		require.NoError(t, err)
 
 		require.Equal(t, 1, len(read))
@@ -618,19 +620,19 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		s, err := newStore()
-		defer func() { _ = s.Close(context.Background()) }()
+		q, err := s.NewQueue(store.QueueInfo{Name: random.String("queue-", 10)})
+		defer func() { _ = q.Close(context.Background()) }()
 		require.NoError(t, err)
 
-		items := writeRandomItems(t, ctx, s, 10_000)
+		items := writeRandomItems(t, ctx, q, 10_000)
 		require.Len(t, items, 10_000)
 
 		// Delete 1_000 items
-		err = s.Delete(ctx, store.CollectIDs(items[0:1_000]))
+		err = q.Delete(ctx, store.CollectIDs(items[0:1_000]))
 		require.NoError(t, err)
 
 		var read []*types.Item
-		err = s.Read(ctx, &read, "", 10_000)
+		err = q.Read(ctx, &read, "", 10_000)
 		require.NoError(t, err)
 		assert.Equal(t, 9_000, len(read))
 
@@ -642,6 +644,59 @@ func testSuite(t *testing.T, newStore NewFunc) {
 				}
 			}
 		}
+
+		// Delete 1_000 items that are already deleted
+		err = q.Delete(ctx, store.CollectIDs(items[0:1_000]))
+		require.NoError(t, err)
+	})
+
+}
+
+func TestQueueStore(t *testing.T) {
+	for _, tc := range []struct {
+		New  NewStorageFunc
+		Name string
+	}{
+		{
+			Name: "BuntDB",
+			New: func() store.Storage {
+				return store.NewBuntStorage(store.BuntOptions{})
+			},
+		},
+		//{
+		//	Name: "SurrealDB",
+		//},
+		//{
+		//	Name: "PostgresSQL",
+		//},
+	} {
+		t.Run(tc.Name, func(t *testing.T) {
+			testQueueStore(t, tc.New)
+		})
+	}
+}
+
+func testQueueStore(t *testing.T, newStore NewStorageFunc) {
+	s := newStore()
+	defer func() { _ = s.Close(context.Background()) }()
+
+	t.Run("Set", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		q, err := s.NewQueueStore(store.QueueStoreOptions{})
+		defer func() { _ = q.Close(context.Background()) }()
+		require.NoError(t, err)
+
+		queueName := random.String("queue-", 10)
+		set := store.QueueInfo{Name: queueName}
+
+		// Set
+		require.NoError(t, q.Set(ctx, set))
+
+		var get store.QueueInfo
+		require.NoError(t, q.Get(ctx, queueName, &get))
+
 	})
 }
 

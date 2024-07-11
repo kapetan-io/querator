@@ -22,6 +22,25 @@ type NewFunc func() store.Storage
 
 var log = slog.New(slog.NewTextHandler(io.Discard, nil))
 
+func TestBrokenStorage(t *testing.T) {
+	var queueName = random.String("queue-", 10)
+	opts := &store.MockOptions{}
+	newStore := func() store.Storage {
+		return store.NewMockStorage(opts)
+	}
+
+	d, c, ctx := newDaemon(t, newStore, 10*time.Second)
+	defer d.Shutdown(t)
+
+	opts.Methods["Queue.Produce"] = func(args []any) error {
+		return errors.New("unknown storage error")
+	}
+
+	// TODO: QueueCreate should create a queue in storage
+	require.NoError(t, c.QueueCreate(ctx, &pb.QueueOptions{Name: queueName}))
+
+}
+
 func TestFunctionalSuite(t *testing.T) {
 	testCases := []struct {
 		Name string
@@ -266,7 +285,7 @@ func testSuite(t *testing.T, newStore NewFunc) {
 				Code: duh.CodeBadRequest,
 			},
 			{
-				Name: "invalid_request_timeout",
+				Name: "max_items_reached",
 				Req: &pb.QueueProduceRequest{
 					QueueName:      queueName,
 					RequestTimeout: "1m",
@@ -275,7 +294,6 @@ func testSuite(t *testing.T, newStore NewFunc) {
 				Msg:  "too many items in request; max_produce_batch_size is 1000 but received 1001",
 				Code: duh.CodeBadRequest,
 			},
-			// TODO: Max items reached
 		} {
 			t.Run(test.Name, func(t *testing.T) {
 				err := c.QueueProduce(ctx, test.Req)
@@ -406,8 +424,6 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		}
 	})
 }
-
-// TODO: Ensure the completed item is actually in reserved status before marking complete.
 
 type testDaemon struct {
 	cancel context.CancelFunc

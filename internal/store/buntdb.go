@@ -464,27 +464,20 @@ func (b *BuntStorage) NewQueueStore(opts QueueStoreOptions) (QueueStore, error) 
 func (r BuntQueueStore) Get(_ context.Context, name string, opts *QueueInfo) error {
 	f := errors.Fields{"category", "bunt-db", "func", "QueueStore.Get"}
 
-	tx, err := r.db.Begin(false)
-	if err != nil {
-		return f.Errorf("during Begin(): %w", err)
-	}
-
-	value, err := tx.Get(name, true)
-	if err != nil {
-		if errors.Is(err, buntdb.ErrNotFound) {
-			return ErrQueueNotExist
+	return r.db.View(func(tx *buntdb.Tx) error {
+		value, err := tx.Get(name, true)
+		if err != nil {
+			if errors.Is(err, buntdb.ErrNotFound) {
+				return ErrQueueNotExist
+			}
+			return f.Errorf("during Get(): %w", err)
 		}
-		return f.Errorf("during Get(): %w", err)
-	}
 
-	if err := json.Unmarshal([]byte(value), opts); err != nil {
-		return f.Errorf("during json.Unmarshal(): %w", err)
-	}
-
-	if err := tx.Rollback(); err != nil {
-		return fmt.Errorf("during Rollback(): %w", err)
-	}
-	return nil
+		if err := json.Unmarshal([]byte(value), opts); err != nil {
+			return f.Errorf("during json.Unmarshal(): %w", err)
+		}
+		return nil
+	})
 }
 
 func (r BuntQueueStore) Set(ctx context.Context, opts QueueInfo) error {
@@ -506,21 +499,13 @@ func (r BuntQueueStore) Set(ctx context.Context, opts QueueInfo) error {
 		return f.Errorf("during json.Marshal(): %w", err)
 	}
 
-	tx, err := r.db.Begin(true)
-	if err != nil {
-		return f.Errorf("during Begin(): %w", err)
-	}
-
-	_, _, err = tx.Set(opts.Name, string(b), nil)
-	if err != nil {
-		return f.Errorf("during Set(): %w", err)
-	}
-
-	err = tx.Commit()
-	if err != nil {
-		return fmt.Errorf("during Commit(): %w", err)
-	}
-	return nil
+	return r.db.Update(func(tx *buntdb.Tx) error {
+		_, _, err = tx.Set(opts.Name, string(b), nil)
+		if err != nil {
+			return f.Errorf("during Set(): %w", err)
+		}
+		return nil
+	})
 }
 
 func (r BuntQueueStore) List(_ context.Context, queues *[]*QueueInfo, opts types.ListOptions) error {

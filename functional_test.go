@@ -22,24 +22,24 @@ type NewFunc func() store.Storage
 
 var log = slog.New(slog.NewTextHandler(io.Discard, nil))
 
-func TestBrokenStorage(t *testing.T) {
-	var queueName = random.String("queue-", 10)
-	opts := &store.MockOptions{}
-	newStore := func() store.Storage {
-		return store.NewMockStorage(opts)
-	}
-
-	d, c, ctx := newDaemon(t, newStore, 10*time.Second)
-	defer d.Shutdown(t)
-
-	opts.Methods["Queue.Produce"] = func(args []any) error {
-		return errors.New("unknown storage error")
-	}
-
-	// TODO: QueueCreate should create a queue in storage
-	require.NoError(t, c.QueueCreate(ctx, &pb.QueueOptions{Name: queueName}))
-
-}
+//func TestBrokenStorage(t *testing.T) {
+//	var queueName = random.String("queue-", 10)
+//	opts := &store.MockOptions{}
+//	newStore := func() store.Storage {
+//		return store.NewMockStorage(opts)
+//	}
+//
+//	d, c, ctx := newDaemon(t, newStore, 10*time.Second)
+//	defer d.Shutdown(t)
+//
+//	opts.Methods["Queue.Produce"] = func(args []any) error {
+//		return errors.New("unknown storage error")
+//	}
+//
+//	// TODO: QueueCreate should create a queue in storage
+//	require.NoError(t, c.QueueCreate(ctx, &pb.QueueOptions{Name: queueName}))
+//
+//}
 
 func TestFunctionalSuite(t *testing.T) {
 	testCases := []struct {

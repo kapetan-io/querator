@@ -37,6 +37,14 @@ const (
 	RPCQueueDelete = "/v1/queue.delete"
 	RPCQueueUpdate = "/v1/queue.update"
 
+	// TODO: Document the /storage/queue.list endpoint. The results include the pivot intentionally. Clients who
+	//  wish to iterate through all the items page by page should account for this. Also clients must check if the
+	//  pivot is the first item, because if the pivot is missing from the data store the API will return the next
+	//  item after the pivot. This is an extremely efficient way to iterate through a SQL RDBMS `primary_key > pivot`
+
+	// TODO: We should define a maximum payload size and now allow clients to send or receive larger than expected
+	//   payloads. I think DUH should do this for us when via duh.ReadRequest(r, &req, maxSize)
+
 	RPCStorageQueueList   = "/v1/storage/queue.list"
 	RPCStorageQueueAdd    = "/v1/storage/queue.add"
 	RPCStorageQueueDelete = "/v1/storage/queue.delete"

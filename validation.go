@@ -24,7 +24,11 @@ func (s *Service) validateQueueProduceProto(in *proto.QueueProduceRequest, out *
 		qi.Encoding = item.Encoding
 		qi.Kind = item.Kind
 		qi.Reference = item.Reference
-		qi.Payload = item.Bytes
+		if item.Bytes != nil {
+			qi.Payload = item.Bytes
+		} else {
+			qi.Payload = []byte(item.Utf8)
+		}
 		out.Items = append(out.Items, qi)
 	}
 	return nil

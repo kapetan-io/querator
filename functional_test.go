@@ -44,10 +44,11 @@ func TestFunctionalSuite(t *testing.T) {
 }
 
 func testSuite(t *testing.T, newStore NewStorageFunc) {
+	_store := newStore()
 
 	t.Run("ProduceAndConsume", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, newStore, 10*time.Second)
+		d, c, ctx := newDaemon(t, _store, 10*time.Second)
 		defer d.Shutdown(t)
 
 		// Create a queue
@@ -91,10 +92,7 @@ func testSuite(t *testing.T, newStore NewStorageFunc) {
 
 		// Queue storage should have only one item
 		var list pb.StorageQueueListResponse
-		require.NoError(t, c.StorageQueueList(ctx, &pb.StorageQueueListRequest{
-			QueueName: queueName,
-			Limit:     10,
-		}, &list))
+		require.NoError(t, c.StorageQueueList(ctx, queueName, &list, &querator.ListOptions{Limit: 10}))
 		require.Equal(t, 1, len(list.Items))
 
 		inspect := list.Items[0]
@@ -115,10 +113,7 @@ func testSuite(t *testing.T, newStore NewStorageFunc) {
 		}))
 
 		// Queue storage should be empty
-		require.NoError(t, c.StorageQueueList(ctx, &pb.StorageQueueListRequest{
-			QueueName: queueName,
-			Limit:     10,
-		}, &list))
+		require.NoError(t, c.StorageQueueList(ctx, queueName, &list, &querator.ListOptions{Limit: 10}))
 
 		assert.Equal(t, 0, len(list.Items))
 
@@ -127,7 +122,7 @@ func testSuite(t *testing.T, newStore NewStorageFunc) {
 
 	t.Run("QueueCompleteCantCompleteWithoutReservation", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, newStore, 10*time.Second)
+		d, c, ctx := newDaemon(t, _store, 10*time.Second)
 		defer d.Shutdown(t)
 		items := randomProduceItems(10)
 
@@ -140,10 +135,7 @@ func testSuite(t *testing.T, newStore NewStorageFunc) {
 
 		// Queue should have 10 items
 		var list pb.StorageQueueListResponse
-		require.NoError(t, c.StorageQueueList(ctx, &pb.StorageQueueListRequest{
-			QueueName: queueName,
-			Limit:     10,
-		}, &list))
+		require.NoError(t, c.StorageQueueList(ctx, queueName, &list, &querator.ListOptions{Limit: 10}))
 		assert.Equal(t, 10, len(list.Items))
 		item := list.Items[0]
 
@@ -166,7 +158,7 @@ func testSuite(t *testing.T, newStore NewStorageFunc) {
 
 	t.Run("QueueProduceErrors", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, newStore, 5*time.Second)
+		d, c, ctx := newDaemon(t, _store, 5*time.Second)
 		defer d.Shutdown(t)
 		maxItems := randomProduceItems(1_001)
 
@@ -283,7 +275,7 @@ func testSuite(t *testing.T, newStore NewStorageFunc) {
 	t.Run("QueueReserveErrors", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
 		var clientID = random.String("client-", 10)
-		d, c, ctx := newDaemon(t, newStore, 5*time.Second)
+		d, c, ctx := newDaemon(t, _store, 5*time.Second)
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueueCreate(ctx, &pb.QueueOptions{Name: queueName}))
@@ -417,13 +409,13 @@ func (td *testDaemon) Context() context.Context {
 	return td.ctx
 }
 
-func newDaemon(t *testing.T, newStore NewStorageFunc, duration time.Duration) (*testDaemon, *querator.Client, context.Context) {
+func newDaemon(t *testing.T, s store.Storage, duration time.Duration) (*testDaemon, *querator.Client, context.Context) {
 	var err error
 	td := &testDaemon{}
 	td.ctx, td.cancel = context.WithTimeout(context.Background(), duration)
 	td.d, err = daemon.NewDaemon(td.ctx, daemon.Config{
-		Store:  newStore(),
 		Logger: log,
+		Store:  s,
 	})
 	require.NoError(t, err)
 	return td, td.d.MustClient(), td.ctx

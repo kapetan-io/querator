@@ -118,10 +118,27 @@ func (c *Client) QueueCreate(ctx context.Context, req *pb.QueueOptions) error {
 	return c.client.Do(r, &res)
 }
 
-func (c *Client) StorageQueueList(ctx context.Context, req *pb.StorageQueueListRequest,
-	res *pb.StorageQueueListResponse) error {
+type ListOptions struct {
+	Pivot string
+	Limit int
+}
 
-	payload, err := proto.Marshal(req)
+// TODO: Write an iterator we can use to iterate through list APIs
+
+func (c *Client) StorageQueueList(ctx context.Context, name string, res *pb.StorageQueueListResponse,
+	opts *ListOptions) error {
+
+	if opts == nil {
+		opts = &ListOptions{}
+	}
+
+	req := pb.StorageQueueListRequest{
+		Limit:     int32(opts.Limit),
+		Pivot:     opts.Pivot,
+		QueueName: name,
+	}
+
+	payload, err := proto.Marshal(&req)
 	if err != nil {
 		return duh.NewClientError("while marshaling request payload: %w", err, nil)
 	}

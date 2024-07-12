@@ -373,7 +373,7 @@ func (s *BuntQueue) Delete(_ context.Context, ids []string) error {
 
 // Stats returns some stats about the current state of the storage and the items within
 // TODO: Fix Stats, Stats items should be renamed and the stats collected corrected.
-func (s *BuntQueue) Stats(_ context.Context, stats *Stats) error {
+func (s *BuntQueue) Stats(_ context.Context, stats *types.QueueStats) error {
 	f := errors.Fields{"category", "bunt-db", "func", "Stats"}
 
 	tx, err := s.db.Begin(false)

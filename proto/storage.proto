@@ -21,29 +21,56 @@ import "google/protobuf/timestamp.proto";
 
 package querator;
 
-message StorageInspectRequest {
-  string id = 1;
-}
-
-message StorageListRequest {
+message StorageQueueListRequest {
   string queueName = 1 [json_name = "queue_name"];
   string pivot  = 2;
   int32 limit = 3;
 }
 
-message StorageListResponse {
-  repeated StorageItem items = 1;
+message StorageQueueListResponse {
+  repeated StorageQueueItem items = 1;
 }
 
-message StorageItem {
+message StorageQueueAddRequest {
+  string queueName = 1 [json_name = "queue_name"];
+  repeated StorageQueueItem items = 2;
+}
+
+message StorageQueueAddResponse {
+  repeated StorageQueueItem items = 2;
+}
+
+message StorageQueueDeleteRequest {
+  string queueName = 1 [json_name = "queue_name"];
+  repeated string ids = 2;
+}
+
+message StorageQueueStatsRequest {
+  string queueName = 1 [json_name = "queue_name"];
+}
+
+message StorageQueueStatsResponse {
+  // Total is the number of items in the queue
+  int32 total = 1;
+  // TotalReserved is the number of items in the queue that are in reserved state
+  int32 TotalReserved = 2 [json_name = "total_reserved"];
+  // AverageAge is the average age of all items in the queue
+  string AverageAge = 3 [json_name = "average_age"];
+  // AverageReservedAge is the average age of reserved items in the queue
+  string AverageReservedAge = 4 [json_name = "average_reserved_age"];
+}
+
+// StorageItem maps directly to the internal.types.Item and allows users to inspect items in storage
+message StorageQueueItem {
   string id = 1;
-  bool isReserved= 2  [json_name = "is_reserved"];
+  bool isReserved = 2  [json_name = "is_reserved"];
   google.protobuf.Timestamp reserveDeadline = 3 [json_name = "reserve_deadline"];
   google.protobuf.Timestamp deadDeadline = 4 [json_name = "dead_deadline"];
-  int32 attempts = 5;
-  int32 maxAttempts = 6 [json_name = "max_attempts"];
-  string reference = 7;
-  string encoding = 8;
-  string kind = 9;
-  bytes payload = 10;
+  google.protobuf.Timestamp createdAt = 5 [json_name = "created_at"];
+  int32 attempts = 6;
+  int32 maxAttempts = 7 [json_name = "max_attempts"];
+  string reference = 8;
+  string encoding = 9;
+  string kind = 10;
+  bytes payload = 11;
 }

@@ -366,7 +366,7 @@ func (q *BoltQueue) Delete(_ context.Context, ids []string) error {
 	})
 }
 
-func (q *BoltQueue) Stats(_ context.Context, stats *Stats) error {
+func (q *BoltQueue) Stats(_ context.Context, stats *types.QueueStats) error {
 	f := errors.Fields{"category", "bunt-db", "func", "Queue.Stats"}
 	now := time.Now().UTC()
 

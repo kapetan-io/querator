@@ -18,33 +18,12 @@ import (
 	"time"
 )
 
-type NewFunc func() store.Storage
-
 var log = slog.New(slog.NewTextHandler(io.Discard, nil))
-
-//func TestBrokenStorage(t *testing.T) {
-//	var queueName = random.String("queue-", 10)
-//	opts := &store.MockOptions{}
-//	newStore := func() store.Storage {
-//		return store.NewMockStorage(opts)
-//	}
-//
-//	d, c, ctx := newDaemon(t, newStore, 10*time.Second)
-//	defer d.Shutdown(t)
-//
-//	opts.Methods["Queue.Produce"] = func(args []any) error {
-//		return errors.New("unknown storage error")
-//	}
-//
-//	// TODO: QueueCreate should create a queue in storage
-//	require.NoError(t, c.QueueCreate(ctx, &pb.QueueOptions{Name: queueName}))
-//
-//}
 
 func TestFunctionalSuite(t *testing.T) {
 	testCases := []struct {
 		Name string
-		New  NewFunc
+		New  NewStorageFunc
 	}{
 		{
 			Name: "BuntDB",
@@ -64,7 +43,7 @@ func TestFunctionalSuite(t *testing.T) {
 	}
 }
 
-func testSuite(t *testing.T, newStore NewFunc) {
+func testSuite(t *testing.T, newStore NewStorageFunc) {
 
 	t.Run("ProduceAndConsume", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
@@ -110,25 +89,21 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		assert.Equal(t, int32(0), item.Attempts)
 		assert.Equal(t, payload, item.Bytes)
 
-		// Ensure the item is in storage and marked as reserved
-		var inspect pb.StorageItem
-		require.NoError(t, c.StorageInspect(ctx, item.Id, &inspect))
+		// Queue storage should have only one item
+		var list pb.StorageQueueListResponse
+		require.NoError(t, c.StorageQueueList(ctx, &pb.StorageQueueListRequest{
+			QueueName: queueName,
+			Limit:     10,
+		}, &list))
+		require.Equal(t, 1, len(list.Items))
 
+		inspect := list.Items[0]
 		assert.Equal(t, ref, inspect.Reference)
 		assert.Equal(t, kind, inspect.Kind)
 		assert.Equal(t, int32(0), inspect.Attempts)
 		assert.Equal(t, payload, inspect.Payload)
 		assert.Equal(t, item.Id, inspect.Id)
 		assert.Equal(t, true, inspect.IsReserved)
-
-		// Queue storage should have only one item
-		var list pb.StorageListResponse
-		require.NoError(t, c.StorageList(ctx, &pb.StorageListRequest{
-			QueueName: queueName,
-			Pivot:     "",
-			Limit:     10,
-		}, &list))
-		assert.Equal(t, 1, len(list.Items))
 
 		// Mark the item as complete
 		require.NoError(t, c.QueueComplete(ctx, &pb.QueueCompleteRequest{
@@ -140,9 +115,8 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		}))
 
 		// Queue storage should be empty
-		require.NoError(t, c.StorageList(ctx, &pb.StorageListRequest{
+		require.NoError(t, c.StorageQueueList(ctx, &pb.StorageQueueListRequest{
 			QueueName: queueName,
-			Pivot:     "",
 			Limit:     10,
 		}, &list))
 
@@ -165,10 +139,9 @@ func testSuite(t *testing.T, newStore NewFunc) {
 		}))
 
 		// Queue should have 10 items
-		var list pb.StorageListResponse
-		require.NoError(t, c.StorageList(ctx, &pb.StorageListRequest{
+		var list pb.StorageQueueListResponse
+		require.NoError(t, c.StorageQueueList(ctx, &pb.StorageQueueListRequest{
 			QueueName: queueName,
-			Pivot:     "",
 			Limit:     10,
 		}, &list))
 		assert.Equal(t, 10, len(list.Items))
@@ -444,7 +417,7 @@ func (td *testDaemon) Context() context.Context {
 	return td.ctx
 }
 
-func newDaemon(t *testing.T, newStore NewFunc, duration time.Duration) (*testDaemon, *querator.Client, context.Context) {
+func newDaemon(t *testing.T, newStore NewStorageFunc, duration time.Duration) (*testDaemon, *querator.Client, context.Context) {
 	var err error
 	td := &testDaemon{}
 	td.ctx, td.cancel = context.WithTimeout(context.Background(), duration)

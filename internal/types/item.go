@@ -39,6 +39,7 @@ type Item struct {
 	Payload []byte
 }
 
+// TODO: Remove if not needed
 func (i *Item) Compare(r *Item) bool {
 	if i.ID != r.ID {
 		return false
@@ -73,9 +74,10 @@ func (i *Item) Compare(r *Item) bool {
 	return true
 }
 
-func (i *Item) ToStorageItemProto(in *pb.StorageItem) *pb.StorageItem {
+func (i *Item) ToProto(in *pb.StorageQueueItem) *pb.StorageQueueItem {
 	in.ReserveDeadline = timestamppb.New(i.ReserveDeadline)
 	in.DeadDeadline = timestamppb.New(i.DeadDeadline)
+	in.CreatedAt = timestamppb.New(i.CreatedAt)
 	in.Attempts = int32(i.Attempts)
 	in.MaxAttempts = int32(i.MaxAttempts)
 	in.IsReserved = i.IsReserved
@@ -85,4 +87,19 @@ func (i *Item) ToStorageItemProto(in *pb.StorageItem) *pb.StorageItem {
 	in.Kind = i.Kind
 	in.Id = i.ID
 	return in
+}
+
+func (i *Item) FromProto(in *pb.StorageQueueItem) *Item {
+	i.ReserveDeadline = in.ReserveDeadline.AsTime()
+	i.DeadDeadline = in.DeadDeadline.AsTime()
+	i.CreatedAt = in.CreatedAt.AsTime()
+	i.Attempts = int(in.Attempts)
+	i.MaxAttempts = int(in.MaxAttempts)
+	i.IsReserved = in.IsReserved
+	i.Reference = in.Reference
+	i.Encoding = in.Encoding
+	i.Payload = in.Payload
+	i.Kind = in.Kind
+	i.ID = in.Id
+	return i
 }

@@ -38,20 +38,6 @@ type ReserveOptions struct {
 	ReserveDeadline time.Time
 }
 
-type Stats struct {
-	// Total is the number of items in the queue
-	Total int
-
-	// TotalReserved is the number of items in the queue that are in reserved state
-	TotalReserved int
-
-	// AverageAge is the average age of all items in the queue
-	AverageAge time.Duration
-
-	// AverageReservedAge is the average age of reserved items in the queue
-	AverageReservedAge time.Duration
-}
-
 type QueueStoreOptions struct{}
 
 // QueueStore is storage for listing and storing information about queues
@@ -105,7 +91,7 @@ type Queue interface {
 	Delete(ctx context.Context, ids []string) error
 
 	// Stats returns stats about the queue
-	Stats(ctx context.Context, stats *Stats) error
+	Stats(ctx context.Context, stats *types.QueueStats) error
 
 	Close(ctx context.Context) error
 }

@@ -31,14 +31,21 @@ const (
 	RPCQueueReserve  = "/v1/queue.reserve"
 	RPCQueueDefer    = "/v1/queue.defer"
 	RPCQueueComplete = "/v1/queue.complete"
-	RPCQueueList     = "/v1/queue.list"
-	RPCQueueCreate   = "/v1/queue.create"
-	RPCQueueDelete   = "/v1/queue.delete"
-	RPCQueueInspect  = "/v1/queue.inspect"
 
-	RPCStorageInspect = "/v1/storage.inspect"
-	RPCStorageList    = "/v1/storage.list"
-	// TODO: How do we inspect scheduled items?
+	RPCQueueList   = "/v1/queue.list"
+	RPCQueueCreate = "/v1/queue.create"
+	RPCQueueDelete = "/v1/queue.delete"
+	RPCQueueUpdate = "/v1/queue.update"
+
+	RPCStorageQueueList   = "/v1/storage/queue.list"
+	RPCStorageQueueAdd    = "/v1/storage/queue.add"
+	RPCStorageQueueDelete = "/v1/storage/queue.delete"
+	RPCStorageQueueStats  = "/v1/storage/queue.stats"
+
+	RPCStorageScheduleList     = "/v1/storage/schedule.list"
+	RPCStorageScheduleQueueAdd = "/v1/storage/schedule.add"
+	RPCStorageScheduleDelete   = "/v1/storage/schedule.delete"
+	RPCStorageScheduleStats    = "/v1/storage/schedule.stats"
 )
 
 // Service exists to provide an abstraction from other public capabilities.
@@ -55,8 +62,11 @@ type Service interface {
 	QueueCreate(context.Context, *proto.QueueOptions) error
 	QueueReserve(context.Context, *proto.QueueReserveRequest, *proto.QueueReserveResponse) error
 	QueueComplete(context.Context, *proto.QueueCompleteRequest) error
-	StorageList(context.Context, *proto.StorageListRequest, *proto.StorageListResponse) error
-	StorageInspect(context.Context, *proto.StorageInspectRequest, *proto.StorageItem) error
+
+	StorageQueueList(context.Context, *proto.StorageQueueListRequest, *proto.StorageQueueListResponse) error
+	StorageQueueAdd(context.Context, *proto.StorageQueueAddRequest, *proto.StorageQueueAddResponse) error
+	StorageQueueDelete(context.Context, *proto.StorageQueueDeleteRequest) error
+	StorageQueueStats(context.Context, *proto.StorageQueueStatsRequest, *proto.StorageQueueStatsResponse) error
 }
 
 type HTTPHandler struct {
@@ -90,8 +100,8 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Implement a custom duh.Reply method to capture internal errors and log them instead of returning them
-	//  to the caller.
+	// TODO: Implement a custom duh.Reply method to capture internal errors and log them
+	//  instead of returning them to the caller.
 
 	switch r.URL.Path {
 	case RPCQueueProduce:
@@ -109,12 +119,18 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.QueueCreate(ctx, w, r)
 		return
 	case RPCQueueDelete:
-	case RPCQueueInspect:
-	case RPCStorageInspect:
-		h.StorageInspect(ctx, w, r)
+	case RPCQueueUpdate:
+	case RPCStorageQueueList:
+		h.StorageQueueList(ctx, w, r)
 		return
-	case RPCStorageList:
-		h.StorageList(ctx, w, r)
+	case RPCStorageQueueAdd:
+		h.StorageQueueAdd(ctx, w, r)
+		return
+	case RPCStorageQueueDelete:
+		h.StorageQueueDelete(ctx, w, r)
+		return
+	case RPCStorageQueueStats:
+		h.StorageQueueStats(ctx, w, r)
 		return
 	case "/metrics":
 		h.metrics.ServeHTTP(w, r)
@@ -180,30 +196,59 @@ func (h *HTTPHandler) QueueCreate(ctx context.Context, w http.ResponseWriter, r 
 	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
 }
 
-func (h *HTTPHandler) StorageList(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-	var req proto.StorageListRequest
+func (h *HTTPHandler) StorageQueueList(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req proto.StorageQueueListRequest
 	if err := duh.ReadRequest(r, &req); err != nil {
 		duh.ReplyError(w, r, err)
 		return
 	}
 
-	var resp proto.StorageListResponse
-	if err := h.service.StorageList(ctx, &req, &resp); err != nil {
+	var resp proto.StorageQueueListResponse
+	if err := h.service.StorageQueueList(ctx, &req, &resp); err != nil {
 		duh.ReplyError(w, r, err)
 		return
 	}
 	duh.Reply(w, r, duh.CodeOK, &resp)
 }
 
-func (h *HTTPHandler) StorageInspect(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-	var req proto.StorageInspectRequest
+func (h *HTTPHandler) StorageQueueAdd(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req proto.StorageQueueAddRequest
 	if err := duh.ReadRequest(r, &req); err != nil {
 		duh.ReplyError(w, r, err)
 		return
 	}
 
-	var resp proto.StorageItem
-	if err := h.service.StorageInspect(ctx, &req, &resp); err != nil {
+	var resp proto.StorageQueueAddResponse
+	if err := h.service.StorageQueueAdd(ctx, &req, &resp); err != nil {
+		duh.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &resp)
+}
+
+func (h *HTTPHandler) StorageQueueDelete(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req proto.StorageQueueDeleteRequest
+	if err := duh.ReadRequest(r, &req); err != nil {
+		duh.ReplyError(w, r, err)
+		return
+	}
+
+	if err := h.service.StorageQueueDelete(ctx, &req); err != nil {
+		duh.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
+}
+
+func (h *HTTPHandler) StorageQueueStats(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req proto.StorageQueueStatsRequest
+	if err := duh.ReadRequest(r, &req); err != nil {
+		duh.ReplyError(w, r, err)
+		return
+	}
+
+	var resp proto.StorageQueueStatsResponse
+	if err := h.service.StorageQueueStats(ctx, &req, &resp); err != nil {
 		duh.ReplyError(w, r, err)
 		return
 	}

@@ -86,7 +86,7 @@ func (m *MockQueue) Delete(ctx context.Context, ids []string) error {
 	panic("implement me")
 }
 
-func (m *MockQueue) Stats(ctx context.Context, stats *Stats) error {
+func (m *MockQueue) Stats(ctx context.Context, stats *types.QueueStats) error {
 	//TODO implement me
 	panic("implement me")
 }

@@ -25,6 +25,10 @@ const (
 	queueChSize       = 20_000
 	maxRequestTimeout = 15 * time.Minute
 	minRequestTimeout = 10 * time.Millisecond
+	MethodList        = "list"
+	MethodAdd         = "add"
+	MethodDelete      = "delete"
+	MethodStats       = "stats"
 )
 
 type QueueOptions struct {
@@ -467,16 +471,8 @@ func (q *Queue) synchronizationLoop() {
 
 		// -----------------------------------------------
 		case req := <-q.storageQueueCh:
-			if req.ID != "" {
-				if err := q.opts.QueueStore.List(req.Context, &req.Items,
-					types.ListOptions{Pivot: req.ID, Limit: 1}); err != nil {
-					req.Err = err
-				}
-			} else {
-				if err := q.opts.QueueStore.List(req.Context, &req.Items,
-					types.ListOptions{Pivot: req.Pivot, Limit: req.Limit}); err != nil {
-					req.Err = err
-				}
+			if err := q.handleStorageQueue(req); err != nil {
+				req.Err = err
 			}
 			close(req.ReadyCh)
 
@@ -529,6 +525,29 @@ func (q *Queue) Shutdown(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+func (q *Queue) handleStorageQueue(req *types.StorageRequest) error {
+	switch req.Method {
+	case MethodList:
+		if err := q.opts.QueueStore.List(req.Context, &req.Items,
+			types.ListOptions{Pivot: req.Pivot, Limit: req.Limit}); err != nil {
+			return err
+		}
+	case MethodAdd:
+		if err := q.opts.QueueStore.Add(req.Context, req.Items); err != nil {
+			return err
+		}
+	case MethodDelete:
+		if err := q.opts.QueueStore.Delete(req.Context, req.IDs); err != nil {
+			return err
+		}
+	case MethodStats:
+		if err := q.opts.QueueStore.Stats(req.Context, req.Stats); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // addIfUnique adds a ReserveRequest to the batch. Returns false if the ReserveRequest.ClientID is a duplicate

@@ -150,11 +150,8 @@ func (s *Service) QueueCreate(ctx context.Context, req *proto.QueueOptions) erro
 	return nil
 }
 
-func (s *Service) StorageList(ctx context.Context, req *proto.StorageListRequest, res *proto.StorageListResponse) error {
-	if req.Limit > 1_000 {
-		return transport.NewInvalidOption("limit exceeds maximum limit;"+
-			" max limit is 1,000 requested '%d'", req.Limit)
-	}
+func (s *Service) StorageQueueList(ctx context.Context, req *proto.StorageQueueListRequest,
+	res *proto.StorageQueueListResponse) error {
 
 	if strings.TrimSpace(req.QueueName) == "" {
 		return transport.NewInvalidOption("queue name cannot be empty")
@@ -165,36 +162,90 @@ func (s *Service) StorageList(ctx context.Context, req *proto.StorageListRequest
 		return err
 	}
 
-	r := types.StorageRequest{Pivot: req.Pivot, Limit: int(req.Limit)}
+	r := types.StorageRequest{Method: internal.MethodList, Pivot: req.Pivot, Limit: int(req.Limit)}
 	if err := queue.Storage(ctx, &r); err != nil {
-		return transport.NewRequestFailed("list request failed; %s", err)
+		return err
 	}
 
 	for _, item := range r.Items {
-		res.Items = append(res.Items, item.ToStorageItemProto(new(proto.StorageItem)))
+		res.Items = append(res.Items, item.ToProto(new(proto.StorageQueueItem)))
 	}
 
 	return nil
 }
 
-func (s *Service) StorageInspect(ctx context.Context, req *proto.StorageInspectRequest, res *proto.StorageItem) error {
+func (s *Service) StorageQueueAdd(ctx context.Context, req *proto.StorageQueueAddRequest,
+	res *proto.StorageQueueAddResponse) error {
 
-	var sid store.StorageID
-	if err := s.opts.Storage.ParseID(req.Id, &sid); err != nil {
-		return transport.NewInvalidOption("invalid storage id; %s", err)
+	if strings.TrimSpace(req.QueueName) == "" {
+		return transport.NewInvalidOption("queue name cannot be empty")
 	}
 
-	queue, err := s.manager.Get(ctx, sid.Queue)
+	queue, err := s.manager.Get(ctx, req.QueueName)
 	if err != nil {
 		return err
 	}
 
-	r := types.StorageRequest{ID: req.Id}
-	if err := queue.Storage(ctx, &r); err != nil {
-		return transport.NewRequestFailed("inspect request failed; %s", err)
+	r := types.StorageRequest{
+		Items:  make([]*types.Item, 0, len(req.Items)),
+		Method: internal.MethodAdd,
+	}
+	for _, item := range req.Items {
+		i := new(types.Item)
+		r.Items = append(r.Items, i.FromProto(item))
 	}
 
-	r.Items[0].ToStorageItemProto(res)
+	if err := queue.Storage(ctx, &r); err != nil {
+		return err
+	}
+
+	for _, item := range r.Items {
+		res.Items = append(res.Items, item.ToProto(new(proto.StorageQueueItem)))
+	}
+
+	return nil
+}
+
+func (s *Service) StorageQueueDelete(ctx context.Context, req *proto.StorageQueueDeleteRequest) error {
+
+	if strings.TrimSpace(req.QueueName) == "" {
+		return transport.NewInvalidOption("queue name cannot be empty")
+	}
+
+	queue, err := s.manager.Get(ctx, req.QueueName)
+	if err != nil {
+		return err
+	}
+
+	r := types.StorageRequest{Method: internal.MethodDelete, IDs: req.Ids}
+	if err := queue.Storage(ctx, &r); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Service) StorageQueueStats(ctx context.Context, req *proto.StorageQueueStatsRequest,
+	res *proto.StorageQueueStatsResponse) error {
+
+	if strings.TrimSpace(req.QueueName) == "" {
+		return transport.NewInvalidOption("queue name cannot be empty")
+	}
+
+	queue, err := s.manager.Get(ctx, req.QueueName)
+	if err != nil {
+		return err
+	}
+
+	var stats types.QueueStats
+	r := types.StorageRequest{Method: internal.MethodStats, Stats: &stats}
+	if err := queue.Storage(ctx, &r); err != nil {
+		return err
+	}
+
+	res.AverageAge = stats.AverageAge.String()
+	res.AverageReservedAge = stats.AverageReservedAge.String()
+	res.Total = int32(stats.Total)
+	res.TotalReserved = int32(stats.TotalReserved)
 	return nil
 }
 

@@ -118,14 +118,16 @@ func (c *Client) QueueCreate(ctx context.Context, req *pb.QueueOptions) error {
 	return c.client.Do(r, &res)
 }
 
-func (c *Client) StorageList(ctx context.Context, req *pb.StorageListRequest, res *pb.StorageListResponse) error {
+func (c *Client) StorageQueueList(ctx context.Context, req *pb.StorageQueueListRequest,
+	res *pb.StorageQueueListResponse) error {
+
 	payload, err := proto.Marshal(req)
 	if err != nil {
 		return duh.NewClientError("while marshaling request payload: %w", err, nil)
 	}
 
 	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		fmt.Sprintf("%s%s", c.opts.Endpoint, transport.RPCStorageList), bytes.NewReader(payload))
+		fmt.Sprintf("%s%s", c.opts.Endpoint, transport.RPCStorageQueueList), bytes.NewReader(payload))
 	if err != nil {
 		return duh.NewClientError("", err, nil)
 	}
@@ -134,14 +136,52 @@ func (c *Client) StorageList(ctx context.Context, req *pb.StorageListRequest, re
 	return c.client.Do(r, res)
 }
 
-func (c *Client) StorageInspect(ctx context.Context, id string, res *pb.StorageItem) error {
-	payload, err := proto.Marshal(&pb.StorageInspectRequest{Id: id})
+func (c *Client) StorageQueueAdd(ctx context.Context, req *pb.StorageQueueAddRequest,
+	res *pb.StorageQueueAddResponse) error {
+
+	payload, err := proto.Marshal(req)
 	if err != nil {
 		return duh.NewClientError("while marshaling request payload: %w", err, nil)
 	}
 
 	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		fmt.Sprintf("%s%s", c.opts.Endpoint, transport.RPCStorageInspect), bytes.NewReader(payload))
+		fmt.Sprintf("%s%s", c.opts.Endpoint, transport.RPCStorageQueueAdd), bytes.NewReader(payload))
+	if err != nil {
+		return duh.NewClientError("", err, nil)
+	}
+
+	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	return c.client.Do(r, res)
+}
+
+func (c *Client) StorageQueueDelete(ctx context.Context, req *pb.StorageQueueAddRequest) error {
+
+	payload, err := proto.Marshal(req)
+	if err != nil {
+		return duh.NewClientError("while marshaling request payload: %w", err, nil)
+	}
+
+	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("%s%s", c.opts.Endpoint, transport.RPCStorageQueueDelete), bytes.NewReader(payload))
+	if err != nil {
+		return duh.NewClientError("", err, nil)
+	}
+
+	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	var res v1.Reply
+	return c.client.Do(r, &res)
+}
+
+func (c *Client) StorageQueueStats(ctx context.Context, req *pb.StorageQueueStatsRequest,
+	res *pb.StorageQueueStatsResponse) error {
+
+	payload, err := proto.Marshal(req)
+	if err != nil {
+		return duh.NewClientError("while marshaling request payload: %w", err, nil)
+	}
+
+	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("%s%s", c.opts.Endpoint, transport.RPCStorageQueueStats), bytes.NewReader(payload))
 	if err != nil {
 		return duh.NewClientError("", err, nil)
 	}

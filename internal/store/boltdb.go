@@ -506,7 +506,7 @@ func (s BoltQueueStore) List(_ context.Context, queues *[]*QueueInfo, opts types
 	})
 }
 
-func (s BoltQueueStore) Delete(ctx context.Context, queueName string) error {
+func (s BoltQueueStore) Delete(_ context.Context, name string) error {
 	f := errors.Fields{"category", "bolt", "func", "QueueStore.Delete"}
 
 	return s.db.Update(func(tx *bolt.Tx) error {
@@ -515,8 +515,10 @@ func (s BoltQueueStore) Delete(ctx context.Context, queueName string) error {
 			return f.Error("bucket does not exist in data file")
 		}
 
-		// TODO: <---- FINISH HIM
-
+		if err := b.Delete([]byte(name)); err != nil {
+			return f.Errorf("during Delete(%s): %w", name, err)
+		}
+		return nil
 	})
 }
 

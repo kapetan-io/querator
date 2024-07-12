@@ -468,11 +468,13 @@ func (q *Queue) synchronizationLoop() {
 		// -----------------------------------------------
 		case req := <-q.storageQueueCh:
 			if req.ID != "" {
-				if err := q.opts.QueueStore.List(req.Context, &req.Items, req.ID, 1); err != nil {
+				if err := q.opts.QueueStore.List(req.Context, &req.Items,
+					types.ListOptions{Pivot: req.ID, Limit: 1}); err != nil {
 					req.Err = err
 				}
 			} else {
-				if err := q.opts.QueueStore.List(req.Context, &req.Items, req.Pivot, req.Limit); err != nil {
+				if err := q.opts.QueueStore.List(req.Context, &req.Items,
+					types.ListOptions{Pivot: req.Pivot, Limit: req.Limit}); err != nil {
 					req.Err = err
 				}
 			}

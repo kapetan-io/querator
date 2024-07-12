@@ -20,6 +20,8 @@ type Item struct {
 	// DeadDeadline is the time in the future the item must be consumed,
 	// before it is considered dead and moved to the dead letter queue if configured.
 	DeadDeadline time.Time
+	// CreatedAt is the time stamp when this item was added to the database.
+	CreatedAt time.Time
 	// Attempts is how many attempts this item has seen
 	Attempts int
 	// MaxAttempts is the maximum number of times this message can be deferred by a consumer before it is
@@ -48,6 +50,9 @@ func (i *Item) Compare(r *Item) bool {
 		return false
 	}
 	if i.ReserveDeadline.Compare(r.ReserveDeadline) != 0 {
+		return false
+	}
+	if i.CreatedAt.Compare(r.CreatedAt) != 0 {
 		return false
 	}
 	if i.Attempts != r.Attempts {

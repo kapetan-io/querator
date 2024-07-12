@@ -29,7 +29,7 @@ type Storage interface {
 	NewQueueStore(opts QueueStoreOptions) (QueueStore, error)
 
 	ParseID(parse string, id *StorageID) error
-	CreateID(queue, id string) string
+	BuildStorageID(queue, id string) string
 	Close(ctx context.Context) error
 }
 
@@ -56,18 +56,20 @@ type QueueStoreOptions struct{}
 
 // QueueStore is storage for listing and storing information about queues
 type QueueStore interface {
-	// Get returns a store.Queue from storage ready to be used
+	// Get returns a store.Queue from storage ready to be used. Returns ErrQueueNotExist if the
+	// queue requested does not exist
 	Get(ctx context.Context, name string, queue *QueueInfo) error
 
-	// Set a queue in the store
+	// Set a queue in the store, if the queue already exists, it updates the existing QueueInfo
 	Set(ctx context.Context, opts QueueInfo) error
 
 	// List returns a list of queues
 	List(ctx context.Context, queues *[]*QueueInfo, opts types.ListOptions) error
 
-	// Delete deletes a queue
+	// Delete deletes a queue. Returns without error if the queue does not exist
 	Delete(ctx context.Context, queueName string) error
 
+	// Close the all open database connections or files
 	Close(ctx context.Context) error
 }
 
@@ -92,15 +94,12 @@ type Queue interface {
 	// the caller should assume none of the batched items were marked as "complete"
 	Complete(ctx context.Context, batch types.Batch[types.CompleteRequest]) error
 
-	// Read reads items in a queue. limit and offset allow the user to page through all the items
+	// List lists items in a queue. limit and offset allow the user to page through all the items
 	// in the queue.
-	// TODO: Consider switching to `List()` with types.ListOptions
-	Read(ctx context.Context, items *[]*types.Item, pivot string, limit int) error
+	List(ctx context.Context, items *[]*types.Item, opts types.ListOptions) error
 
-	// Write writes the item to the queue and updates the item with the
-	// unique id.
-	// TODO: Consider renaming to `Add()`
-	Write(ctx context.Context, items []*types.Item) error
+	// Add adds the item to the queue and updates the item with the unique id.
+	Add(ctx context.Context, items []*types.Item) error
 
 	// Delete removes the provided ids from the queue
 	Delete(ctx context.Context, ids []string) error

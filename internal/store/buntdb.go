@@ -55,8 +55,6 @@ import (
 // I couldn't identify. This leads me to think that using `AscendGreaterOrEqual()` captures the panic and attempts
 // to handle it in an undesirable way. I didn't spend time figuring it out.
 
-var ErrQueueNotExist = transport.NewRequestFailed("queue does not exist")
-
 type BuntOptions struct {
 	Logger duh.StandardLogger
 }
@@ -81,7 +79,7 @@ func (b *BuntStorage) ParseID(parse string, id *StorageID) error {
 	return nil
 }
 
-func (b *BuntStorage) CreateID(name, id string) string {
+func (b *BuntStorage) BuildStorageID(name, id string) string {
 	return fmt.Sprintf("%s~%s", name, id)
 }
 
@@ -143,7 +141,7 @@ func (s *BuntQueue) Produce(_ context.Context, batch types.Batch[types.ProduceRe
 			if err := buntSet(f, tx, item); err != nil {
 				return err
 			}
-			item.ID = s.storage.CreateID(s.opts.Name, item.ID)
+			item.ID = s.storage.BuildStorageID(s.opts.Name, item.ID)
 		}
 	}
 
@@ -214,7 +212,7 @@ func (s *BuntQueue) Reserve(_ context.Context, batch types.ReserveBatch, opts Re
 			if err := buntSet(f, tx, item); err != nil {
 				return err
 			}
-			item.ID = s.storage.CreateID(s.opts.Name, item.ID)
+			item.ID = s.storage.BuildStorageID(s.opts.Name, item.ID)
 		}
 	}
 
@@ -271,8 +269,8 @@ nextBatch:
 	return nil
 }
 
-func (s *BuntQueue) Read(_ context.Context, items *[]*types.Item, pivot string, limit int) error {
-	f := errors.Fields{"category", "bunt-db", "func", "Read"}
+func (s *BuntQueue) List(_ context.Context, items *[]*types.Item, opts types.ListOptions) error {
+	f := errors.Fields{"category", "bunt-db", "func", "List"}
 
 	tx, err := s.db.Begin(false)
 	if err != nil {
@@ -282,14 +280,14 @@ func (s *BuntQueue) Read(_ context.Context, items *[]*types.Item, pivot string, 
 	var iterErr error
 	var count int
 	var sid StorageID
-	if pivot != "" {
-		if err := s.storage.ParseID(pivot, &sid); err != nil {
-			return transport.NewInvalidOption("invalid storage id; '%s': %s", pivot, err)
+	if opts.Pivot != "" {
+		if err := s.storage.ParseID(opts.Pivot, &sid); err != nil {
+			return transport.NewInvalidOption("invalid storage id; '%s': %s", opts.Pivot, err)
 		}
 	}
 
 	err = tx.AscendGreaterOrEqual("", string(sid.ID), func(key, value string) bool {
-		if count >= limit {
+		if count >= opts.Limit {
 			return false
 		}
 		// TODO: Grab from the memory pool
@@ -298,7 +296,7 @@ func (s *BuntQueue) Read(_ context.Context, items *[]*types.Item, pivot string, 
 			iterErr = f.Errorf("during json.Unmarshal(): %w", err)
 			return false
 		}
-		item.ID = s.storage.CreateID(s.opts.Name, item.ID)
+		item.ID = s.storage.BuildStorageID(s.opts.Name, item.ID)
 		*items = append(*items, item)
 		count++
 		return true
@@ -317,8 +315,8 @@ func (s *BuntQueue) Read(_ context.Context, items *[]*types.Item, pivot string, 
 	return nil
 }
 
-func (s *BuntQueue) Write(_ context.Context, items []*types.Item) error {
-	f := errors.Fields{"category", "bunt-db", "func", "Write"}
+func (s *BuntQueue) Add(_ context.Context, items []*types.Item) error {
+	f := errors.Fields{"category", "bunt-db", "func", "Add"}
 
 	tx, err := s.db.Begin(true)
 	if err != nil {
@@ -332,7 +330,7 @@ func (s *BuntQueue) Write(_ context.Context, items []*types.Item) error {
 		if err := buntSet(f, tx, item); err != nil {
 			return err
 		}
-		item.ID = s.storage.CreateID(s.opts.Name, item.ID)
+		item.ID = s.storage.BuildStorageID(s.opts.Name, item.ID)
 	}
 
 	err = tx.Commit()

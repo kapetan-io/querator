@@ -75,11 +75,11 @@ func testQueue(t *testing.T, newStore NewStorageFunc) {
 			Payload:         []byte("Whining? I am not whining, I am complaining"),
 		})
 
-		err = q.Write(ctx, items)
+		err = q.Add(ctx, items)
 		require.NoError(t, err)
 
 		var reads []*types.Item
-		err = q.Read(ctx, &reads, "", 2)
+		err = q.List(ctx, &reads, types.ListOptions{Limit: 2})
 		require.NoError(t, err)
 
 		assert.Equal(t, len(reads), len(items))
@@ -111,6 +111,7 @@ func testQueue(t *testing.T, newStore NewStorageFunc) {
 			IsReserved:      false,
 			DeadDeadline:    now.Add(1_000_000 * time.Minute),
 			ReserveDeadline: now.Add(2_000 * time.Minute),
+			CreatedAt:       now,
 			Attempts:        100_000,
 			Reference:       "discord@dash.com",
 			Encoding:        "Lord of Chaos",
@@ -122,6 +123,7 @@ func testQueue(t *testing.T, newStore NewStorageFunc) {
 			IsReserved:      false,
 			DeadDeadline:    now.Add(1_000_000 * time.Minute),
 			ReserveDeadline: now.Add(2_000 * time.Minute),
+			CreatedAt:       now,
 			Attempts:        100_000,
 			Reference:       "discord@dash.com",
 			Encoding:        "Lord of Chaos",
@@ -165,7 +167,7 @@ func testQueue(t *testing.T, newStore NewStorageFunc) {
 		items := writeRandomItems(t, ctx, q, 10_000)
 
 		var read []*types.Item
-		err = q.Read(ctx, &read, "", 10_000)
+		err = q.List(ctx, &read, types.ListOptions{Limit: 10_000})
 		require.NoError(t, err)
 
 		assert.Equal(t, len(items), len(read))
@@ -182,7 +184,7 @@ func testQueue(t *testing.T, newStore NewStorageFunc) {
 		// Ensure if we ask for more than is available, we only get what is in the db.
 		t.Run("AskForMoreThanIsAvailable", func(t *testing.T) {
 			var more []*types.Item
-			err = q.Read(ctx, &more, "", 20_000)
+			err = q.List(ctx, &more, types.ListOptions{Limit: 20_000})
 			require.NoError(t, err)
 			assert.Equal(t, 10_000, len(more))
 			assert.True(t, items[0].Compare(more[0]),
@@ -192,7 +194,7 @@ func testQueue(t *testing.T, newStore NewStorageFunc) {
 
 			// Ensure if we limit the read, we get only the amount requested
 			var limit []*types.Item
-			err = q.Read(ctx, &limit, "", 1_000)
+			err = q.List(ctx, &limit, types.ListOptions{Limit: 1_000})
 			require.NoError(t, err)
 			assert.Equal(t, 1_000, len(limit))
 			assert.True(t, items[0].Compare(limit[0]),
@@ -203,7 +205,7 @@ func testQueue(t *testing.T, newStore NewStorageFunc) {
 
 		t.Run("AskForLessThanIsAvailable", func(t *testing.T) {
 			var less []*types.Item
-			require.NoError(t, q.Read(ctx, &less, "", 10))
+			require.NoError(t, q.List(ctx, &less, types.ListOptions{Limit: 10}))
 			assert.Equal(t, 10, len(less))
 		})
 	})
@@ -221,7 +223,7 @@ func testQueue(t *testing.T, newStore NewStorageFunc) {
 
 		id := items[1000].ID
 		var read []*types.Item
-		err = q.Read(ctx, &read, id, 10)
+		err = q.List(ctx, &read, types.ListOptions{Pivot: id, Limit: 10})
 		require.NoError(t, err)
 
 		assert.Equal(t, 10, len(read))
@@ -238,7 +240,7 @@ func testQueue(t *testing.T, newStore NewStorageFunc) {
 		// The read includes the pivot
 		item := read[9]
 		read = read[:0]
-		err = q.Read(ctx, &read, item.ID, 1)
+		err = q.List(ctx, &read, types.ListOptions{Pivot: item.ID, Limit: 1})
 		require.NoError(t, err)
 
 		require.Equal(t, 1, len(read))
@@ -247,12 +249,12 @@ func testQueue(t *testing.T, newStore NewStorageFunc) {
 
 		// Pivot through more pages and ensure the pivot allows us to page through items
 		read = read[0:]
-		err = q.Read(ctx, &read, item.ID, 10)
+		err = q.List(ctx, &read, types.ListOptions{Pivot: item.ID, Limit: 10})
 		require.NoError(t, err)
 
 		item = read[9]
 		read = read[:0]
-		err = q.Read(ctx, &read, item.ID, 10)
+		err = q.List(ctx, &read, types.ListOptions{Pivot: item.ID, Limit: 10})
 		require.NoError(t, err)
 
 		// The last item on the last page, should match the items written
@@ -290,7 +292,7 @@ func testQueue(t *testing.T, newStore NewStorageFunc) {
 
 		// Ensure the items produced are in the database
 		var read []*types.Item
-		err = q.Read(ctx, &read, "", 10_000)
+		err = q.List(ctx, &read, types.ListOptions{Limit: 10_000})
 		require.NoError(t, err)
 		require.Len(t, items, 10)
 
@@ -333,7 +335,7 @@ func testQueue(t *testing.T, newStore NewStorageFunc) {
 			require.Equal(t, 10, len(reserved))
 
 			// Ensure the items reserved are marked as reserved in the database
-			err = q.Read(ctx, &read, "", 10_000)
+			err = q.List(ctx, &read, types.ListOptions{Limit: 10_000})
 			require.NoError(t, err)
 
 			for i := range reserved {
@@ -354,14 +356,14 @@ func testQueue(t *testing.T, newStore NewStorageFunc) {
 			secondReserve = batch.Requests[0].Items
 
 			read = read[:0]
-			err = q.Read(ctx, &read, "", 10_000)
+			err = q.List(ctx, &read, types.ListOptions{Limit: 10_000})
 			require.NoError(t, err)
 
 			var combined []*types.Item
 			combined = append(combined, reserved...)
 			combined = append(combined, secondReserve...)
 
-			err = q.Read(ctx, &read, "", 10_000)
+			err = q.List(ctx, &read, types.ListOptions{Limit: 10_000})
 			require.NoError(t, err)
 			assert.NotEqual(t, reserved[0].ID, secondReserve[0].ID)
 			assert.Equal(t, combined[0].ID, read[0].ID)
@@ -399,7 +401,7 @@ func testQueue(t *testing.T, newStore NewStorageFunc) {
 
 			// Ensure all the items are reserved
 			read = read[:0]
-			require.NoError(t, q.Read(ctx, &read, lastReserved[0].ID, 10_000))
+			require.NoError(t, q.List(ctx, &read, types.ListOptions{Pivot: lastReserved[0].ID, Limit: 10_000}))
 			require.Equal(t, 9_980, len(read))
 
 			for _, item := range read[0:35] {
@@ -520,7 +522,7 @@ func testQueue(t *testing.T, newStore NewStorageFunc) {
 			require.NoError(t, complete.Requests[0].Err)
 
 			// Ensure the items completed are not in the database
-			require.NoError(t, q.Read(ctx, &read, "", 10))
+			require.NoError(t, q.List(ctx, &read, types.ListOptions{Limit: 10}))
 			assert.Equal(t, 1, len(read))
 		})
 
@@ -538,7 +540,7 @@ func testQueue(t *testing.T, newStore NewStorageFunc) {
 
 		read = read[:0]
 		t.Run("InvalidID", func(t *testing.T) {
-			require.NoError(t, q.Read(ctx, &read, "", 10))
+			require.NoError(t, q.List(ctx, &read, types.ListOptions{Limit: 10}))
 			assert.Equal(t, 1, len(read))
 
 			complete = types.Batch[types.CompleteRequest]{
@@ -605,10 +607,10 @@ func testQueue(t *testing.T, newStore NewStorageFunc) {
 		items := writeRandomItems(t, ctx, q, 10_000)
 		require.Len(t, items, 10_000)
 
-		// Ensure Read() can fetch one item using pivot, and the item returned is the pivot
+		// Ensure List() can fetch one item using pivot, and the item returned is the pivot
 		item := items[1000]
 		var read []*types.Item
-		err = q.Read(ctx, &read, item.ID, 1)
+		err = q.List(ctx, &read, types.ListOptions{Pivot: item.ID, Limit: 1})
 		require.NoError(t, err)
 
 		require.Equal(t, 1, len(read))
@@ -632,7 +634,7 @@ func testQueue(t *testing.T, newStore NewStorageFunc) {
 		require.NoError(t, err)
 
 		var read []*types.Item
-		err = q.Read(ctx, &read, "", 10_000)
+		err = q.List(ctx, &read, types.ListOptions{Limit: 10_000})
 		require.NoError(t, err)
 		assert.Equal(t, 9_000, len(read))
 
@@ -715,7 +717,7 @@ func writeRandomItems(t *testing.T, ctx context.Context, s store.Queue, count in
 			Payload:      []byte(fmt.Sprintf("message-%d", i)),
 		})
 	}
-	err := s.Write(ctx, items)
+	err := s.Add(ctx, items)
 	require.NoError(t, err)
 	return items
 }

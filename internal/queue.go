@@ -327,7 +327,7 @@ func (q *Queue) synchronizationLoop() {
 				}
 			}
 
-			// If we allow a calculated write timeout to be a few milliseconds, then the store.Write()
+			// If we allow a calculated write timeout to be a few milliseconds, then the store.Add()
 			// is almost guaranteed to fail, so we ensure the write timeout is something reasonable.
 			if writeTimeout < q.opts.WriteTimeout {
 				// WriteTimeout comes from the storage implementation as the user who configured the
@@ -337,7 +337,7 @@ func (q *Queue) synchronizationLoop() {
 
 			ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
 			if err := q.opts.QueueStore.Produce(ctx, producers); err != nil {
-				q.opts.Logger.Error("while calling QueueStore.Write()", "error", err,
+				q.opts.Logger.Error("while calling QueueStore.Add()", "error", err,
 					"category", "queue", "queueName", q.opts.Name)
 				cancel()
 				// Let clients that are timed out, know we are done with them.
@@ -376,7 +376,7 @@ func (q *Queue) synchronizationLoop() {
 			// Remove any clients that have timed out and find the next request to timeout.
 			writeTimeout := nextTimeout(&reserves)
 
-			// If we allow a calculated write timeout to be a few milliseconds, then the store.Write()
+			// If we allow a calculated write timeout to be a few milliseconds, then the store.Add()
 			// is almost guaranteed to fail, so we ensure the write timeout is something reasonable.
 			if writeTimeout < q.opts.WriteTimeout {
 				// WriteTimeout comes from the storage implementation as the user who configured the
@@ -440,7 +440,7 @@ func (q *Queue) synchronizationLoop() {
 				}
 			}
 
-			// If we allow a calculated write timeout to be a few milliseconds, then the store.Write()
+			// If we allow a calculated write timeout to be a few milliseconds, then the store.Add()
 			// is almost guaranteed to fail, so we ensure the write timeout is something reasonable.
 			if writeTimeout < q.opts.WriteTimeout {
 				// WriteTimeout comes from the storage implementation as the user who configured the
@@ -468,11 +468,11 @@ func (q *Queue) synchronizationLoop() {
 		// -----------------------------------------------
 		case req := <-q.storageQueueCh:
 			if req.ID != "" {
-				if err := q.opts.QueueStore.Read(req.Context, &req.Items, req.ID, 1); err != nil {
+				if err := q.opts.QueueStore.List(req.Context, &req.Items, req.ID, 1); err != nil {
 					req.Err = err
 				}
 			} else {
-				if err := q.opts.QueueStore.Read(req.Context, &req.Items, req.Pivot, req.Limit); err != nil {
+				if err := q.opts.QueueStore.List(req.Context, &req.Items, req.Pivot, req.Limit); err != nil {
 					req.Err = err
 				}
 			}

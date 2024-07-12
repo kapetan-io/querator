@@ -40,7 +40,7 @@ func (m *MockStorage) ParseID(parse string, id *StorageID) error {
 	return nil
 }
 
-func (m *MockStorage) CreateID(queue, id string) string {
+func (m *MockStorage) BuildStorageID(queue, id string) string {
 	return fmt.Sprintf("%s~%s", queue, id)
 }
 
@@ -71,12 +71,12 @@ func (m *MockQueue) Complete(ctx context.Context, batch types.Batch[types.Comple
 	panic("implement me")
 }
 
-func (m *MockQueue) Read(ctx context.Context, items *[]*types.Item, pivot string, limit int) error {
+func (m *MockQueue) List(ctx context.Context, items *[]*types.Item, opts types.ListOptions) error {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (m *MockQueue) Write(ctx context.Context, items []*types.Item) error {
+func (m *MockQueue) Add(ctx context.Context, items []*types.Item) error {
 	//TODO implement me
 	panic("implement me")
 }

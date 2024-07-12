@@ -137,6 +137,7 @@ func (s *BuntQueue) Produce(_ context.Context, batch types.Batch[types.ProduceRe
 		for _, item := range r.Items {
 			s.uid = s.uid.Next()
 			item.ID = s.uid.String()
+			item.CreatedAt = time.Now().UTC()
 
 			if err := buntSet(f, tx, item); err != nil {
 				return err
@@ -326,6 +327,7 @@ func (s *BuntQueue) Add(_ context.Context, items []*types.Item) error {
 	for _, item := range items {
 		s.uid = s.uid.Next()
 		item.ID = s.uid.String()
+		item.CreatedAt = time.Now().UTC()
 
 		if err := buntSet(f, tx, item); err != nil {
 			return err

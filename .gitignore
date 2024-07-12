@@ -5,3 +5,4 @@ __pycache__
 .DS_Store
 coverage.out
 coverage.html
+*test-data*

@@ -14,7 +14,7 @@ type StorageID struct {
 }
 
 func (id StorageID) String() string {
-	return fmt.Sprintf("%s/%s", id.Queue, id.ID)
+	return fmt.Sprintf("%s~%s", id.Queue, id.ID)
 }
 
 // Storage is the primary storage interface

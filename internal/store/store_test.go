@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"math/rand"
+	"os"
 	"testing"
 	"time"
 )
@@ -16,32 +17,53 @@ import (
 type NewStorageFunc func() store.Storage
 
 func TestQueue(t *testing.T) {
+	var dir string
+
 	for _, tc := range []struct {
-		New  NewStorageFunc
-		Name string
+		Setup    NewStorageFunc
+		TearDown func()
+		Name     string
 	}{
 		{
 			Name: "BuntDB",
-			New: func() store.Storage {
+			Setup: func() store.Storage {
 				return store.NewBuntStorage(store.BuntOptions{})
 			},
+			TearDown: func() {},
 		},
-		//{
-		//	Name: "SurrealDB",
-		//},
+		{
+			Name: "BoltDB",
+			Setup: func() store.Storage {
+				dir = random.String("test-data-", 10)
+				if err := os.Mkdir(dir, 0777); err != nil {
+					panic(err)
+				}
+				return store.NewBoltStorage(store.BoltOptions{
+					StorageDir: dir,
+				})
+			},
+			TearDown: func() {
+				if err := os.RemoveAll(dir); err != nil {
+					panic(err)
+				}
+			},
+		},
 		//{
 		//	Name: "PostgresSQL",
 		//},
 	} {
 		t.Run(tc.Name, func(t *testing.T) {
-			testQueue(t, tc.New)
+			testQueue(t, tc.Setup, tc.TearDown)
 		})
 	}
 }
 
-func testQueue(t *testing.T, newStore NewStorageFunc) {
-	s := newStore()
-	defer func() { _ = s.Close(context.Background()) }()
+func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
+	s := setup()
+	defer func() {
+		_ = s.Close(context.Background())
+		tearDown()
+	}()
 
 	t.Run("QueueItemCompare", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -82,7 +104,7 @@ func testQueue(t *testing.T, newStore NewStorageFunc) {
 		err = q.List(ctx, &reads, types.ListOptions{Limit: 2})
 		require.NoError(t, err)
 
-		assert.Equal(t, len(reads), len(items))
+		require.Equal(t, len(items), len(reads))
 		assert.True(t, reads[0].Compare(items[0]), "%+v != %+v", *reads[0], *items[0])
 		assert.True(t, reads[1].Compare(items[1]), "%+v != %+v", *reads[1], *items[1])
 
@@ -156,7 +178,7 @@ func testQueue(t *testing.T, newStore NewStorageFunc) {
 		assert.False(t, cmp.Compare(&cpy))
 	})
 
-	t.Run("ReadAndWrite", func(t *testing.T) {
+	t.Run("AddAndList", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
@@ -173,6 +195,7 @@ func testQueue(t *testing.T, newStore NewStorageFunc) {
 		assert.Equal(t, len(items), len(read))
 		for i := range items {
 			assert.NotEmpty(t, read[i].ID)
+			assert.NotEmpty(t, read[i].CreatedAt)
 			assert.Equal(t, items[i].IsReserved, read[i].IsReserved)
 			assert.Equal(t, items[i].Attempts, read[i].Attempts)
 			assert.Equal(t, items[i].Reference, read[i].Reference)
@@ -229,6 +252,7 @@ func testQueue(t *testing.T, newStore NewStorageFunc) {
 		assert.Equal(t, 10, len(read))
 		for i := range read {
 			assert.NotEmpty(t, read[i].ID)
+			assert.Equal(t, items[i+1000].ID, read[i].ID)
 			assert.Equal(t, items[i+1000].IsReserved, read[i].IsReserved)
 			assert.Equal(t, items[i+1000].Attempts, read[i].Attempts)
 			assert.Equal(t, items[i+1000].Reference, read[i].Reference)
@@ -565,7 +589,7 @@ func testQueue(t *testing.T, newStore NewStorageFunc) {
 	//	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	//	defer cancel()
 	//
-	//	s, err := newStore()
+	//	s, err := setup()
 	//	defer func() { _ = s.Close(context.Background()) }()
 	//	require.NoError(t, err)
 	//
@@ -655,14 +679,35 @@ func testQueue(t *testing.T, newStore NewStorageFunc) {
 }
 
 func TestQueueStore(t *testing.T) {
+	var dir string
+
 	for _, tc := range []struct {
-		New  NewStorageFunc
-		Name string
+		Setup    NewStorageFunc
+		TearDown func()
+		Name     string
 	}{
 		{
 			Name: "BuntDB",
-			New: func() store.Storage {
+			Setup: func() store.Storage {
 				return store.NewBuntStorage(store.BuntOptions{})
+			},
+			TearDown: func() {},
+		},
+		{
+			Name: "BoltDB",
+			Setup: func() store.Storage {
+				dir = random.String("test-data-", 10)
+				if err := os.Mkdir(dir, 0777); err != nil {
+					panic(err)
+				}
+				return store.NewBoltStorage(store.BoltOptions{
+					StorageDir: dir,
+				})
+			},
+			TearDown: func() {
+				if err := os.RemoveAll(dir); err != nil {
+					panic(err)
+				}
 			},
 		},
 		//{
@@ -673,13 +718,18 @@ func TestQueueStore(t *testing.T) {
 		//},
 	} {
 		t.Run(tc.Name, func(t *testing.T) {
-			testQueueStore(t, tc.New)
+			testQueueStore(t, tc.Setup, tc.TearDown)
 		})
 	}
 }
 
-func testQueueStore(t *testing.T, newStore NewStorageFunc) {
-	s := newStore()
+func testQueueStore(t *testing.T, setup NewStorageFunc, tearDown func()) {
+	s := setup()
+	defer func() {
+		_ = s.Close(context.Background())
+		tearDown()
+	}()
+
 	defer func() { _ = s.Close(context.Background()) }()
 
 	t.Run("Set", func(t *testing.T) {
@@ -699,6 +749,7 @@ func testQueueStore(t *testing.T, newStore NewStorageFunc) {
 		var get store.QueueInfo
 		require.NoError(t, q.Get(ctx, queueName, &get))
 
+		assert.Equal(t, set.Name, get.Name)
 	})
 }
 

@@ -75,6 +75,18 @@ func (b *BoltStorage) NewQueue(info QueueInfo) (Queue, error) {
 	if err != nil {
 		return nil, f.Errorf("while opening db '%s': %w", file, err)
 	}
+
+	err = db.Update(func(tx *bolt.Tx) error {
+		_, err := tx.CreateBucket(bucketName)
+		if err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, f.Errorf("while creating bucket '%s': %w", file, err)
+	}
+
 	return &BoltQueue{
 		uid:     ksuid.New(),
 		info:    info,
@@ -103,6 +115,7 @@ func (q *BoltQueue) Produce(_ context.Context, batch types.Batch[types.ProduceRe
 			for _, item := range r.Items {
 				q.uid = q.uid.Next()
 				item.ID = q.uid.String()
+				item.CreatedAt = time.Now().UTC()
 
 				// TODO: Get buffers from memory pool
 				var buf bytes.Buffer
@@ -110,7 +123,7 @@ func (q *BoltQueue) Produce(_ context.Context, batch types.Batch[types.ProduceRe
 					return f.Errorf("during gob.Encode(): %w", err)
 				}
 
-				if err := b.Put(q.uid.Bytes(), buf.Bytes()); err != nil {
+				if err := b.Put([]byte(item.ID), buf.Bytes()); err != nil {
 					return f.Errorf("during Put(): %w", err)
 				}
 
@@ -124,72 +137,57 @@ func (q *BoltQueue) Produce(_ context.Context, batch types.Batch[types.ProduceRe
 
 func (q *BoltQueue) Reserve(_ context.Context, batch types.ReserveBatch, opts ReserveOptions) error {
 	f := errors.Fields{"category", "bolt", "func", "Queue.Reserve"}
-	var done bool
+	return q.db.Update(func(tx *bolt.Tx) error {
 
-	tx, err := q.db.Begin(false)
-	if err != nil {
-		return f.Errorf("during Begin(false): %w", err)
-	}
-
-	defer func() {
-		if !done {
-			if err := tx.Rollback(); err != nil {
-				q.storage.opts.Logger.Error("during Rollback()", "error", err)
-			}
+		b := tx.Bucket(bucketName)
+		if b == nil {
+			return f.Error("bucket does not exist in data file")
 		}
-	}()
 
-	b := tx.Bucket(bucketName)
-	if b == nil {
-		return f.Error("bucket does not exist in data file")
-	}
+		batchIter := batch.Iterator()
+		c := b.Cursor()
+		var count int
 
-	batchIter := batch.Iterator()
-	c := b.Cursor()
-	var count int
+		// We preform a full scan of the entire bucket to find our reserved items.
+		// I might entertain using an index for this if Bolt becomes a popular choice
+		// in production.
+		for k, v := c.First(); k != nil; k, v = c.Next() {
+			if count >= batch.Total {
+				break
+			}
 
-	for k, v := c.First(); k != nil; k, v = c.Next() {
-		if count >= batch.Total {
+			item := new(types.Item) // TODO: memory pool
+			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(item); err != nil {
+				return f.Errorf("during Decode(): %w", err)
+			}
+
+			if item.IsReserved {
+				continue
+			}
+
+			item.ReserveDeadline = opts.ReserveDeadline
+			item.IsReserved = true
+			count++
+
+			// Assign the item to the next waiting reservation in the batch,
+			// returns false if there are no more reservations available to fill
+			if batchIter.Next(item) {
+				// If assignment was a success, then we put the updated item into the db
+				var buf bytes.Buffer // TODO: memory pool
+				if err := gob.NewEncoder(&buf).Encode(item); err != nil {
+					return f.Errorf("during gob.Encode(): %w", err)
+				}
+
+				if err := b.Put([]byte(item.ID), buf.Bytes()); err != nil {
+					return f.Errorf("during Put(): %w", err)
+				}
+				item.ID = q.storage.BuildStorageID(q.info.Name, item.ID)
+				continue
+			}
 			break
 		}
-
-		item := new(types.Item) // TODO: memory pool
-		if err := gob.NewDecoder(bytes.NewReader(v)).Decode(item); err != nil {
-			return f.Errorf("during Decode(): %w", err)
-		}
-
-		if item.IsReserved {
-			continue
-		}
-
-		item.ReserveDeadline = opts.ReserveDeadline
-		item.IsReserved = true
-		count++
-
-		// Assign the item to the next waiting reservation in the batch,
-		// returns false if there are no more reservations available to fill
-		if batchIter.Next(item) {
-			// If assignment was a success, then we put the updated item into the db
-			var buf bytes.Buffer // TODO: memory pool
-			if err := gob.NewEncoder(&buf).Encode(item); err != nil {
-				return f.Errorf("during gob.Encode(): %w", err)
-			}
-
-			if err := b.Put([]byte(item.ID), buf.Bytes()); err != nil {
-				return f.Errorf("during Put(): %w", err)
-			}
-			item.ID = q.storage.BuildStorageID(q.info.Name, item.ID)
-			continue
-		}
-		break
-	}
-
-	if err = tx.Commit(); err != nil {
-		return f.Errorf("during Commit(): %w", err)
-	}
-
-	done = true
-	return nil
+		return nil
+	})
 }
 
 func (q *BoltQueue) Complete(_ context.Context, batch types.Batch[types.CompleteRequest]) error {
@@ -274,23 +272,31 @@ func (q *BoltQueue) List(_ context.Context, items *[]*types.Item, opts types.Lis
 
 		c := b.Cursor()
 		var count int
+		var k, v []byte
 		if sid.ID != nil {
-			k, v := c.Seek(sid.ID)
+			k, v = c.Seek(sid.ID)
 			if k == nil {
 				return transport.NewInvalidOption("invalid pivot; '%s' does not exist", sid.String())
 			}
-
-			item := new(types.Item) // TODO: memory pool
-			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(item); err != nil {
-				return f.Errorf("during Decode(): %w", err)
+		} else {
+			k, v = c.First()
+			if k == nil {
+				// TODO: Add a test for this code path, attempt to list an empty queue
+				// we get here if the bucket is empty
+				return nil
 			}
-
-			item.ID = q.storage.BuildStorageID(q.info.Name, item.ID)
-			*items = append(*items, item)
-			count++
 		}
 
-		for k, v := c.First(); k != nil; k, v = c.Next() {
+		item := new(types.Item) // TODO: memory pool
+		if err := gob.NewDecoder(bytes.NewReader(v)).Decode(item); err != nil {
+			return f.Errorf("during Decode(): %w", err)
+		}
+
+		item.ID = q.storage.BuildStorageID(q.info.Name, item.ID)
+		*items = append(*items, item)
+		count++
+
+		for k, v = c.Next(); k != nil; k, v = c.Next() {
 			if count >= opts.Limit {
 				return nil
 			}
@@ -320,6 +326,7 @@ func (q *BoltQueue) Add(_ context.Context, items []*types.Item) error {
 		for _, item := range items {
 			q.uid = q.uid.Next()
 			item.ID = q.uid.String()
+			item.CreatedAt = time.Now().UTC()
 
 			// TODO: Get buffers from memory pool
 			var buf bytes.Buffer
@@ -327,7 +334,7 @@ func (q *BoltQueue) Add(_ context.Context, items []*types.Item) error {
 				return f.Errorf("during gob.Encode(): %w", err)
 			}
 
-			if err := b.Put(q.uid.Bytes(), buf.Bytes()); err != nil {
+			if err := b.Put([]byte(item.ID), buf.Bytes()); err != nil {
 				return f.Errorf("during Put(): %w", err)
 			}
 
@@ -409,6 +416,18 @@ func (b *BoltStorage) NewQueueStore(opts QueueStoreOptions) (QueueStore, error) 
 	if err != nil {
 		return nil, f.Errorf("while opening db '%s': %w", file, err)
 	}
+
+	err = db.Update(func(tx *bolt.Tx) error {
+		_, err := tx.CreateBucket(bucketName)
+		if err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, f.Errorf("while creating bucket '%s': %w", file, err)
+	}
+
 	return &BoltQueueStore{
 		db: db,
 	}, nil

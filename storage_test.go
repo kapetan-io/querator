@@ -86,7 +86,7 @@ func testStorage(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		d, c, ctx := newDaemon(t, _store, 10*time.Second)
 		defer d.Shutdown(t)
 
-		require.NoError(t, c.QueueCreate(ctx, &pb.QueueOptions{Name: queueName}))
+		require.NoError(t, c.QueueCreate(ctx, &pb.QueueOptions{QueueName: queueName}))
 
 		now := time.Now().UTC()
 		var items []*pb.StorageQueueItem
@@ -147,7 +147,7 @@ func testStorage(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		d, c, ctx := newDaemon(t, _store, 10*time.Second)
 		defer d.Shutdown(t)
 
-		require.NoError(t, c.QueueCreate(ctx, &pb.QueueOptions{Name: queueName}))
+		require.NoError(t, c.QueueCreate(ctx, &pb.QueueOptions{QueueName: queueName}))
 		items := writeRandomItems(t, ctx, c, queueName, 10_000)
 
 		var resp pb.StorageQueueListResponse
@@ -191,7 +191,7 @@ func testStorage(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		d, c, ctx := newDaemon(t, _store, 10*time.Second)
 		defer d.Shutdown(t)
 
-		require.NoError(t, c.QueueCreate(ctx, &pb.QueueOptions{Name: queueName}))
+		require.NoError(t, c.QueueCreate(ctx, &pb.QueueOptions{QueueName: queueName}))
 		items := writeRandomItems(t, ctx, c, queueName, 10_000)
 
 		id := items[1000].Id
@@ -227,7 +227,7 @@ func testStorage(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			require.NoError(t, err)
 			compareStorageItem(t, items[1027], list.Items[len(list.Items)-1])
 		})
-		// TODO: Test the list iterator on the StorageQueueList
+		// TODO: Test the list iterator for client.StorageQueueList()
 	})
 
 	t.Run("Produce", func(t *testing.T) {
@@ -236,7 +236,7 @@ func testStorage(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer d.Shutdown(t)
 		now := time.Now().UTC()
 
-		require.NoError(t, c.QueueCreate(ctx, &pb.QueueOptions{Name: queueName}))
+		require.NoError(t, c.QueueCreate(ctx, &pb.QueueOptions{QueueName: queueName}))
 		var lastItem *pb.StorageQueueItem
 		t.Run("Bytes", func(t *testing.T) {
 			var items []*pb.QueueProduceItem
@@ -323,6 +323,116 @@ func testStorage(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			}
 		})
 	})
+	//t.Run("Reserve", func(t *testing.T) {
+	//	var queueName = random.String("queue-", 10)
+	//	clientID := random.String("client-", 10)
+	//	d, c, ctx := newDaemon(t, _store, 10*time.Second)
+	//	defer d.Shutdown(t)
+	//
+	//	require.NoError(t, c.QueueCreate(ctx, &pb.QueueOptions{QueueName: queueName}))
+	//	items := writeRandomItems(t, ctx, c, queueName, 10_000)
+	//	require.Len(t, items, 10_000)
+	//
+	//	expire := time.Now().UTC().Add(2_000 * time.Minute)
+	//	var reserved, secondReserve pb.QueueReserveResponse
+	//	var list pb.StorageQueueListResponse
+	//	var lastReservedId string
+	//
+	//	t.Run("TenItems", func(t *testing.T) {
+	//		req := pb.QueueReserveRequest{
+	//			ClientId:       clientID,
+	//			QueueName:      queueName,
+	//			BatchSize:      10,
+	//			RequestTimeout: "1m",
+	//		}
+	//
+	//		require.NoError(t, c.QueueReserve(ctx, &req, &reserved))
+	//		require.Equal(t, 10, len(reserved.Items))
+	//
+	//		// Ensure the items reserved are marked as reserved in the database
+	//		require.NoError(t, c.StorageQueueList(ctx, queueName, &list, &que.ListOptions{Limit: 10_000}))
+	//
+	//		for i := range reserved.Items {
+	//			assert.Equal(t, list.Items[i].Id, reserved.Items[i].Id)
+	//			assert.Equal(t, true, list.Items[i].IsReserved)
+	//			assert.True(t, list.Items[i].ReserveDeadline.AsTime().After(expire))
+	//		}
+	//	})
+	//
+	//	t.Run("AnotherTenItems", func(t *testing.T) {
+	//		req := pb.QueueReserveRequest{
+	//			ClientId:       clientID,
+	//			QueueName:      queueName,
+	//			BatchSize:      10,
+	//			RequestTimeout: "1m",
+	//		}
+	//
+	//		require.NoError(t, c.QueueReserve(ctx, &req, &secondReserve))
+	//		require.Equal(t, 10, len(reserved.Items))
+	//
+	//		var combined []*pb.QueueReserveItem
+	//		combined = append(combined, reserved.Items...)
+	//		combined = append(combined, secondReserve.Items...)
+	//
+	//		require.NoError(t, c.StorageQueueList(ctx, queueName, &list, &que.ListOptions{Limit: 10_000}))
+	//		assert.NotEqual(t, reserved.Items[0].Id, secondReserve.Items[0].Id)
+	//		assert.Equal(t, combined[0].Id, list.Items[0].Id)
+	//		require.Equal(t, 20, len(combined))
+	//		require.Equal(t, 10_000, len(list.Items))
+	//
+	//		// Ensure all the items reserved are marked as reserved in the database
+	//		for i := range combined {
+	//			assert.Equal(t, list.Items[i].Id, combined[i].Id)
+	//			assert.Equal(t, true, list.Items[i].IsReserved)
+	//			assert.True(t, list.Items[i].ReserveDeadline.AsTime().After(expire))
+	//		}
+	//		//lastReservedId = list.Items[len(combined)-1].Id TODO
+	//	})
+	//
+	//	t.Run("DistributeNumRequested", func(t *testing.T) {
+	//
+	//		// TODO: Pause processing of the queue
+	//		//   The pause should also be aware of shutdown requests, and cancel all pending requests
+	//
+	//		// TODO: Send 3 requests to reserve, such that they are queued for processing
+	//
+	//		// TODO: Unpause processing of the queue
+	//
+	//		//// Ensure our requests are of different requested reservations
+	//		//batch := types.ReserveBatch{
+	//		//	Requests: []*types.ReserveRequest{
+	//		//		{NumRequested: 5},
+	//		//		{NumRequested: 10},
+	//		//		{NumRequested: 20},
+	//		//	},
+	//		//	Total: 35,
+	//		//}
+	//		//
+	//		//require.NoError(t, q.Reserve(ctx, batch, store.ReserveOptions{ReserveDeadline: expire}))
+	//		//
+	//		//assert.Equal(t, 5, batch.Requests[0].NumRequested)
+	//		//assert.Equal(t, 5, len(batch.Requests[0].Items))
+	//		//assert.Equal(t, 10, batch.Requests[1].NumRequested)
+	//		//assert.Equal(t, 10, len(batch.Requests[1].Items))
+	//		//assert.Equal(t, 20, batch.Requests[2].NumRequested)
+	//		//assert.Equal(t, 20, len(batch.Requests[2].Items))
+	//		//
+	//		//// Ensure all the items are reserved
+	//		//read = read[:0]
+	//		//require.NoError(t, q.List(ctx, &read, types.ListOptions{Pivot: lastReserved[0].ID, Limit: 10_000}))
+	//		//require.Equal(t, 9_980, len(read))
+	//		//
+	//		//for _, item := range read[0:35] {
+	//		//	// Ensure the item is reserved
+	//		//	require.Equal(t, true, item.IsReserved)
+	//		//	// Find the reserved item in the batch request
+	//		//	if !findInBatch(t, batch, item.ID) {
+	//		//		t.Fatalf("unable to find item '%s' in any batch reserve request", item.ID)
+	//		//	}
+	//		//}
+	//	})
+	//
+	//})
 }
 
 func compareStorageItem(t *testing.T, l *pb.StorageQueueItem, r *pb.StorageQueueItem) {

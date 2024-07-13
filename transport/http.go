@@ -37,6 +37,13 @@ const (
 	RPCQueueDelete = "/v1/queue.delete"
 	RPCQueueUpdate = "/v1/queue.update"
 
+	// TODO: Document pause in OpenAPI, "Pauses queue processing such that requests to produce, reserve,
+	//  defer and complete are all paused. While a queue is on pause, Querator will queue those requests
+	//  until the pause is lifted". /v1/queue API requests can still timeout
+	//  NOTE: This does not effect /v1/storage/ or /v1/queue.list,create,delete,update API requests.
+
+	RPCQueuePause = "/v1/queue.pause"
+
 	// TODO: Document the /storage/queue.list endpoint. The results include the pivot intentionally. Clients who
 	//  wish to iterate through all the items page by page should account for this. Also clients must check if the
 	//  pivot is the first item, because if the pivot is missing from the data store the API will return the next
@@ -56,20 +63,21 @@ const (
 	RPCStorageScheduleStats    = "/v1/storage/schedule.stats"
 )
 
-// Service exists to provide an abstraction from other public capabilities.
+// Service is an abstraction separating the public protocol from the underlying implementation.
 //
-// Abstraction rules dictate that the `transport` package should NOT access any other public interfaces other
-// than `Service`. To expose other public interface capabilities via the HTTP interface, we must first add that
-// capability to the `Service` first.
+// Abstraction rules dictate that the `transport` package should NOT access any other public interfaces or types.
+// To expose new public interface capabilities via the HTTP interface, we must first add that capability to the
+// `Service` first.
 //
-// NOTE: Golang circular dependency rules work with us to help remind developers that we should not break our
-// public HTTP abstraction rule. The `Service` interface avoids a circular dependency on any other part of the
-// code because `transport` package is imported by most packages in the code base.
+// Golang circular dependency rules work with us to help remind developers that we should not break our
+// abstraction of HTTP code from the implementation. Any attempt to add a non-public facing method or types
+// from other Querator packages will result in a circular dependency warning.
 type Service interface {
 	QueueProduce(context.Context, *proto.QueueProduceRequest) error
 	QueueCreate(context.Context, *proto.QueueOptions) error
 	QueueReserve(context.Context, *proto.QueueReserveRequest, *proto.QueueReserveResponse) error
 	QueueComplete(context.Context, *proto.QueueCompleteRequest) error
+	QueuePause(context.Context, *proto.QueuePauseRequest) error
 
 	StorageQueueList(context.Context, *proto.StorageQueueListRequest, *proto.StorageQueueListResponse) error
 	StorageQueueAdd(context.Context, *proto.StorageQueueAddRequest, *proto.StorageQueueAddResponse) error
@@ -128,6 +136,8 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	case RPCQueueDelete:
 	case RPCQueueUpdate:
+	case RPCQueuePause:
+		h.QueuePause(ctx, w, r)
 	case RPCStorageQueueList:
 		h.StorageQueueList(ctx, w, r)
 		return
@@ -198,6 +208,20 @@ func (h *HTTPHandler) QueueCreate(ctx context.Context, w http.ResponseWriter, r 
 	}
 
 	if err := h.service.QueueCreate(ctx, &req); err != nil {
+		duh.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
+}
+
+func (h *HTTPHandler) QueuePause(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req proto.QueuePauseRequest
+	if err := duh.ReadRequest(r, &req); err != nil {
+		duh.ReplyError(w, r, err)
+		return
+	}
+
+	if err := h.service.QueuePause(ctx, &req); err != nil {
 		duh.ReplyError(w, r, err)
 		return
 	}

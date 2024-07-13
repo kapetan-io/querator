@@ -17,10 +17,10 @@ primary goals of the project.
 The primary goal of the project is to implement a highly efficient and simple to integrate with reserve based FIFO
 queuing system.
 
-[Querator](https://querator.io) is focused on simplicity and efficiency first. We want to encourage customers who
-wish to embrace distributed architectures with the ability to do so without needing to run expensive high performance
-clusters. Although our primary goal is to build an efficient reservation based queue, we believe our efficiency goals
-will also lend the project toward a high performance implementation. When deciding to do the efficient thing, or the
+[Querator](https://querator.io) is focused on simplicity and efficiency first. We want to appeal to users who
+wish to embrace distributed architectures without needing to run expensive high performance clusters. Although 
+our primary goal is to build an efficient reservation based queue, we believe our efficiency goals will also 
+lend the project toward a high performance implementation. When deciding to do the efficient thing, or the
 fast thing we will always choose efficient.
 
 ##### Goals
@@ -28,12 +28,12 @@ fast thing we will always choose efficient.
 * Separation of item consumer and producers from underlying storage. This allows storage to scale independently of
   the number of clients and the size and frequency of the items queued.
 * Complexity is handled by the server, with very simple client implementations.
-* Build a service which encourages good distributed design, and can be used to solve many different distributed scale
-  problems.
+* Build a service which encourages good distributed design, and can be used to solve many different distributed
+  scale problems.
 
 ## Consequences
 
 By choosing to prioritize simplicity and efficiency over high performance and scalability, we may not appeal to 
 large enterprise customers with very large pockets who care more about performance than efficiency. We want to 
-attract users who are more interested in high efficiency, easy to use distributed software than bleeding edge
-costly solutions.
+attract users who are more interested in high efficiency, high interoperability with third party products, and 
+easy to use distributed software, rather than bleeding edge costly solutions.

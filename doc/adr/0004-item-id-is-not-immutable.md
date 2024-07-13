@@ -23,7 +23,7 @@ The client MUST NOT make any assumptions about the format of the `id`, as it cou
 implementation used. In addition, assumptions about the format `id` could break in the future.
 
 Note: The `/queue.defer` and `/queue.complete` operations still require the user to provide a queue as a way 
-to avoid abusing the API and encouraging simple client design. See [ADR 7 - Encourage one queue per client](0007-encourage-one-queue-per-client.md)
+to avoid abusing the API and encouraging simple client design. See [ADR 7 - Encourage one queue per client](0007-encourage-simple-clients)
 
 ## Consequences
 

@@ -22,13 +22,13 @@ var (
 )
 
 const (
-	queueChSize       = 20_000
-	maxRequestTimeout = 15 * time.Minute
-	minRequestTimeout = 10 * time.Millisecond
-	MethodList        = "list"
-	MethodAdd         = "add"
-	MethodDelete      = "delete"
-	MethodStats       = "stats"
+	queueChSize              = 20_000
+	maxRequestTimeout        = 15 * time.Minute
+	minRequestTimeout        = 10 * time.Millisecond
+	MethodStorageQueueList   = "storage.queue.list"
+	MethodStorageQueueAdd    = "storage.queue.add"
+	MethodStorageQueueDelete = "storage.queue.delete"
+	MethodStorageQueueStats  = "storage.queue.stats"
 )
 
 type QueueOptions struct {
@@ -62,15 +62,15 @@ type QueueOptions struct {
 // there can ONLY BE ONE instance of a Queue running anywhere in the cluster at any given time. All consume
 // and produce requests MUST go through this queue singleton.
 type Queue struct {
-	// TODO: I would love to see a lock free ring queue here, based on an array, such that we don't need
+	// TODO(thrawn01): Maybe we can use a lock free ring queue here, based on an array, such that we don't need
 	//  to throw away the channel after we process all the items in the channel. An array might allow the L3
-	//  cache to pre load that data and avoid expensive calls to DRAM.
+	//  cache to pre load that data and avoid expensive calls to DRAM if we convert to non pointer structs.
 	reserveQueueCh  atomic.Pointer[chan *types.ReserveRequest]
 	produceQueueCh  atomic.Pointer[chan *types.ProduceRequest]
 	completeQueueCh atomic.Pointer[chan *types.CompleteRequest]
 
-	storageQueueCh chan *types.StorageRequest
 	shutdownCh     chan *types.ShutdownRequest
+	queueRequestCh chan *types.QueueRequest
 	wg             sync.WaitGroup
 	opts           QueueOptions
 	inShutdown     atomic.Bool
@@ -86,12 +86,16 @@ func NewQueue(opts QueueOptions) (*Queue, error) {
 	}
 
 	q := &Queue{
-		shutdownCh:     make(chan *types.ShutdownRequest),
-		storageQueueCh: make(chan *types.StorageRequest),
-		opts:           opts,
+		// Queue requests are any request that doesn't require special batch processing
+		queueRequestCh: make(chan *types.QueueRequest),
+		// Shutdowns require special handling in the sync loop
+		shutdownCh: make(chan *types.ShutdownRequest),
+		opts:       opts,
 	}
 
-	// Next new wait queue
+	// These are request queues that queue requests from clients until the sync loop has
+	// time to process them. When they get processed, every request in the queue is handled
+	// in a batch.
 	rch := make(chan *types.ReserveRequest, queueChSize)
 	q.reserveQueueCh.Store(&rch)
 	pch := make(chan *types.ProduceRequest, queueChSize)
@@ -102,28 +106,6 @@ func NewQueue(opts QueueOptions) (*Queue, error) {
 	q.wg.Add(1)
 	go q.synchronizationLoop()
 	return q, nil
-}
-
-func (q *Queue) Storage(ctx context.Context, req *types.StorageRequest) error {
-	if q.inShutdown.Load() {
-		return ErrQueueShutdown
-	}
-
-	req.Context = ctx
-	req.ReadyCh = make(chan struct{})
-
-	select {
-	case q.storageQueueCh <- req:
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-
-	select {
-	case <-req.ReadyCh:
-		return req.Err
-	case <-ctx.Done():
-		return ctx.Err()
-	}
 }
 
 // Produce is called by clients who wish to produce an item to the queue. This
@@ -157,9 +139,11 @@ func (q *Queue) Produce(ctx context.Context, req *types.ProduceRequest) error {
 			" '%s' was requested", req.RequestTimeout.String())
 	}
 
-	req.Context = ctx
-	req.ReadyCh = make(chan struct{})
 	req.RequestDeadline = time.Now().UTC().Add(req.RequestTimeout)
+	req.ReadyCh = make(chan struct{})
+	req.Context = ctx
+
+	// TODO: Handle channel full, return a "service over loaded retry again" error
 	*q.produceQueueCh.Load() <- req
 
 	// Wait until the request has been processed
@@ -171,21 +155,17 @@ func (q *Queue) Produce(ctx context.Context, req *types.ProduceRequest) error {
 // will block until the request is cancelled via the passed context or the RequestTimeout
 // is reached.
 //
-// ### Context
+// ### Context Cancellation
 // IT IS NOT recommend to use context.WithTimeout() or context.WithDeadline() with Reserve() since
 // Reserve() will block until the duration provided via ReserveRequest.RequestTimeout has been reached.
-// You may cancel the context if the client has gone away. In this case Queue will abort the reservation
+// Callers SHOULD cancel the context if the client has gone away, in this case Queue will abort the reservation
 // request. If the context is cancelled after reservation has been written to the data store
 // then those reservations will remain reserved until they can be offered to another client after the
-// ReserveDeadline has been reached.
+// ReserveDeadline has been reached. See doc/adr/0009-client-timeouts.md
 //
-// ### Unique Requests (TODO: Update this comment, it's out of date)
-// ClientID must NOT be empty and each request must have a unique id, or it will
-// be rejected with ErrDuplicateClientID. When recording a reservation in the data store the ClientID
-// the reservation is for is also written. This can assist in diagnosing which clients are failing
-// to process items properly. It is so used to avoid poor performing or bad behavior from clients
-// who may attempt to issue many requests simultaneously in an attempt to increase throughput.
-// Increased throughput can instead be achieved by raising the batch size.
+// ### Unique Requests
+// ClientID must NOT be empty and each request must be unique, Non-unique requests will be rejected with
+// ErrDuplicateClientID. See doc/adr/0007-encourage-simple-clients.md for an explanation.
 func (q *Queue) Reserve(ctx context.Context, req *types.ReserveRequest) error {
 	if q.inShutdown.Load() {
 		return ErrQueueShutdown
@@ -199,7 +179,7 @@ func (q *Queue) Reserve(ctx context.Context, req *types.ReserveRequest) error {
 		return transport.NewInvalidOption("invalid batch_size; must be greater than zero")
 	}
 
-	if int(req.NumRequested) > q.opts.MaxReserveBatchSize {
+	if req.NumRequested > q.opts.MaxReserveBatchSize {
 		return transport.NewInvalidOption("invalid batch_size; exceeds maximum limit max_reserve_batch_size is %d, "+
 			"but %d was requested", q.opts.MaxProduceBatchSize, req.NumRequested)
 	}
@@ -218,9 +198,11 @@ func (q *Queue) Reserve(ctx context.Context, req *types.ReserveRequest) error {
 			" '%s' was requested", req.RequestTimeout.String())
 	}
 
-	req.Context = ctx
-	req.ReadyCh = make(chan struct{})
 	req.RequestDeadline = time.Now().UTC().Add(req.RequestTimeout)
+	req.ReadyCh = make(chan struct{})
+	req.Context = ctx
+
+	// TODO: Handle channel full, return a "service over loaded retry again" error
 	*q.reserveQueueCh.Load() <- req
 
 	// Wait until the request has been processed
@@ -242,9 +224,11 @@ func (q *Queue) Complete(ctx context.Context, req *types.CompleteRequest) error 
 		return transport.NewInvalidOption("request_timeout is required; '5m' is recommended, 15m is the maximum")
 	}
 
-	req.Context = ctx
-	req.ReadyCh = make(chan struct{})
 	req.RequestDeadline = time.Now().UTC().Add(req.RequestTimeout)
+	req.ReadyCh = make(chan struct{})
+	req.Context = ctx
+
+	// TODO: Handle channel full, return a "service over loaded retry again" error
 	*q.completeQueueCh.Load() <- req
 
 	// Wait until the request has been processed
@@ -260,9 +244,6 @@ func (q *Queue) synchronizationLoop() {
 
 	// TODO: Refactor this into a smaller loop with handler functions which pass around a state object with
 	//  State.AddToWPR() and State.AddToWRR() etc....
-
-	// TODO: Maybe introduce a types.ReserveBatch which ensures only unique clients are in the batch.
-	// TODO: Make an ADR on why we don't allow the same client to make multiple reserve requests
 
 	reserves := types.ReserveBatch{
 		Requests: make([]*types.ReserveRequest, 0, 5_000),
@@ -470,8 +451,8 @@ func (q *Queue) synchronizationLoop() {
 			completes.Reset()
 
 		// -----------------------------------------------
-		case req := <-q.storageQueueCh:
-			if err := q.handleStorageQueue(req); err != nil {
+		case req := <-q.queueRequestCh:
+			if err := q.handleServiceRequests(req); err != nil {
 				req.Err = err
 			}
 			close(req.ReadyCh)
@@ -527,24 +508,90 @@ func (q *Queue) Shutdown(ctx context.Context) error {
 	}
 }
 
-func (q *Queue) handleStorageQueue(req *types.StorageRequest) error {
+func (q *Queue) StorageQueueList(ctx context.Context, req *types.StorageRequest) error {
+	// TODO(thrawn01): I suspect the most efficient way to do this is pass by value and not a pointer
+	//  I really need to get into the habit of being pass by value as the default, and only pass by
+	//  pointer when its absolutely needed.
+	r := types.QueueRequest{
+		Method:  MethodStorageQueueList,
+		Request: req,
+	}
+	return q.queueRequest(ctx, &r)
+}
+
+func (q *Queue) StorageQueueAdd(ctx context.Context, req *types.StorageRequest) error {
+	r := types.QueueRequest{
+		Method:  MethodStorageQueueAdd,
+		Request: req,
+	}
+	return q.queueRequest(ctx, &r)
+}
+
+func (q *Queue) StorageQueueDelete(ctx context.Context, req *types.StorageRequest) error {
+	r := types.QueueRequest{
+		Method:  MethodStorageQueueDelete,
+		Request: req,
+	}
+	return q.queueRequest(ctx, &r)
+}
+
+func (q *Queue) StorageQueueStats(ctx context.Context, req *types.StorageRequest) error {
+	r := types.QueueRequest{
+		Method:  MethodStorageQueueStats,
+		Request: req,
+	}
+	return q.queueRequest(ctx, &r)
+}
+
+func (q *Queue) Pause(ctx context.Context, req *types.PauseRequest) error {
+	return nil
+}
+
+func (q *Queue) queueRequest(ctx context.Context, r *types.QueueRequest) error {
+	if q.inShutdown.Load() {
+		return ErrQueueShutdown
+	}
+
+	r.ReadyCh = make(chan struct{})
+	r.Context = ctx
+
+	select {
+	case q.queueRequestCh <- r:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
+	select {
+	case <-r.ReadyCh:
+		return r.Err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (q *Queue) handleServiceRequests(req *types.QueueRequest) error {
 	switch req.Method {
-	case MethodList:
-		if err := q.opts.QueueStore.List(req.Context, &req.Items,
-			types.ListOptions{Pivot: req.Pivot, Limit: req.Limit}); err != nil {
-			return err
-		}
-	case MethodAdd:
-		if err := q.opts.QueueStore.Add(req.Context, req.Items); err != nil {
-			return err
-		}
-	case MethodDelete:
-		if err := q.opts.QueueStore.Delete(req.Context, req.IDs); err != nil {
-			return err
-		}
-	case MethodStats:
-		if err := q.opts.QueueStore.Stats(req.Context, req.Stats); err != nil {
-			return err
+	// Handle type.StorageRequests
+	case MethodStorageQueueList, MethodStorageQueueAdd, MethodStorageQueueDelete, MethodStorageQueueStats:
+		sr := req.Request.(*types.StorageRequest)
+		switch req.Method {
+		case MethodStorageQueueList:
+			if err := q.opts.QueueStore.List(req.Context, &sr.Items,
+				types.ListOptions{Pivot: sr.Pivot, Limit: sr.Limit}); err != nil {
+				return err
+			}
+		case MethodStorageQueueAdd:
+			if err := q.opts.QueueStore.Add(req.Context, sr.Items); err != nil {
+				return err
+			}
+		case MethodStorageQueueDelete:
+			if err := q.opts.QueueStore.Delete(req.Context, sr.IDs); err != nil {
+				return err
+			}
+		case MethodStorageQueueStats:
+			if err := q.opts.QueueStore.Stats(req.Context, sr.Stats); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

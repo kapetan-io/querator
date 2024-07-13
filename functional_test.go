@@ -52,7 +52,7 @@ func testSuite(t *testing.T, newStore NewStorageFunc) {
 		defer d.Shutdown(t)
 
 		// Create a queue
-		require.NoError(t, c.QueueCreate(ctx, &pb.QueueOptions{Name: queueName}))
+		require.NoError(t, c.QueueCreate(ctx, &pb.QueueOptions{QueueName: queueName}))
 
 		// Produce a single message
 		ref := random.String("ref-", 10)
@@ -126,7 +126,7 @@ func testSuite(t *testing.T, newStore NewStorageFunc) {
 		defer d.Shutdown(t)
 		items := randomProduceItems(10)
 
-		require.NoError(t, c.QueueCreate(ctx, &pb.QueueOptions{Name: queueName}))
+		require.NoError(t, c.QueueCreate(ctx, &pb.QueueOptions{QueueName: queueName}))
 		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
 			QueueName:      queueName,
 			RequestTimeout: "5s",
@@ -162,7 +162,7 @@ func testSuite(t *testing.T, newStore NewStorageFunc) {
 		defer d.Shutdown(t)
 		maxItems := randomProduceItems(1_001)
 
-		require.NoError(t, c.QueueCreate(ctx, &pb.QueueOptions{Name: queueName}))
+		require.NoError(t, c.QueueCreate(ctx, &pb.QueueOptions{QueueName: queueName}))
 
 		for _, test := range []struct {
 			Name string
@@ -278,7 +278,7 @@ func testSuite(t *testing.T, newStore NewStorageFunc) {
 		d, c, ctx := newDaemon(t, _store, 5*time.Second)
 		defer d.Shutdown(t)
 
-		require.NoError(t, c.QueueCreate(ctx, &pb.QueueOptions{Name: queueName}))
+		require.NoError(t, c.QueueCreate(ctx, &pb.QueueOptions{QueueName: queueName}))
 
 		for _, tc := range []struct {
 			Name string

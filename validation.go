@@ -88,6 +88,19 @@ func (s *Service) validateQueueOptionsProto(in *proto.QueueOptions, out *interna
 	}
 
 	out.DeadQueue = in.DeadQueue
-	out.Name = in.Name
+	out.Name = in.QueueName
+	return nil
+}
+
+func (s *Service) validateQueuePauseRequestProto(in *proto.QueuePauseRequest, out *types.PauseRequest) error {
+	var err error
+
+	if in.PauseDuration != "" {
+		out.PauseDuration, err = time.ParseDuration(in.PauseDuration)
+		if err != nil {
+			return transport.NewInvalidOption("pause_duration is invalid; %s - expected format: 60m, 2h or 24h", err.Error())
+		}
+	}
+	out.Pause = in.Pause
 	return nil
 }

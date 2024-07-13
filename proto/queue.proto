@@ -158,7 +158,7 @@ message QueueCompleteRequest {
 
 message QueueOptions {
   // The name of the queue
-  string name = 1;
+  string queueName = 1  [json_name = "queue_name"];
 
   // The date the queue was created
   google.protobuf.Timestamp createdAt = 2 [json_name = "created_at"];
@@ -187,16 +187,12 @@ message QueueOptions {
   int32  maxAttempts = 8 [json_name = "max_attempts"];
 }
 
-message QueueListResponse {
-  repeated QueueOptions items = 1;
-}
-
-message QueueDeleteRequest {
-    // The name of the queue
-    string name = 1;
-}
-
-message QueueInspectRequest {
+message QueuePauseRequest {
   // The name of the queue
-  string name = 1;
+  string queueName = 1  [json_name = "queue_name"];
+  // The duration of the pause, after which the queue will automatically resume
+  string pauseDuration = 2 [json_name = "pause_duration"];
+  // Indicate if the queue should be paused or un-paused. If true the queue will be paused for 'pause_duration'
+  // or until another request is received with pause = false
+  bool pause = 3;
 }

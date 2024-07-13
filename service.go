@@ -31,6 +31,8 @@ import (
 	"strings"
 )
 
+var ErrQueueNameEmpty = transport.NewInvalidOption("queue_name cannot be empty")
+
 // TODO: Document this and make it configurable via the daemon
 type ServiceOptions struct {
 	Logger              duh.StandardLogger
@@ -150,11 +152,15 @@ func (s *Service) QueueCreate(ctx context.Context, req *proto.QueueOptions) erro
 	return nil
 }
 
-func (s *Service) StorageQueueList(ctx context.Context, req *proto.StorageQueueListRequest,
-	res *proto.StorageQueueListResponse) error {
+func (s *Service) QueuePause(ctx context.Context, req *proto.QueuePauseRequest) error {
+	var r types.PauseRequest
 
 	if strings.TrimSpace(req.QueueName) == "" {
-		return transport.NewInvalidOption("queue name cannot be empty")
+		return ErrQueueNameEmpty
+	}
+
+	if err := s.validateQueuePauseRequestProto(req, &r); err != nil {
+		return err
 	}
 
 	queue, err := s.manager.Get(ctx, req.QueueName)
@@ -162,8 +168,27 @@ func (s *Service) StorageQueueList(ctx context.Context, req *proto.StorageQueueL
 		return err
 	}
 
-	r := types.StorageRequest{Method: internal.MethodList, Pivot: req.Pivot, Limit: int(req.Limit)}
-	if err := queue.Storage(ctx, &r); err != nil {
+	if err := queue.Pause(ctx, &r); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (s *Service) StorageQueueList(ctx context.Context, req *proto.StorageQueueListRequest,
+	res *proto.StorageQueueListResponse) error {
+
+	if strings.TrimSpace(req.QueueName) == "" {
+		return ErrQueueNameEmpty
+	}
+
+	queue, err := s.manager.Get(ctx, req.QueueName)
+	if err != nil {
+		return err
+	}
+
+	r := types.StorageRequest{Pivot: req.Pivot, Limit: int(req.Limit)}
+	if err := queue.StorageQueueList(ctx, &r); err != nil {
 		return err
 	}
 
@@ -178,7 +203,7 @@ func (s *Service) StorageQueueAdd(ctx context.Context, req *proto.StorageQueueAd
 	res *proto.StorageQueueAddResponse) error {
 
 	if strings.TrimSpace(req.QueueName) == "" {
-		return transport.NewInvalidOption("queue name cannot be empty")
+		return ErrQueueNameEmpty
 	}
 
 	queue, err := s.manager.Get(ctx, req.QueueName)
@@ -187,15 +212,14 @@ func (s *Service) StorageQueueAdd(ctx context.Context, req *proto.StorageQueueAd
 	}
 
 	r := types.StorageRequest{
-		Items:  make([]*types.Item, 0, len(req.Items)),
-		Method: internal.MethodAdd,
+		Items: make([]*types.Item, 0, len(req.Items)),
 	}
 	for _, item := range req.Items {
 		i := new(types.Item)
 		r.Items = append(r.Items, i.FromProto(item))
 	}
 
-	if err := queue.Storage(ctx, &r); err != nil {
+	if err := queue.StorageQueueAdd(ctx, &r); err != nil {
 		return err
 	}
 
@@ -209,7 +233,7 @@ func (s *Service) StorageQueueAdd(ctx context.Context, req *proto.StorageQueueAd
 func (s *Service) StorageQueueDelete(ctx context.Context, req *proto.StorageQueueDeleteRequest) error {
 
 	if strings.TrimSpace(req.QueueName) == "" {
-		return transport.NewInvalidOption("queue name cannot be empty")
+		return ErrQueueNameEmpty
 	}
 
 	queue, err := s.manager.Get(ctx, req.QueueName)
@@ -217,8 +241,7 @@ func (s *Service) StorageQueueDelete(ctx context.Context, req *proto.StorageQueu
 		return err
 	}
 
-	r := types.StorageRequest{Method: internal.MethodDelete, IDs: req.Ids}
-	if err := queue.Storage(ctx, &r); err != nil {
+	if err := queue.StorageQueueDelete(ctx, &types.StorageRequest{IDs: req.Ids}); err != nil {
 		return err
 	}
 	return nil
@@ -228,7 +251,7 @@ func (s *Service) StorageQueueStats(ctx context.Context, req *proto.StorageQueue
 	res *proto.StorageQueueStatsResponse) error {
 
 	if strings.TrimSpace(req.QueueName) == "" {
-		return transport.NewInvalidOption("queue name cannot be empty")
+		return ErrQueueNameEmpty
 	}
 
 	queue, err := s.manager.Get(ctx, req.QueueName)
@@ -237,15 +260,14 @@ func (s *Service) StorageQueueStats(ctx context.Context, req *proto.StorageQueue
 	}
 
 	var stats types.QueueStats
-	r := types.StorageRequest{Method: internal.MethodStats, Stats: &stats}
-	if err := queue.Storage(ctx, &r); err != nil {
+	if err := queue.StorageQueueStats(ctx, &types.StorageRequest{Stats: &stats}); err != nil {
 		return err
 	}
 
-	res.AverageAge = stats.AverageAge.String()
 	res.AverageReservedAge = stats.AverageReservedAge.String()
-	res.Total = int32(stats.Total)
 	res.TotalReserved = int32(stats.TotalReserved)
+	res.AverageAge = stats.AverageAge.String()
+	res.Total = int32(stats.Total)
 	return nil
 }
 

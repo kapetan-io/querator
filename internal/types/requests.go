@@ -57,10 +57,20 @@ type CompleteRequest struct {
 	Err error
 }
 
-type StorageRequest struct {
+type QueueRequest struct {
+	// The API method called
 	Method string
 	// Context is the context of the request
 	Context context.Context
+	// The request struct for this method
+	Request any
+	// Used to wait for this request to complete
+	ReadyCh chan struct{}
+	// The error to be returned to the caller
+	Err error
+}
+
+type StorageRequest struct {
 	// Items is the items returned by the storage request
 	Items []*Item
 	// ID is the unique id of the item requested
@@ -71,10 +81,11 @@ type StorageRequest struct {
 	Limit int
 	// Stats is the response to the Stats() call
 	Stats *QueueStats
-	// Used to wait for this request to complete
-	ReadyCh chan struct{}
-	// The error to be returned to the caller
-	Err error
+}
+
+type PauseRequest struct {
+	PauseDuration time.Duration
+	Pause         bool
 }
 
 type ShutdownRequest struct {

@@ -28,15 +28,15 @@ the client how long the client will wait for a response from the server.
 Consider the example of a server that is experiencing a high saturation event such it is handling many individual 
 queues very slowly.
 1. Client issues a request to reserve 10 items from the queue with a 5s request timeout.
-2. 1 second after the client makes its request, the server kernel notifies the service of the incomming request,
+2. 1 second after the client makes its request, the server kernel notifies the service of the incoming request,
    and the golang HTTP library spawns a go routine to handle the HTTP request. That request then queues the 
    reservation request with `Queue` and waits for a response.
 3. 5 seconds later (because the CPU is busy doing something else) the scheduler provides CPU time to the 
-   `processQueues()` routine, and an item waiting in the queue is provided to the waiting client channel.
+   main queue loop, and an item waiting in the queue is provided to the waiting client channel.
 4. The HTTP go routine handling the HTTP request, receives notification from the kernel that the client has closed 
    the remote connection, and thus cancels the context and never receives the item marked for reservation in the queue.
 
-Since the server is under heavy saturation, timing of all operations are slowed, and occur in an order which neither 
+Since the server is under heavy load, timing of all operations are slowed, and occur in an order which neither 
 the client nor the server can predict. If both the client and server know the client has been waiting longer than 
 RequestTimeout the server can do the right thing and avoid reserving an item from the queue, since it knows the 
 client has likely already timed out and cancelled the HTTP request.

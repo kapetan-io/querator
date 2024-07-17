@@ -59,6 +59,7 @@ func NewService(opts ServiceOptions) (*Service, error) {
 			MaxProduceBatchSize: opts.MaxProduceBatchSize,
 		},
 		Storage: opts.Storage,
+		Logger:  opts.Logger,
 	})
 
 	return &Service{

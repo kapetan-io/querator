@@ -8,7 +8,7 @@ proto: ## Build protos
 
 .PHONY: test
 test:
-	go test -timeout 10m -v -p 1 -race -parallel=1 ./...
+	go test -timeout 10m -v -p 1 -count=1 -race -parallel=1 ./...
 
 $(LINT): ## Download Go linter
 	curl -sfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(GOPATH)/bin $(LINT_VERSION)

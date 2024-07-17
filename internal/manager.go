@@ -2,13 +2,17 @@ package internal
 
 import (
 	"context"
+	"github.com/duh-rpc/duh-go"
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/transport"
+	"github.com/kapetan-io/tackle/set"
+	"log/slog"
 	"strings"
 	"time"
 )
 
 type QueueManagerOptions struct {
+	Logger       duh.StandardLogger
 	Storage      store.Storage
 	QueueOptions QueueOptions
 }
@@ -19,6 +23,7 @@ type QueueManager struct {
 }
 
 func NewQueueManager(opts QueueManagerOptions) *QueueManager {
+	set.Default(&opts.Logger, slog.Default())
 	return &QueueManager{
 		queues: make(map[string]*Queue),
 		opts:   opts,
@@ -52,13 +57,9 @@ func (qm *QueueManager) Create(_ context.Context, opts QueueOptions) (*Queue, er
 		return nil, transport.NewInvalidOption("duplicate queue name; '%s' already exists", opts.Name)
 	}
 
-	if opts.ReserveTimeout == 0 {
-		opts.ReserveTimeout = time.Minute
-	}
-
-	if opts.DeadTimeout == 0 {
-		opts.DeadTimeout = 24 * time.Hour
-	}
+	set.Default(&opts.ReserveTimeout, time.Minute)
+	set.Default(&opts.DeadTimeout, 24*time.Hour)
+	opts.Logger = qm.opts.Logger
 
 	if opts.ReserveTimeout > opts.DeadTimeout {
 		return nil, transport.NewInvalidOption("reserve_timeout is too long; %s cannot be greater than the "+

@@ -28,6 +28,11 @@ type BoltOptions struct {
 	Logger duh.StandardLogger
 }
 
+// TODO: Make BoltStorage non blocking, and obey the context provided. Perhaps we introduce a AsyncStorage
+//   struct which takes a normal storage implementation and makes each call async and cancellable, making
+//   a new call when the previous call failed, should be an error, a new call cannot be made until the
+//   previous call completes.
+
 // ---------------------------------------------
 // Storage Implementation
 // ---------------------------------------------

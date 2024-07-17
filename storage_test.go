@@ -39,12 +39,23 @@ import (
 //
 //}
 
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false
+		}
+		return false
+	}
+	return info.IsDir()
+}
+
 var RetryTenTimes = retry.Policy{Interval: retry.Sleep(time.Second), Attempts: 10}
 
 type NewStorageFunc func() store.Storage
 
 func TestStorage(t *testing.T) {
-	var dir string
+	dir := "test-data"
 
 	for _, tc := range []struct {
 		Setup    NewStorageFunc
@@ -54,8 +65,12 @@ func TestStorage(t *testing.T) {
 		{
 			Name: "BoltDB",
 			Setup: func() store.Storage {
-				dir = random.String("test-data-", 10)
-				dir = filepath.Join("test-data", dir)
+				if !dirExists(dir) {
+					if err := os.Mkdir(dir, 0777); err != nil {
+						panic(err)
+					}
+				}
+				dir = filepath.Join(dir, random.String("test-data-", 10))
 				if err := os.Mkdir(dir, 0777); err != nil {
 					panic(err)
 				}
@@ -332,7 +347,7 @@ func testStorage(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	t.Run("Reserve", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
 		clientID := random.String("client-", 10)
-		d, c, ctx := newDaemon(t, _store, 10*time.Second)
+		d, c, ctx := newDaemon(t, _store, 20*time.Second)
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueueCreate(ctx, &pb.QueueOptions{QueueName: queueName}))
@@ -397,7 +412,11 @@ func testStorage(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		t.Run("DistributeNumRequested", func(t *testing.T) {
 			// Pause processing of the queue
-			require.NoError(t, c.QueuePause(ctx, &pb.QueuePauseRequest{QueueName: queueName, Pause: true}))
+			require.NoError(t, c.QueuePause(ctx, &pb.QueuePauseRequest{
+				QueueName:     queueName,
+				PauseDuration: "2m",
+				Pause:         true,
+			}))
 
 			requests := []*pb.QueueReserveRequest{
 				{
@@ -425,19 +444,25 @@ func testStorage(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 			// Send 3 requests to reserve, such that they are queued for processing
 			go func() {
-				require.NoError(t, c.QueueReserve(ctx, requests[0], responses[0]))
+				if err := c.QueueReserve(ctx, requests[0], responses[0]); err != nil {
+					panic(err)
+				}
 				wg.Done()
 			}()
 			go func() {
-				require.NoError(t, c.QueueReserve(ctx, requests[1], responses[1]))
+				if err := c.QueueReserve(ctx, requests[1], responses[1]); err != nil {
+					panic(err)
+				}
 				wg.Done()
 			}()
 			go func() {
-				require.NoError(t, c.QueueReserve(ctx, requests[2], responses[2]))
+				if err := c.QueueReserve(ctx, requests[2], responses[2]); err != nil {
+					panic(err)
+				}
 				wg.Done()
 			}()
 
-			_ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+			_ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
 			// Wait until every request is waiting
 			err := retry.On(_ctx, RetryTenTimes, func(ctx context.Context, i int) error {

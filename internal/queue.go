@@ -77,10 +77,6 @@ type SyncState struct {
 	Producers    types.Batch[types.ProduceRequest]
 	Completes    types.Batch[types.CompleteRequest]
 
-	ReserveCh  *chan *types.ReserveRequest
-	ProduceCh  *chan *types.ProduceRequest
-	CompleteCh *chan *types.CompleteRequest
-
 	WakeUpCh <-chan time.Time
 }
 
@@ -89,12 +85,9 @@ type SyncState struct {
 // there can ONLY BE ONE instance of a Queue running anywhere in the cluster at any given time. All consume
 // and produce requests MUST go through this queue singleton.
 type Queue struct {
-	// TODO(thrawn01): Maybe we can use a lock free ring queue here, based on an array, such that we don't need
-	//  to throw away the channel after we process all the items in the channel. An array might allow the L3
-	//  cache to pre load that data and avoid expensive calls to DRAM if we convert to non pointer structs.
-	reserveQueueCh  atomic.Pointer[chan *types.ReserveRequest]
-	produceQueueCh  atomic.Pointer[chan *types.ProduceRequest]
-	completeQueueCh atomic.Pointer[chan *types.CompleteRequest]
+	reserveQueueCh  chan *types.ReserveRequest
+	produceQueueCh  chan *types.ProduceRequest
+	completeQueueCh chan *types.CompleteRequest
 
 	shutdownCh     chan *types.ShutdownRequest
 	queueRequestCh chan *QueueRequest
@@ -123,12 +116,9 @@ func NewQueue(opts QueueOptions) (*Queue, error) {
 	// These are request queues that queue requests from clients until the sync loop has
 	// time to process them. When they get processed, every request in the queue is handled
 	// in a batch.
-	rch := make(chan *types.ReserveRequest, queueChSize)
-	q.reserveQueueCh.Store(&rch)
-	pch := make(chan *types.ProduceRequest, queueChSize)
-	q.produceQueueCh.Store(&pch)
-	cch := make(chan *types.CompleteRequest, queueChSize)
-	q.completeQueueCh.Store(&cch)
+	q.reserveQueueCh = make(chan *types.ReserveRequest, queueChSize)
+	q.produceQueueCh = make(chan *types.ProduceRequest, queueChSize)
+	q.completeQueueCh = make(chan *types.CompleteRequest, queueChSize)
 
 	q.wg.Add(1)
 	go q.synchronizationLoop()
@@ -171,7 +161,7 @@ func (q *Queue) Produce(ctx context.Context, req *types.ProduceRequest) error {
 	req.Context = ctx
 
 	// TODO: Handle channel full, return a "service over loaded retry again" error
-	*q.produceQueueCh.Load() <- req
+	q.produceQueueCh <- req
 
 	// Wait until the request has been processed
 	<-req.ReadyCh
@@ -230,7 +220,7 @@ func (q *Queue) Reserve(ctx context.Context, req *types.ReserveRequest) error {
 	req.Context = ctx
 
 	// TODO: Handle channel full, return a "service over loaded retry again" error
-	*q.reserveQueueCh.Load() <- req
+	q.reserveQueueCh <- req
 
 	// Wait until the request has been processed
 	<-req.ReadyCh
@@ -256,7 +246,7 @@ func (q *Queue) Complete(ctx context.Context, req *types.CompleteRequest) error 
 	req.Context = ctx
 
 	// TODO: Handle channel full, return a "service over loaded retry again" error
-	*q.completeQueueCh.Load() <- req
+	q.completeQueueCh <- req
 
 	// Wait until the request has been processed
 	<-req.ReadyCh
@@ -272,6 +262,18 @@ func (q *Queue) QueueStats(ctx context.Context, stats *types.QueueStats) error {
 }
 
 func (q *Queue) Pause(ctx context.Context, req *types.PauseRequest) error {
+
+	if req.Pause {
+		// TODO: Add tests for these cases
+		if req.PauseDuration.Nanoseconds() == 0 {
+			return transport.NewInvalidOption("pause_duration is invalid; cannot be empty")
+		}
+
+		if req.PauseDuration <= 100*time.Millisecond {
+			return transport.NewInvalidOption("pause_duration is invalid; cannot be less than 100ms")
+		}
+	}
+
 	r := QueueRequest{
 		Method:  MethodQueuePause,
 		Request: req,
@@ -350,32 +352,31 @@ func (q *Queue) synchronizationLoop() {
 	}
 
 	for {
-		state.ReserveCh = q.reserveQueueCh.Load()
-		state.ProduceCh = q.produceQueueCh.Load()
-		state.CompleteCh = q.completeQueueCh.Load()
 		select {
 
 		// -----------------------------------------------
-		case req := <-*state.ProduceCh:
-			// Swap the wait channel, so we can process the wait queue. Creating a
-			// new channel allows any incoming waiting produce requests (producers) that occur
-			// while this routine is running to be queued into the new wait queue without
-			// interfering with anything we are doing here.
-			ch := make(chan *types.ProduceRequest, queueChSize)
-			q.produceQueueCh.Store(&ch)
-			close(*state.ProduceCh)
+		case req := <-q.produceQueueCh:
+			// Consume all items in the channel, so we can process the entire batch
 
-			// TODO(thrawn01): Ensure we don't go beyond our max number of state.Producers, return
-			//  an error to the client
-
-			// TODO: Refactor this into a loop which pulls all the items from the channel via
-			//  select with default, once the default case is hit, we know the channel is empty
-			//  and we don't need to close the channel or use the atomic.Pointers anymore.
-			//  <--- DO THIS NEXT
-
+			// TODO: Consider making this a separate method to consume all items and handle request timeout
+			//  this will avoid the need for a label and this code might become complex if we over flow with
+			//  requests.
 			state.Producers.Add(req)
-			for req := range *state.ProduceCh {
-				state.Producers.Add(req)
+		CONTINUE1:
+			for {
+				select {
+				case req := <-q.produceQueueCh:
+					// TODO(thrawn01): Ensure we don't go beyond our max number of state.Producers, if we do,
+					//  then we must inform the client that we are overloaded, and they must try again. We
+					//  cannot hold on to a request and let it sit in the channel, else we break the
+					//  request_timeout contract we have with the client.
+
+					// TODO(thrawn01): Paused queues must also process this channel, and place produce requests
+					//  into state.Producers, and handle requests if this channel is full.
+					state.Producers.Add(req)
+				default:
+					break CONTINUE1
+				}
 			}
 
 			// FUTURE: Inspect the Waiting Reserve Requests, and attempt to assign produced items with
@@ -441,21 +442,21 @@ func (q *Queue) synchronizationLoop() {
 			state.Producers.Reset()
 
 		// -----------------------------------------------
-		case req := <-*state.ReserveCh:
-			// Swap the wait channel, so we can process the wait queue. Creating a
-			// new channel allows any incoming reserves that occur while this routine
-			// is running to be queued into the new wait queue without interfering with
-			// anything we are doing here.
-			ch := make(chan *types.ReserveRequest, queueChSize)
-			q.reserveQueueCh.Store(&ch)
-			close(*state.ReserveCh)
+		case req := <-q.reserveQueueCh:
+			// Consume all items in the channel, so we can process the entire batch
 
 			// TODO(thrawn01): Ensure we don't go beyond our max number of state.Reservations, return
 			//  an error to the client
 
 			addIfUnique(&state.Reservations, req)
-			for req := range *state.ReserveCh {
-				addIfUnique(&state.Reservations, req)
+		CONTINUE2:
+			for {
+				select {
+				case req := <-q.reserveQueueCh:
+					addIfUnique(&state.Reservations, req)
+				default:
+					break CONTINUE2
+				}
 			}
 
 			// Remove any clients that have timed out and find the next request to timeout.
@@ -503,17 +504,19 @@ func (q *Queue) synchronizationLoop() {
 			state.Reservations.FilterNils()
 
 		// -----------------------------------------------
-		case req := <-*state.CompleteCh:
-			ch := make(chan *types.CompleteRequest, queueChSize)
-			q.completeQueueCh.Store(&ch)
-			close(*state.CompleteCh)
-
+		case req := <-q.completeQueueCh:
 			// TODO(thrawn01): Ensure we don't go beyond our max number of state.Completes, return
 			//  an error to the client
 
 			state.Completes.Add(req)
-			for req := range *state.CompleteCh {
-				state.Completes.Add(req)
+		CONTINUE3:
+			for {
+				select {
+				case req := <-q.completeQueueCh:
+					state.Completes.Add(req)
+				default:
+					break CONTINUE3
+				}
 			}
 
 			writeTimeout := maxRequestTimeout
@@ -643,9 +646,9 @@ func (q *Queue) handleQueueStats(state *SyncState, r *QueueRequest) {
 	if err := q.opts.QueueStore.Stats(r.Context, qs); err != nil {
 		r.Err = err
 	}
-	qs.ProduceWaiting = len(*q.produceQueueCh.Load())
-	qs.ReserveWaiting = len(*q.reserveQueueCh.Load())
-	qs.CompleteWaiting = len(*q.completeQueueCh.Load())
+	qs.ProduceWaiting = len(q.produceQueueCh)
+	qs.ReserveWaiting = len(q.reserveQueueCh)
+	qs.CompleteWaiting = len(q.completeQueueCh)
 	qs.ReserveBlocked = len(state.Reservations.Requests)
 	close(r.ReadyCh)
 }
@@ -666,6 +669,8 @@ func (q *Queue) handlePause(state *SyncState, r *QueueRequest) {
 	timeoutCh := time.NewTimer(pr.PauseDuration)
 	close(r.ReadyCh)
 
+	q.opts.Logger.Warn("queue paused", "queue", q.opts.Name)
+	defer q.opts.Logger.Warn("queue un-paused", "queue", q.opts.Name)
 	for {
 		select {
 		case req := <-q.shutdownCh:
@@ -674,7 +679,7 @@ func (q *Queue) handlePause(state *SyncState, r *QueueRequest) {
 		case req := <-q.queueRequestCh:
 			switch req.Method {
 			case MethodQueuePause:
-				pr := r.Request.(*types.PauseRequest)
+				pr := req.Request.(*types.PauseRequest)
 				// Update the pause timeout if we receive another request to pause
 				if pr.Pause {
 					timeoutCh = time.NewTimer(pr.PauseDuration)

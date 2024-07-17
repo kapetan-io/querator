@@ -57,19 +57,6 @@ type CompleteRequest struct {
 	Err error
 }
 
-type QueueRequest struct {
-	// The API method called
-	Method string
-	// Context is the context of the request
-	Context context.Context
-	// The request struct for this method
-	Request any
-	// Used to wait for this request to complete
-	ReadyCh chan struct{}
-	// The error to be returned to the caller
-	Err error
-}
-
 type StorageRequest struct {
 	// Items is the items returned by the storage request
 	Items []*Item
@@ -79,8 +66,6 @@ type StorageRequest struct {
 	Pivot string
 	// Limit is included if requesting a list of storage items
 	Limit int
-	// Stats is the response to the Stats() call
-	Stats *QueueStats
 }
 
 type PauseRequest struct {
@@ -110,4 +95,15 @@ type QueueStats struct {
 	AverageAge time.Duration
 	// AverageReservedAge is the average age of reserved items in the queue
 	AverageReservedAge time.Duration
+	// ProduceWaiting is the number of `/queue.produce` requests currently waiting
+	// to be processed by the sync loop
+	ProduceWaiting int
+	// ReserveWaiting is the number of `/queue.reserve` requests currently waiting
+	// to be processed by the sync loop
+	ReserveWaiting int
+	// CompleteWaiting is the number of `/queue.complete` requests currently waiting
+	// to be processed by the sync loop
+	CompleteWaiting int
+	// ReserveBlocked is the number of reservations which are blocked waiting for new item to enter the queue.
+	ReserveBlocked int
 }

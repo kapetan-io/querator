@@ -247,8 +247,8 @@ func (s *Service) StorageQueueDelete(ctx context.Context, req *proto.StorageQueu
 	return nil
 }
 
-func (s *Service) StorageQueueStats(ctx context.Context, req *proto.StorageQueueStatsRequest,
-	res *proto.StorageQueueStatsResponse) error {
+func (s *Service) QueueStats(ctx context.Context, req *proto.QueueStatsRequest,
+	res *proto.QueueStatsResponse) error {
 
 	if strings.TrimSpace(req.QueueName) == "" {
 		return ErrQueueNameEmpty
@@ -260,7 +260,7 @@ func (s *Service) StorageQueueStats(ctx context.Context, req *proto.StorageQueue
 	}
 
 	var stats types.QueueStats
-	if err := queue.StorageQueueStats(ctx, &types.StorageRequest{Stats: &stats}); err != nil {
+	if err := queue.QueueStats(ctx, &stats); err != nil {
 		return err
 	}
 
@@ -268,6 +268,10 @@ func (s *Service) StorageQueueStats(ctx context.Context, req *proto.StorageQueue
 	res.TotalReserved = int32(stats.TotalReserved)
 	res.AverageAge = stats.AverageAge.String()
 	res.Total = int32(stats.Total)
+	res.ProduceWaiting = int32(stats.ProduceWaiting)
+	res.ReserveWaiting = int32(stats.ReserveWaiting)
+	res.CompleteWaiting = int32(stats.CompleteWaiting)
+	res.ReserveBlocked = int32(stats.ReserveBlocked)
 	return nil
 }
 

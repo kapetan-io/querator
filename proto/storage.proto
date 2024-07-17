@@ -45,21 +45,6 @@ message StorageQueueDeleteRequest {
   repeated string ids = 2;
 }
 
-message StorageQueueStatsRequest {
-  string queueName = 1 [json_name = "queue_name"];
-}
-
-message StorageQueueStatsResponse {
-  // Total is the number of items in the queue
-  int32 total = 1;
-  // TotalReserved is the number of items in the queue that are in reserved state
-  int32 TotalReserved = 2 [json_name = "total_reserved"];
-  // AverageAge is the average age of all items in the queue
-  string AverageAge = 3 [json_name = "average_age"];
-  // AverageReservedAge is the average age of reserved items in the queue
-  string AverageReservedAge = 4 [json_name = "average_reserved_age"];
-}
-
 // StorageItem maps directly to the internal.types.Item and allows users to inspect items in storage
 message StorageQueueItem {
   string id = 1;

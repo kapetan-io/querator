@@ -196,3 +196,29 @@ message QueuePauseRequest {
   // or until another request is received with pause = false
   bool pause = 3;
 }
+
+message QueueStatsRequest {
+  string queueName = 1 [json_name = "queue_name"];
+}
+
+message QueueStatsResponse {
+  // Total is the number of items in the queue
+  int32 total = 1;
+  // TotalReserved is the number of items in the queue that are in reserved state
+  int32 TotalReserved = 2 [json_name = "total_reserved"];
+  // AverageAge is the average age of all items in the queue
+  string AverageAge = 3 [json_name = "average_age"];
+  // AverageReservedAge is the average age of reserved items in the queue
+  string AverageReservedAge = 4 [json_name = "average_reserved_age"];
+  // ProduceWaiting is the number of `/queue.produce` requests currently waiting
+  // to be processed by the sync loop
+  int32 ProduceWaiting = 5 [json_name = "produce_waiting"];
+  // ReserveWaiting is the number of `/queue.reserve` requests currently waiting
+  // to be processed by the sync loop
+  int32 ReserveWaiting = 6 [json_name = "reserve_waiting"];
+  // CompleteWaiting is the number of `/queue.complete` requests currently waiting
+  // to be processed by the sync loop
+  int32 CompleteWaiting = 7 [json_name = "complete_waiting"];
+  // ReserveBlocked is the number of reservations which are blocked waiting for new item to enter the queue.
+  int32 ReserveBlocked = 8 [json_name = "reserve_blocked"];
+}

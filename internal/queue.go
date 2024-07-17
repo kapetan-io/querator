@@ -2,6 +2,7 @@ package internal
 
 import (
 	"context"
+	"fmt"
 	"github.com/duh-rpc/duh-go"
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
@@ -22,13 +23,14 @@ var (
 )
 
 const (
-	queueChSize              = 20_000
-	maxRequestTimeout        = 15 * time.Minute
-	minRequestTimeout        = 10 * time.Millisecond
-	MethodStorageQueueList   = "storage.queue.list"
-	MethodStorageQueueAdd    = "storage.queue.add"
-	MethodStorageQueueDelete = "storage.queue.delete"
-	MethodStorageQueueStats  = "storage.queue.stats"
+	queueChSize            = 20_000
+	maxRequestTimeout      = 15 * time.Minute
+	minRequestTimeout      = 10 * time.Millisecond
+	MethodStorageQueueList = iota
+	MethodStorageQueueAdd
+	MethodStorageQueueDelete
+	MethodQueueStats
+	MethodQueuePause
 )
 
 type QueueOptions struct {
@@ -57,6 +59,31 @@ type QueueOptions struct {
 	MaxProduceBatchSize int
 }
 
+type QueueRequest struct {
+	// The API method called
+	Method int
+	// Context is the context of the request
+	Context context.Context
+	// The request struct for this method
+	Request any
+	// Used to wait for this request to complete
+	ReadyCh chan struct{}
+	// The error to be returned to the caller
+	Err error
+}
+
+type SyncState struct {
+	Reservations types.ReserveBatch
+	Producers    types.Batch[types.ProduceRequest]
+	Completes    types.Batch[types.CompleteRequest]
+
+	ReserveCh  *chan *types.ReserveRequest
+	ProduceCh  *chan *types.ProduceRequest
+	CompleteCh *chan *types.CompleteRequest
+
+	WakeUpCh <-chan time.Time
+}
+
 // Queue manages job is to evenly distribute and consume items from a single queue. Ensuring consumers and
 // producers are handled fairly and efficiently. Since a Queue is the synchronization point for R/W
 // there can ONLY BE ONE instance of a Queue running anywhere in the cluster at any given time. All consume
@@ -70,7 +97,7 @@ type Queue struct {
 	completeQueueCh atomic.Pointer[chan *types.CompleteRequest]
 
 	shutdownCh     chan *types.ShutdownRequest
-	queueRequestCh chan *types.QueueRequest
+	queueRequestCh chan *QueueRequest
 	wg             sync.WaitGroup
 	opts           QueueOptions
 	inShutdown     atomic.Bool
@@ -87,7 +114,7 @@ func NewQueue(opts QueueOptions) (*Queue, error) {
 
 	q := &Queue{
 		// Queue requests are any request that doesn't require special batch processing
-		queueRequestCh: make(chan *types.QueueRequest),
+		queueRequestCh: make(chan *QueueRequest),
 		// Shutdowns require special handling in the sync loop
 		shutdownCh: make(chan *types.ShutdownRequest),
 		opts:       opts,
@@ -236,49 +263,119 @@ func (q *Queue) Complete(ctx context.Context, req *types.CompleteRequest) error 
 	return req.Err
 }
 
-// synchronizationLoop See doc/adr/0003-rw-sync-point.md for an explanation of this design
+func (q *Queue) QueueStats(ctx context.Context, stats *types.QueueStats) error {
+	r := QueueRequest{
+		Method:  MethodQueueStats,
+		Request: stats,
+	}
+	return q.queueRequest(ctx, &r)
+}
 
-// TODO: Refactor the queue.go code to use Batch Request objects and replace wwr, wcr structs with Request objects
+func (q *Queue) Pause(ctx context.Context, req *types.PauseRequest) error {
+	r := QueueRequest{
+		Method:  MethodQueuePause,
+		Request: req,
+	}
+	return q.queueRequest(ctx, &r)
+}
+
+func (q *Queue) StorageQueueList(ctx context.Context, req *types.StorageRequest) error {
+	// TODO(thrawn01): I suspect the most efficient way to do this is pass by value and not a pointer
+	//  I really need to get into the habit of passing by value as the default, and only pass by
+	//  pointer when its absolutely needed.
+	r := QueueRequest{
+		Method:  MethodStorageQueueList,
+		Request: req,
+	}
+	return q.queueRequest(ctx, &r)
+}
+
+func (q *Queue) StorageQueueAdd(ctx context.Context, req *types.StorageRequest) error {
+	r := QueueRequest{
+		Method:  MethodStorageQueueAdd,
+		Request: req,
+	}
+	return q.queueRequest(ctx, &r)
+}
+
+func (q *Queue) StorageQueueDelete(ctx context.Context, req *types.StorageRequest) error {
+	r := QueueRequest{
+		Method:  MethodStorageQueueDelete,
+		Request: req,
+	}
+	return q.queueRequest(ctx, &r)
+}
+
+func (q *Queue) queueRequest(ctx context.Context, r *QueueRequest) error {
+	if q.inShutdown.Load() {
+		return ErrQueueShutdown
+	}
+
+	r.ReadyCh = make(chan struct{})
+	r.Context = ctx
+
+	select {
+	case q.queueRequestCh <- r:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
+	select {
+	case <-r.ReadyCh:
+		return r.Err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// -------------------------------------------------
+// Main Loop and Handlers
+// See doc/adr/0003-rw-sync-point.md for an explanation of this design
+// -------------------------------------------------
+
 func (q *Queue) synchronizationLoop() {
 	defer q.wg.Done()
 
-	// TODO: Refactor this into a smaller loop with handler functions which pass around a state object with
-	//  State.AddToWPR() and State.AddToWRR() etc....
-
-	reserves := types.ReserveBatch{
-		Requests: make([]*types.ReserveRequest, 0, 5_000),
-		Total:    0,
+	state := SyncState{
+		Reservations: types.ReserveBatch{
+			Requests: make([]*types.ReserveRequest, 0, 5_000),
+			Total:    0,
+		},
+		Producers: types.Batch[types.ProduceRequest]{
+			Requests: make([]*types.ProduceRequest, 0, 5_000),
+		},
+		Completes: types.Batch[types.CompleteRequest]{
+			Requests: make([]*types.CompleteRequest, 0, 5_000),
+		},
 	}
-
-	producers := types.Batch[types.ProduceRequest]{
-		Requests: make([]*types.ProduceRequest, 0, 5_000),
-	}
-
-	completes := types.Batch[types.CompleteRequest]{
-		Requests: make([]*types.CompleteRequest, 0, 5_000),
-	}
-
-	var timerCh <-chan time.Time
 
 	for {
-		reserveQueueCh := q.reserveQueueCh.Load()
-		produceQueueCh := q.produceQueueCh.Load()
-		completeQueueCh := q.completeQueueCh.Load()
+		state.ReserveCh = q.reserveQueueCh.Load()
+		state.ProduceCh = q.produceQueueCh.Load()
+		state.CompleteCh = q.completeQueueCh.Load()
 		select {
 
 		// -----------------------------------------------
-		case req := <-*produceQueueCh:
+		case req := <-*state.ProduceCh:
 			// Swap the wait channel, so we can process the wait queue. Creating a
 			// new channel allows any incoming waiting produce requests (producers) that occur
 			// while this routine is running to be queued into the new wait queue without
 			// interfering with anything we are doing here.
 			ch := make(chan *types.ProduceRequest, queueChSize)
 			q.produceQueueCh.Store(&ch)
-			close(*produceQueueCh)
+			close(*state.ProduceCh)
 
-			producers.Add(req)
-			for req := range *produceQueueCh {
-				producers.Add(req)
+			// TODO(thrawn01): Ensure we don't go beyond our max number of state.Producers, return
+			//  an error to the client
+
+			// TODO: Refactor this into a loop which pulls all the items from the channel via
+			//  select with default, once the default case is hit, we know the channel is empty
+			//  and we don't need to close the channel or use the atomic.Pointers anymore.
+			//  <--- DO THIS NEXT
+
+			state.Producers.Add(req)
+			for req := range *state.ProduceCh {
+				state.Producers.Add(req)
 			}
 
 			// FUTURE: Inspect the Waiting Reserve Requests, and attempt to assign produced items with
@@ -293,11 +390,11 @@ func (q *Queue) synchronizationLoop() {
 			// Assign a DeadTimeout and Calculate an appropriate write timeout such that we respect RequestDeadline
 			// if we are experiencing a saturation event
 			writeTimeout := maxRequestTimeout
-			for _, req := range producers.Requests {
+			for _, req := range state.Producers.Requests {
 				// Cancel any produce requests that have timed out
 				if time.Now().UTC().After(req.RequestDeadline) {
 					req.Err = ErrRequestTimeout
-					producers.Remove(req)
+					state.Producers.Remove(req)
 					close(req.ReadyCh)
 					continue
 				}
@@ -321,12 +418,12 @@ func (q *Queue) synchronizationLoop() {
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
-			if err := q.opts.QueueStore.Produce(ctx, producers); err != nil {
+			if err := q.opts.QueueStore.Produce(ctx, state.Producers); err != nil {
 				q.opts.Logger.Error("while calling QueueStore.Add()", "error", err,
 					"category", "queue", "queueName", q.opts.Name)
 				cancel()
 				// Let clients that are timed out, know we are done with them.
-				for _, req := range producers.Requests {
+				for _, req := range state.Producers.Requests {
 					if time.Now().UTC().After(req.RequestDeadline) {
 						req.Err = ErrRequestTimeout
 						close(req.ReadyCh)
@@ -338,28 +435,31 @@ func (q *Queue) synchronizationLoop() {
 			cancel()
 
 			// Tell the waiting clients the items have been produced
-			for _, req := range producers.Requests {
+			for _, req := range state.Producers.Requests {
 				close(req.ReadyCh)
 			}
-			producers.Reset()
+			state.Producers.Reset()
 
 		// -----------------------------------------------
-		case req := <-*reserveQueueCh:
+		case req := <-*state.ReserveCh:
 			// Swap the wait channel, so we can process the wait queue. Creating a
 			// new channel allows any incoming reserves that occur while this routine
 			// is running to be queued into the new wait queue without interfering with
 			// anything we are doing here.
 			ch := make(chan *types.ReserveRequest, queueChSize)
 			q.reserveQueueCh.Store(&ch)
-			close(*reserveQueueCh)
+			close(*state.ReserveCh)
 
-			addIfUnique(&reserves, req)
-			for req := range *reserveQueueCh {
-				addIfUnique(&reserves, req)
+			// TODO(thrawn01): Ensure we don't go beyond our max number of state.Reservations, return
+			//  an error to the client
+
+			addIfUnique(&state.Reservations, req)
+			for req := range *state.ReserveCh {
+				addIfUnique(&state.Reservations, req)
 			}
 
 			// Remove any clients that have timed out and find the next request to timeout.
-			writeTimeout := nextTimeout(&reserves)
+			writeTimeout := nextTimeout(&state.Reservations)
 
 			// If we allow a calculated write timeout to be a few milliseconds, then the store.Add()
 			// is almost guaranteed to fail, so we ensure the write timeout is something reasonable.
@@ -372,7 +472,7 @@ func (q *Queue) synchronizationLoop() {
 			// Send the batch that each request wants to the store. If there are items that can be reserved the
 			// store will assign items to each batch request.
 			ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
-			if err := q.opts.QueueStore.Reserve(ctx, reserves, store.ReserveOptions{
+			if err := q.opts.QueueStore.Reserve(ctx, state.Reservations, store.ReserveOptions{
 				ReserveDeadline: time.Now().UTC().Add(q.opts.ReserveTimeout),
 			}); err != nil {
 				q.opts.Logger.Error("while calling QueueStore.Reserve()", "error", err,
@@ -383,38 +483,45 @@ func (q *Queue) synchronizationLoop() {
 			cancel()
 
 			// Inform clients they have reservations ready or if there was an error
-			for _, req := range reserves.Requests {
+			for i, req := range state.Reservations.Requests {
+				if req == nil {
+					continue
+				}
 				if len(req.Items) != 0 || req.Err != nil {
+					state.Reservations.MarkNil(i)
 					close(req.ReadyCh)
-					reserves.Remove(req)
 				}
 			}
 
 			// Set a timer for remaining open reserve requests
-			// Or when next reservation will expire
-			next := nextTimeout(&reserves)
+			// Or when next reservation will expire.
+			next := nextTimeout(&state.Reservations)
 			if next.Nanoseconds() != 0 {
-				timerCh = time.After(next)
+				state.WakeUpCh = time.After(next)
 			}
+			// Clean up requests that have timed out or received reservations
+			state.Reservations.FilterNils()
 
 		// -----------------------------------------------
-		case req := <-*completeQueueCh:
+		case req := <-*state.CompleteCh:
 			ch := make(chan *types.CompleteRequest, queueChSize)
 			q.completeQueueCh.Store(&ch)
-			close(*completeQueueCh)
+			close(*state.CompleteCh)
 
-			completes.Add(req)
-			for req := range *completeQueueCh {
-				completes.Add(req)
+			// TODO(thrawn01): Ensure we don't go beyond our max number of state.Completes, return
+			//  an error to the client
+
+			state.Completes.Add(req)
+			for req := range *state.CompleteCh {
+				state.Completes.Add(req)
 			}
 
-			// TODO: Abstract the writeTimeout calc into a function call
 			writeTimeout := maxRequestTimeout
-			for _, req := range producers.Requests {
+			for _, req := range state.Completes.Requests {
 				// Cancel any produce requests that have timed out
 				if time.Now().UTC().After(req.RequestDeadline) {
 					req.Err = ErrRequestTimeout
-					producers.Remove(req)
+					state.Completes.Remove(req)
 					close(req.ReadyCh)
 					continue
 				}
@@ -435,51 +542,39 @@ func (q *Queue) synchronizationLoop() {
 
 			var err error
 			ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
-			if err = q.opts.QueueStore.Complete(ctx, completes); err != nil {
+			if err = q.opts.QueueStore.Complete(ctx, state.Completes); err != nil {
 				q.opts.Logger.Error("while calling QueueStore.Complete()", "error", err,
 					"category", "queue", "queueName", q.opts.Name)
 			}
 			cancel()
 
 			// Tell the waiting clients that items have been marked as complete
-			for _, req := range completes.Requests {
+			for _, req := range state.Completes.Requests {
 				if err != nil {
 					req.Err = ErrInternalRetry
 				}
 				close(req.ReadyCh)
 			}
-			completes.Reset()
+			state.Completes.Reset()
 
-		// -----------------------------------------------
 		case req := <-q.queueRequestCh:
-			if err := q.handleServiceRequests(req); err != nil {
-				req.Err = err
+			q.handleQueueRequests(&state, req)
+			// If we shut down during a pause
+			if q.inShutdown.Load() {
+				return
 			}
-			close(req.ReadyCh)
 
-		// -----------------------------------------------
 		case req := <-q.shutdownCh:
-			for _, r := range producers.Requests {
-				r.Err = ErrQueueShutdown
-				close(r.ReadyCh)
-			}
-			for _, r := range reserves.Requests {
-				r.Err = ErrQueueShutdown
-				close(r.ReadyCh)
-			}
-			if err := q.opts.QueueStore.Close(req.Context); err != nil {
-				req.Err = err
-			}
-			close(req.ReadyCh)
+			q.handleShutdown(&state, req)
 			return
 
-		// -----------------------------------------------
-		case <-timerCh:
+		case <-state.WakeUpCh:
 			// Find the next reserve request that will time out, and notify any clients of expired reserves
-			next := nextTimeout(&reserves)
+			next := nextTimeout(&state.Reservations)
 			if next.Nanoseconds() != 0 {
-				timerCh = time.After(next)
+				state.WakeUpCh = time.After(next)
 			}
+			state.Reservations.FilterNils()
 
 			// TODO: Preform queue maintenance, cleaning up reserved items that have not been completed and
 			//  moving items into the dead letter queue.
@@ -508,93 +603,110 @@ func (q *Queue) Shutdown(ctx context.Context) error {
 	}
 }
 
-func (q *Queue) StorageQueueList(ctx context.Context, req *types.StorageRequest) error {
-	// TODO(thrawn01): I suspect the most efficient way to do this is pass by value and not a pointer
-	//  I really need to get into the habit of being pass by value as the default, and only pass by
-	//  pointer when its absolutely needed.
-	r := types.QueueRequest{
-		Method:  MethodStorageQueueList,
-		Request: req,
-	}
-	return q.queueRequest(ctx, &r)
-}
-
-func (q *Queue) StorageQueueAdd(ctx context.Context, req *types.StorageRequest) error {
-	r := types.QueueRequest{
-		Method:  MethodStorageQueueAdd,
-		Request: req,
-	}
-	return q.queueRequest(ctx, &r)
-}
-
-func (q *Queue) StorageQueueDelete(ctx context.Context, req *types.StorageRequest) error {
-	r := types.QueueRequest{
-		Method:  MethodStorageQueueDelete,
-		Request: req,
-	}
-	return q.queueRequest(ctx, &r)
-}
-
-func (q *Queue) StorageQueueStats(ctx context.Context, req *types.StorageRequest) error {
-	r := types.QueueRequest{
-		Method:  MethodStorageQueueStats,
-		Request: req,
-	}
-	return q.queueRequest(ctx, &r)
-}
-
-func (q *Queue) Pause(ctx context.Context, req *types.PauseRequest) error {
-	return nil
-}
-
-func (q *Queue) queueRequest(ctx context.Context, r *types.QueueRequest) error {
-	if q.inShutdown.Load() {
-		return ErrQueueShutdown
-	}
-
-	r.ReadyCh = make(chan struct{})
-	r.Context = ctx
-
-	select {
-	case q.queueRequestCh <- r:
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-
-	select {
-	case <-r.ReadyCh:
-		return r.Err
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-func (q *Queue) handleServiceRequests(req *types.QueueRequest) error {
+func (q *Queue) handleQueueRequests(state *SyncState, req *QueueRequest) {
 	switch req.Method {
-	// Handle type.StorageRequests
-	case MethodStorageQueueList, MethodStorageQueueAdd, MethodStorageQueueDelete, MethodStorageQueueStats:
-		sr := req.Request.(*types.StorageRequest)
-		switch req.Method {
-		case MethodStorageQueueList:
-			if err := q.opts.QueueStore.List(req.Context, &sr.Items,
-				types.ListOptions{Pivot: sr.Pivot, Limit: sr.Limit}); err != nil {
-				return err
+	case MethodStorageQueueList, MethodStorageQueueAdd, MethodStorageQueueDelete:
+		q.handleStorageRequests(req)
+	case MethodQueueStats:
+		q.handleQueueStats(state, req)
+	case MethodQueuePause:
+		q.handlePause(state, req)
+	default:
+		panic(fmt.Sprintf("unknown queue request method '%d'", req.Method))
+	}
+}
+
+func (q *Queue) handleStorageRequests(req *QueueRequest) {
+	sr := req.Request.(*types.StorageRequest)
+	switch req.Method {
+	case MethodStorageQueueList:
+		if err := q.opts.QueueStore.List(req.Context, &sr.Items,
+			types.ListOptions{Pivot: sr.Pivot, Limit: sr.Limit}); err != nil {
+			req.Err = err
+		}
+	case MethodStorageQueueAdd:
+		if err := q.opts.QueueStore.Add(req.Context, sr.Items); err != nil {
+			req.Err = err
+		}
+	case MethodStorageQueueDelete:
+		if err := q.opts.QueueStore.Delete(req.Context, sr.IDs); err != nil {
+			req.Err = err
+		}
+	default:
+		panic(fmt.Sprintf("unknown storage request method '%d'", req.Method))
+	}
+	close(req.ReadyCh)
+}
+
+func (q *Queue) handleQueueStats(state *SyncState, r *QueueRequest) {
+	qs := r.Request.(*types.QueueStats)
+	if err := q.opts.QueueStore.Stats(r.Context, qs); err != nil {
+		r.Err = err
+	}
+	qs.ProduceWaiting = len(*q.produceQueueCh.Load())
+	qs.ReserveWaiting = len(*q.reserveQueueCh.Load())
+	qs.CompleteWaiting = len(*q.completeQueueCh.Load())
+	qs.ReserveBlocked = len(state.Reservations.Requests)
+	close(r.ReadyCh)
+}
+
+// handlePause places Queue into a special loop where operations are limited and none of the
+// produce, reserve, complete, defer operations will be processed until we leave the loop.
+func (q *Queue) handlePause(state *SyncState, r *QueueRequest) {
+	pr := r.Request.(*types.PauseRequest)
+
+	// Since we are not currently paused, and yet we get an un-pause request likely the user
+	// wants us to sync any cached state and reload from the data store if necessary.
+	// As of this current version (V0), there is no cached data to sync, but this will likely
+	// change in the future.
+	if !pr.Pause {
+		close(r.ReadyCh)
+		return
+	}
+	timeoutCh := time.NewTimer(pr.PauseDuration)
+	close(r.ReadyCh)
+
+	for {
+		select {
+		case req := <-q.shutdownCh:
+			q.handleShutdown(state, req)
+			return
+		case req := <-q.queueRequestCh:
+			switch req.Method {
+			case MethodQueuePause:
+				pr := r.Request.(*types.PauseRequest)
+				// Update the pause timeout if we receive another request to pause
+				if pr.Pause {
+					timeoutCh = time.NewTimer(pr.PauseDuration)
+					close(req.ReadyCh)
+					continue
+				}
+				// Cancel the pause
+				close(req.ReadyCh)
+				return
+			default:
+				q.handleQueueRequests(state, req)
 			}
-		case MethodStorageQueueAdd:
-			if err := q.opts.QueueStore.Add(req.Context, sr.Items); err != nil {
-				return err
-			}
-		case MethodStorageQueueDelete:
-			if err := q.opts.QueueStore.Delete(req.Context, sr.IDs); err != nil {
-				return err
-			}
-		case MethodStorageQueueStats:
-			if err := q.opts.QueueStore.Stats(req.Context, sr.Stats); err != nil {
-				return err
-			}
+		case <-timeoutCh.C:
+			// Cancel the pause
+			return
 		}
 	}
-	return nil
+}
+
+func (q *Queue) handleShutdown(state *SyncState, req *types.ShutdownRequest) {
+	for _, r := range state.Producers.Requests {
+		r.Err = ErrQueueShutdown
+		close(r.ReadyCh)
+	}
+	for _, r := range state.Reservations.Requests {
+		r.Err = ErrQueueShutdown
+		close(r.ReadyCh)
+	}
+	if err := q.opts.QueueStore.Close(req.Context); err != nil {
+		req.Err = err
+	}
+	close(req.ReadyCh)
 }
 
 // addIfUnique adds a ReserveRequest to the batch. Returns false if the ReserveRequest.ClientID is a duplicate
@@ -612,27 +724,30 @@ func addIfUnique(r *types.ReserveBatch, req *types.ReserveRequest) bool {
 	return false
 }
 
-// TODO: I don't think we should pass by ref, but use escape analysis to decide
+// TODO: I don't think we should pass by ref. We should use escape analysis to decide
 func nextTimeout(r *types.ReserveBatch) time.Duration {
 	var soon *types.ReserveRequest
 
-	for _, req := range r.Requests {
+	for i, req := range r.Requests {
+		if req == nil {
+			continue
+		}
+
 		// If request has already expired
 		if time.Now().UTC().After(req.RequestDeadline) {
 			// Inform our waiting client
 			req.Err = ErrRequestTimeout
 			close(req.ReadyCh)
-			r.Total -= req.NumRequested
-			r.Remove(req)
+			r.MarkNil(i)
 			continue
 		}
 
 		// If client has gone away
 		if req.Context.Err() != nil {
-			close(req.ReadyCh)
 			r.Total -= req.NumRequested
 			req.Err = req.Context.Err()
-			r.Remove(req)
+			close(req.ReadyCh)
+			r.MarkNil(i)
 			continue
 		}
 

@@ -2,7 +2,9 @@ package querator_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"github.com/duh-rpc/duh-go/retry"
 	que "github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/internal/store"
 	pb "github.com/kapetan-io/querator/proto"
@@ -13,6 +15,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -35,6 +38,8 @@ import (
 //	require.NoError(t, c.QueueCreate(ctx, &pb.QueueOptions{Name: queueName}))
 //
 //}
+
+var RetryTenTimes = retry.Policy{Interval: retry.Sleep(time.Second), Attempts: 10}
 
 type NewStorageFunc func() store.Storage
 
@@ -323,116 +328,189 @@ func testStorage(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			}
 		})
 	})
-	//t.Run("Reserve", func(t *testing.T) {
-	//	var queueName = random.String("queue-", 10)
-	//	clientID := random.String("client-", 10)
-	//	d, c, ctx := newDaemon(t, _store, 10*time.Second)
-	//	defer d.Shutdown(t)
-	//
-	//	require.NoError(t, c.QueueCreate(ctx, &pb.QueueOptions{QueueName: queueName}))
-	//	items := writeRandomItems(t, ctx, c, queueName, 10_000)
-	//	require.Len(t, items, 10_000)
-	//
-	//	expire := time.Now().UTC().Add(2_000 * time.Minute)
-	//	var reserved, secondReserve pb.QueueReserveResponse
-	//	var list pb.StorageQueueListResponse
-	//	var lastReservedId string
-	//
-	//	t.Run("TenItems", func(t *testing.T) {
-	//		req := pb.QueueReserveRequest{
-	//			ClientId:       clientID,
-	//			QueueName:      queueName,
-	//			BatchSize:      10,
-	//			RequestTimeout: "1m",
-	//		}
-	//
-	//		require.NoError(t, c.QueueReserve(ctx, &req, &reserved))
-	//		require.Equal(t, 10, len(reserved.Items))
-	//
-	//		// Ensure the items reserved are marked as reserved in the database
-	//		require.NoError(t, c.StorageQueueList(ctx, queueName, &list, &que.ListOptions{Limit: 10_000}))
-	//
-	//		for i := range reserved.Items {
-	//			assert.Equal(t, list.Items[i].Id, reserved.Items[i].Id)
-	//			assert.Equal(t, true, list.Items[i].IsReserved)
-	//			assert.True(t, list.Items[i].ReserveDeadline.AsTime().After(expire))
-	//		}
-	//	})
-	//
-	//	t.Run("AnotherTenItems", func(t *testing.T) {
-	//		req := pb.QueueReserveRequest{
-	//			ClientId:       clientID,
-	//			QueueName:      queueName,
-	//			BatchSize:      10,
-	//			RequestTimeout: "1m",
-	//		}
-	//
-	//		require.NoError(t, c.QueueReserve(ctx, &req, &secondReserve))
-	//		require.Equal(t, 10, len(reserved.Items))
-	//
-	//		var combined []*pb.QueueReserveItem
-	//		combined = append(combined, reserved.Items...)
-	//		combined = append(combined, secondReserve.Items...)
-	//
-	//		require.NoError(t, c.StorageQueueList(ctx, queueName, &list, &que.ListOptions{Limit: 10_000}))
-	//		assert.NotEqual(t, reserved.Items[0].Id, secondReserve.Items[0].Id)
-	//		assert.Equal(t, combined[0].Id, list.Items[0].Id)
-	//		require.Equal(t, 20, len(combined))
-	//		require.Equal(t, 10_000, len(list.Items))
-	//
-	//		// Ensure all the items reserved are marked as reserved in the database
-	//		for i := range combined {
-	//			assert.Equal(t, list.Items[i].Id, combined[i].Id)
-	//			assert.Equal(t, true, list.Items[i].IsReserved)
-	//			assert.True(t, list.Items[i].ReserveDeadline.AsTime().After(expire))
-	//		}
-	//		//lastReservedId = list.Items[len(combined)-1].Id TODO
-	//	})
-	//
-	//	t.Run("DistributeNumRequested", func(t *testing.T) {
-	//
-	//		// TODO: Pause processing of the queue
-	//		//   The pause should also be aware of shutdown requests, and cancel all pending requests
-	//
-	//		// TODO: Send 3 requests to reserve, such that they are queued for processing
-	//
-	//		// TODO: Unpause processing of the queue
-	//
-	//		//// Ensure our requests are of different requested reservations
-	//		//batch := types.ReserveBatch{
-	//		//	Requests: []*types.ReserveRequest{
-	//		//		{NumRequested: 5},
-	//		//		{NumRequested: 10},
-	//		//		{NumRequested: 20},
-	//		//	},
-	//		//	Total: 35,
-	//		//}
-	//		//
-	//		//require.NoError(t, q.Reserve(ctx, batch, store.ReserveOptions{ReserveDeadline: expire}))
-	//		//
-	//		//assert.Equal(t, 5, batch.Requests[0].NumRequested)
-	//		//assert.Equal(t, 5, len(batch.Requests[0].Items))
-	//		//assert.Equal(t, 10, batch.Requests[1].NumRequested)
-	//		//assert.Equal(t, 10, len(batch.Requests[1].Items))
-	//		//assert.Equal(t, 20, batch.Requests[2].NumRequested)
-	//		//assert.Equal(t, 20, len(batch.Requests[2].Items))
-	//		//
-	//		//// Ensure all the items are reserved
-	//		//read = read[:0]
-	//		//require.NoError(t, q.List(ctx, &read, types.ListOptions{Pivot: lastReserved[0].ID, Limit: 10_000}))
-	//		//require.Equal(t, 9_980, len(read))
-	//		//
-	//		//for _, item := range read[0:35] {
-	//		//	// Ensure the item is reserved
-	//		//	require.Equal(t, true, item.IsReserved)
-	//		//	// Find the reserved item in the batch request
-	//		//	if !findInBatch(t, batch, item.ID) {
-	//		//		t.Fatalf("unable to find item '%s' in any batch reserve request", item.ID)
-	//		//	}
-	//		//}
-	//	})
-	//
-	//})
+
+	t.Run("Reserve", func(t *testing.T) {
+		var queueName = random.String("queue-", 10)
+		clientID := random.String("client-", 10)
+		d, c, ctx := newDaemon(t, _store, 10*time.Second)
+		defer d.Shutdown(t)
+
+		require.NoError(t, c.QueueCreate(ctx, &pb.QueueOptions{QueueName: queueName}))
+		items := writeRandomItems(t, ctx, c, queueName, 10_000)
+		require.Len(t, items, 10_000)
+
+		expire := time.Now().UTC().Add(2_000 * time.Minute)
+		var reserved, secondReserve pb.QueueReserveResponse
+		var list pb.StorageQueueListResponse
+
+		t.Run("TenItems", func(t *testing.T) {
+			req := pb.QueueReserveRequest{
+				ClientId:       clientID,
+				QueueName:      queueName,
+				BatchSize:      10,
+				RequestTimeout: "1m",
+			}
+
+			require.NoError(t, c.QueueReserve(ctx, &req, &reserved))
+			require.Equal(t, 10, len(reserved.Items))
+
+			// Ensure the items reserved are marked as reserved in the database
+			require.NoError(t, c.StorageQueueList(ctx, queueName, &list, &que.ListOptions{Limit: 10_000}))
+
+			for i := range reserved.Items {
+				assert.Equal(t, list.Items[i].Id, reserved.Items[i].Id)
+				assert.Equal(t, true, list.Items[i].IsReserved)
+				// TODO: Allow config of the reservation deadline on the queue and then
+				//  assert the ReserveDeadline is correct.
+				assert.True(t, list.Items[i].ReserveDeadline.AsTime().Before(expire))
+			}
+		})
+
+		t.Run("AnotherTenItems", func(t *testing.T) {
+			req := pb.QueueReserveRequest{
+				ClientId:       clientID,
+				QueueName:      queueName,
+				BatchSize:      10,
+				RequestTimeout: "1m",
+			}
+
+			require.NoError(t, c.QueueReserve(ctx, &req, &secondReserve))
+			require.Equal(t, 10, len(reserved.Items))
+
+			var combined []*pb.QueueReserveItem
+			combined = append(combined, reserved.Items...)
+			combined = append(combined, secondReserve.Items...)
+
+			require.NoError(t, c.StorageQueueList(ctx, queueName, &list, &que.ListOptions{Limit: 10_000}))
+			assert.NotEqual(t, reserved.Items[0].Id, secondReserve.Items[0].Id)
+			assert.Equal(t, combined[0].Id, list.Items[0].Id)
+			require.Equal(t, 20, len(combined))
+			require.Equal(t, 10_000, len(list.Items))
+
+			// Ensure all the items reserved are marked as reserved in the database
+			for i := range combined {
+				assert.Equal(t, list.Items[i].Id, combined[i].Id)
+				assert.Equal(t, true, list.Items[i].IsReserved)
+				assert.True(t, list.Items[i].ReserveDeadline.AsTime().Before(expire))
+			}
+		})
+
+		t.Run("DistributeNumRequested", func(t *testing.T) {
+			// Pause processing of the queue
+			require.NoError(t, c.QueuePause(ctx, &pb.QueuePauseRequest{QueueName: queueName, Pause: true}))
+
+			requests := []*pb.QueueReserveRequest{
+				{
+					ClientId:       random.String("client-", 10),
+					QueueName:      queueName,
+					BatchSize:      5,
+					RequestTimeout: "1m",
+				},
+				{
+					ClientId:       random.String("client-", 10),
+					QueueName:      queueName,
+					BatchSize:      10,
+					RequestTimeout: "1m",
+				},
+				{
+					ClientId:       random.String("client-", 10),
+					QueueName:      queueName,
+					BatchSize:      20,
+					RequestTimeout: "1m",
+				},
+			}
+			responses := []*pb.QueueReserveResponse{{}, {}, {}}
+			var wg sync.WaitGroup
+			wg.Add(len(requests))
+
+			// Send 3 requests to reserve, such that they are queued for processing
+			go func() {
+				require.NoError(t, c.QueueReserve(ctx, requests[0], responses[0]))
+				wg.Done()
+			}()
+			go func() {
+				require.NoError(t, c.QueueReserve(ctx, requests[1], responses[1]))
+				wg.Done()
+			}()
+			go func() {
+				require.NoError(t, c.QueueReserve(ctx, requests[2], responses[2]))
+				wg.Done()
+			}()
+
+			_ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+			defer cancel()
+			// Wait until every request is waiting
+			err := retry.On(_ctx, RetryTenTimes, func(ctx context.Context, i int) error {
+				var resp pb.QueueStatsResponse
+				require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &resp))
+				// There should eventually be 3 waiting reserve requests
+				if resp.ReserveWaiting != 3 {
+					return errors.New("TotalReserved never reached expected 3")
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatalf("while waiting on 3 reserved requests: %v", err)
+			}
+
+			// Unpause processing of the queue to allow the reservations to be filled.
+			require.NoError(t, c.QueuePause(ctx, &pb.QueuePauseRequest{QueueName: queueName, Pause: false}))
+			// Wait for each request to complete
+			done := make(chan struct{})
+
+			go func() {
+				wg.Wait()
+				close(done)
+			}()
+
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatalf("timed out waiting for distribution of requests")
+			}
+
+			assert.Equal(t, int32(5), requests[0].BatchSize)
+			assert.Equal(t, 5, len(responses[0].Items))
+			assert.Equal(t, int32(10), requests[1].BatchSize)
+			assert.Equal(t, 10, len(responses[1].Items))
+			assert.Equal(t, int32(20), requests[2].BatchSize)
+			assert.Equal(t, 20, len(responses[2].Items))
+
+			// Fetch items from storage, ensure items are reserved
+			require.NoError(t, c.StorageQueueList(ctx, queueName, &list, &que.ListOptions{Limit: 10_000}))
+			require.Equal(t, 10_000, len(list.Items))
+
+			var found int
+			for _, item := range list.Items {
+				// Find the reserved item in the batch request
+				if findInResponses(t, responses, item.Id) {
+					found++
+					// Ensure the item is reserved
+					require.Equal(t, true, item.IsReserved)
+				}
+			}
+			assert.Equal(t, 35, found, "expected to find 35 reserved items, got %d", found)
+		})
+
+		// TODO: Continue the storage_test migration <-- DO THIS NEXT
+
+		// TODO: Test duplicate client id
+		// TODO: Test pause and unpause, ensure can produce and consume after un-paused and Ensure can shutdown
+		// TODO: Test pause false without pause true
+	})
+}
+
+func findInResponses(t *testing.T, responses []*pb.QueueReserveResponse, id string) bool {
+	t.Helper()
+
+	for _, item := range responses {
+		for _, idItem := range item.Items {
+			if idItem.Id == id {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func compareStorageItem(t *testing.T, l *pb.StorageQueueItem, r *pb.StorageQueueItem) {

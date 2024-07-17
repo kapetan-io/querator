@@ -101,6 +101,23 @@ func (c *Client) QueueComplete(ctx context.Context, req *pb.QueueCompleteRequest
 	return c.client.Do(r, &res)
 }
 
+func (c *Client) QueuePause(ctx context.Context, req *pb.QueuePauseRequest) error {
+	payload, err := proto.Marshal(req)
+	if err != nil {
+		return duh.NewClientError("while marshaling request payload: %w", err, nil)
+	}
+
+	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("%s%s", c.opts.Endpoint, transport.RPCQueuePause), bytes.NewReader(payload))
+	if err != nil {
+		return duh.NewClientError("", err, nil)
+	}
+
+	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	var res v1.Reply
+	return c.client.Do(r, &res)
+}
+
 func (c *Client) QueueCreate(ctx context.Context, req *pb.QueueOptions) error {
 	payload, err := proto.Marshal(req)
 	if err != nil {
@@ -189,8 +206,8 @@ func (c *Client) StorageQueueDelete(ctx context.Context, req *pb.StorageQueueAdd
 	return c.client.Do(r, &res)
 }
 
-func (c *Client) StorageQueueStats(ctx context.Context, req *pb.StorageQueueStatsRequest,
-	res *pb.StorageQueueStatsResponse) error {
+func (c *Client) QueueStats(ctx context.Context, req *pb.QueueStatsRequest,
+	res *pb.QueueStatsResponse) error {
 
 	payload, err := proto.Marshal(req)
 	if err != nil {
@@ -198,7 +215,7 @@ func (c *Client) StorageQueueStats(ctx context.Context, req *pb.StorageQueueStat
 	}
 
 	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		fmt.Sprintf("%s%s", c.opts.Endpoint, transport.RPCStorageQueueStats), bytes.NewReader(payload))
+		fmt.Sprintf("%s%s", c.opts.Endpoint, transport.RPCQueueStats), bytes.NewReader(payload))
 	if err != nil {
 		return duh.NewClientError("", err, nil)
 	}

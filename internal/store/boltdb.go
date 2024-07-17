@@ -392,8 +392,12 @@ func (q *BoltQueue) Stats(_ context.Context, stats *types.QueueStats) error {
 				stats.TotalReserved++
 			}
 		}
-		stats.AverageAge = time.Duration(int64(stats.AverageAge) / int64(stats.Total))
-		stats.AverageReservedAge = time.Duration(int64(stats.AverageReservedAge) / int64(stats.TotalReserved))
+		if stats.Total != 0 {
+			stats.AverageAge = time.Duration(int64(stats.AverageAge) / int64(stats.Total))
+		}
+		if stats.TotalReserved != 0 {
+			stats.AverageReservedAge = time.Duration(int64(stats.AverageReservedAge) / int64(stats.TotalReserved))
+		}
 		return nil
 	})
 }

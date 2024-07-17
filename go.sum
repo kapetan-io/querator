@@ -5,8 +5,8 @@ github.com/cespare/xxhash/v2 v2.2.0/go.mod h1:VGX0DQ3Q6kWi7AoAeZDth3/j3BFtOZR5XL
 github.com/creack/pty v1.1.9/go.mod h1:oKZEueFk5CKHvIhNR5MUki03XCEU+Q6VDXinZuGJ33E=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
-github.com/duh-rpc/duh-go v0.6.0 h1:sl4MsSp1CqeuMyuGZbaqLfDadIDGhfJQQVW4Cx2fyC4=
-github.com/duh-rpc/duh-go v0.6.0/go.mod h1:sbi5hg2JmByZl+KMXJxOs7iNotKTdHd5NJ5+kyFJN1M=
+github.com/duh-rpc/duh-go v0.7.0 h1:uXWlR1cT1+Y8Nk4yxXL2P7dfGDMy5Up98Oxbt/KRBFE=
+github.com/duh-rpc/duh-go v0.7.0/go.mod h1:sbi5hg2JmByZl+KMXJxOs7iNotKTdHd5NJ5+kyFJN1M=
 github.com/google/go-cmp v0.6.0 h1:ofyhxvXcZhMsU5ulbFiLKl/XBFqE1GSq7atu8tAmTRI=
 github.com/google/go-cmp v0.6.0/go.mod h1:17dUlkBOakJ0+DkrSSNjCkIjxS6bF9zb3elmeNGIjoY=
 github.com/kapetan-io/errors v0.2.0 h1:+jVVkH394SAqd8kMXP+z1Bxnu12UagJ8dTjLoav/bFg=

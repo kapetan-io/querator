@@ -3,7 +3,7 @@ module github.com/kapetan-io/querator
 go 1.22.3
 
 require (
-	github.com/duh-rpc/duh-go v0.6.0
+	github.com/duh-rpc/duh-go v0.7.0
 	github.com/kapetan-io/errors v0.2.0
 	github.com/kapetan-io/tackle v0.3.0
 	github.com/prometheus/client_golang v1.19.1

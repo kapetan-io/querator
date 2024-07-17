@@ -819,6 +819,167 @@ func (x *QueuePauseRequest) GetPause() bool {
 	return false
 }
 
+type QueueStatsRequest struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	QueueName string `protobuf:"bytes,1,opt,name=queueName,json=queue_name,proto3" json:"queueName,omitempty"`
+}
+
+func (x *QueueStatsRequest) Reset() {
+	*x = QueueStatsRequest{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_proto_queue_proto_msgTypes[10]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *QueueStatsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*QueueStatsRequest) ProtoMessage() {}
+
+func (x *QueueStatsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_queue_proto_msgTypes[10]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use QueueStatsRequest.ProtoReflect.Descriptor instead.
+func (*QueueStatsRequest) Descriptor() ([]byte, []int) {
+	return file_proto_queue_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *QueueStatsRequest) GetQueueName() string {
+	if x != nil {
+		return x.QueueName
+	}
+	return ""
+}
+
+type QueueStatsResponse struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	// Total is the number of items in the queue
+	Total int32 `protobuf:"varint,1,opt,name=total,proto3" json:"total,omitempty"`
+	// TotalReserved is the number of items in the queue that are in reserved state
+	TotalReserved int32 `protobuf:"varint,2,opt,name=TotalReserved,json=total_reserved,proto3" json:"TotalReserved,omitempty"`
+	// AverageAge is the average age of all items in the queue
+	AverageAge string `protobuf:"bytes,3,opt,name=AverageAge,json=average_age,proto3" json:"AverageAge,omitempty"`
+	// AverageReservedAge is the average age of reserved items in the queue
+	AverageReservedAge string `protobuf:"bytes,4,opt,name=AverageReservedAge,json=average_reserved_age,proto3" json:"AverageReservedAge,omitempty"`
+	// ProduceWaiting is the number of `/queue.produce` requests currently waiting
+	// to be processed by the sync loop
+	ProduceWaiting int32 `protobuf:"varint,5,opt,name=ProduceWaiting,json=produce_waiting,proto3" json:"ProduceWaiting,omitempty"`
+	// ReserveWaiting is the number of `/queue.reserve` requests currently waiting
+	// to be processed by the sync loop
+	ReserveWaiting int32 `protobuf:"varint,6,opt,name=ReserveWaiting,json=reserve_waiting,proto3" json:"ReserveWaiting,omitempty"`
+	// CompleteWaiting is the number of `/queue.complete` requests currently waiting
+	// to be processed by the sync loop
+	CompleteWaiting int32 `protobuf:"varint,7,opt,name=CompleteWaiting,json=complete_waiting,proto3" json:"CompleteWaiting,omitempty"`
+	// ReserveBlocked is the number of reservations which are blocked waiting for new item to enter the queue.
+	ReserveBlocked int32 `protobuf:"varint,8,opt,name=ReserveBlocked,json=reserve_blocked,proto3" json:"ReserveBlocked,omitempty"`
+}
+
+func (x *QueueStatsResponse) Reset() {
+	*x = QueueStatsResponse{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_proto_queue_proto_msgTypes[11]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *QueueStatsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*QueueStatsResponse) ProtoMessage() {}
+
+func (x *QueueStatsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_queue_proto_msgTypes[11]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use QueueStatsResponse.ProtoReflect.Descriptor instead.
+func (*QueueStatsResponse) Descriptor() ([]byte, []int) {
+	return file_proto_queue_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *QueueStatsResponse) GetTotal() int32 {
+	if x != nil {
+		return x.Total
+	}
+	return 0
+}
+
+func (x *QueueStatsResponse) GetTotalReserved() int32 {
+	if x != nil {
+		return x.TotalReserved
+	}
+	return 0
+}
+
+func (x *QueueStatsResponse) GetAverageAge() string {
+	if x != nil {
+		return x.AverageAge
+	}
+	return ""
+}
+
+func (x *QueueStatsResponse) GetAverageReservedAge() string {
+	if x != nil {
+		return x.AverageReservedAge
+	}
+	return ""
+}
+
+func (x *QueueStatsResponse) GetProduceWaiting() int32 {
+	if x != nil {
+		return x.ProduceWaiting
+	}
+	return 0
+}
+
+func (x *QueueStatsResponse) GetReserveWaiting() int32 {
+	if x != nil {
+		return x.ReserveWaiting
+	}
+	return 0
+}
+
+func (x *QueueStatsResponse) GetCompleteWaiting() int32 {
+	if x != nil {
+		return x.CompleteWaiting
+	}
+	return 0
+}
+
+func (x *QueueStatsResponse) GetReserveBlocked() int32 {
+	if x != nil {
+		return x.ReserveBlocked
+	}
+	return 0
+}
+
 var File_proto_queue_proto protoreflect.FileDescriptor
 
 var file_proto_queue_proto_rawDesc = []byte{
@@ -919,10 +1080,34 @@ var file_proto_queue_proto_rawDesc = []byte{
 	0x73, 0x65, 0x44, 0x75, 0x72, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09,
 	0x52, 0x0e, 0x70, 0x61, 0x75, 0x73, 0x65, 0x5f, 0x64, 0x75, 0x72, 0x61, 0x74, 0x69, 0x6f, 0x6e,
 	0x12, 0x14, 0x0a, 0x05, 0x70, 0x61, 0x75, 0x73, 0x65, 0x18, 0x03, 0x20, 0x01, 0x28, 0x08, 0x52,
-	0x05, 0x70, 0x61, 0x75, 0x73, 0x65, 0x42, 0x26, 0x5a, 0x24, 0x67, 0x69, 0x74, 0x68, 0x75, 0x62,
-	0x2e, 0x63, 0x6f, 0x6d, 0x2f, 0x6b, 0x61, 0x70, 0x65, 0x74, 0x61, 0x6e, 0x2d, 0x69, 0x6f, 0x2f,
-	0x71, 0x75, 0x65, 0x72, 0x61, 0x74, 0x6f, 0x72, 0x2f, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x62, 0x06,
-	0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
+	0x05, 0x70, 0x61, 0x75, 0x73, 0x65, 0x22, 0x32, 0x0a, 0x11, 0x51, 0x75, 0x65, 0x75, 0x65, 0x53,
+	0x74, 0x61, 0x74, 0x73, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x12, 0x1d, 0x0a, 0x09, 0x71,
+	0x75, 0x65, 0x75, 0x65, 0x4e, 0x61, 0x6d, 0x65, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0a,
+	0x71, 0x75, 0x65, 0x75, 0x65, 0x5f, 0x6e, 0x61, 0x6d, 0x65, 0x22, 0xca, 0x02, 0x0a, 0x12, 0x51,
+	0x75, 0x65, 0x75, 0x65, 0x53, 0x74, 0x61, 0x74, 0x73, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73,
+	0x65, 0x12, 0x14, 0x0a, 0x05, 0x74, 0x6f, 0x74, 0x61, 0x6c, 0x18, 0x01, 0x20, 0x01, 0x28, 0x05,
+	0x52, 0x05, 0x74, 0x6f, 0x74, 0x61, 0x6c, 0x12, 0x25, 0x0a, 0x0d, 0x54, 0x6f, 0x74, 0x61, 0x6c,
+	0x52, 0x65, 0x73, 0x65, 0x72, 0x76, 0x65, 0x64, 0x18, 0x02, 0x20, 0x01, 0x28, 0x05, 0x52, 0x0e,
+	0x74, 0x6f, 0x74, 0x61, 0x6c, 0x5f, 0x72, 0x65, 0x73, 0x65, 0x72, 0x76, 0x65, 0x64, 0x12, 0x1f,
+	0x0a, 0x0a, 0x41, 0x76, 0x65, 0x72, 0x61, 0x67, 0x65, 0x41, 0x67, 0x65, 0x18, 0x03, 0x20, 0x01,
+	0x28, 0x09, 0x52, 0x0b, 0x61, 0x76, 0x65, 0x72, 0x61, 0x67, 0x65, 0x5f, 0x61, 0x67, 0x65, 0x12,
+	0x30, 0x0a, 0x12, 0x41, 0x76, 0x65, 0x72, 0x61, 0x67, 0x65, 0x52, 0x65, 0x73, 0x65, 0x72, 0x76,
+	0x65, 0x64, 0x41, 0x67, 0x65, 0x18, 0x04, 0x20, 0x01, 0x28, 0x09, 0x52, 0x14, 0x61, 0x76, 0x65,
+	0x72, 0x61, 0x67, 0x65, 0x5f, 0x72, 0x65, 0x73, 0x65, 0x72, 0x76, 0x65, 0x64, 0x5f, 0x61, 0x67,
+	0x65, 0x12, 0x27, 0x0a, 0x0e, 0x50, 0x72, 0x6f, 0x64, 0x75, 0x63, 0x65, 0x57, 0x61, 0x69, 0x74,
+	0x69, 0x6e, 0x67, 0x18, 0x05, 0x20, 0x01, 0x28, 0x05, 0x52, 0x0f, 0x70, 0x72, 0x6f, 0x64, 0x75,
+	0x63, 0x65, 0x5f, 0x77, 0x61, 0x69, 0x74, 0x69, 0x6e, 0x67, 0x12, 0x27, 0x0a, 0x0e, 0x52, 0x65,
+	0x73, 0x65, 0x72, 0x76, 0x65, 0x57, 0x61, 0x69, 0x74, 0x69, 0x6e, 0x67, 0x18, 0x06, 0x20, 0x01,
+	0x28, 0x05, 0x52, 0x0f, 0x72, 0x65, 0x73, 0x65, 0x72, 0x76, 0x65, 0x5f, 0x77, 0x61, 0x69, 0x74,
+	0x69, 0x6e, 0x67, 0x12, 0x29, 0x0a, 0x0f, 0x43, 0x6f, 0x6d, 0x70, 0x6c, 0x65, 0x74, 0x65, 0x57,
+	0x61, 0x69, 0x74, 0x69, 0x6e, 0x67, 0x18, 0x07, 0x20, 0x01, 0x28, 0x05, 0x52, 0x10, 0x63, 0x6f,
+	0x6d, 0x70, 0x6c, 0x65, 0x74, 0x65, 0x5f, 0x77, 0x61, 0x69, 0x74, 0x69, 0x6e, 0x67, 0x12, 0x27,
+	0x0a, 0x0e, 0x52, 0x65, 0x73, 0x65, 0x72, 0x76, 0x65, 0x42, 0x6c, 0x6f, 0x63, 0x6b, 0x65, 0x64,
+	0x18, 0x08, 0x20, 0x01, 0x28, 0x05, 0x52, 0x0f, 0x72, 0x65, 0x73, 0x65, 0x72, 0x76, 0x65, 0x5f,
+	0x62, 0x6c, 0x6f, 0x63, 0x6b, 0x65, 0x64, 0x42, 0x26, 0x5a, 0x24, 0x67, 0x69, 0x74, 0x68, 0x75,
+	0x62, 0x2e, 0x63, 0x6f, 0x6d, 0x2f, 0x6b, 0x61, 0x70, 0x65, 0x74, 0x61, 0x6e, 0x2d, 0x69, 0x6f,
+	0x2f, 0x71, 0x75, 0x65, 0x72, 0x61, 0x74, 0x6f, 0x72, 0x2f, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x62,
+	0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
 }
 
 var (
@@ -937,7 +1122,7 @@ func file_proto_queue_proto_rawDescGZIP() []byte {
 	return file_proto_queue_proto_rawDescData
 }
 
-var file_proto_queue_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_proto_queue_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_proto_queue_proto_goTypes = []interface{}{
 	(*QueueProduceRequest)(nil),   // 0: querator.QueueProduceRequest
 	(*QueueProduceItem)(nil),      // 1: querator.QueueProduceItem
@@ -949,16 +1134,18 @@ var file_proto_queue_proto_goTypes = []interface{}{
 	(*QueueCompleteRequest)(nil),  // 7: querator.QueueCompleteRequest
 	(*QueueOptions)(nil),          // 8: querator.QueueOptions
 	(*QueuePauseRequest)(nil),     // 9: querator.QueuePauseRequest
-	(*timestamppb.Timestamp)(nil), // 10: google.protobuf.Timestamp
+	(*QueueStatsRequest)(nil),     // 10: querator.QueueStatsRequest
+	(*QueueStatsResponse)(nil),    // 11: querator.QueueStatsResponse
+	(*timestamppb.Timestamp)(nil), // 12: google.protobuf.Timestamp
 }
 var file_proto_queue_proto_depIdxs = []int32{
 	1,  // 0: querator.QueueProduceRequest.items:type_name -> querator.QueueProduceItem
-	10, // 1: querator.QueueReserveItem.reserveDeadline:type_name -> google.protobuf.Timestamp
+	12, // 1: querator.QueueReserveItem.reserveDeadline:type_name -> google.protobuf.Timestamp
 	3,  // 2: querator.QueueReserveResponse.items:type_name -> querator.QueueReserveItem
 	6,  // 3: querator.QueueDeferRequest.items:type_name -> querator.QueueDeferItem
-	10, // 4: querator.QueueDeferItem.offerAt:type_name -> google.protobuf.Timestamp
-	10, // 5: querator.QueueOptions.createdAt:type_name -> google.protobuf.Timestamp
-	10, // 6: querator.QueueOptions.updatedAt:type_name -> google.protobuf.Timestamp
+	12, // 4: querator.QueueDeferItem.offerAt:type_name -> google.protobuf.Timestamp
+	12, // 5: querator.QueueOptions.createdAt:type_name -> google.protobuf.Timestamp
+	12, // 6: querator.QueueOptions.updatedAt:type_name -> google.protobuf.Timestamp
 	7,  // [7:7] is the sub-list for method output_type
 	7,  // [7:7] is the sub-list for method input_type
 	7,  // [7:7] is the sub-list for extension type_name
@@ -1092,6 +1279,30 @@ func file_proto_queue_proto_init() {
 				return nil
 			}
 		}
+		file_proto_queue_proto_msgTypes[10].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*QueueStatsRequest); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_proto_queue_proto_msgTypes[11].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*QueueStatsResponse); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -1099,7 +1310,7 @@ func file_proto_queue_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_proto_queue_proto_rawDesc,
 			NumEnums:      0,
-			NumMessages:   10,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

@@ -36,6 +36,7 @@ const (
 	RPCQueueCreate = "/v1/queue.create"
 	RPCQueueDelete = "/v1/queue.delete"
 	RPCQueueUpdate = "/v1/queue.update"
+	RPCQueueStats  = "/v1/queue.stats"
 
 	// TODO: Document pause in OpenAPI, "Pauses queue processing such that requests to produce, reserve,
 	//  defer and complete are all paused. While a queue is on pause, Querator will queue those requests
@@ -55,7 +56,6 @@ const (
 	RPCStorageQueueList   = "/v1/storage/queue.list"
 	RPCStorageQueueAdd    = "/v1/storage/queue.add"
 	RPCStorageQueueDelete = "/v1/storage/queue.delete"
-	RPCStorageQueueStats  = "/v1/storage/queue.stats"
 
 	RPCStorageScheduleList     = "/v1/storage/schedule.list"
 	RPCStorageScheduleQueueAdd = "/v1/storage/schedule.add"
@@ -77,12 +77,12 @@ type Service interface {
 	QueueCreate(context.Context, *proto.QueueOptions) error
 	QueueReserve(context.Context, *proto.QueueReserveRequest, *proto.QueueReserveResponse) error
 	QueueComplete(context.Context, *proto.QueueCompleteRequest) error
+	QueueStats(context.Context, *proto.QueueStatsRequest, *proto.QueueStatsResponse) error
 	QueuePause(context.Context, *proto.QueuePauseRequest) error
 
 	StorageQueueList(context.Context, *proto.StorageQueueListRequest, *proto.StorageQueueListResponse) error
 	StorageQueueAdd(context.Context, *proto.StorageQueueAddRequest, *proto.StorageQueueAddResponse) error
 	StorageQueueDelete(context.Context, *proto.StorageQueueDeleteRequest) error
-	StorageQueueStats(context.Context, *proto.StorageQueueStatsRequest, *proto.StorageQueueStatsResponse) error
 }
 
 type HTTPHandler struct {
@@ -136,8 +136,12 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	case RPCQueueDelete:
 	case RPCQueueUpdate:
+	case RPCQueueStats:
+		h.QueueStats(ctx, w, r)
+		return
 	case RPCQueuePause:
 		h.QueuePause(ctx, w, r)
+		return
 	case RPCStorageQueueList:
 		h.StorageQueueList(ctx, w, r)
 		return
@@ -146,9 +150,6 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	case RPCStorageQueueDelete:
 		h.StorageQueueDelete(ctx, w, r)
-		return
-	case RPCStorageQueueStats:
-		h.StorageQueueStats(ctx, w, r)
 		return
 	case "/metrics":
 		h.metrics.ServeHTTP(w, r)
@@ -272,15 +273,15 @@ func (h *HTTPHandler) StorageQueueDelete(ctx context.Context, w http.ResponseWri
 	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
 }
 
-func (h *HTTPHandler) StorageQueueStats(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-	var req proto.StorageQueueStatsRequest
+func (h *HTTPHandler) QueueStats(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req proto.QueueStatsRequest
 	if err := duh.ReadRequest(r, &req); err != nil {
 		duh.ReplyError(w, r, err)
 		return
 	}
 
-	var resp proto.StorageQueueStatsResponse
-	if err := h.service.StorageQueueStats(ctx, &req, &resp); err != nil {
+	var resp proto.QueueStatsResponse
+	if err := h.service.QueueStats(ctx, &req, &resp); err != nil {
 		duh.ReplyError(w, r, err)
 		return
 	}

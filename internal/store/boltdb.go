@@ -371,6 +371,44 @@ func (q *BoltQueue) Delete(_ context.Context, ids []string) error {
 	})
 }
 
+func (q *BoltQueue) Clear(_ context.Context, destructive bool) error {
+	f := errors.Fields{"category", "bolt", "func", "Queue.Delete"}
+
+	return q.db.Update(func(tx *bolt.Tx) error {
+		if destructive {
+			if err := tx.DeleteBucket(bucketName); err != nil {
+				return f.Errorf("during destructive DeleteBucket(): %w", err)
+			}
+			if _, err := tx.CreateBucket(bucketName); err != nil {
+				return f.Errorf("while re-creating with CreateBucket()): %w", err)
+			}
+			return nil
+		}
+
+		b := tx.Bucket(bucketName)
+		if b == nil {
+			return f.Error("bucket does not exist in data file")
+		}
+		c := b.Cursor()
+		for k, v := c.Next(); k != nil; k, v = c.Next() {
+			item := new(types.Item) // TODO: memory pool
+			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(item); err != nil {
+				return f.Errorf("during Decode(): %w", err)
+			}
+
+			// Skip reserved items
+			if item.IsReserved {
+				continue
+			}
+
+			if err := b.Delete(k); err != nil {
+				return f.Errorf("during Delete(): %w", err)
+			}
+		}
+		return nil
+	})
+}
+
 func (q *BoltQueue) Stats(_ context.Context, stats *types.QueueStats) error {
 	f := errors.Fields{"category", "bunt-db", "func", "Queue.Stats"}
 	now := time.Now().UTC()

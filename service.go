@@ -153,6 +153,30 @@ func (s *Service) QueueCreate(ctx context.Context, req *proto.QueueOptions) erro
 	return nil
 }
 
+func (s *Service) QueueClear(ctx context.Context, req *proto.QueueClearRequest) error {
+	if strings.TrimSpace(req.QueueName) == "" {
+		return ErrQueueNameEmpty
+	}
+
+	queue, err := s.manager.Get(ctx, req.QueueName)
+	if err != nil {
+		return err
+	}
+
+	r := types.ClearRequest{
+		Destructive: req.Destructive,
+		Scheduled:   req.Scheduled,
+		Queue:       req.Queue,
+		Defer:       req.Defer,
+	}
+
+	if err := queue.Clear(ctx, &r); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (s *Service) QueuePause(ctx context.Context, req *proto.QueuePauseRequest) error {
 	var r types.PauseRequest
 

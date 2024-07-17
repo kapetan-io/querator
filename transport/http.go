@@ -26,24 +26,24 @@ import (
 	"net/http"
 )
 
+// TODO: Document pause in OpenAPI, "Pauses queue processing such that requests to produce, reserve,
+//  defer and complete are all paused. While a queue is on pause, Querator will queue those requests
+//  until the pause is lifted". /v1/queue API requests can still timeout
+//  NOTE: This does not effect /v1/storage/ or /v1/queue.list,create,delete,update API requests.
+
 const (
 	RPCQueueProduce  = "/v1/queue.produce"
 	RPCQueueReserve  = "/v1/queue.reserve"
 	RPCQueueDefer    = "/v1/queue.defer"
 	RPCQueueComplete = "/v1/queue.complete"
+	RPCQueueStats    = "/v1/queue.stats"
+	RPCQueueClear    = "/v1/queue.clear"
+	RPCQueuePause    = "/v1/queue.pause"
 
-	RPCQueueList   = "/v1/queue.list"
-	RPCQueueCreate = "/v1/queue.create"
-	RPCQueueDelete = "/v1/queue.delete"
-	RPCQueueUpdate = "/v1/queue.update"
-	RPCQueueStats  = "/v1/queue.stats"
-
-	// TODO: Document pause in OpenAPI, "Pauses queue processing such that requests to produce, reserve,
-	//  defer and complete are all paused. While a queue is on pause, Querator will queue those requests
-	//  until the pause is lifted". /v1/queue API requests can still timeout
-	//  NOTE: This does not effect /v1/storage/ or /v1/queue.list,create,delete,update API requests.
-
-	RPCQueuePause = "/v1/queue.pause"
+	RPCQueuesList   = "/v1/queues.list"
+	RPCQueuesCreate = "/v1/queues.create"
+	RPCQueuesDelete = "/v1/queues.delete"
+	RPCQueuesUpdate = "/v1/queues.update"
 
 	// TODO: Document the /storage/queue.list endpoint. The results include the pivot intentionally. Clients who
 	//  wish to iterate through all the items page by page should account for this. Also clients must check if the
@@ -79,6 +79,7 @@ type Service interface {
 	QueueComplete(context.Context, *proto.QueueCompleteRequest) error
 	QueueStats(context.Context, *proto.QueueStatsRequest, *proto.QueueStatsResponse) error
 	QueuePause(context.Context, *proto.QueuePauseRequest) error
+	QueueClear(context.Context, *proto.QueueClearRequest) error
 
 	StorageQueueList(context.Context, *proto.StorageQueueListRequest, *proto.StorageQueueListResponse) error
 	StorageQueueAdd(context.Context, *proto.StorageQueueAddRequest, *proto.StorageQueueAddResponse) error
@@ -130,18 +131,21 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case RPCQueueComplete:
 		h.QueueComplete(ctx, w, r)
 		return
-	case RPCQueueList:
-	case RPCQueueCreate:
-		h.QueueCreate(ctx, w, r)
-		return
-	case RPCQueueDelete:
-	case RPCQueueUpdate:
 	case RPCQueueStats:
+		h.QueueStats(ctx, w, r)
+		return
+	case RPCQueueClear:
 		h.QueueStats(ctx, w, r)
 		return
 	case RPCQueuePause:
 		h.QueuePause(ctx, w, r)
 		return
+	case RPCQueuesList:
+	case RPCQueuesCreate:
+		h.QueuesCreate(ctx, w, r)
+		return
+	case RPCQueuesDelete:
+	case RPCQueuesUpdate:
 	case RPCStorageQueueList:
 		h.StorageQueueList(ctx, w, r)
 		return
@@ -201,7 +205,7 @@ func (h *HTTPHandler) QueueComplete(ctx context.Context, w http.ResponseWriter, 
 	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
 }
 
-func (h *HTTPHandler) QueueCreate(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+func (h *HTTPHandler) QueuesCreate(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req proto.QueueOptions
 	if err := duh.ReadRequest(r, &req); err != nil {
 		duh.ReplyError(w, r, err)
@@ -209,6 +213,35 @@ func (h *HTTPHandler) QueueCreate(ctx context.Context, w http.ResponseWriter, r 
 	}
 
 	if err := h.service.QueueCreate(ctx, &req); err != nil {
+		duh.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
+}
+
+func (h *HTTPHandler) QueueStats(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req proto.QueueStatsRequest
+	if err := duh.ReadRequest(r, &req); err != nil {
+		duh.ReplyError(w, r, err)
+		return
+	}
+
+	var resp proto.QueueStatsResponse
+	if err := h.service.QueueStats(ctx, &req, &resp); err != nil {
+		duh.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &resp)
+}
+
+func (h *HTTPHandler) QueueClear(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req proto.QueueClearRequest
+	if err := duh.ReadRequest(r, &req); err != nil {
+		duh.ReplyError(w, r, err)
+		return
+	}
+
+	if err := h.service.QueueClear(ctx, &req); err != nil {
 		duh.ReplyError(w, r, err)
 		return
 	}
@@ -271,21 +304,6 @@ func (h *HTTPHandler) StorageQueueDelete(ctx context.Context, w http.ResponseWri
 		return
 	}
 	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
-}
-
-func (h *HTTPHandler) QueueStats(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-	var req proto.QueueStatsRequest
-	if err := duh.ReadRequest(r, &req); err != nil {
-		duh.ReplyError(w, r, err)
-		return
-	}
-
-	var resp proto.QueueStatsResponse
-	if err := h.service.QueueStats(ctx, &req, &resp); err != nil {
-		duh.ReplyError(w, r, err)
-		return
-	}
-	duh.Reply(w, r, duh.CodeOK, &resp)
 }
 
 // Describe fetches prometheus metrics to be registered

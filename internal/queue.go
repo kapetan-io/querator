@@ -31,6 +31,7 @@ const (
 	MethodStorageQueueDelete
 	MethodQueueStats
 	MethodQueuePause
+	MethodQueueClear
 )
 
 type QueueOptions struct {
@@ -72,7 +73,7 @@ type QueueRequest struct {
 	Err error
 }
 
-type SyncState struct {
+type QueueState struct {
 	Reservations types.ReserveBatch
 	Producers    types.Batch[types.ProduceRequest]
 	Completes    types.Batch[types.CompleteRequest]
@@ -262,7 +263,6 @@ func (q *Queue) QueueStats(ctx context.Context, stats *types.QueueStats) error {
 }
 
 func (q *Queue) Pause(ctx context.Context, req *types.PauseRequest) error {
-
 	if req.Pause {
 		// TODO: Add tests for these cases
 		if req.PauseDuration.Nanoseconds() == 0 {
@@ -276,6 +276,19 @@ func (q *Queue) Pause(ctx context.Context, req *types.PauseRequest) error {
 
 	r := QueueRequest{
 		Method:  MethodQueuePause,
+		Request: req,
+	}
+	return q.queueRequest(ctx, &r)
+}
+
+func (q *Queue) Clear(ctx context.Context, req *types.ClearRequest) error {
+	if !req.Queue && !req.Defer && !req.Scheduled {
+		return transport.NewInvalidOption("invalid clear request; one of 'queue', 'defer'," +
+			" 'scheduled' must be true")
+	}
+
+	r := QueueRequest{
+		Method:  MethodQueueClear,
 		Request: req,
 	}
 	return q.queueRequest(ctx, &r)
@@ -338,7 +351,7 @@ func (q *Queue) queueRequest(ctx context.Context, r *QueueRequest) error {
 func (q *Queue) synchronizationLoop() {
 	defer q.wg.Done()
 
-	state := SyncState{
+	state := QueueState{
 		Reservations: types.ReserveBatch{
 			Requests: make([]*types.ReserveRequest, 0, 5_000),
 			Total:    0,
@@ -606,17 +619,33 @@ func (q *Queue) Shutdown(ctx context.Context) error {
 	}
 }
 
-func (q *Queue) handleQueueRequests(state *SyncState, req *QueueRequest) {
+func (q *Queue) handleQueueRequests(state *QueueState, req *QueueRequest) {
 	switch req.Method {
 	case MethodStorageQueueList, MethodStorageQueueAdd, MethodStorageQueueDelete:
 		q.handleStorageRequests(req)
 	case MethodQueueStats:
-		q.handleQueueStats(state, req)
+		q.handleStats(state, req)
 	case MethodQueuePause:
 		q.handlePause(state, req)
+	case MethodQueueClear:
+		q.handleClear(state, req)
 	default:
 		panic(fmt.Sprintf("unknown queue request method '%d'", req.Method))
 	}
+}
+
+func (q *Queue) handleClear(_ *QueueState, req *QueueRequest) {
+	// NOTE: When clearing a queue, ensure we flush any cached items. As of this current
+	// version (V0), there is no cached data to sync, but this will likely change in the future.
+	cr := req.Request.(*types.ClearRequest)
+
+	if cr.Queue {
+		// Ask the store to clean up any items in the data store which are not currently out for reservation
+		if err := q.opts.QueueStore.Clear(req.Context, cr.Destructive); err != nil {
+			req.Err = err
+		}
+	}
+	// TODO(thrawn01): Support clearing defer and scheduled
 }
 
 func (q *Queue) handleStorageRequests(req *QueueRequest) {
@@ -641,7 +670,7 @@ func (q *Queue) handleStorageRequests(req *QueueRequest) {
 	close(req.ReadyCh)
 }
 
-func (q *Queue) handleQueueStats(state *SyncState, r *QueueRequest) {
+func (q *Queue) handleStats(state *QueueState, r *QueueRequest) {
 	qs := r.Request.(*types.QueueStats)
 	if err := q.opts.QueueStore.Stats(r.Context, qs); err != nil {
 		r.Err = err
@@ -655,10 +684,10 @@ func (q *Queue) handleQueueStats(state *SyncState, r *QueueRequest) {
 
 // handlePause places Queue into a special loop where operations are limited and none of the
 // produce, reserve, complete, defer operations will be processed until we leave the loop.
-func (q *Queue) handlePause(state *SyncState, r *QueueRequest) {
+func (q *Queue) handlePause(state *QueueState, r *QueueRequest) {
 	pr := r.Request.(*types.PauseRequest)
 
-	// Since we are not currently paused, and yet we get an un-pause request likely the user
+	// NOTE: Since we are not currently paused, and yet we get an un-pause request likely the user
 	// wants us to sync any cached state and reload from the data store if necessary.
 	// As of this current version (V0), there is no cached data to sync, but this will likely
 	// change in the future.
@@ -699,7 +728,7 @@ func (q *Queue) handlePause(state *SyncState, r *QueueRequest) {
 	}
 }
 
-func (q *Queue) handleShutdown(state *SyncState, req *types.ShutdownRequest) {
+func (q *Queue) handleShutdown(state *QueueState, req *types.ShutdownRequest) {
 	for _, r := range state.Producers.Requests {
 		r.Err = ErrQueueShutdown
 		close(r.ReadyCh)

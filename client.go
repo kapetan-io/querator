@@ -101,6 +101,23 @@ func (c *Client) QueueComplete(ctx context.Context, req *pb.QueueCompleteRequest
 	return c.client.Do(r, &res)
 }
 
+func (c *Client) QueueClear(ctx context.Context, req *pb.QueueClearRequest) error {
+	payload, err := proto.Marshal(req)
+	if err != nil {
+		return duh.NewClientError("while marshaling request payload: %w", err, nil)
+	}
+
+	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("%s%s", c.opts.Endpoint, transport.RPCQueueClear), bytes.NewReader(payload))
+	if err != nil {
+		return duh.NewClientError("", err, nil)
+	}
+
+	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	var res v1.Reply
+	return c.client.Do(r, &res)
+}
+
 func (c *Client) QueuePause(ctx context.Context, req *pb.QueuePauseRequest) error {
 	payload, err := proto.Marshal(req)
 	if err != nil {
@@ -125,7 +142,7 @@ func (c *Client) QueueCreate(ctx context.Context, req *pb.QueueOptions) error {
 	}
 
 	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		fmt.Sprintf("%s%s", c.opts.Endpoint, transport.RPCQueueCreate), bytes.NewReader(payload))
+		fmt.Sprintf("%s%s", c.opts.Endpoint, transport.RPCQueuesCreate), bytes.NewReader(payload))
 	if err != nil {
 		return duh.NewClientError("", err, nil)
 	}

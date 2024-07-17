@@ -68,6 +68,27 @@ type StorageRequest struct {
 	Limit int
 }
 
+type ClearRequest struct {
+	// Defer indicates the 'defer' queue will be cleared. If true, any items
+	// scheduled to be retried at a future date will be removed.
+	Defer bool // TODO: Implement
+	// Scheduled indicates any 'scheduled' items in the queue will be
+	// cleared. If true, any items scheduled to be enqueued at a future date
+	// will be removed.
+	Scheduled bool // TODO: Implement
+	// Queue indicates any items currently waiting in the FIFO queue will
+	// clear. If true, any items in the queue which have NOT been reserved
+	// will be removed.
+	Queue bool
+	// Destructive indicates the Defer,Scheduled,Queue operations should be
+	// destructive in that all data regardless of status will be removed.
+	// For example, if used with ClearRequest.Queue = true, then ALL items
+	// in the queue regardless of reserve status will be removed. This means
+	// that clients who currently have ownership of those items will not be able
+	// to "complete" those items, as querator will have no knowledge of those items.
+	Destructive bool
+}
+
 type PauseRequest struct {
 	PauseDuration time.Duration
 	Pause         bool

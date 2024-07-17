@@ -34,8 +34,8 @@ import (
 //		return errors.New("unknown storage error")
 //	}
 //
-//	// TODO: QueueCreate should create a queue in storage
-//	require.NoError(t, c.QueueCreate(ctx, &pb.QueueOptions{Name: queueName}))
+//	// TODO: QueuesCreate should create a queue in storage
+//	require.NoError(t, c.QueuesCreate(ctx, &pb.QueueOptions{Name: queueName}))
 //
 //}
 
@@ -517,12 +517,17 @@ func testStorage(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			assert.Equal(t, 35, found, "expected to find 35 reserved items, got %d", found)
 		})
 
-		// TODO: Continue the storage_test migration <-- DO THIS NEXT
-
-		// TODO: Test duplicate client id
-		// TODO: Test pause and unpause, ensure can produce and consume after un-paused and Ensure can shutdown
-		// TODO: Test pause false without pause true
+		t.Run("DistributeNotEnoughItems", func(t *testing.T) {
+			// TODO: Ensure Clear() works, add a test for it. <--- DO THIS NEXT
+			// TODO: Clear all the items from the queue
+		})
 	})
+
+	// TODO: Continue the storage_test migration <-- DO THIS NEXT
+
+	// TODO: Test duplicate client id
+	// TODO: Test pause and unpause, ensure can produce and consume after un-paused and Ensure can shutdown
+	// TODO: Test pause false without pause true
 }
 
 func findInResponses(t *testing.T, responses []*pb.QueueReserveResponse, id string) bool {

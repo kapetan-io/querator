@@ -90,6 +90,9 @@ type Queue interface {
 	// Delete removes the provided ids from the queue
 	Delete(ctx context.Context, ids []string) error
 
+	// Clear removes all items from storage
+	Clear(ctx context.Context, destructive bool) error
+
 	// Stats returns stats about the queue
 	Stats(ctx context.Context, stats *types.QueueStats) error
 

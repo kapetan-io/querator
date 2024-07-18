@@ -42,8 +42,8 @@ type ServiceOptions struct {
 }
 
 type Service struct {
-	manager *internal.QueueManager
-	opts    ServiceOptions
+	queues *internal.QueuesManager
+	opts   ServiceOptions
 }
 
 func NewService(opts ServiceOptions) (*Service, error) {
@@ -53,7 +53,7 @@ func NewService(opts ServiceOptions) (*Service, error) {
 		return nil, errors.New("storage is required")
 	}
 
-	qm := internal.NewQueueManager(internal.QueueManagerOptions{
+	qm := internal.NewQueuesManager(internal.QueuesManagerOptions{
 		QueueOptions: internal.QueueOptions{
 			MaxReserveBatchSize: opts.MaxReserveBatchSize,
 			MaxProduceBatchSize: opts.MaxProduceBatchSize,
@@ -63,13 +63,13 @@ func NewService(opts ServiceOptions) (*Service, error) {
 	})
 
 	return &Service{
-		opts:    opts,
-		manager: qm,
+		opts:   opts,
+		queues: qm,
 	}, nil
 }
 
 func (s *Service) QueueProduce(ctx context.Context, req *proto.QueueProduceRequest) error {
-	queue, err := s.manager.Get(ctx, req.QueueName)
+	queue, err := s.queues.Get(ctx, req.QueueName)
 	if err != nil {
 		return err
 	}
@@ -88,7 +88,7 @@ func (s *Service) QueueProduce(ctx context.Context, req *proto.QueueProduceReque
 }
 
 func (s *Service) QueueReserve(ctx context.Context, req *proto.QueueReserveRequest, res *proto.QueueReserveResponse) error {
-	queue, err := s.manager.Get(ctx, req.QueueName)
+	queue, err := s.queues.Get(ctx, req.QueueName)
 	if err != nil {
 		return err
 	}
@@ -119,7 +119,7 @@ func (s *Service) QueueReserve(ctx context.Context, req *proto.QueueReserveReque
 }
 
 func (s *Service) QueueComplete(ctx context.Context, req *proto.QueueCompleteRequest) error {
-	queue, err := s.manager.Get(ctx, req.QueueName)
+	queue, err := s.queues.Get(ctx, req.QueueName)
 	if err != nil {
 		return err
 	}
@@ -137,42 +137,12 @@ func (s *Service) QueueComplete(ctx context.Context, req *proto.QueueCompleteReq
 	return nil
 }
 
-// -------------------------------------------------
-// API to manage lists of queues
-// -------------------------------------------------
-
-func (s *Service) QueuesCreate(ctx context.Context, req *proto.QueueInfo) error {
-	var opts internal.QueueOptions
-
-	if err := s.validateQueueOptionsProto(req, &opts); err != nil {
-		return err
-	}
-
-	_, err := s.manager.Create(ctx, opts)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func (s *Service) QueuesList(ctx context.Context, req *proto.QueueInfo) error {
-	return nil
-}
-
-func (s *Service) QueuesUpdate(ctx context.Context, req *proto.QueueInfo) error {
-	return nil
-}
-
-func (s *Service) QueuesDelete(ctx context.Context, req *proto.QueueInfo) error {
-	return nil
-}
-
 func (s *Service) QueueClear(ctx context.Context, req *proto.QueueClearRequest) error {
 	if strings.TrimSpace(req.QueueName) == "" {
 		return ErrQueueNameEmpty
 	}
 
-	queue, err := s.manager.Get(ctx, req.QueueName)
+	queue, err := s.queues.Get(ctx, req.QueueName)
 	if err != nil {
 		return err
 	}
@@ -202,7 +172,7 @@ func (s *Service) QueuePause(ctx context.Context, req *proto.QueuePauseRequest) 
 		return err
 	}
 
-	queue, err := s.manager.Get(ctx, req.QueueName)
+	queue, err := s.queues.Get(ctx, req.QueueName)
 	if err != nil {
 		return err
 	}
@@ -214,6 +184,48 @@ func (s *Service) QueuePause(ctx context.Context, req *proto.QueuePauseRequest) 
 	return nil
 }
 
+// -------------------------------------------------
+// API to manage lists of queues
+// -------------------------------------------------
+
+func (s *Service) QueuesCreate(ctx context.Context, req *proto.QueueInfo) error {
+	var opts internal.QueueOptions
+
+	if err := s.validateQueueOptionsProto(req, &opts); err != nil {
+		return err
+	}
+
+	_, err := s.queues.Create(ctx, opts)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Service) QueuesList(ctx context.Context, req *proto.QueueInfo) error {
+
+	// TODO: Validate proto
+
+	//if err := s.queues.List(ctx, req); err != nil {
+	//
+	//}
+
+	return nil
+}
+
+func (s *Service) QueuesUpdate(ctx context.Context, req *proto.QueuesListRequest,
+	resp *proto.QueuesListResponse) error {
+	return nil
+}
+
+func (s *Service) QueuesDelete(ctx context.Context, req *proto.QueuesDeleteRequest) error {
+	return nil
+}
+
+// -------------------------------------------------
+// API to inspect queue storage
+// -------------------------------------------------
+
 func (s *Service) StorageQueueList(ctx context.Context, req *proto.StorageQueueListRequest,
 	res *proto.StorageQueueListResponse) error {
 
@@ -221,17 +233,20 @@ func (s *Service) StorageQueueList(ctx context.Context, req *proto.StorageQueueL
 		return ErrQueueNameEmpty
 	}
 
-	queue, err := s.manager.Get(ctx, req.QueueName)
+	queue, err := s.queues.Get(ctx, req.QueueName)
 	if err != nil {
 		return err
 	}
 
-	r := types.StorageRequest{Pivot: req.Pivot, Limit: int(req.Limit)}
-	if err := queue.StorageQueueList(ctx, &r); err != nil {
+	items := make([]*types.Item, 0, req.Limit)
+	if err := queue.StorageQueueList(ctx, &items, types.ListOptions{
+		Pivot: req.Pivot,
+		Limit: int(req.Limit),
+	}); err != nil {
 		return err
 	}
 
-	for _, item := range r.Items {
+	for _, item := range items {
 		res.Items = append(res.Items, item.ToProto(new(proto.StorageQueueItem)))
 	}
 
@@ -245,24 +260,22 @@ func (s *Service) StorageQueueAdd(ctx context.Context, req *proto.StorageQueueAd
 		return ErrQueueNameEmpty
 	}
 
-	queue, err := s.manager.Get(ctx, req.QueueName)
+	queue, err := s.queues.Get(ctx, req.QueueName)
 	if err != nil {
 		return err
 	}
 
-	r := types.StorageRequest{
-		Items: make([]*types.Item, 0, len(req.Items)),
-	}
+	items := make([]*types.Item, 0, len(req.Items))
 	for _, item := range req.Items {
 		i := new(types.Item)
-		r.Items = append(r.Items, i.FromProto(item))
+		items = append(items, i.FromProto(item))
 	}
 
-	if err := queue.StorageQueueAdd(ctx, &r); err != nil {
+	if err := queue.StorageQueueAdd(ctx, &items); err != nil {
 		return err
 	}
 
-	for _, item := range r.Items {
+	for _, item := range items {
 		res.Items = append(res.Items, item.ToProto(new(proto.StorageQueueItem)))
 	}
 
@@ -275,12 +288,12 @@ func (s *Service) StorageQueueDelete(ctx context.Context, req *proto.StorageQueu
 		return ErrQueueNameEmpty
 	}
 
-	queue, err := s.manager.Get(ctx, req.QueueName)
+	queue, err := s.queues.Get(ctx, req.QueueName)
 	if err != nil {
 		return err
 	}
 
-	if err := queue.StorageQueueDelete(ctx, &types.StorageRequest{IDs: req.Ids}); err != nil {
+	if err := queue.StorageQueueDelete(ctx, req.Ids); err != nil {
 		return err
 	}
 	return nil
@@ -293,7 +306,7 @@ func (s *Service) QueueStats(ctx context.Context, req *proto.QueueStatsRequest,
 		return ErrQueueNameEmpty
 	}
 
-	queue, err := s.manager.Get(ctx, req.QueueName)
+	queue, err := s.queues.Get(ctx, req.QueueName)
 	if err != nil {
 		return err
 	}
@@ -315,5 +328,5 @@ func (s *Service) QueueStats(ctx context.Context, req *proto.QueueStatsRequest,
 }
 
 func (s *Service) Shutdown(ctx context.Context) error {
-	return s.manager.Shutdown(ctx)
+	return s.queues.Shutdown(ctx)
 }

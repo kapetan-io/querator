@@ -11,26 +11,26 @@ import (
 	"time"
 )
 
-type QueueManagerOptions struct {
+type QueuesManagerOptions struct {
 	Logger       duh.StandardLogger
 	Storage      store.Storage
 	QueueOptions QueueOptions
 }
 
-type QueueManager struct {
+type QueuesManager struct {
 	queues map[string]*Queue
-	opts   QueueManagerOptions
+	opts   QueuesManagerOptions
 }
 
-func NewQueueManager(opts QueueManagerOptions) *QueueManager {
+func NewQueuesManager(opts QueuesManagerOptions) *QueuesManager {
 	set.Default(&opts.Logger, slog.Default())
-	return &QueueManager{
+	return &QueuesManager{
 		queues: make(map[string]*Queue),
 		opts:   opts,
 	}
 }
 
-func (qm *QueueManager) Get(_ context.Context, name string) (*Queue, error) {
+func (qm *QueuesManager) Get(_ context.Context, name string) (*Queue, error) {
 
 	if strings.TrimSpace(name) == "" {
 		return nil, transport.NewInvalidOption("invalid queue_name; cannot be empty")
@@ -47,7 +47,7 @@ func (qm *QueueManager) Get(_ context.Context, name string) (*Queue, error) {
 	return q, nil
 }
 
-func (qm *QueueManager) Create(_ context.Context, opts QueueOptions) (*Queue, error) {
+func (qm *QueuesManager) Create(_ context.Context, opts QueueOptions) (*Queue, error) {
 
 	if strings.TrimSpace(opts.Name) == "" {
 		return nil, transport.NewInvalidOption("queue 'name' cannot be empty")
@@ -84,7 +84,7 @@ func (qm *QueueManager) Create(_ context.Context, opts QueueOptions) (*Queue, er
 	return q, nil
 }
 
-func (qm *QueueManager) Delete(ctx context.Context, name string) error {
+func (qm *QueuesManager) Delete(ctx context.Context, name string) error {
 	q, ok := qm.queues[name]
 	if !ok {
 		return transport.NewInvalidOption("queue does not exist; no such queue named '%s'", name)
@@ -98,7 +98,7 @@ func (qm *QueueManager) Delete(ctx context.Context, name string) error {
 	return nil
 }
 
-func (qm *QueueManager) Shutdown(ctx context.Context) error {
+func (qm *QueuesManager) Shutdown(ctx context.Context) error {
 	wait := make(chan error)
 	go func() {
 		for _, q := range qm.queues {

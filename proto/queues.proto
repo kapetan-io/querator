@@ -18,7 +18,7 @@ syntax = "proto3";
 
 option go_package = "github.com/kapetan-io/querator/proto";
 import "google/protobuf/timestamp.proto";
-import "queue.proto";
+import "proto/queue.proto";
 
 package querator;
 

@@ -60,27 +60,6 @@ type QueueOptions struct {
 	MaxProduceBatchSize int
 }
 
-type QueueRequest struct {
-	// The API method called
-	Method int
-	// Context is the context of the request
-	Context context.Context
-	// The request struct for this method
-	Request any
-	// Used to wait for this request to complete
-	ReadyCh chan struct{}
-	// The error to be returned to the caller
-	Err error
-}
-
-type QueueState struct {
-	Reservations types.ReserveBatch
-	Producers    types.Batch[types.ProduceRequest]
-	Completes    types.Batch[types.CompleteRequest]
-
-	NextMaintCh <-chan time.Time
-}
-
 // Queue manages job is to evenly distribute and consume items from a single queue. Ensuring consumers and
 // producers are handled fairly and efficiently. Since a Queue is the synchronization point for R/W
 // there can ONLY BE ONE instance of a Queue running anywhere in the cluster at any given time. All consume
@@ -173,7 +152,7 @@ func (q *Queue) Produce(ctx context.Context, req *types.ProduceRequest) error {
 // will block until the request is cancelled via the passed context or the RequestTimeout
 // is reached.
 //
-// ### Context Cancellation
+// # Context Cancellation
 // IT IS NOT recommend to use context.WithTimeout() or context.WithDeadline() with Reserve() since
 // Reserve() will block until the duration provided via ReserveRequest.RequestTimeout has been reached.
 // Callers SHOULD cancel the context if the client has gone away, in this case Queue will abort the reservation
@@ -181,7 +160,7 @@ func (q *Queue) Produce(ctx context.Context, req *types.ProduceRequest) error {
 // then those reservations will remain reserved until they can be offered to another client after the
 // ReserveDeadline has been reached. See doc/adr/0009-client-timeouts.md
 //
-// ### Unique Requests
+// # Unique Requests
 // ClientID must NOT be empty and each request must be unique, Non-unique requests will be rejected with
 // ErrDuplicateClientID. See doc/adr/0007-encourage-simple-clients.md for an explanation.
 func (q *Queue) Reserve(ctx context.Context, req *types.ReserveRequest) error {
@@ -228,6 +207,9 @@ func (q *Queue) Reserve(ctx context.Context, req *types.ReserveRequest) error {
 	return req.Err
 }
 
+// Complete is called by clients who wish to mark an item as complete. The call will block
+// until the item has been marked as complete or until the request is cancelled via the passed
+// context or RequestTimeout is reached.
 func (q *Queue) Complete(ctx context.Context, req *types.CompleteRequest) error {
 	if q.inShutdown.Load() {
 		return ErrQueueShutdown
@@ -254,6 +236,7 @@ func (q *Queue) Complete(ctx context.Context, req *types.CompleteRequest) error 
 	return req.Err
 }
 
+// QueueStats retrieves stats about the queue and items in storage
 func (q *Queue) QueueStats(ctx context.Context, stats *types.QueueStats) error {
 	r := QueueRequest{
 		Method:  MethodQueueStats,
@@ -262,6 +245,8 @@ func (q *Queue) QueueStats(ctx context.Context, stats *types.QueueStats) error {
 	return q.queueRequest(ctx, &r)
 }
 
+// Pause pauses processing of produce, reserve, complete and defer operations until the pause duration
+// is reached or the queue is un-paused by calling Pause() with types.PauseRequest.Pause = false
 func (q *Queue) Pause(ctx context.Context, req *types.PauseRequest) error {
 	if req.Pause {
 		// TODO: Add tests for these cases
@@ -281,6 +266,7 @@ func (q *Queue) Pause(ctx context.Context, req *types.PauseRequest) error {
 	return q.queueRequest(ctx, &r)
 }
 
+// Clear clears enqueued items from the queue
 func (q *Queue) Clear(ctx context.Context, req *types.ClearRequest) error {
 	if !req.Queue && !req.Defer && !req.Scheduled {
 		return transport.NewInvalidOption("invalid clear request; one of 'queue', 'defer'," +
@@ -294,13 +280,18 @@ func (q *Queue) Clear(ctx context.Context, req *types.ClearRequest) error {
 	return q.queueRequest(ctx, &r)
 }
 
-func (q *Queue) StorageQueueList(ctx context.Context, req *types.StorageRequest) error {
-	// TODO(thrawn01): I suspect the most efficient way to do this is pass by value and not a pointer
-	//  I really need to get into the habit of passing by value as the default, and only pass by
-	//  pointer when its absolutely needed.
+// -------------------------------------------------
+// Methods to manage queue storage
+// -------------------------------------------------
 
-	if req.Limit == 0 {
-		req.Limit = 1_000
+func (q *Queue) StorageQueueList(ctx context.Context, items *[]*types.Item, opts types.ListOptions) error {
+	req := StorageRequest{
+		Items:   items,
+		Options: opts,
+	}
+
+	if req.Options.Limit == 0 {
+		req.Options.Limit = 1_000
 	}
 
 	r := QueueRequest{
@@ -310,47 +301,29 @@ func (q *Queue) StorageQueueList(ctx context.Context, req *types.StorageRequest)
 	return q.queueRequest(ctx, &r)
 }
 
-func (q *Queue) StorageQueueAdd(ctx context.Context, req *types.StorageRequest) error {
+func (q *Queue) StorageQueueAdd(ctx context.Context, items *[]*types.Item) error {
+
 	r := QueueRequest{
-		Method:  MethodStorageQueueAdd,
-		Request: req,
+		Method: MethodStorageQueueAdd,
+		Request: StorageRequest{
+			Items: items,
+		},
 	}
 	return q.queueRequest(ctx, &r)
 }
 
-func (q *Queue) StorageQueueDelete(ctx context.Context, req *types.StorageRequest) error {
-
-	if len(req.IDs) == 0 {
+func (q *Queue) StorageQueueDelete(ctx context.Context, ids []string) error {
+	if len(ids) == 0 {
 		return transport.NewInvalidOption("ids is invalid; cannot be empty")
 	}
 
 	r := QueueRequest{
-		Method:  MethodStorageQueueDelete,
-		Request: req,
+		Method: MethodStorageQueueDelete,
+		Request: StorageRequest{
+			IDs: ids,
+		},
 	}
 	return q.queueRequest(ctx, &r)
-}
-
-func (q *Queue) queueRequest(ctx context.Context, r *QueueRequest) error {
-	if q.inShutdown.Load() {
-		return ErrQueueShutdown
-	}
-
-	r.ReadyCh = make(chan struct{})
-	r.Context = ctx
-
-	select {
-	case q.queueRequestCh <- r:
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-
-	select {
-	case <-r.ReadyCh:
-		return r.Err
-	case <-ctx.Done():
-		return ctx.Err()
-	}
 }
 
 // -------------------------------------------------
@@ -358,6 +331,7 @@ func (q *Queue) queueRequest(ctx context.Context, r *QueueRequest) error {
 // See doc/adr/0003-rw-sync-point.md for an explanation of this design
 // -------------------------------------------------
 
+// TODO: Break up this loop into smaller handlers to reduce the size of this method.
 func (q *Queue) synchronizationLoop() {
 	defer q.wg.Done()
 
@@ -587,7 +561,7 @@ func (q *Queue) synchronizationLoop() {
 			q.handleShutdown(&state, req)
 			return
 
-		case <-state.NextMaintCh:
+		case <-state.NextMaintenanceCh:
 			q.stateCleanUp(&state)
 
 			// TODO: Preform queue maintenance, cleaning up reserved items that have not been completed and
@@ -603,7 +577,7 @@ func (q *Queue) stateCleanUp(state *QueueState) {
 	if next.Nanoseconds() != 0 {
 		q.opts.Logger.Debug("next maintenance window",
 			"duration", next.String(), "queue", q.opts.Name)
-		state.NextMaintCh = time.After(next)
+		state.NextMaintenanceCh = time.After(next)
 	}
 	state.Reservations.FilterNils()
 }
@@ -628,6 +602,32 @@ func (q *Queue) Shutdown(ctx context.Context) error {
 		return ctx.Err()
 	}
 }
+
+func (q *Queue) queueRequest(ctx context.Context, r *QueueRequest) error {
+	if q.inShutdown.Load() {
+		return ErrQueueShutdown
+	}
+
+	r.ReadyCh = make(chan struct{})
+	r.Context = ctx
+
+	select {
+	case q.queueRequestCh <- r:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
+	select {
+	case <-r.ReadyCh:
+		return r.Err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// -------------------------------------------------
+// Handlers for the main and pause loops
+// -------------------------------------------------
 
 func (q *Queue) handleQueueRequests(state *QueueState, req *QueueRequest) {
 	switch req.Method {
@@ -660,15 +660,14 @@ func (q *Queue) handleClear(_ *QueueState, req *QueueRequest) {
 }
 
 func (q *Queue) handleStorageRequests(req *QueueRequest) {
-	sr := req.Request.(*types.StorageRequest)
+	sr := req.Request.(StorageRequest)
 	switch req.Method {
 	case MethodStorageQueueList:
-		if err := q.opts.QueueStore.List(req.Context, &sr.Items,
-			types.ListOptions{Pivot: sr.Pivot, Limit: sr.Limit}); err != nil {
+		if err := q.opts.QueueStore.List(req.Context, sr.Items, sr.Options); err != nil {
 			req.Err = err
 		}
 	case MethodStorageQueueAdd:
-		if err := q.opts.QueueStore.Add(req.Context, sr.Items); err != nil {
+		if err := q.opts.QueueStore.Add(req.Context, *sr.Items); err != nil {
 			req.Err = err
 		}
 	case MethodStorageQueueDelete:
@@ -755,20 +754,9 @@ func (q *Queue) handleShutdown(state *QueueState, req *types.ShutdownRequest) {
 	close(req.ReadyCh)
 }
 
-// addIfUnique adds a ReserveRequest to the batch. Returns false if the ReserveRequest.ClientID is a duplicate
-// and the request was not added to the batch
-func addIfUnique(r *types.ReserveBatch, req *types.ReserveRequest) bool {
-	for _, existing := range r.Requests {
-		if existing.ClientID == req.ClientID {
-			req.Err = ErrDuplicateClientID
-			close(req.ReadyCh)
-			return false
-		}
-	}
-	r.Total += req.NumRequested
-	r.Requests = append(r.Requests, req)
-	return false
-}
+// -------------------------------------------------
+// Support Functions & Methods
+// -------------------------------------------------
 
 // TODO: I don't think we should pass by ref. We should use escape analysis to decide
 func (q *Queue) nextTimeout(r *types.ReserveBatch) time.Duration {
@@ -816,4 +804,19 @@ func (q *Queue) nextTimeout(r *types.ReserveBatch) time.Duration {
 
 	// How soon is it? =)
 	return soon.RequestDeadline.Sub(time.Now().UTC())
+}
+
+// addIfUnique adds a ReserveRequest to the batch. Returns false if the ReserveRequest.ClientID is a duplicate
+// and the request was not added to the batch
+func addIfUnique(r *types.ReserveBatch, req *types.ReserveRequest) bool {
+	for _, existing := range r.Requests {
+		if existing.ClientID == req.ClientID {
+			req.Err = ErrDuplicateClientID
+			close(req.ReadyCh)
+			return false
+		}
+	}
+	r.Total += req.NumRequested
+	r.Requests = append(r.Requests, req)
+	return false
 }

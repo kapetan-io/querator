@@ -57,17 +57,6 @@ type CompleteRequest struct {
 	Err error
 }
 
-type StorageRequest struct {
-	// Items is the items returned by the storage request
-	Items []*Item
-	// ID is the unique id of the item requested
-	IDs []string
-	// Pivot is included if requesting a list of storage items
-	Pivot string
-	// Limit is included if requesting a list of storage items
-	Limit int
-}
-
 type ClearRequest struct {
 	// Defer indicates the 'defer' queue will be cleared. If true, any items
 	// scheduled to be retried at a future date will be removed.

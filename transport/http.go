@@ -74,7 +74,7 @@ const (
 // from other Querator packages will result in a circular dependency warning.
 type Service interface {
 	QueueProduce(context.Context, *proto.QueueProduceRequest) error
-	QueueCreate(context.Context, *proto.QueueOptions) error
+	QueuesCreate(context.Context, *proto.QueueInfo) error
 	QueueReserve(context.Context, *proto.QueueReserveRequest, *proto.QueueReserveResponse) error
 	QueueComplete(context.Context, *proto.QueueCompleteRequest) error
 	QueueStats(context.Context, *proto.QueueStatsRequest, *proto.QueueStatsResponse) error
@@ -206,13 +206,13 @@ func (h *HTTPHandler) QueueComplete(ctx context.Context, w http.ResponseWriter, 
 }
 
 func (h *HTTPHandler) QueuesCreate(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-	var req proto.QueueOptions
+	var req proto.QueueInfo
 	if err := duh.ReadRequest(r, &req); err != nil {
 		duh.ReplyError(w, r, err)
 		return
 	}
 
-	if err := h.service.QueueCreate(ctx, &req); err != nil {
+	if err := h.service.QueuesCreate(ctx, &req); err != nil {
 		duh.ReplyError(w, r, err)
 		return
 	}

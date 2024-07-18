@@ -135,7 +135,7 @@ func (c *Client) QueuePause(ctx context.Context, req *pb.QueuePauseRequest) erro
 	return c.client.Do(r, &res)
 }
 
-func (c *Client) QueueCreate(ctx context.Context, req *pb.QueueOptions) error {
+func (c *Client) QueueCreate(ctx context.Context, req *pb.QueueInfo) error {
 	payload, err := proto.Marshal(req)
 	if err != nil {
 		return duh.NewClientError("while marshaling request payload: %w", err, nil)

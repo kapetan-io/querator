@@ -2,7 +2,9 @@ package querator_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"github.com/duh-rpc/duh-go"
 	que "github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/daemon"
 	"github.com/kapetan-io/querator/internal/store"
@@ -21,7 +23,8 @@ import (
 
 var log = slog.New(slog.NewTextHandler(io.Discard, nil))
 
-func TestStorage(t *testing.T) {
+// TestQueueStorage tests the /storage/queue.* endpoints
+func TestQueueStorage(t *testing.T) {
 	dir := "test-data"
 
 	for _, tc := range []struct {
@@ -59,12 +62,12 @@ func TestStorage(t *testing.T) {
 		//},
 	} {
 		t.Run(tc.Name, func(t *testing.T) {
-			testStorage(t, tc.Setup, tc.TearDown)
+			testQueueStorage(t, tc.Setup, tc.TearDown)
 		})
 	}
 }
 
-func testStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
+func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 	_store := newStore()
 	defer tearDown()
 
@@ -73,7 +76,7 @@ func testStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 		d, c, ctx := newDaemon(t, _store, 10*time.Second)
 		defer d.Shutdown(t)
 
-		require.NoError(t, c.QueueCreate(ctx, &pb.QueueOptions{QueueName: queueName}))
+		require.NoError(t, c.QueueCreate(ctx, &pb.QueueInfo{QueueName: queueName}))
 
 		now := time.Now().UTC()
 		var items []*pb.StorageQueueItem
@@ -134,7 +137,7 @@ func testStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 		d, c, ctx := newDaemon(t, _store, 10*time.Second)
 		defer d.Shutdown(t)
 
-		require.NoError(t, c.QueueCreate(ctx, &pb.QueueOptions{QueueName: queueName}))
+		require.NoError(t, c.QueueCreate(ctx, &pb.QueueInfo{QueueName: queueName}))
 		items := writeRandomItems(t, ctx, c, queueName, 10_000)
 
 		var resp pb.StorageQueueListResponse
@@ -153,7 +156,7 @@ func testStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 			assert.Equal(t, items[i].Payload, resp.Items[i].Payload)
 		}
 
-		t.Run("AskForMoreThanIsAvailable", func(t *testing.T) {
+		t.Run("ListMoreThanAvailable", func(t *testing.T) {
 			var more pb.StorageQueueListResponse
 			err = c.StorageQueueList(ctx, queueName, &more, &que.ListOptions{Limit: 20_000})
 			require.NoError(t, err)
@@ -163,7 +166,7 @@ func testStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 			compareStorageItem(t, items[10_000-1], more.Items[len(more.Items)-1])
 		})
 
-		t.Run("AskForLessThanIsAvailable", func(t *testing.T) {
+		t.Run("ListLessThanAvailable", func(t *testing.T) {
 			var limit pb.StorageQueueListResponse
 			err = c.StorageQueueList(ctx, queueName, &limit, &que.ListOptions{Limit: 1_000})
 			require.NoError(t, err)
@@ -172,7 +175,7 @@ func testStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 			compareStorageItem(t, items[1_000-1], limit.Items[len(limit.Items)-1])
 		})
 
-		t.Run("GetOne", func(t *testing.T) {
+		t.Run("Get", func(t *testing.T) {
 			var limit pb.StorageQueueListResponse
 			require.NoError(t, c.StorageQueueList(ctx, queueName, &limit, &que.ListOptions{Limit: 1}))
 
@@ -180,7 +183,7 @@ func testStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 			assert.Equal(t, items[0].Id, limit.Items[0].Id)
 		})
 
-		t.Run("GetOneWithPivot", func(t *testing.T) {
+		t.Run("GetWithPivot", func(t *testing.T) {
 			var limit pb.StorageQueueListResponse
 			require.NoError(t, c.StorageQueueList(ctx, queueName, &limit,
 				&que.ListOptions{Pivot: items[10].Id, Limit: 1}))
@@ -213,16 +216,15 @@ func testStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 					Ids:       que.CollectIDs(items[0:1_000]),
 				}))
 			})
-			// TODO: Attempt to delete an invalid id.
 		})
 	})
 
-	t.Run("ReadPivot", func(t *testing.T) {
+	t.Run("ListWithPivot", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
 		d, c, ctx := newDaemon(t, _store, 10*time.Second)
 		defer d.Shutdown(t)
 
-		require.NoError(t, c.QueueCreate(ctx, &pb.QueueOptions{QueueName: queueName}))
+		require.NoError(t, c.QueueCreate(ctx, &pb.QueueInfo{QueueName: queueName}))
 		items := writeRandomItems(t, ctx, c, queueName, 10_000)
 
 		id := items[1000].Id
@@ -236,7 +238,7 @@ func testStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 			compareStorageItem(t, items[i+1000], list.Items[i])
 		}
 
-		t.Run("ListResultsIncludePivot", func(t *testing.T) {
+		t.Run("ListIncludePivot", func(t *testing.T) {
 			item := list.Items[9]
 			err = c.StorageQueueList(ctx, queueName, &list, &que.ListOptions{Pivot: item.Id, Limit: 1})
 			require.NoError(t, err)
@@ -247,6 +249,7 @@ func testStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 			compareStorageItem(t, items[1009], list.Items[0])
 		})
 
+		// TODO: Replace this test with a test of the list iterator for client.StorageQueueList()
 		t.Run("PivotMorePages", func(t *testing.T) {
 			item := list.Items[0]
 			err = c.StorageQueueList(ctx, queueName, &list, &que.ListOptions{Pivot: item.Id, Limit: 10})
@@ -258,8 +261,78 @@ func testStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 			require.NoError(t, err)
 			compareStorageItem(t, items[1027], list.Items[len(list.Items)-1])
 		})
-		// TODO: Test the list iterator for client.StorageQueueList()
 
+	})
+
+	// TODO: Finish these tests
+	t.Run("StorageQueueListErrors", func(t *testing.T) {})
+	t.Run("StorageQueueAddErrors", func(t *testing.T) {})
+
+	t.Run("StorageQueueDeleteErrors", func(t *testing.T) {
+		var queueName = random.String("queue-", 10)
+		d, c, ctx := newDaemon(t, _store, 5*time.Second)
+		defer d.Shutdown(t)
+
+		require.NoError(t, c.QueueCreate(ctx, &pb.QueueInfo{QueueName: queueName}))
+
+		for _, test := range []struct {
+			Name string
+			Req  *pb.StorageQueueDeleteRequest
+			Msg  string
+			Code int
+		}{
+			{
+				Name: "EmptyRequest",
+				Req:  &pb.StorageQueueDeleteRequest{},
+				Msg:  "invalid queue_name; cannot be empty",
+				Code: duh.CodeBadRequest,
+			},
+			{
+				Name: "InvalidQueue",
+				Req: &pb.StorageQueueDeleteRequest{
+					QueueName: "invalid~queue",
+				},
+				Msg:  "invalid queue_name; 'invalid~queue' cannot contain '~' character",
+				Code: duh.CodeBadRequest,
+			},
+			{
+				Name: "NoIds",
+				Req: &pb.StorageQueueDeleteRequest{
+					QueueName: queueName,
+					Ids:       nil,
+				},
+				Msg:  "ids is invalid; cannot be empty",
+				Code: duh.CodeBadRequest,
+			},
+			{
+				Name: "IdsEmptyList",
+				Req: &pb.StorageQueueDeleteRequest{
+					QueueName: queueName,
+					Ids:       []string{},
+				},
+				Msg:  "ids is invalid; cannot be empty",
+				Code: duh.CodeBadRequest,
+			},
+			{
+				Name: "InvalidIds",
+				Req: &pb.StorageQueueDeleteRequest{
+					QueueName: queueName,
+					Ids:       []string{"invalid-id", "another-invalid-id"},
+				},
+				Msg:  "invalid storage id; 'invalid-id': expected format <queue_name>~<storage_id>",
+				Code: duh.CodeBadRequest,
+			},
+		} {
+			t.Run(test.Name, func(t *testing.T) {
+				err := c.StorageQueueDelete(ctx, test.Req)
+				if test.Code != duh.CodeOK {
+					var e duh.Error
+					require.True(t, errors.As(err, &e))
+					assert.Equal(t, test.Msg, e.Message())
+					assert.Equal(t, test.Code, e.Code())
+				}
+			})
+		}
 	})
 
 }

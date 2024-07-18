@@ -1,0 +1,42 @@
+/*
+Copyright 2024 Derrick J Wippler
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+syntax = "proto3";
+
+option go_package = "github.com/kapetan-io/querator/proto";
+import "google/protobuf/timestamp.proto";
+import "queue.proto";
+
+package querator;
+
+message QueuesListRequest {
+  string queueName = 1 [json_name = "queue_name"];
+  string pivot  = 2;
+  int32 limit = 3;
+}
+
+message QueuesListResponse {
+  repeated QueueInfo items = 1;
+}
+
+message QueuesDeleteRequest {
+  // QueueName is the name of the queue to delete
+  string queueName = 1 [json_name = "queue_name"];
+  // Force indicates the deletion should ignore any current open reservations or items in the queue and
+  // delete all data related to the queue. In addition, this forcibly cancels all in progress client
+  // reservation requests.
+  bool force = 2;
+}

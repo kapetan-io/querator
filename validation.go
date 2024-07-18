@@ -70,7 +70,7 @@ func (s *Service) validateQueueCompleteProto(in *proto.QueueCompleteRequest, out
 	return nil
 }
 
-func (s *Service) validateQueueOptionsProto(in *proto.QueueOptions, out *internal.QueueOptions) error {
+func (s *Service) validateQueueOptionsProto(in *proto.QueueInfo, out *internal.QueueOptions) error {
 	var err error
 
 	if in.DeadTimeout != "" {

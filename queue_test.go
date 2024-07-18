@@ -36,7 +36,7 @@ import (
 //	}
 //
 //	// TODO: QueuesCreate should create a queue in storage
-//	require.NoError(t, c.QueuesCreate(ctx, &pb.QueueOptions{Name: queueName}))
+//	require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{Name: queueName}))
 //
 //}
 
@@ -108,7 +108,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer d.Shutdown(t)
 
 		// Create a queue
-		require.NoError(t, c.QueueCreate(ctx, &pb.QueueOptions{QueueName: queueName}))
+		require.NoError(t, c.QueueCreate(ctx, &pb.QueueInfo{QueueName: queueName}))
 
 		// Produce a single message
 		ref := random.String("ref-", 10)
@@ -183,7 +183,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		var reserved []*pb.StorageQueueItem
 		var list pb.StorageQueueListResponse
-		require.NoError(t, c.QueueCreate(ctx, &pb.QueueOptions{QueueName: queueName}))
+		require.NoError(t, c.QueueCreate(ctx, &pb.QueueInfo{QueueName: queueName}))
 
 		// Write some items to the queue
 		_ = writeRandomItems(t, ctx, c, queueName, 500)
@@ -246,7 +246,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer d.Shutdown(t)
 		now := time.Now().UTC()
 
-		require.NoError(t, c.QueueCreate(ctx, &pb.QueueOptions{QueueName: queueName}))
+		require.NoError(t, c.QueueCreate(ctx, &pb.QueueInfo{QueueName: queueName}))
 		var lastItem *pb.StorageQueueItem
 		t.Run("Bytes", func(t *testing.T) {
 			var items []*pb.QueueProduceItem
@@ -340,7 +340,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		d, c, ctx := newDaemon(t, _store, 30*time.Second)
 		defer d.Shutdown(t)
 
-		require.NoError(t, c.QueueCreate(ctx, &pb.QueueOptions{QueueName: queueName}))
+		require.NoError(t, c.QueueCreate(ctx, &pb.QueueInfo{QueueName: queueName}))
 		items := writeRandomItems(t, ctx, c, queueName, 10_000)
 		require.Len(t, items, 10_000)
 
@@ -537,7 +537,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		d, c, ctx := newDaemon(t, _store, 30*time.Second)
 		defer d.Shutdown(t)
 
-		require.NoError(t, c.QueueCreate(ctx, &pb.QueueOptions{QueueName: queueName}))
+		require.NoError(t, c.QueueCreate(ctx, &pb.QueueInfo{QueueName: queueName}))
 
 		t.Run("Success", func(t *testing.T) {
 			items := writeRandomItems(t, ctx, c, queueName, 10)
@@ -616,7 +616,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		d, c, ctx := newDaemon(t, _store, 30*time.Second)
 		defer d.Shutdown(t)
 
-		require.NoError(t, c.QueueCreate(ctx, &pb.QueueOptions{QueueName: queueName}))
+		require.NoError(t, c.QueueCreate(ctx, &pb.QueueInfo{QueueName: queueName}))
 
 		items := writeRandomItems(t, ctx, c, queueName, 500)
 		require.Len(t, items, 500)
@@ -651,7 +651,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer d.Shutdown(t)
 		maxItems := randomProduceItems(1_001)
 
-		require.NoError(t, c.QueueCreate(ctx, &pb.QueueOptions{QueueName: queueName}))
+		require.NoError(t, c.QueueCreate(ctx, &pb.QueueInfo{QueueName: queueName}))
 
 		for _, test := range []struct {
 			Name string
@@ -767,7 +767,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		d, c, ctx := newDaemon(t, _store, 5*time.Second)
 		defer d.Shutdown(t)
 
-		require.NoError(t, c.QueueCreate(ctx, &pb.QueueOptions{QueueName: queueName}))
+		require.NoError(t, c.QueueCreate(ctx, &pb.QueueInfo{QueueName: queueName}))
 
 		for _, tc := range []struct {
 			Name string
@@ -877,6 +877,10 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			})
 		}
 	})
+
+	// TODO: Finish error testing
+	t.Run("QueueCompleteErrors", func(t *testing.T) {})
+
 	// TODO: Test duplicate client id on reserve
 	// TODO: Test pause and unpause, ensure can produce and consume after un-paused and Ensure can shutdown
 	// TODO: Test pause false without pause true

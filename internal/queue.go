@@ -319,6 +319,11 @@ func (q *Queue) StorageQueueAdd(ctx context.Context, req *types.StorageRequest) 
 }
 
 func (q *Queue) StorageQueueDelete(ctx context.Context, req *types.StorageRequest) error {
+
+	if len(req.IDs) == 0 {
+		return transport.NewInvalidOption("ids is invalid; cannot be empty")
+	}
+
 	r := QueueRequest{
 		Method:  MethodStorageQueueDelete,
 		Request: req,

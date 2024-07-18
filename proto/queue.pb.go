@@ -636,7 +636,7 @@ func (x *QueueCompleteRequest) GetIds() []string {
 	return nil
 }
 
-type QueueOptions struct {
+type QueueInfo struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
@@ -664,8 +664,8 @@ type QueueOptions struct {
 	MaxAttempts int32 `protobuf:"varint,8,opt,name=maxAttempts,json=max_attempts,proto3" json:"maxAttempts,omitempty"`
 }
 
-func (x *QueueOptions) Reset() {
-	*x = QueueOptions{}
+func (x *QueueInfo) Reset() {
+	*x = QueueInfo{}
 	if protoimpl.UnsafeEnabled {
 		mi := &file_proto_queue_proto_msgTypes[8]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -673,13 +673,13 @@ func (x *QueueOptions) Reset() {
 	}
 }
 
-func (x *QueueOptions) String() string {
+func (x *QueueInfo) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*QueueOptions) ProtoMessage() {}
+func (*QueueInfo) ProtoMessage() {}
 
-func (x *QueueOptions) ProtoReflect() protoreflect.Message {
+func (x *QueueInfo) ProtoReflect() protoreflect.Message {
 	mi := &file_proto_queue_proto_msgTypes[8]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -691,61 +691,61 @@ func (x *QueueOptions) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use QueueOptions.ProtoReflect.Descriptor instead.
-func (*QueueOptions) Descriptor() ([]byte, []int) {
+// Deprecated: Use QueueInfo.ProtoReflect.Descriptor instead.
+func (*QueueInfo) Descriptor() ([]byte, []int) {
 	return file_proto_queue_proto_rawDescGZIP(), []int{8}
 }
 
-func (x *QueueOptions) GetQueueName() string {
+func (x *QueueInfo) GetQueueName() string {
 	if x != nil {
 		return x.QueueName
 	}
 	return ""
 }
 
-func (x *QueueOptions) GetCreatedAt() *timestamppb.Timestamp {
+func (x *QueueInfo) GetCreatedAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.CreatedAt
 	}
 	return nil
 }
 
-func (x *QueueOptions) GetUpdatedAt() *timestamppb.Timestamp {
+func (x *QueueInfo) GetUpdatedAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.UpdatedAt
 	}
 	return nil
 }
 
-func (x *QueueOptions) GetDeadQueue() string {
+func (x *QueueInfo) GetDeadQueue() string {
 	if x != nil {
 		return x.DeadQueue
 	}
 	return ""
 }
 
-func (x *QueueOptions) GetReference() string {
+func (x *QueueInfo) GetReference() string {
 	if x != nil {
 		return x.Reference
 	}
 	return ""
 }
 
-func (x *QueueOptions) GetReserveTimeout() string {
+func (x *QueueInfo) GetReserveTimeout() string {
 	if x != nil {
 		return x.ReserveTimeout
 	}
 	return ""
 }
 
-func (x *QueueOptions) GetDeadTimeout() string {
+func (x *QueueInfo) GetDeadTimeout() string {
 	if x != nil {
 		return x.DeadTimeout
 	}
 	return ""
 }
 
-func (x *QueueOptions) GetMaxAttempts() int32 {
+func (x *QueueInfo) GetMaxAttempts() int32 {
 	if x != nil {
 		return x.MaxAttempts
 	}
@@ -1236,7 +1236,7 @@ var file_proto_queue_proto_goTypes = []interface{}{
 	(*QueueDeferRequest)(nil),     // 5: querator.QueueDeferRequest
 	(*QueueDeferItem)(nil),        // 6: querator.QueueDeferItem
 	(*QueueCompleteRequest)(nil),  // 7: querator.QueueCompleteRequest
-	(*QueueOptions)(nil),          // 8: querator.QueueOptions
+	(*QueueInfo)(nil),             // 8: querator.QueueInfo
 	(*QueuePauseRequest)(nil),     // 9: querator.QueuePauseRequest
 	(*QueueClearRequest)(nil),     // 10: querator.QueueClearRequest
 	(*QueueStatsRequest)(nil),     // 11: querator.QueueStatsRequest
@@ -1249,8 +1249,8 @@ var file_proto_queue_proto_depIdxs = []int32{
 	3,  // 2: querator.QueueReserveResponse.items:type_name -> querator.QueueReserveItem
 	6,  // 3: querator.QueueDeferRequest.items:type_name -> querator.QueueDeferItem
 	13, // 4: querator.QueueDeferItem.offerAt:type_name -> google.protobuf.Timestamp
-	13, // 5: querator.QueueOptions.createdAt:type_name -> google.protobuf.Timestamp
-	13, // 6: querator.QueueOptions.updatedAt:type_name -> google.protobuf.Timestamp
+	13, // 5: querator.QueueInfo.createdAt:type_name -> google.protobuf.Timestamp
+	13, // 6: querator.QueueInfo.updatedAt:type_name -> google.protobuf.Timestamp
 	7,  // [7:7] is the sub-list for method output_type
 	7,  // [7:7] is the sub-list for method input_type
 	7,  // [7:7] is the sub-list for extension type_name
@@ -1361,7 +1361,7 @@ func file_proto_queue_proto_init() {
 			}
 		}
 		file_proto_queue_proto_msgTypes[8].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*QueueOptions); i {
+			switch v := v.(*QueueInfo); i {
 			case 0:
 				return &v.state
 			case 1:

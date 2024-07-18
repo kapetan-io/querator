@@ -31,7 +31,7 @@ import (
 	"strings"
 )
 
-var ErrQueueNameEmpty = transport.NewInvalidOption("queue_name cannot be empty")
+var ErrQueueNameEmpty = transport.NewInvalidOption("invalid queue_name; cannot be empty")
 
 // TODO: Document this and make it configurable via the daemon
 type ServiceOptions struct {
@@ -137,9 +137,11 @@ func (s *Service) QueueComplete(ctx context.Context, req *proto.QueueCompleteReq
 	return nil
 }
 
-// TODO: Manage Queue Methods
+// -------------------------------------------------
+// API to manage lists of queues
+// -------------------------------------------------
 
-func (s *Service) QueueCreate(ctx context.Context, req *proto.QueueOptions) error {
+func (s *Service) QueuesCreate(ctx context.Context, req *proto.QueueInfo) error {
 	var opts internal.QueueOptions
 
 	if err := s.validateQueueOptionsProto(req, &opts); err != nil {
@@ -150,6 +152,18 @@ func (s *Service) QueueCreate(ctx context.Context, req *proto.QueueOptions) erro
 	if err != nil {
 		return err
 	}
+	return nil
+}
+
+func (s *Service) QueuesList(ctx context.Context, req *proto.QueueInfo) error {
+	return nil
+}
+
+func (s *Service) QueuesUpdate(ctx context.Context, req *proto.QueueInfo) error {
+	return nil
+}
+
+func (s *Service) QueuesDelete(ctx context.Context, req *proto.QueueInfo) error {
 	return nil
 }
 

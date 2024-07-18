@@ -205,7 +205,7 @@ func (c *Client) StorageQueueAdd(ctx context.Context, req *pb.StorageQueueAddReq
 	return c.client.Do(r, res)
 }
 
-func (c *Client) StorageQueueDelete(ctx context.Context, req *pb.StorageQueueAddRequest) error {
+func (c *Client) StorageQueueDelete(ctx context.Context, req *pb.StorageQueueDeleteRequest) error {
 
 	payload, err := proto.Marshal(req)
 	if err != nil {
@@ -270,4 +270,16 @@ func WithTLS(tls *tls.Config, address string) ClientOptions {
 			},
 		},
 	}
+}
+
+type ItemsWithIDs interface {
+	GetId() string
+}
+
+func CollectIDs[S ~[]E, E ItemsWithIDs](items S) []string {
+	var result []string
+	for _, v := range items {
+		result = append(result, v.GetId())
+	}
+	return result
 }

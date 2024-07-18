@@ -446,14 +446,14 @@ func buntSet(f errors.Fields, tx *buntdb.Tx, item *types.Item) error {
 // ---------------------------------------------
 
 type BuntQueueStore struct {
-	opts QueueStoreOptions
+	opts QueuesStoreOptions
 	db   *buntdb.DB
 }
 
-var _ QueueStore = &BuntQueueStore{}
+var _ QueuesStore = &BuntQueueStore{}
 
-func (b *BuntStorage) NewQueueStore(opts QueueStoreOptions) (QueueStore, error) {
-	f := errors.Fields{"category", "bunt-db", "func", "NewQueueStore"}
+func (b *BuntStorage) NewQueuesStore(opts QueuesStoreOptions) (QueuesStore, error) {
+	f := errors.Fields{"category", "bunt-db", "func", "NewQueuesStore"}
 
 	db, err := buntdb.Open(":memory:")
 	if err != nil {
@@ -466,7 +466,7 @@ func (b *BuntStorage) NewQueueStore(opts QueueStoreOptions) (QueueStore, error) 
 }
 
 func (r BuntQueueStore) Get(_ context.Context, name string, opts *QueueInfo) error {
-	f := errors.Fields{"category", "bunt-db", "func", "QueueStore.Get"}
+	f := errors.Fields{"category", "bunt-db", "func", "QueuesStore.Get"}
 
 	return r.db.View(func(tx *buntdb.Tx) error {
 		value, err := tx.Get(name, true)
@@ -485,7 +485,7 @@ func (r BuntQueueStore) Get(_ context.Context, name string, opts *QueueInfo) err
 }
 
 func (r BuntQueueStore) Set(ctx context.Context, opts QueueInfo) error {
-	f := errors.Fields{"category", "bunt-db", "func", "QueueStore.Set"}
+	f := errors.Fields{"category", "bunt-db", "func", "QueuesStore.Set"}
 
 	// TODO: Validate options in a function all store implementations can share
 
@@ -513,7 +513,7 @@ func (r BuntQueueStore) Set(ctx context.Context, opts QueueInfo) error {
 }
 
 func (r BuntQueueStore) List(_ context.Context, queues *[]*QueueInfo, opts types.ListOptions) error {
-	f := errors.Fields{"category", "bunt-db", "func", "QueueStore.List"}
+	f := errors.Fields{"category", "bunt-db", "func", "QueuesStore.List"}
 
 	tx, err := r.db.Begin(false)
 	if err != nil {

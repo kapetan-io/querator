@@ -24,9 +24,9 @@ type Storage interface {
 	// items for this queue are stored.
 	NewQueue(info QueueInfo) (Queue, error)
 
-	// NewQueueStore creates a new instance of the QueueStore. A QueueStore stores
+	// NewQueuesStore creates a new instance of the QueuesStore. A QueuesStore stores
 	// QueueInfo structs, which hold information about all the available queues.
-	NewQueueStore(opts QueueStoreOptions) (QueueStore, error)
+	NewQueuesStore(opts QueuesStoreOptions) (QueuesStore, error)
 
 	ParseID(parse string, id *StorageID) error
 	BuildStorageID(queue, id string) string
@@ -38,10 +38,10 @@ type ReserveOptions struct {
 	ReserveDeadline time.Time
 }
 
-type QueueStoreOptions struct{}
+type QueuesStoreOptions struct{}
 
-// QueueStore is storage for listing and storing information about queues
-type QueueStore interface {
+// QueuesStore is storage for listing and storing information about queues
+type QueuesStore interface {
 	// Get returns a store.Queue from storage ready to be used. Returns ErrQueueNotExist if the
 	// queue requested does not exist
 	Get(ctx context.Context, name string, queue *QueueInfo) error
@@ -101,7 +101,7 @@ type Queue interface {
 
 // TODO: ScheduledStorage interface {} - A place to store scheduled items to be queued. (Defer)
 
-// CollectIDs is a convenience function which assists in calling QueueStore.Delete()
+// CollectIDs is a convenience function which assists in calling QueuesStore.Delete()
 // when a list of items to be deleted is needed.
 func CollectIDs(items []*types.Item) []string {
 	var result []string

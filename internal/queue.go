@@ -78,7 +78,7 @@ type QueueState struct {
 	Producers    types.Batch[types.ProduceRequest]
 	Completes    types.Batch[types.CompleteRequest]
 
-	WakeUpCh <-chan time.Time
+	NextMaintCh <-chan time.Time
 }
 
 // Queue manages job is to evenly distribute and consume items from a single queue. Ensuring consumers and
@@ -103,7 +103,7 @@ func NewQueue(opts QueueOptions) (*Queue, error) {
 	set.Default(&opts.MaxProduceBatchSize, 1_000)
 
 	if opts.QueueStore == nil {
-		return nil, transport.NewInvalidOption("QueueOptions.QueueStore cannot be nil")
+		return nil, transport.NewInvalidOption("QueueOptions.QueuesStore cannot be nil")
 	}
 
 	q := &Queue{
@@ -298,6 +298,11 @@ func (q *Queue) StorageQueueList(ctx context.Context, req *types.StorageRequest)
 	// TODO(thrawn01): I suspect the most efficient way to do this is pass by value and not a pointer
 	//  I really need to get into the habit of passing by value as the default, and only pass by
 	//  pointer when its absolutely needed.
+
+	if req.Limit == 0 {
+		req.Limit = 1_000
+	}
+
 	r := QueueRequest{
 		Method:  MethodStorageQueueList,
 		Request: req,
@@ -473,7 +478,7 @@ func (q *Queue) synchronizationLoop() {
 			}
 
 			// Remove any clients that have timed out and find the next request to timeout.
-			writeTimeout := nextTimeout(&state.Reservations)
+			writeTimeout := q.nextTimeout(&state.Reservations)
 
 			// If we allow a calculated write timeout to be a few milliseconds, then the store.Add()
 			// is almost guaranteed to fail, so we ensure the write timeout is something reasonable.
@@ -506,15 +511,7 @@ func (q *Queue) synchronizationLoop() {
 					close(req.ReadyCh)
 				}
 			}
-
-			// Set a timer for remaining open reserve requests
-			// Or when next reservation will expire.
-			next := nextTimeout(&state.Reservations)
-			if next.Nanoseconds() != 0 {
-				state.WakeUpCh = time.After(next)
-			}
-			// Clean up requests that have timed out or received reservations
-			state.Reservations.FilterNils()
+			q.stateCleanUp(&state)
 
 		// -----------------------------------------------
 		case req := <-q.completeQueueCh:
@@ -575,27 +572,35 @@ func (q *Queue) synchronizationLoop() {
 
 		case req := <-q.queueRequestCh:
 			q.handleQueueRequests(&state, req)
-			// If we shut down during a pause
+			// If we shut down during a pause, exit immediately
 			if q.inShutdown.Load() {
 				return
 			}
+			q.stateCleanUp(&state)
 
 		case req := <-q.shutdownCh:
 			q.handleShutdown(&state, req)
 			return
 
-		case <-state.WakeUpCh:
-			// Find the next reserve request that will time out, and notify any clients of expired reserves
-			next := nextTimeout(&state.Reservations)
-			if next.Nanoseconds() != 0 {
-				state.WakeUpCh = time.After(next)
-			}
-			state.Reservations.FilterNils()
+		case <-state.NextMaintCh:
+			q.stateCleanUp(&state)
 
 			// TODO: Preform queue maintenance, cleaning up reserved items that have not been completed and
 			//  moving items into the dead letter queue.
 		}
 	}
+}
+
+// stateCleanUp is responsible for cleaning the QueueState by removing clients that have timed out,
+// and finding the next reserve request that will time out and wetting the wakeup timer.
+func (q *Queue) stateCleanUp(state *QueueState) {
+	next := q.nextTimeout(&state.Reservations)
+	if next.Nanoseconds() != 0 {
+		q.opts.Logger.Debug("next maintenance window",
+			"duration", next.String(), "queue", q.opts.Name)
+		state.NextMaintCh = time.After(next)
+	}
+	state.Reservations.FilterNils()
 }
 
 func (q *Queue) Shutdown(ctx context.Context) error {
@@ -646,6 +651,7 @@ func (q *Queue) handleClear(_ *QueueState, req *QueueRequest) {
 		}
 	}
 	// TODO(thrawn01): Support clearing defer and scheduled
+	close(req.ReadyCh)
 }
 
 func (q *Queue) handleStorageRequests(req *QueueRequest) {
@@ -729,6 +735,7 @@ func (q *Queue) handlePause(state *QueueState, r *QueueRequest) {
 }
 
 func (q *Queue) handleShutdown(state *QueueState, req *types.ShutdownRequest) {
+	q.stateCleanUp(state)
 	for _, r := range state.Producers.Requests {
 		r.Err = ErrQueueShutdown
 		close(r.ReadyCh)
@@ -759,7 +766,7 @@ func addIfUnique(r *types.ReserveBatch, req *types.ReserveRequest) bool {
 }
 
 // TODO: I don't think we should pass by ref. We should use escape analysis to decide
-func nextTimeout(r *types.ReserveBatch) time.Duration {
+func (q *Queue) nextTimeout(r *types.ReserveBatch) time.Duration {
 	var soon *types.ReserveRequest
 
 	for i, req := range r.Requests {
@@ -803,5 +810,5 @@ func nextTimeout(r *types.ReserveBatch) time.Duration {
 	}
 
 	// How soon is it? =)
-	return time.Now().UTC().Sub(soon.RequestDeadline)
+	return soon.RequestDeadline.Sub(time.Now().UTC())
 }

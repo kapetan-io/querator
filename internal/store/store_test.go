@@ -16,7 +16,7 @@ import (
 
 type NewStorageFunc func() store.Storage
 
-func TestQueue(t *testing.T) {
+func TestStore(t *testing.T) {
 	var dir string
 
 	for _, tc := range []struct {
@@ -736,7 +736,7 @@ func testQueueStore(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		q, err := s.NewQueueStore(store.QueueStoreOptions{})
+		q, err := s.NewQueuesStore(store.QueuesStoreOptions{})
 		defer func() { _ = q.Close(context.Background()) }()
 		require.NoError(t, err)
 

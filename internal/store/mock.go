@@ -22,7 +22,7 @@ func NewMockStorage(opts *MockOptions) *MockStorage {
 	return &MockStorage{opts: opts}
 }
 
-func (m *MockStorage) NewQueueStore(opts QueueStoreOptions) (QueueStore, error) {
+func (m *MockStorage) NewQueuesStore(opts QueuesStoreOptions) (QueuesStore, error) {
 	return &MockQueueStore{}, nil
 }
 
@@ -107,7 +107,7 @@ func (m *MockQueue) Close(ctx context.Context) error {
 
 type MockQueueStore struct{}
 
-var _ QueueStore = &MockQueueStore{}
+var _ QueuesStore = &MockQueueStore{}
 
 func (r MockQueueStore) Get(ctx context.Context, name string, queue *QueueInfo) error {
 	//TODO implement me

@@ -135,7 +135,7 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.QueueStats(ctx, w, r)
 		return
 	case RPCQueueClear:
-		h.QueueStats(ctx, w, r)
+		h.QueueClear(ctx, w, r)
 		return
 	case RPCQueuePause:
 		h.QueuePause(ctx, w, r)

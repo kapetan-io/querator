@@ -390,7 +390,7 @@ func (q *BoltQueue) Clear(_ context.Context, destructive bool) error {
 			return f.Error("bucket does not exist in data file")
 		}
 		c := b.Cursor()
-		for k, v := c.Next(); k != nil; k, v = c.Next() {
+		for k, v := c.First(); k != nil; k, v = c.Next() {
 			item := new(types.Item) // TODO: memory pool
 			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(item); err != nil {
 				return f.Errorf("during Decode(): %w", err)
@@ -429,7 +429,7 @@ func (q *BoltQueue) Stats(_ context.Context, stats *types.QueueStats) error {
 			}
 
 			stats.Total++
-			stats.AverageAge += item.CreatedAt.Sub(now)
+			stats.AverageAge += now.Sub(item.CreatedAt)
 			if item.IsReserved {
 				stats.AverageReservedAge += item.ReserveDeadline.Sub(now)
 				stats.TotalReserved++
@@ -453,8 +453,8 @@ func (q *BoltQueue) Close(_ context.Context) error {
 // Queue Repository Implementation
 // ---------------------------------------------
 
-func (b *BoltStorage) NewQueueStore(opts QueueStoreOptions) (QueueStore, error) {
-	f := errors.Fields{"category", "bolt", "func", "Storage.NewQueueStore"}
+func (b *BoltStorage) NewQueuesStore(opts QueuesStoreOptions) (QueuesStore, error) {
+	f := errors.Fields{"category", "bolt", "func", "Storage.NewQueuesStore"}
 
 	// We store info about the queues in a single db file. We prefix it with `~` to make it
 	// impossible for someone to create a queue with the same name.
@@ -484,10 +484,10 @@ type BoltQueueStore struct {
 	db *bolt.DB
 }
 
-var _ QueueStore = &BoltQueueStore{}
+var _ QueuesStore = &BoltQueueStore{}
 
 func (s BoltQueueStore) Get(_ context.Context, name string, queue *QueueInfo) error {
-	f := errors.Fields{"category", "bolt", "func", "QueueStore.Get"}
+	f := errors.Fields{"category", "bolt", "func", "QueuesStore.Get"}
 	return s.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket(bucketName)
 		if b == nil {
@@ -507,7 +507,7 @@ func (s BoltQueueStore) Get(_ context.Context, name string, queue *QueueInfo) er
 }
 
 func (s BoltQueueStore) Set(_ context.Context, info QueueInfo) error {
-	f := errors.Fields{"category", "bolt", "func", "QueueStore.Set"}
+	f := errors.Fields{"category", "bolt", "func", "QueuesStore.Set"}
 
 	if strings.TrimSpace(info.Name) == "" {
 		return f.Error("info.Name is required")
@@ -532,7 +532,7 @@ func (s BoltQueueStore) Set(_ context.Context, info QueueInfo) error {
 }
 
 func (s BoltQueueStore) List(_ context.Context, queues *[]*QueueInfo, opts types.ListOptions) error {
-	f := errors.Fields{"category", "bolt", "func", "QueueStore.List"}
+	f := errors.Fields{"category", "bolt", "func", "QueuesStore.List"}
 
 	return s.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket(bucketName)
@@ -573,7 +573,7 @@ func (s BoltQueueStore) List(_ context.Context, queues *[]*QueueInfo, opts types
 }
 
 func (s BoltQueueStore) Delete(_ context.Context, name string) error {
-	f := errors.Fields{"category", "bolt", "func", "QueueStore.Delete"}
+	f := errors.Fields{"category", "bolt", "func", "QueuesStore.Delete"}
 
 	return s.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(bucketName)

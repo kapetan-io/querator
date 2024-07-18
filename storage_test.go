@@ -2,57 +2,24 @@ package querator_test
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"github.com/duh-rpc/duh-go/retry"
 	que "github.com/kapetan-io/querator"
+	"github.com/kapetan-io/querator/daemon"
 	"github.com/kapetan-io/querator/internal/store"
 	pb "github.com/kapetan-io/querator/proto"
 	"github.com/kapetan-io/tackle/random"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/timestamppb"
-	"math/rand"
+	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 	"time"
 )
 
-//func TestBrokenStorage(t *testing.T) {
-//	var queueName = random.String("queue-", 10)
-//	opts := &store.MockOptions{}
-//	newStore := func() store.Storage {
-//		return store.NewMockStorage(opts)
-//	}
-//
-//	d, c, ctx := newDaemon(t, _store, 10*time.Second)
-//	defer d.Shutdown(t)
-//
-//	opts.Methods["Queue.Produce"] = func(args []any) error {
-//		return errors.New("unknown storage error")
-//	}
-//
-//	// TODO: QueuesCreate should create a queue in storage
-//	require.NoError(t, c.QueuesCreate(ctx, &pb.QueueOptions{Name: queueName}))
-//
-//}
-
-func dirExists(path string) bool {
-	info, err := os.Stat(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return false
-		}
-		return false
-	}
-	return info.IsDir()
-}
-
-var RetryTenTimes = retry.Policy{Interval: retry.Sleep(time.Second), Attempts: 10}
-
-type NewStorageFunc func() store.Storage
+var log = slog.New(slog.NewTextHandler(io.Discard, nil))
 
 func TestStorage(t *testing.T) {
 	dir := "test-data"
@@ -97,11 +64,11 @@ func TestStorage(t *testing.T) {
 	}
 }
 
-func testStorage(t *testing.T, setup NewStorageFunc, tearDown func()) {
-	_store := setup()
+func testStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
+	_store := newStore()
 	defer tearDown()
 
-	t.Run("AddAndListCompare", func(t *testing.T) {
+	t.Run("CRUDCompare", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
 		d, c, ctx := newDaemon(t, _store, 10*time.Second)
 		defer d.Shutdown(t)
@@ -162,7 +129,7 @@ func testStorage(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		assert.Equal(t, items[1].Payload, resp.Items[1].Payload)
 	})
 
-	t.Run("AddAndList", func(t *testing.T) {
+	t.Run("CRUD", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
 		d, c, ctx := newDaemon(t, _store, 10*time.Second)
 		defer d.Shutdown(t)
@@ -203,6 +170,50 @@ func testStorage(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			assert.Equal(t, 1_000, len(limit.Items))
 			compareStorageItem(t, items[0], limit.Items[0])
 			compareStorageItem(t, items[1_000-1], limit.Items[len(limit.Items)-1])
+		})
+
+		t.Run("GetOne", func(t *testing.T) {
+			var limit pb.StorageQueueListResponse
+			require.NoError(t, c.StorageQueueList(ctx, queueName, &limit, &que.ListOptions{Limit: 1}))
+
+			assert.Equal(t, 1, len(limit.Items))
+			assert.Equal(t, items[0].Id, limit.Items[0].Id)
+		})
+
+		t.Run("GetOneWithPivot", func(t *testing.T) {
+			var limit pb.StorageQueueListResponse
+			require.NoError(t, c.StorageQueueList(ctx, queueName, &limit,
+				&que.ListOptions{Pivot: items[10].Id, Limit: 1}))
+
+			assert.Equal(t, 1, len(limit.Items))
+			assert.Equal(t, items[10].Id, limit.Items[0].Id)
+		})
+
+		t.Run("Delete", func(t *testing.T) {
+			require.NoError(t, c.StorageQueueDelete(ctx, &pb.StorageQueueDeleteRequest{
+				QueueName: queueName,
+				Ids:       que.CollectIDs(items[0:1_000]),
+			}))
+
+			var deleted pb.StorageQueueListResponse
+			require.NoError(t, c.StorageQueueList(ctx, queueName, &deleted, &que.ListOptions{Limit: 10_000}))
+
+			// Assert the items deleted do not exist
+			for _, d := range items[0:1_000] {
+				for _, item := range deleted.Items {
+					if item.Id == d.Id {
+						t.Fatalf("Found deleted message %s", d.Id)
+					}
+				}
+			}
+
+			t.Run("DeleteAlreadyDeletedIsOk", func(t *testing.T) {
+				require.NoError(t, c.StorageQueueDelete(ctx, &pb.StorageQueueDeleteRequest{
+					QueueName: queueName,
+					Ids:       que.CollectIDs(items[0:1_000]),
+				}))
+			})
+			// TODO: Attempt to delete an invalid id.
 		})
 	})
 
@@ -248,334 +259,57 @@ func testStorage(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			compareStorageItem(t, items[1027], list.Items[len(list.Items)-1])
 		})
 		// TODO: Test the list iterator for client.StorageQueueList()
+
 	})
 
-	t.Run("Produce", func(t *testing.T) {
-		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, _store, 10*time.Second)
-		defer d.Shutdown(t)
-		now := time.Now().UTC()
+}
 
-		require.NoError(t, c.QueueCreate(ctx, &pb.QueueOptions{QueueName: queueName}))
-		var lastItem *pb.StorageQueueItem
-		t.Run("Bytes", func(t *testing.T) {
-			var items []*pb.QueueProduceItem
-			for i := 0; i < 10; i++ {
-				items = append(items, &pb.QueueProduceItem{
-					Reference: random.String("ref-", 10),
-					Encoding:  random.String("enc-", 10),
-					Kind:      random.String("kind-", 10),
-					Bytes:     []byte(fmt.Sprintf("message-%d", i)),
-				})
-			}
+type testDaemon struct {
+	cancel context.CancelFunc
+	ctx    context.Context
+	d      *daemon.Daemon
+}
 
-			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
-				QueueName:      queueName,
-				RequestTimeout: "1m",
-				Items:          items,
-			}))
+func (td *testDaemon) Shutdown(t *testing.T) {
+	require.NoError(t, td.d.Shutdown(td.ctx))
+	td.cancel()
+}
 
-			// Ensure the items produced are in the data store
-			var list pb.StorageQueueListResponse
-			err := c.StorageQueueList(ctx, queueName, &list, &que.ListOptions{Limit: 20})
-			require.NoError(t, err)
+func (td *testDaemon) MustClient() *que.Client {
+	return td.d.MustClient()
+}
 
-			require.Len(t, items, 10)
-			assert.Equal(t, len(items), len(list.Items))
-			for i := range items {
-				assert.True(t, list.Items[i].CreatedAt.AsTime().After(now))
-				// TODO: Ensure the DeadDeadline is set to something reasonable and then
-				//  change this test to ensure the they are also Before the time we think it should be.
-				assert.True(t, list.Items[i].DeadDeadline.AsTime().After(now))
-				assert.True(t, list.Items[i].ReserveDeadline.AsTime().IsZero())
+func (td *testDaemon) Context() context.Context {
+	return td.ctx
+}
 
-				assert.Equal(t, false, list.Items[i].IsReserved)
-				assert.Equal(t, int32(0), list.Items[i].Attempts)
-				assert.Equal(t, items[i].Reference, list.Items[i].Reference)
-				assert.Equal(t, items[i].Encoding, list.Items[i].Encoding)
-				assert.Equal(t, items[i].Bytes, list.Items[i].Payload)
-				assert.Equal(t, items[i].Kind, list.Items[i].Kind)
-			}
-			lastItem = list.Items[len(list.Items)-1]
-		})
-
-		t.Run("Utf8", func(t *testing.T) {
-			var items []*pb.QueueProduceItem
-			for i := 0; i < 100; i++ {
-				items = append(items, &pb.QueueProduceItem{
-					Reference: random.String("ref-", 10),
-					Encoding:  random.String("enc-", 10),
-					Kind:      random.String("kind-", 10),
-					Utf8:      fmt.Sprintf("message-%d", i),
-				})
-			}
-
-			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
-				QueueName:      queueName,
-				RequestTimeout: "1m",
-				Items:          items,
-			}))
-
-			// Ensure the items produced are in the data store
-			var list pb.StorageQueueListResponse
-			err := c.StorageQueueList(ctx, queueName, &list, &que.ListOptions{Pivot: lastItem.Id, Limit: 101})
-			require.NoError(t, err)
-
-			require.Len(t, items, 100)
-
-			// Remember the pivot is included in the results, so we remove the pivot from the results
-			assert.Equal(t, len(items), len(list.Items[1:]))
-			produced := list.Items[1:]
-
-			for i := range produced {
-				assert.True(t, produced[i].CreatedAt.AsTime().After(now))
-				// TODO: Ensure the DeadDeadline is set to something reasonable and then
-				//  change this test to ensure the they are also Before the time we think it should be.
-				assert.True(t, produced[i].DeadDeadline.AsTime().After(now))
-				assert.True(t, produced[i].ReserveDeadline.AsTime().IsZero())
-
-				assert.Equal(t, false, produced[i].IsReserved)
-				assert.Equal(t, int32(0), produced[i].Attempts)
-				assert.Equal(t, items[i].Reference, produced[i].Reference)
-				assert.Equal(t, items[i].Encoding, produced[i].Encoding)
-				assert.Equal(t, []byte(items[i].Utf8), produced[i].Payload)
-				assert.Equal(t, items[i].Kind, produced[i].Kind)
-			}
-		})
+func newDaemon(t *testing.T, s store.Storage, duration time.Duration) (*testDaemon, *que.Client, context.Context) {
+	var err error
+	td := &testDaemon{}
+	td.ctx, td.cancel = context.WithTimeout(context.Background(), duration)
+	td.d, err = daemon.NewDaemon(td.ctx, daemon.Config{
+		Logger: log,
+		Store:  s,
 	})
-
-	t.Run("Reserve", func(t *testing.T) {
-		var queueName = random.String("queue-", 10)
-		clientID := random.String("client-", 10)
-		d, c, ctx := newDaemon(t, _store, 20*time.Second)
-		defer d.Shutdown(t)
-
-		require.NoError(t, c.QueueCreate(ctx, &pb.QueueOptions{QueueName: queueName}))
-		items := writeRandomItems(t, ctx, c, queueName, 10_000)
-		require.Len(t, items, 10_000)
-
-		expire := time.Now().UTC().Add(2_000 * time.Minute)
-		var reserved, secondReserve pb.QueueReserveResponse
-		var list pb.StorageQueueListResponse
-
-		t.Run("TenItems", func(t *testing.T) {
-			req := pb.QueueReserveRequest{
-				ClientId:       clientID,
-				QueueName:      queueName,
-				BatchSize:      10,
-				RequestTimeout: "1m",
-			}
-
-			require.NoError(t, c.QueueReserve(ctx, &req, &reserved))
-			require.Equal(t, 10, len(reserved.Items))
-
-			// Ensure the items reserved are marked as reserved in the database
-			require.NoError(t, c.StorageQueueList(ctx, queueName, &list, &que.ListOptions{Limit: 10_000}))
-
-			for i := range reserved.Items {
-				assert.Equal(t, list.Items[i].Id, reserved.Items[i].Id)
-				assert.Equal(t, true, list.Items[i].IsReserved)
-				// TODO: Allow config of the reservation deadline on the queue and then
-				//  assert the ReserveDeadline is correct.
-				assert.True(t, list.Items[i].ReserveDeadline.AsTime().Before(expire))
-			}
-		})
-
-		t.Run("AnotherTenItems", func(t *testing.T) {
-			req := pb.QueueReserveRequest{
-				ClientId:       clientID,
-				QueueName:      queueName,
-				BatchSize:      10,
-				RequestTimeout: "1m",
-			}
-
-			require.NoError(t, c.QueueReserve(ctx, &req, &secondReserve))
-			require.Equal(t, 10, len(reserved.Items))
-
-			var combined []*pb.QueueReserveItem
-			combined = append(combined, reserved.Items...)
-			combined = append(combined, secondReserve.Items...)
-
-			require.NoError(t, c.StorageQueueList(ctx, queueName, &list, &que.ListOptions{Limit: 10_000}))
-			assert.NotEqual(t, reserved.Items[0].Id, secondReserve.Items[0].Id)
-			assert.Equal(t, combined[0].Id, list.Items[0].Id)
-			require.Equal(t, 20, len(combined))
-			require.Equal(t, 10_000, len(list.Items))
-
-			// Ensure all the items reserved are marked as reserved in the database
-			for i := range combined {
-				assert.Equal(t, list.Items[i].Id, combined[i].Id)
-				assert.Equal(t, true, list.Items[i].IsReserved)
-				assert.True(t, list.Items[i].ReserveDeadline.AsTime().Before(expire))
-			}
-		})
-
-		t.Run("DistributeNumRequested", func(t *testing.T) {
-			// Pause processing of the queue
-			require.NoError(t, c.QueuePause(ctx, &pb.QueuePauseRequest{
-				QueueName:     queueName,
-				PauseDuration: "2m",
-				Pause:         true,
-			}))
-
-			requests := []*pb.QueueReserveRequest{
-				{
-					ClientId:       random.String("client-", 10),
-					QueueName:      queueName,
-					BatchSize:      5,
-					RequestTimeout: "1m",
-				},
-				{
-					ClientId:       random.String("client-", 10),
-					QueueName:      queueName,
-					BatchSize:      10,
-					RequestTimeout: "1m",
-				},
-				{
-					ClientId:       random.String("client-", 10),
-					QueueName:      queueName,
-					BatchSize:      20,
-					RequestTimeout: "1m",
-				},
-			}
-			responses := []*pb.QueueReserveResponse{{}, {}, {}}
-			var wg sync.WaitGroup
-			wg.Add(len(requests))
-
-			// Send 3 requests to reserve, such that they are queued for processing
-			go func() {
-				if err := c.QueueReserve(ctx, requests[0], responses[0]); err != nil {
-					panic(err)
-				}
-				wg.Done()
-			}()
-			go func() {
-				if err := c.QueueReserve(ctx, requests[1], responses[1]); err != nil {
-					panic(err)
-				}
-				wg.Done()
-			}()
-			go func() {
-				if err := c.QueueReserve(ctx, requests[2], responses[2]); err != nil {
-					panic(err)
-				}
-				wg.Done()
-			}()
-
-			_ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-			defer cancel()
-			// Wait until every request is waiting
-			err := retry.On(_ctx, RetryTenTimes, func(ctx context.Context, i int) error {
-				var resp pb.QueueStatsResponse
-				require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &resp))
-				// There should eventually be 3 waiting reserve requests
-				if resp.ReserveWaiting != 3 {
-					return errors.New("TotalReserved never reached expected 3")
-				}
-				return nil
-			})
-			if err != nil {
-				t.Fatalf("while waiting on 3 reserved requests: %v", err)
-			}
-
-			// Unpause processing of the queue to allow the reservations to be filled.
-			require.NoError(t, c.QueuePause(ctx, &pb.QueuePauseRequest{QueueName: queueName, Pause: false}))
-			// Wait for each request to complete
-			done := make(chan struct{})
-
-			go func() {
-				wg.Wait()
-				close(done)
-			}()
-
-			select {
-			case <-done:
-			case <-time.After(5 * time.Second):
-				t.Fatalf("timed out waiting for distribution of requests")
-			}
-
-			assert.Equal(t, int32(5), requests[0].BatchSize)
-			assert.Equal(t, 5, len(responses[0].Items))
-			assert.Equal(t, int32(10), requests[1].BatchSize)
-			assert.Equal(t, 10, len(responses[1].Items))
-			assert.Equal(t, int32(20), requests[2].BatchSize)
-			assert.Equal(t, 20, len(responses[2].Items))
-
-			// Fetch items from storage, ensure items are reserved
-			require.NoError(t, c.StorageQueueList(ctx, queueName, &list, &que.ListOptions{Limit: 10_000}))
-			require.Equal(t, 10_000, len(list.Items))
-
-			var found int
-			for _, item := range list.Items {
-				// Find the reserved item in the batch request
-				if findInResponses(t, responses, item.Id) {
-					found++
-					// Ensure the item is reserved
-					require.Equal(t, true, item.IsReserved)
-				}
-			}
-			assert.Equal(t, 35, found, "expected to find 35 reserved items, got %d", found)
-		})
-
-		t.Run("DistributeNotEnoughItems", func(t *testing.T) {
-			// TODO: Ensure Clear() works, add a test for it. <--- DO THIS NEXT
-			// TODO: Clear all the items from the queue
-		})
-	})
-
-	// TODO: Continue the storage_test migration <-- DO THIS NEXT
-
-	// TODO: Test duplicate client id
-	// TODO: Test pause and unpause, ensure can produce and consume after un-paused and Ensure can shutdown
-	// TODO: Test pause false without pause true
-}
-
-func findInResponses(t *testing.T, responses []*pb.QueueReserveResponse, id string) bool {
-	t.Helper()
-
-	for _, item := range responses {
-		for _, idItem := range item.Items {
-			if idItem.Id == id {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func compareStorageItem(t *testing.T, l *pb.StorageQueueItem, r *pb.StorageQueueItem) {
-	t.Helper()
-	require.Equal(t, l.Id, r.Id)
-	require.Equal(t, l.IsReserved, r.IsReserved)
-	require.Equal(t, l.DeadDeadline.AsTime(), r.DeadDeadline.AsTime())
-	require.Equal(t, l.ReserveDeadline.AsTime(), r.ReserveDeadline.AsTime())
-	require.Equal(t, l.Attempts, r.Attempts)
-	require.Equal(t, l.Reference, r.Reference)
-	require.Equal(t, l.Encoding, r.Encoding)
-	require.Equal(t, l.Kind, r.Kind)
-	require.Equal(t, l.Payload, r.Payload)
-}
-
-func writeRandomItems(t *testing.T, ctx context.Context, c *que.Client,
-	name string, count int) []*pb.StorageQueueItem {
-
-	t.Helper()
-	expire := time.Now().UTC().Add(random.Duration(time.Minute))
-
-	var items []*pb.StorageQueueItem
-	for i := 0; i < count; i++ {
-		items = append(items, &pb.StorageQueueItem{
-			DeadDeadline: timestamppb.New(expire),
-			Attempts:     int32(rand.Intn(10)),
-			Reference:    random.String("ref-", 10),
-			Encoding:     random.String("enc-", 10),
-			Kind:         random.String("kind-", 10),
-			Payload:      []byte(fmt.Sprintf("message-%d", i)),
-		})
-	}
-
-	var resp pb.StorageQueueAddResponse
-	err := c.StorageQueueAdd(ctx, &pb.StorageQueueAddRequest{Items: items, QueueName: name}, &resp)
 	require.NoError(t, err)
-	return resp.Items
+	return td, td.d.MustClient(), td.ctx
 }
+
+func randomProduceItems(count int) []*pb.QueueProduceItem {
+	var items []*pb.QueueProduceItem
+	for i := 0; i < count; i++ {
+		items = append(items, &pb.QueueProduceItem{
+			Reference: random.String("ref-", 10),
+			Encoding:  random.String("enc-", 10),
+			Kind:      random.String("kind-", 10),
+			Bytes:     []byte(fmt.Sprintf("message-%d", i)),
+		})
+	}
+	return items
+}
+
+// TODO: Defer
+// TODO: Implement clock style thingy so we can freeze time and advance time in order to test Deadlines and such.
+// TODO: Test /queue.produce and all the possible incorrect way it could be called
+// TODO: Test /queue.reserve and all the possible incorrect way it could be called
+// TODO: Test /queue.complete and all the possible incorrect way it could be called

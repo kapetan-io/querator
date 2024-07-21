@@ -23,7 +23,6 @@ import "proto/queue.proto";
 package querator;
 
 message QueuesListRequest {
-  string queueName = 1 [json_name = "queue_name"];
   string pivot  = 2;
   int32 limit = 3;
 }

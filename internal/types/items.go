@@ -103,3 +103,30 @@ func (i *Item) FromProto(in *pb.StorageQueueItem) *Item {
 	i.ID = in.Id
 	return i
 }
+
+// QueueInfo is information about a queue
+type QueueInfo struct {
+	// The name of the queue
+	Name string
+	// ReserveTimeout is how long the reservation is valid for.
+	// TODO: We must ensure the DeadTimeout is not less than the ReserveTimeout
+	ReserveTimeout time.Duration
+	// DeadQueue is the name of the dead letter queue for this queue.
+	DeadQueue string
+	// DeadTimeout is the time an item can wait in the queue regardless of attempts before
+	// it is moved to the dead letter queue. This value is used if no DeadTimeout is provided
+	// by the queued item.
+	DeadTimeout time.Duration
+	// CreatedAt is the time this queue was created
+	CreatedAt time.Time
+}
+
+func (i *QueueInfo) ToProto(in *pb.QueueInfo) *pb.QueueInfo {
+	in.QueueName = i.Name
+	return in
+}
+
+func (i *QueueInfo) FromProto(in *pb.QueueInfo) *QueueInfo {
+	i.Name = in.QueueName
+	return i
+}

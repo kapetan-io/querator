@@ -2,10 +2,14 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/kapetan-io/querator/internal/types"
 	"time"
 )
+
+// TODO: Ensure this error is used consistently
+var ErrEmptyQueueName = errors.New("invalid queue; queue name cannot be empty")
 
 // StorageID is the decoded storage StorageID
 type StorageID struct {
@@ -22,7 +26,7 @@ type Storage interface {
 	// NewQueue creates a store.Queue instance. The Queue is used to load and store
 	// items in a singular queue, which is typically backed by a single table where
 	// items for this queue are stored.
-	NewQueue(info QueueInfo) (Queue, error)
+	NewQueue(info types.QueueInfo) (Queue, error)
 
 	// NewQueuesStore creates a new instance of the QueuesStore. A QueuesStore stores
 	// QueueInfo structs, which hold information about all the available queues.
@@ -44,25 +48,19 @@ type QueuesStoreOptions struct{}
 type QueuesStore interface {
 	// Get returns a store.Queue from storage ready to be used. Returns ErrQueueNotExist if the
 	// queue requested does not exist
-	Get(ctx context.Context, name string, queue *QueueInfo) error
+	Get(ctx context.Context, name string, queue *types.QueueInfo) error
 
 	// Set a queue in the store, if the queue already exists, it updates the existing QueueInfo
-	Set(ctx context.Context, opts QueueInfo) error
+	Set(ctx context.Context, opts types.QueueInfo) error
 
 	// List returns a list of queues
-	List(ctx context.Context, queues *[]*QueueInfo, opts types.ListOptions) error
+	List(ctx context.Context, queues *[]types.QueueInfo, opts types.ListOptions) error
 
 	// Delete deletes a queue. Returns without error if the queue does not exist
 	Delete(ctx context.Context, queueName string) error
 
 	// Close the all open database connections or files
 	Close(ctx context.Context) error
-}
-
-// QueueInfo is information about a queue
-type QueueInfo struct {
-	// The name of the queue
-	Name string
 }
 
 // Queue represents storage for a single queue. An instance of Queue should not be considered thread safe,
@@ -100,13 +98,3 @@ type Queue interface {
 }
 
 // TODO: ScheduledStorage interface {} - A place to store scheduled items to be queued. (Defer)
-
-// CollectIDs is a convenience function which assists in calling QueuesStore.Delete()
-// when a list of items to be deleted is needed.
-func CollectIDs(items []*types.Item) []string {
-	var result []string
-	for _, v := range items {
-		result = append(result, v.ID)
-	}
-	return result
-}

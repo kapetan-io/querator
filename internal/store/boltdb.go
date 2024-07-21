@@ -488,6 +488,15 @@ var _ QueuesStore = &BoltQueueStore{}
 
 func (s BoltQueueStore) Get(_ context.Context, name string, queue *QueueInfo) error {
 	f := errors.Fields{"category", "bolt", "func", "QueuesStore.Get"}
+
+	if strings.TrimSpace(name) == "" {
+		return nil, ErrEmptyQueueName
+	}
+
+	if strings.Contains(name, "~") {
+		return nil, transport.NewInvalidOption("invalid queue_name; '%s' cannot contain '~' character", name)
+	}
+
 	return s.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket(bucketName)
 		if b == nil {
@@ -510,7 +519,12 @@ func (s BoltQueueStore) Set(_ context.Context, info QueueInfo) error {
 	f := errors.Fields{"category", "bolt", "func", "QueuesStore.Set"}
 
 	if strings.TrimSpace(info.Name) == "" {
-		return f.Error("info.Name is required")
+		return ErrEmptyQueueName
+	}
+
+	if info.ReserveTimeout > info.DeadTimeout {
+		return transport.NewInvalidOption("reserve_timeout is too long; %s cannot be greater than the "+
+			"dead_timeout %s", info.ReserveTimeout.String(), info.DeadTimeout.String())
 	}
 
 	return s.db.Update(func(tx *bolt.Tx) error {

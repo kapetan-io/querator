@@ -31,6 +31,8 @@ import (
 	"strings"
 )
 
+const DefaultListLimit = 1_000
+
 var ErrQueueNameEmpty = transport.NewInvalidOption("invalid queue_name; cannot be empty")
 
 // TODO: Document this and make it configurable via the daemon
@@ -199,26 +201,51 @@ func (s *Service) QueuesCreate(ctx context.Context, req *proto.QueueInfo) error 
 	if err != nil {
 		return err
 	}
-	return nil
-}
-
-func (s *Service) QueuesList(ctx context.Context, req *proto.QueueInfo) error {
-
-	// TODO: Validate proto
-
-	//if err := s.queues.List(ctx, req); err != nil {
-	//
-	//}
 
 	return nil
 }
 
-func (s *Service) QueuesUpdate(ctx context.Context, req *proto.QueuesListRequest,
+func (s *Service) QueuesList(ctx context.Context, req *proto.QueuesListRequest,
 	resp *proto.QueuesListResponse) error {
+
+	if req.Limit == 0 {
+		req.Limit = DefaultListLimit
+	}
+
+	items := make([]types.QueueInfo, 0, req.Limit)
+	if err := s.queues.List(ctx, &items, types.ListOptions{
+		Limit: int(req.Limit),
+		Pivot: req.Pivot,
+	}); err != nil {
+		return err
+	}
+
+	for _, item := range items {
+		resp.Items = append(resp.Items, item.ToProto(new(proto.QueueInfo)))
+	}
+	return nil
+}
+
+func (s *Service) QueuesUpdate(ctx context.Context, req *proto.QueueInfo) error {
+	var opts internal.QueueOptions
+
+	// TODO: Should be the same validation as the Create method
+	if err := s.validateQueueOptionsProto(req, &opts); err != nil {
+		return err
+	}
+
+	if err := s.queues.Update(ctx, opts); err != nil {
+		return err
+	}
 	return nil
 }
 
 func (s *Service) QueuesDelete(ctx context.Context, req *proto.QueuesDeleteRequest) error {
+	// TODO: Validate protobuf
+
+	if err := s.queues.Delete(ctx, req.QueueName); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -236,6 +263,10 @@ func (s *Service) StorageQueueList(ctx context.Context, req *proto.StorageQueueL
 	queue, err := s.queues.Get(ctx, req.QueueName)
 	if err != nil {
 		return err
+	}
+
+	if req.Limit == 0 {
+		req.Limit = DefaultListLimit
 	}
 
 	items := make([]*types.Item, 0, req.Limit)

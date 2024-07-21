@@ -66,6 +66,7 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 
 		t.Run("Create", func(t *testing.T) {
 			require.NoError(t, c.QueueCreate(ctx, &pb.QueueInfo{QueueName: queueName}))
+			// TODO: Validate CreatedAt
 		})
 		t.Run("Get", func(t *testing.T) {})
 		t.Run("List", func(t *testing.T) {})

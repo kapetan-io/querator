@@ -32,32 +32,27 @@ const (
 	MethodQueueStats
 	MethodQueuePause
 	MethodQueueClear
+	MethodUpdateInfo
 )
 
 type QueueOptions struct {
-	// The name of the queue
-	Name string
+	types.QueueInfo
 	// If defined, is the logger used by the queue
 	Logger duh.StandardLogger
-	// ReserveTimeout is how long the reservation is valid for.
-	// TODO: We must ensure the DeadTimeout is not less than the ReserveTimeout
-	ReserveTimeout time.Duration
-	// DeadQueue is the name of the dead letter queue for this queue.
-	DeadQueue string
-	// DeadTimeout is the time an item can wait in the queue regardless of attempts before
-	// it is moved to the dead letter queue. This value is used if no DeadTimeout is provided
-	// by the queued item.
-	DeadTimeout time.Duration
 	// QueueStore is the store interface used to persist items for this specific queue
 	QueueStore store.Queue
 
+	// TODO: Make these configurable at the Service level
 	// WriteTimeout (Optional) The time it should take for a single batched write to complete
 	WriteTimeout time.Duration
 	// ReadTimeout (Optional) The time it should take for a single batched read to complete
 	ReadTimeout time.Duration
-	// TODO: Make these configurable
+	// MaxReserveBatchSize is the maximum number of items a client can request in a single reserve request
 	MaxReserveBatchSize int
+	// MaxProduceBatchSize is the maximum number of items a client can produce in a single produce request
 	MaxProduceBatchSize int
+	// MaxCompleteSize is the maximum number of ids a client can complete in a single complete request
+	MaxCompleteSize int // TODO: implement this limit and limit storage deletion also
 }
 
 // Queue manages job is to evenly distribute and consume items from a single queue. Ensuring consumers and
@@ -80,6 +75,7 @@ func NewQueue(opts QueueOptions) (*Queue, error) {
 	set.Default(&opts.Logger, slog.Default())
 	set.Default(&opts.MaxReserveBatchSize, 1_000)
 	set.Default(&opts.MaxProduceBatchSize, 1_000)
+	set.Default(&opts.MaxCompleteSize, 1_000)
 
 	if opts.QueueStore == nil {
 		return nil, transport.NewInvalidOption("QueueOptions.QueuesStore cannot be nil")
@@ -280,6 +276,14 @@ func (q *Queue) Clear(ctx context.Context, req *types.ClearRequest) error {
 	return q.queueRequest(ctx, &r)
 }
 
+func (q *Queue) UpdateInfo(ctx context.Context, info types.QueueInfo) error {
+	r := QueueRequest{
+		Method:  MethodUpdateInfo,
+		Request: info,
+	}
+	return q.queueRequest(ctx, &r)
+}
+
 // -------------------------------------------------
 // Methods to manage queue storage
 // -------------------------------------------------
@@ -290,9 +294,7 @@ func (q *Queue) StorageQueueList(ctx context.Context, items *[]*types.Item, opts
 		Options: opts,
 	}
 
-	if req.Options.Limit == 0 {
-		req.Options.Limit = 1_000
-	}
+	// TODO: Test for invalid pivot
 
 	r := QueueRequest{
 		Method:  MethodStorageQueueList,
@@ -302,7 +304,7 @@ func (q *Queue) StorageQueueList(ctx context.Context, items *[]*types.Item, opts
 }
 
 func (q *Queue) StorageQueueAdd(ctx context.Context, items *[]*types.Item) error {
-
+	// TODO: Test for empty list
 	r := QueueRequest{
 		Method: MethodStorageQueueAdd,
 		Request: StorageRequest{
@@ -639,6 +641,10 @@ func (q *Queue) handleQueueRequests(state *QueueState, req *QueueRequest) {
 		q.handlePause(state, req)
 	case MethodQueueClear:
 		q.handleClear(state, req)
+	case MethodUpdateInfo:
+		info := req.Request.(types.QueueInfo)
+		q.opts.QueueInfo = info
+		close(req.ReadyCh)
 	default:
 		panic(fmt.Sprintf("unknown queue request method '%d'", req.Method))
 	}

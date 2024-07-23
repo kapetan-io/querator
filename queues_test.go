@@ -5,14 +5,12 @@ import (
 	pb "github.com/kapetan-io/querator/proto"
 	"github.com/kapetan-io/tackle/random"
 	"github.com/stretchr/testify/require"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 )
 
 func TestQueuesStorage(t *testing.T) {
-	dir := "test-data"
+	bdb := store.BoltDBTesting{Dir: t.TempDir()}
 
 	for _, tc := range []struct {
 		Setup    NewStorageFunc
@@ -22,23 +20,10 @@ func TestQueuesStorage(t *testing.T) {
 		{
 			Name: "BoltDB",
 			Setup: func() store.Storage {
-				if !dirExists(dir) {
-					if err := os.Mkdir(dir, 0777); err != nil {
-						panic(err)
-					}
-				}
-				dir = filepath.Join(dir, random.String("test-data-", 10))
-				if err := os.Mkdir(dir, 0777); err != nil {
-					panic(err)
-				}
-				return store.NewBoltStorage(store.BoltOptions{
-					StorageDir: dir,
-				})
+				return bdb.Setup(store.BoltOptions{})
 			},
 			TearDown: func() {
-				if err := os.RemoveAll(dir); err != nil {
-					panic(err)
-				}
+				bdb.Teardown()
 			},
 		},
 		//{

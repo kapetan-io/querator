@@ -32,12 +32,19 @@ type QueuesManager struct {
 	mutex      sync.Mutex
 }
 
-func NewQueuesManager(opts QueuesManagerOptions) *QueuesManager {
+func NewQueuesManager(opts QueuesManagerOptions) (*QueuesManager, error) {
 	set.Default(&opts.Logger, slog.Default())
+
+	s, err := opts.Storage.NewQueuesStore(store.QueuesStoreOptions{})
+	if err != nil {
+		return nil, err
+	}
+
 	return &QueuesManager{
 		queues: make(map[string]*Queue),
 		opts:   opts,
-	}
+		store:  s,
+	}, nil
 }
 
 func (qm *QueuesManager) Get(ctx context.Context, name string) (*Queue, error) {

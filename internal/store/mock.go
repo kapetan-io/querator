@@ -26,7 +26,7 @@ func (m *MockStorage) NewQueuesStore(opts QueuesStoreOptions) (QueuesStore, erro
 	return &MockQueueStore{}, nil
 }
 
-func (m *MockStorage) NewQueue(opts QueueInfo) (Queue, error) {
+func (m *MockStorage) NewQueue(opts types.QueueInfo) (Queue, error) {
 	return &MockQueue{opts: opts, parent: m}, nil
 }
 
@@ -49,7 +49,7 @@ func (b *MockStorage) Close(_ context.Context) error {
 }
 
 type MockQueue struct {
-	opts   QueueInfo
+	opts   types.QueueInfo
 	parent *MockStorage
 }
 
@@ -109,17 +109,17 @@ type MockQueueStore struct{}
 
 var _ QueuesStore = &MockQueueStore{}
 
-func (r MockQueueStore) Get(ctx context.Context, name string, queue *QueueInfo) error {
+func (r MockQueueStore) Get(ctx context.Context, name string, queue *types.QueueInfo) error {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (r MockQueueStore) Set(ctx context.Context, opts QueueInfo) error {
+func (r MockQueueStore) Set(ctx context.Context, opts types.QueueInfo) error {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (r MockQueueStore) List(ctx context.Context, queues *[]*QueueInfo, opts types.ListOptions) error {
+func (r MockQueueStore) List(ctx context.Context, queues *[]types.QueueInfo, opts types.ListOptions) error {
 	//TODO implement me
 	panic("implement me")
 }

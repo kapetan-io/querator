@@ -9,10 +9,12 @@ import (
 	"github.com/kapetan-io/errors"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/transport"
+	"github.com/kapetan-io/tackle/random"
 	"github.com/kapetan-io/tackle/set"
 	"github.com/segmentio/ksuid"
 	bolt "go.etcd.io/bbolt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -72,7 +74,7 @@ func NewBoltStorage(opts BoltOptions) *BoltStorage {
 // Queue Implementation
 // ---------------------------------------------
 
-func (b *BoltStorage) NewQueue(info QueueInfo) (Queue, error) {
+func (b *BoltStorage) NewQueue(info types.QueueInfo) (Queue, error) {
 	f := errors.Fields{"category", "bolt", "func", "Storage.NewQueue"}
 
 	file := filepath.Join(b.opts.StorageDir, fmt.Sprintf("%s.db", info.Name))
@@ -101,9 +103,9 @@ func (b *BoltStorage) NewQueue(info QueueInfo) (Queue, error) {
 }
 
 type BoltQueue struct {
-	uid     ksuid.KSUID
+	info    types.QueueInfo
 	storage *BoltStorage
-	info    QueueInfo
+	uid     ksuid.KSUID
 	db      *bolt.DB
 }
 
@@ -467,7 +469,9 @@ func (b *BoltStorage) NewQueuesStore(opts QueuesStoreOptions) (QueuesStore, erro
 	err = db.Update(func(tx *bolt.Tx) error {
 		_, err := tx.CreateBucket(bucketName)
 		if err != nil {
-			return err
+			if !errors.Is(err, bolt.ErrBucketExists) {
+				return err
+			}
 		}
 		return nil
 	})
@@ -475,26 +479,26 @@ func (b *BoltStorage) NewQueuesStore(opts QueuesStoreOptions) (QueuesStore, erro
 		return nil, f.Errorf("while creating bucket '%s': %w", file, err)
 	}
 
-	return &BoltQueueStore{
+	return &BoltQueuesStore{
 		db: db,
 	}, nil
 }
 
-type BoltQueueStore struct {
+type BoltQueuesStore struct {
 	db *bolt.DB
 }
 
-var _ QueuesStore = &BoltQueueStore{}
+var _ QueuesStore = &BoltQueuesStore{}
 
-func (s BoltQueueStore) Get(_ context.Context, name string, queue *QueueInfo) error {
+func (s BoltQueuesStore) Get(_ context.Context, name string, queue *types.QueueInfo) error {
 	f := errors.Fields{"category", "bolt", "func", "QueuesStore.Get"}
 
 	if strings.TrimSpace(name) == "" {
-		return nil, ErrEmptyQueueName
+		return ErrEmptyQueueName
 	}
 
 	if strings.Contains(name, "~") {
-		return nil, transport.NewInvalidOption("invalid queue_name; '%s' cannot contain '~' character", name)
+		return transport.NewInvalidOption("invalid queue_name; '%s' cannot contain '~' character", name)
 	}
 
 	return s.db.View(func(tx *bolt.Tx) error {
@@ -515,7 +519,7 @@ func (s BoltQueueStore) Get(_ context.Context, name string, queue *QueueInfo) er
 	})
 }
 
-func (s BoltQueueStore) Set(_ context.Context, info QueueInfo) error {
+func (s BoltQueuesStore) Set(_ context.Context, info types.QueueInfo) error {
 	f := errors.Fields{"category", "bolt", "func", "QueuesStore.Set"}
 
 	if strings.TrimSpace(info.Name) == "" {
@@ -545,7 +549,7 @@ func (s BoltQueueStore) Set(_ context.Context, info QueueInfo) error {
 	})
 }
 
-func (s BoltQueueStore) List(_ context.Context, queues *[]*QueueInfo, opts types.ListOptions) error {
+func (s BoltQueuesStore) List(_ context.Context, queues *[]types.QueueInfo, opts types.ListOptions) error {
 	f := errors.Fields{"category", "bolt", "func", "QueuesStore.List"}
 
 	return s.db.View(func(tx *bolt.Tx) error {
@@ -562,8 +566,8 @@ func (s BoltQueueStore) List(_ context.Context, queues *[]*QueueInfo, opts types
 				return transport.NewInvalidOption("invalid pivot; '%s' does not exist", opts.Pivot)
 			}
 
-			info := new(QueueInfo)
-			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(info); err != nil {
+			var info types.QueueInfo
+			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(&info); err != nil {
 				return f.Errorf("during Decode(): %w", err)
 			}
 			*queues = append(*queues, info)
@@ -575,8 +579,8 @@ func (s BoltQueueStore) List(_ context.Context, queues *[]*QueueInfo, opts types
 				return nil
 			}
 
-			info := new(QueueInfo)
-			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(info); err != nil {
+			var info types.QueueInfo
+			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(&info); err != nil {
 				return f.Errorf("during Decode(): %w", err)
 			}
 			*queues = append(*queues, info)
@@ -586,7 +590,7 @@ func (s BoltQueueStore) List(_ context.Context, queues *[]*QueueInfo, opts types
 	})
 }
 
-func (s BoltQueueStore) Delete(_ context.Context, name string) error {
+func (s BoltQueuesStore) Delete(_ context.Context, name string) error {
 	f := errors.Fields{"category", "bolt", "func", "QueuesStore.Delete"}
 
 	return s.db.Update(func(tx *bolt.Tx) error {
@@ -602,6 +606,45 @@ func (s BoltQueueStore) Delete(_ context.Context, name string) error {
 	})
 }
 
-func (s BoltQueueStore) Close(_ context.Context) error {
+func (s BoltQueuesStore) Close(_ context.Context) error {
 	return s.db.Close()
+}
+
+// ---------------------------------------------
+// Test Helper
+// ---------------------------------------------
+
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false
+		}
+		return false
+	}
+	return info.IsDir()
+}
+
+type BoltDBTesting struct {
+	Dir string
+}
+
+func (b *BoltDBTesting) Setup(opts BoltOptions) Storage {
+	if !dirExists(b.Dir) {
+		if err := os.Mkdir(b.Dir, 0777); err != nil {
+			panic(err)
+		}
+	}
+	b.Dir = filepath.Join(b.Dir, random.String("test-data-", 10))
+	if err := os.Mkdir(b.Dir, 0777); err != nil {
+		panic(err)
+	}
+	opts.StorageDir = b.Dir
+	return NewBoltStorage(opts)
+}
+
+func (b *BoltDBTesting) Teardown() {
+	if err := os.RemoveAll(b.Dir); err != nil {
+		panic(err)
+	}
 }

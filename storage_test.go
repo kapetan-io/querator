@@ -15,8 +15,6 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"io"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 )
@@ -25,7 +23,7 @@ var log = slog.New(slog.NewTextHandler(io.Discard, nil))
 
 // TestQueueStorage tests the /storage/queue.* endpoints
 func TestQueueStorage(t *testing.T) {
-	dir := "test-data"
+	bdb := store.BoltDBTesting{Dir: t.TempDir()}
 
 	for _, tc := range []struct {
 		Setup    NewStorageFunc
@@ -35,23 +33,10 @@ func TestQueueStorage(t *testing.T) {
 		{
 			Name: "BoltDB",
 			Setup: func() store.Storage {
-				if !dirExists(dir) {
-					if err := os.Mkdir(dir, 0777); err != nil {
-						panic(err)
-					}
-				}
-				dir = filepath.Join(dir, random.String("test-data-", 10))
-				if err := os.Mkdir(dir, 0777); err != nil {
-					panic(err)
-				}
-				return store.NewBoltStorage(store.BoltOptions{
-					StorageDir: dir,
-				})
+				return bdb.Setup(store.BoltOptions{})
 			},
 			TearDown: func() {
-				if err := os.RemoveAll(dir); err != nil {
-					panic(err)
-				}
+				bdb.Teardown()
 			},
 		},
 		//{

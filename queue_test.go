@@ -14,8 +14,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"math/rand"
-	"os"
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -40,23 +38,12 @@ import (
 //
 //}
 
-func dirExists(path string) bool {
-	info, err := os.Stat(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return false
-		}
-		return false
-	}
-	return info.IsDir()
-}
-
 var RetryTenTimes = retry.Policy{Interval: retry.Sleep(time.Second), Attempts: 10}
 
 type NewStorageFunc func() store.Storage
 
 func TestQueue(t *testing.T) {
-	dir := "test-data"
+	bdb := store.BoltDBTesting{Dir: t.TempDir()}
 
 	for _, tc := range []struct {
 		Setup    NewStorageFunc
@@ -66,23 +53,10 @@ func TestQueue(t *testing.T) {
 		{
 			Name: "BoltDB",
 			Setup: func() store.Storage {
-				if !dirExists(dir) {
-					if err := os.Mkdir(dir, 0777); err != nil {
-						panic(err)
-					}
-				}
-				dir = filepath.Join(dir, random.String("test-data-", 10))
-				if err := os.Mkdir(dir, 0777); err != nil {
-					panic(err)
-				}
-				return store.NewBoltStorage(store.BoltOptions{
-					StorageDir: dir,
-				})
+				return bdb.Setup(store.BoltOptions{})
 			},
 			TearDown: func() {
-				if err := os.RemoveAll(dir); err != nil {
-					panic(err)
-				}
+				bdb.Teardown()
 			},
 		},
 		//{

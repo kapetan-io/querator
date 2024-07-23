@@ -89,6 +89,10 @@ func (d *Daemon) Shutdown(ctx context.Context) error {
 	return d.service.Shutdown(ctx)
 }
 
+func (d *Daemon) Service() *querator.Service {
+	return d.service
+}
+
 func (d *Daemon) MustClient() *querator.Client {
 	c, err := d.Client()
 	if err != nil {

@@ -1,7 +1,6 @@
 package querator
 
 import (
-	"github.com/kapetan-io/querator/internal"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/proto"
 	"github.com/kapetan-io/querator/transport"
@@ -70,7 +69,7 @@ func (s *Service) validateQueueCompleteProto(in *proto.QueueCompleteRequest, out
 	return nil
 }
 
-func (s *Service) validateQueueOptionsProto(in *proto.QueueInfo, out *internal.QueueOptions) error {
+func (s *Service) validateQueueOptionsProto(in *proto.QueueInfo, out *types.QueueInfo) error {
 	var err error
 
 	if in.DeadTimeout != "" {

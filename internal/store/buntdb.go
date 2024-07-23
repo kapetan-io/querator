@@ -99,14 +99,14 @@ func NewBuntStorage(opts BuntOptions) *BuntStorage {
 
 type BuntQueue struct {
 	storage *BuntStorage
-	opts    QueueInfo
+	opts    types.QueueInfo
 	uid     ksuid.KSUID
 	db      *buntdb.DB
 }
 
 var _ Queue = &BuntQueue{}
 
-func (b *BuntStorage) NewQueue(opts QueueInfo) (Queue, error) {
+func (b *BuntStorage) NewQueue(opts types.QueueInfo) (Queue, error) {
 	f := errors.Fields{"category", "bunt-db", "func", "NewQueue"}
 
 	if strings.TrimSpace(opts.Name) == "" {
@@ -465,7 +465,7 @@ func (b *BuntStorage) NewQueuesStore(opts QueuesStoreOptions) (QueuesStore, erro
 	}, nil
 }
 
-func (r BuntQueueStore) Get(_ context.Context, name string, opts *QueueInfo) error {
+func (r BuntQueueStore) Get(_ context.Context, name string, opts *types.QueueInfo) error {
 	f := errors.Fields{"category", "bunt-db", "func", "QueuesStore.Get"}
 
 	return r.db.View(func(tx *buntdb.Tx) error {
@@ -484,7 +484,7 @@ func (r BuntQueueStore) Get(_ context.Context, name string, opts *QueueInfo) err
 	})
 }
 
-func (r BuntQueueStore) Set(ctx context.Context, opts QueueInfo) error {
+func (r BuntQueueStore) Set(ctx context.Context, opts types.QueueInfo) error {
 	f := errors.Fields{"category", "bunt-db", "func", "QueuesStore.Set"}
 
 	// TODO: Validate options in a function all store implementations can share
@@ -493,7 +493,7 @@ func (r BuntQueueStore) Set(ctx context.Context, opts QueueInfo) error {
 		return transport.NewInvalidOption("invalid queue; name cannot by empty")
 	}
 
-	var q QueueInfo
+	var q types.QueueInfo
 	if err := r.Get(ctx, opts.Name, &q); err == nil {
 		return transport.NewInvalidOption("invalid queue; '%s' already exists", opts.Name)
 	}
@@ -512,7 +512,7 @@ func (r BuntQueueStore) Set(ctx context.Context, opts QueueInfo) error {
 	})
 }
 
-func (r BuntQueueStore) List(_ context.Context, queues *[]*QueueInfo, opts types.ListOptions) error {
+func (r BuntQueueStore) List(_ context.Context, queues *[]types.QueueInfo, opts types.ListOptions) error {
 	f := errors.Fields{"category", "bunt-db", "func", "QueuesStore.List"}
 
 	tx, err := r.db.Begin(false)
@@ -527,8 +527,8 @@ func (r BuntQueueStore) List(_ context.Context, queues *[]*QueueInfo, opts types
 			return false
 		}
 
-		queue := new(QueueInfo)
-		if err := json.Unmarshal([]byte(value), queue); err != nil {
+		var queue types.QueueInfo
+		if err := json.Unmarshal([]byte(value), &queue); err != nil {
 			iterErr = f.Errorf("during json.Unmarshal(): %w", err)
 			return false
 		}

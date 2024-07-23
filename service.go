@@ -55,7 +55,7 @@ func NewService(opts ServiceOptions) (*Service, error) {
 		return nil, errors.New("storage is required")
 	}
 
-	qm := internal.NewQueuesManager(internal.QueuesManagerOptions{
+	qm, err := internal.NewQueuesManager(internal.QueuesManagerOptions{
 		QueueOptions: internal.QueueOptions{
 			MaxReserveBatchSize: opts.MaxReserveBatchSize,
 			MaxProduceBatchSize: opts.MaxProduceBatchSize,
@@ -63,6 +63,9 @@ func NewService(opts ServiceOptions) (*Service, error) {
 		Storage: opts.Storage,
 		Logger:  opts.Logger,
 	})
+	if err != nil {
+		return nil, err
+	}
 
 	return &Service{
 		opts:   opts,
@@ -191,13 +194,13 @@ func (s *Service) QueuePause(ctx context.Context, req *proto.QueuePauseRequest) 
 // -------------------------------------------------
 
 func (s *Service) QueuesCreate(ctx context.Context, req *proto.QueueInfo) error {
-	var opts internal.QueueOptions
+	var info types.QueueInfo
 
-	if err := s.validateQueueOptionsProto(req, &opts); err != nil {
+	if err := s.validateQueueOptionsProto(req, &info); err != nil {
 		return err
 	}
 
-	_, err := s.queues.Create(ctx, opts)
+	_, err := s.queues.Create(ctx, info)
 	if err != nil {
 		return err
 	}
@@ -227,14 +230,14 @@ func (s *Service) QueuesList(ctx context.Context, req *proto.QueuesListRequest,
 }
 
 func (s *Service) QueuesUpdate(ctx context.Context, req *proto.QueueInfo) error {
-	var opts internal.QueueOptions
+	var info types.QueueInfo
 
 	// TODO: Should be the same validation as the Create method
-	if err := s.validateQueueOptionsProto(req, &opts); err != nil {
+	if err := s.validateQueueOptionsProto(req, &info); err != nil {
 		return err
 	}
 
-	if err := s.queues.Update(ctx, opts); err != nil {
+	if err := s.queues.Update(ctx, info); err != nil {
 		return err
 	}
 	return nil

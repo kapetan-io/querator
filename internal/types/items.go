@@ -4,14 +4,25 @@ import (
 	"bytes"
 	pb "github.com/kapetan-io/querator/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"strings"
 	"time"
 )
+
+// TODO: Consider using this instead of []byte for the Item ID
+type ItemID []byte
+
+func ToItemID(id string) ItemID {
+	if strings.TrimSpace(id) == "" {
+		return nil
+	}
+	return ItemID(id)
+}
 
 // Item is the store and queue representation of an item in the queue.
 type Item struct {
 	// ID is unique to each item in the data store. The ID style is different depending on the data store
 	// implementation, and does not include the queue name.
-	ID string
+	ID ItemID
 	// IsReserved is true if the item has been reserved by a client
 	IsReserved bool
 	// ReserveDeadline is the time in the future when the reservation is
@@ -41,7 +52,7 @@ type Item struct {
 
 // TODO: Remove if not needed
 func (i *Item) Compare(r *Item) bool {
-	if i.ID != r.ID {
+	if !bytes.Equal(i.ID, r.ID) {
 		return false
 	}
 	if i.IsReserved != r.IsReserved {
@@ -85,7 +96,7 @@ func (i *Item) ToProto(in *pb.StorageQueueItem) *pb.StorageQueueItem {
 	in.Encoding = i.Encoding
 	in.Payload = i.Payload
 	in.Kind = i.Kind
-	in.Id = i.ID
+	in.Id = string(i.ID)
 	return in
 }
 
@@ -100,7 +111,7 @@ func (i *Item) FromProto(in *pb.StorageQueueItem) *Item {
 	i.Encoding = in.Encoding
 	i.Payload = in.Payload
 	i.Kind = in.Kind
-	i.ID = in.Id
+	i.ID = []byte(in.Id)
 	return i
 }
 

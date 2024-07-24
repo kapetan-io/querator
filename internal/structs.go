@@ -31,7 +31,7 @@ type StorageRequest struct {
 	// Items is the items returned by the storage request
 	Items *[]*types.Item
 	// ID is the unique id of the item requested
-	IDs []string
+	IDs []types.ItemID
 	// Options used when listing
 	Options types.ListOptions
 }

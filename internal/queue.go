@@ -314,7 +314,7 @@ func (q *Queue) StorageQueueAdd(ctx context.Context, items *[]*types.Item) error
 	return q.queueRequest(ctx, &r)
 }
 
-func (q *Queue) StorageQueueDelete(ctx context.Context, ids []string) error {
+func (q *Queue) StorageQueueDelete(ctx context.Context, ids []types.ItemID) error {
 	if len(ids) == 0 {
 		return transport.NewInvalidOption("ids is invalid; cannot be empty")
 	}

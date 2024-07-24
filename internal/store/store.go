@@ -2,19 +2,19 @@ package store
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"github.com/kapetan-io/querator/internal/types"
+	"github.com/kapetan-io/querator/transport"
 	"time"
 )
 
 // TODO: Ensure this error is used consistently
-var ErrEmptyQueueName = errors.New("invalid queue; queue name cannot be empty")
+var ErrEmptyQueueName = transport.NewInvalidOption("invalid queue; queue name cannot be empty")
 
 // StorageID is the decoded storage StorageID
 type StorageID struct {
+	ID    types.ItemID
 	Queue string
-	ID    []byte
 }
 
 func (id StorageID) String() string {
@@ -32,8 +32,8 @@ type Storage interface {
 	// QueueInfo structs, which hold information about all the available queues.
 	NewQueuesStore(opts QueuesStoreOptions) (QueuesStore, error)
 
-	ParseID(parse string, id *StorageID) error
-	BuildStorageID(queue, id string) string
+	ParseID(parse types.ItemID, id *StorageID) error
+	BuildStorageID(queue string, id []byte) types.ItemID
 	Close(ctx context.Context) error
 }
 
@@ -86,7 +86,7 @@ type Queue interface {
 	Add(ctx context.Context, items []*types.Item) error
 
 	// Delete removes the provided ids from the queue
-	Delete(ctx context.Context, ids []string) error
+	Delete(ctx context.Context, ids []types.ItemID) error
 
 	// Clear removes all items from storage
 	Clear(ctx context.Context, destructive bool) error

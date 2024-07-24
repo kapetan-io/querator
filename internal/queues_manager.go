@@ -66,6 +66,7 @@ func (qm *QueuesManager) Get(ctx context.Context, name string) (*Queue, error) {
 		if errors.Is(err, store.ErrQueueNotExist) {
 			return nil, transport.NewInvalidOption("queue does not exist; no such queue named '%s'", name)
 		}
+		return nil, err
 	}
 
 	return qm.startQueue(queue)

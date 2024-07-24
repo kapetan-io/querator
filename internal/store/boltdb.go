@@ -45,18 +45,18 @@ type BoltStorage struct {
 
 var _ Storage = &BoltStorage{}
 
-func (b *BoltStorage) ParseID(parse string, id *StorageID) error {
-	parts := strings.Split(parse, "~")
+func (b *BoltStorage) ParseID(parse types.ItemID, id *StorageID) error {
+	parts := bytes.Split(parse, []byte("~"))
 	if len(parts) != 2 {
 		return errors.New("expected format <queue_name>~<storage_id>")
 	}
-	id.Queue = parts[0]
-	id.ID = []byte(parts[1])
+	id.Queue = string(parts[0])
+	id.ID = parts[1]
 	return nil
 }
 
-func (b *BoltStorage) BuildStorageID(queue, id string) string {
-	return fmt.Sprintf("%s~%s", queue, id)
+func (b *BoltStorage) BuildStorageID(queue string, id []byte) types.ItemID {
+	return append([]byte(queue+"~"), id...)
 }
 
 func (b *BoltStorage) Close(_ context.Context) error {
@@ -95,18 +95,18 @@ func (b *BoltStorage) NewQueue(info types.QueueInfo) (Queue, error) {
 	}
 
 	return &BoltQueue{
-		uid:     ksuid.New(),
-		info:    info,
-		db:      db,
-		storage: b,
+		uid:    ksuid.New(),
+		info:   info,
+		db:     db,
+		parent: b,
 	}, nil
 }
 
 type BoltQueue struct {
-	info    types.QueueInfo
-	storage *BoltStorage
-	uid     ksuid.KSUID
-	db      *bolt.DB
+	info   types.QueueInfo
+	parent *BoltStorage
+	uid    ksuid.KSUID
+	db     *bolt.DB
 }
 
 func (q *BoltQueue) Produce(_ context.Context, batch types.Batch[types.ProduceRequest]) error {
@@ -121,7 +121,7 @@ func (q *BoltQueue) Produce(_ context.Context, batch types.Batch[types.ProduceRe
 		for _, r := range batch.Requests {
 			for _, item := range r.Items {
 				q.uid = q.uid.Next()
-				item.ID = q.uid.String()
+				item.ID = []byte(q.uid.String())
 				item.CreatedAt = time.Now().UTC()
 
 				// TODO: Get buffers from memory pool
@@ -130,16 +130,15 @@ func (q *BoltQueue) Produce(_ context.Context, batch types.Batch[types.ProduceRe
 					return f.Errorf("during gob.Encode(): %w", err)
 				}
 
-				if err := b.Put([]byte(item.ID), buf.Bytes()); err != nil {
+				if err := b.Put(item.ID, buf.Bytes()); err != nil {
 					return f.Errorf("during Put(): %w", err)
 				}
 
-				item.ID = q.storage.BuildStorageID(q.info.Name, item.ID)
+				item.ID = q.parent.BuildStorageID(q.info.Name, item.ID)
 			}
 		}
 		return nil
 	})
-
 }
 
 func (q *BoltQueue) Reserve(_ context.Context, batch types.ReserveBatch, opts ReserveOptions) error {
@@ -185,10 +184,10 @@ func (q *BoltQueue) Reserve(_ context.Context, batch types.ReserveBatch, opts Re
 					return f.Errorf("during gob.Encode(): %w", err)
 				}
 
-				if err := b.Put([]byte(item.ID), buf.Bytes()); err != nil {
+				if err := b.Put(item.ID, buf.Bytes()); err != nil {
 					return f.Errorf("during Put(): %w", err)
 				}
-				item.ID = q.storage.BuildStorageID(q.info.Name, item.ID)
+				item.ID = q.parent.BuildStorageID(q.info.Name, item.ID)
 				continue
 			}
 			break
@@ -209,7 +208,7 @@ func (q *BoltQueue) Complete(_ context.Context, batch types.Batch[types.Complete
 	defer func() {
 		if !done {
 			if err := tx.Rollback(); err != nil {
-				q.storage.opts.Logger.Error("during Rollback()", "error", err)
+				q.parent.opts.Logger.Error("during Rollback()", "error", err)
 			}
 		}
 	}()
@@ -223,7 +222,7 @@ nextBatch:
 	for i := range batch.Requests {
 		for _, id := range batch.Requests[i].Ids {
 			var sid StorageID
-			if err = q.storage.ParseID(id, &sid); err != nil {
+			if err = q.parent.ParseID(id, &sid); err != nil {
 				batch.Requests[i].Err = transport.NewInvalidOption("invalid storage id; '%s': %s", id, err)
 				continue nextBatch
 			}
@@ -265,8 +264,8 @@ func (q *BoltQueue) List(_ context.Context, items *[]*types.Item, opts types.Lis
 	f := errors.Fields{"category", "bolt", "func", "Queue.List"}
 
 	var sid StorageID
-	if opts.Pivot != "" {
-		if err := q.storage.ParseID(opts.Pivot, &sid); err != nil {
+	if opts.Pivot != nil {
+		if err := q.parent.ParseID(opts.Pivot, &sid); err != nil {
 			return transport.NewInvalidOption("invalid storage id; '%s': %s", opts.Pivot, err)
 		}
 	}
@@ -299,7 +298,7 @@ func (q *BoltQueue) List(_ context.Context, items *[]*types.Item, opts types.Lis
 			return f.Errorf("during Decode(): %w", err)
 		}
 
-		item.ID = q.storage.BuildStorageID(q.info.Name, item.ID)
+		item.ID = q.parent.BuildStorageID(q.info.Name, item.ID)
 		*items = append(*items, item)
 		count++
 
@@ -313,7 +312,7 @@ func (q *BoltQueue) List(_ context.Context, items *[]*types.Item, opts types.Lis
 				return f.Errorf("during Decode(): %w", err)
 			}
 
-			item.ID = q.storage.BuildStorageID(q.info.Name, item.ID)
+			item.ID = q.parent.BuildStorageID(q.info.Name, item.ID)
 			*items = append(*items, item)
 			count++
 		}
@@ -332,7 +331,7 @@ func (q *BoltQueue) Add(_ context.Context, items []*types.Item) error {
 
 		for _, item := range items {
 			q.uid = q.uid.Next()
-			item.ID = q.uid.String()
+			item.ID = []byte(q.uid.String())
 			item.CreatedAt = time.Now().UTC()
 
 			// TODO: Get buffers from memory pool
@@ -341,17 +340,17 @@ func (q *BoltQueue) Add(_ context.Context, items []*types.Item) error {
 				return f.Errorf("during gob.Encode(): %w", err)
 			}
 
-			if err := b.Put([]byte(item.ID), buf.Bytes()); err != nil {
+			if err := b.Put(item.ID, buf.Bytes()); err != nil {
 				return f.Errorf("during Put(): %w", err)
 			}
 
-			item.ID = q.storage.BuildStorageID(q.info.Name, item.ID)
+			item.ID = q.parent.BuildStorageID(q.info.Name, item.ID)
 		}
 		return nil
 	})
 }
 
-func (q *BoltQueue) Delete(_ context.Context, ids []string) error {
+func (q *BoltQueue) Delete(_ context.Context, ids []types.ItemID) error {
 	f := errors.Fields{"category", "bolt", "func", "Queue.Delete"}
 
 	return q.db.Update(func(tx *bolt.Tx) error {
@@ -362,7 +361,7 @@ func (q *BoltQueue) Delete(_ context.Context, ids []string) error {
 
 		for _, id := range ids {
 			var sid StorageID
-			if err := q.storage.ParseID(id, &sid); err != nil {
+			if err := q.parent.ParseID(id, &sid); err != nil {
 				return transport.NewInvalidOption("invalid storage id; '%s': %s", id, err)
 			}
 			if err := b.Delete(sid.ID); err != nil {
@@ -560,8 +559,8 @@ func (s BoltQueuesStore) List(_ context.Context, queues *[]types.QueueInfo, opts
 
 		c := b.Cursor()
 		var count int
-		if opts.Pivot == "" {
-			k, v := c.Seek([]byte(opts.Pivot))
+		if opts.Pivot == nil {
+			k, v := c.Seek(opts.Pivot)
 			if k == nil {
 				return transport.NewInvalidOption("invalid pivot; '%s' does not exist", opts.Pivot)
 			}

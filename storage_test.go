@@ -269,7 +269,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 			{
 				Name: "EmptyRequest",
 				Req:  &pb.StorageQueueDeleteRequest{},
-				Msg:  "invalid queue_name; cannot be empty",
+				Msg:  "invalid queue; queue name cannot be empty",
 				Code: duh.CodeBadRequest,
 			},
 			{

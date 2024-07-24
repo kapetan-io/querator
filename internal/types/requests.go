@@ -48,7 +48,7 @@ type CompleteRequest struct {
 	// The context of the requesting client
 	Context context.Context
 	// The ids to mark as complete
-	Ids []string
+	Ids [][]byte
 	// The RequestDeadline calculated from RequestTimeout
 	RequestDeadline time.Time
 	// Used to wait for this request to complete
@@ -92,7 +92,7 @@ type ShutdownRequest struct {
 }
 
 type ListOptions struct {
-	Pivot string
+	Pivot []byte
 	Limit int
 }
 

@@ -1,11 +1,10 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"github.com/kapetan-io/querator/internal/types"
-	"strings"
 )
 
 type MockOptions struct {
@@ -23,25 +22,25 @@ func NewMockStorage(opts *MockOptions) *MockStorage {
 }
 
 func (m *MockStorage) NewQueuesStore(opts QueuesStoreOptions) (QueuesStore, error) {
-	return &MockQueueStore{}, nil
+	return &MockQueuesStore{}, nil
 }
 
 func (m *MockStorage) NewQueue(opts types.QueueInfo) (Queue, error) {
 	return &MockQueue{opts: opts, parent: m}, nil
 }
 
-func (m *MockStorage) ParseID(parse string, id *StorageID) error {
-	parts := strings.Split(parse, "~")
+func (m *MockStorage) ParseID(parse types.ItemID, id *StorageID) error {
+	parts := bytes.Split(parse, []byte("~"))
 	if len(parts) != 2 {
 		return errors.New("expected format <queue_name>~<storage_id>")
 	}
-	id.Queue = parts[0]
-	id.ID = []byte(parts[1])
+	id.Queue = string(parts[0])
+	id.ID = parts[1]
 	return nil
 }
 
-func (m *MockStorage) BuildStorageID(queue, id string) string {
-	return fmt.Sprintf("%s~%s", queue, id)
+func (m *MockStorage) BuildStorageID(queue string, id []byte) types.ItemID {
+	return append([]byte(queue+"~"), id...)
 }
 
 func (b *MockStorage) Close(_ context.Context) error {
@@ -81,7 +80,7 @@ func (m *MockQueue) Add(ctx context.Context, items []*types.Item) error {
 	panic("implement me")
 }
 
-func (m *MockQueue) Delete(ctx context.Context, ids []string) error {
+func (m *MockQueue) Delete(ctx context.Context, ids []types.ItemID) error {
 	//TODO implement me
 	panic("implement me")
 }
@@ -105,30 +104,30 @@ func (m *MockQueue) Close(ctx context.Context) error {
 // Queue Repository Implementation
 // ---------------------------------------------
 
-type MockQueueStore struct{}
+type MockQueuesStore struct{}
 
-var _ QueuesStore = &MockQueueStore{}
+var _ QueuesStore = &MockQueuesStore{}
 
-func (r MockQueueStore) Get(ctx context.Context, name string, queue *types.QueueInfo) error {
+func (r MockQueuesStore) Get(ctx context.Context, name string, queue *types.QueueInfo) error {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (r MockQueueStore) Set(ctx context.Context, opts types.QueueInfo) error {
+func (r MockQueuesStore) Set(ctx context.Context, opts types.QueueInfo) error {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (r MockQueueStore) List(ctx context.Context, queues *[]types.QueueInfo, opts types.ListOptions) error {
+func (r MockQueuesStore) List(ctx context.Context, queues *[]types.QueueInfo, opts types.ListOptions) error {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (r MockQueueStore) Delete(ctx context.Context, queueName string) error {
+func (r MockQueuesStore) Delete(ctx context.Context, queueName string) error {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (r MockQueueStore) Close(_ context.Context) error {
+func (r MockQueuesStore) Close(_ context.Context) error {
 	return nil
 }

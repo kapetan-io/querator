@@ -64,7 +64,9 @@ func (s *Service) validateQueueCompleteProto(in *proto.QueueCompleteRequest, out
 		}
 	}
 
-	out.Ids = in.Ids
+	for _, id := range in.Ids {
+		out.Ids = append(out.Ids, []byte(id))
+	}
 
 	return nil
 }

@@ -636,7 +636,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			{
 				Name: "EmptyRequest",
 				Req:  &pb.QueueProduceRequest{},
-				Msg:  "invalid queue_name; cannot be empty",
+				Msg:  "invalid queue; queue name cannot be empty",
 				Code: duh.CodeBadRequest,
 			},
 			{
@@ -752,7 +752,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			{
 				Name: "EmptyRequest",
 				Req:  &pb.QueueReserveRequest{},
-				Msg:  "invalid queue_name; cannot be empty",
+				Msg:  "invalid queue; queue name cannot be empty",
 				Code: duh.CodeBadRequest,
 			},
 			{

@@ -28,12 +28,11 @@ import (
 	"github.com/kapetan-io/tackle/set"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"log/slog"
-	"strings"
 )
 
 const DefaultListLimit = 1_000
 
-var ErrQueueNameEmpty = transport.NewInvalidOption("invalid queue_name; cannot be empty")
+var ErrQueueNameEmpty = transport.NewInvalidOption("invalid queue; queue name cannot be empty")
 
 // TODO: Document this and make it configurable via the daemon
 type ServiceOptions struct {
@@ -112,11 +111,11 @@ func (s *Service) QueueReserve(ctx context.Context, req *proto.QueueReserveReque
 		res.Items = append(res.Items, &proto.QueueReserveItem{
 			ReserveDeadline: timestamppb.New(item.ReserveDeadline),
 			Attempts:        int32(item.Attempts),
+			Id:              string(item.ID),
 			Reference:       item.Reference,
 			Encoding:        item.Encoding,
-			Kind:            item.Kind,
 			Bytes:           item.Payload,
-			Id:              item.ID,
+			Kind:            item.Kind,
 		})
 	}
 
@@ -143,9 +142,9 @@ func (s *Service) QueueComplete(ctx context.Context, req *proto.QueueCompleteReq
 }
 
 func (s *Service) QueueClear(ctx context.Context, req *proto.QueueClearRequest) error {
-	if strings.TrimSpace(req.QueueName) == "" {
-		return ErrQueueNameEmpty
-	}
+	//if strings.TrimSpace(req.QueueName) == "" {
+	//	return ErrQueueNameEmpty
+	//}
 
 	queue, err := s.queues.Get(ctx, req.QueueName)
 	if err != nil {
@@ -169,9 +168,9 @@ func (s *Service) QueueClear(ctx context.Context, req *proto.QueueClearRequest) 
 func (s *Service) QueuePause(ctx context.Context, req *proto.QueuePauseRequest) error {
 	var r types.PauseRequest
 
-	if strings.TrimSpace(req.QueueName) == "" {
-		return ErrQueueNameEmpty
-	}
+	//if strings.TrimSpace(req.QueueName) == "" {
+	//	return ErrQueueNameEmpty
+	//}
 
 	if err := s.validateQueuePauseRequestProto(req, &r); err != nil {
 		return err
@@ -217,8 +216,8 @@ func (s *Service) QueuesList(ctx context.Context, req *proto.QueuesListRequest,
 
 	items := make([]types.QueueInfo, 0, req.Limit)
 	if err := s.queues.List(ctx, &items, types.ListOptions{
+		Pivot: types.ToItemID(req.Pivot),
 		Limit: int(req.Limit),
-		Pivot: req.Pivot,
 	}); err != nil {
 		return err
 	}
@@ -259,9 +258,9 @@ func (s *Service) QueuesDelete(ctx context.Context, req *proto.QueuesDeleteReque
 func (s *Service) StorageQueueList(ctx context.Context, req *proto.StorageQueueListRequest,
 	res *proto.StorageQueueListResponse) error {
 
-	if strings.TrimSpace(req.QueueName) == "" {
-		return ErrQueueNameEmpty
-	}
+	//if strings.TrimSpace(req.QueueName) == "" {
+	//	return ErrQueueNameEmpty
+	//}
 
 	queue, err := s.queues.Get(ctx, req.QueueName)
 	if err != nil {
@@ -274,7 +273,7 @@ func (s *Service) StorageQueueList(ctx context.Context, req *proto.StorageQueueL
 
 	items := make([]*types.Item, 0, req.Limit)
 	if err := queue.StorageQueueList(ctx, &items, types.ListOptions{
-		Pivot: req.Pivot,
+		Pivot: types.ToItemID(req.Pivot),
 		Limit: int(req.Limit),
 	}); err != nil {
 		return err
@@ -290,9 +289,9 @@ func (s *Service) StorageQueueList(ctx context.Context, req *proto.StorageQueueL
 func (s *Service) StorageQueueAdd(ctx context.Context, req *proto.StorageQueueAddRequest,
 	res *proto.StorageQueueAddResponse) error {
 
-	if strings.TrimSpace(req.QueueName) == "" {
-		return ErrQueueNameEmpty
-	}
+	//if strings.TrimSpace(req.QueueName) == "" {
+	//	return ErrQueueNameEmpty
+	//}
 
 	queue, err := s.queues.Get(ctx, req.QueueName)
 	if err != nil {
@@ -318,16 +317,21 @@ func (s *Service) StorageQueueAdd(ctx context.Context, req *proto.StorageQueueAd
 
 func (s *Service) StorageQueueDelete(ctx context.Context, req *proto.StorageQueueDeleteRequest) error {
 
-	if strings.TrimSpace(req.QueueName) == "" {
-		return ErrQueueNameEmpty
-	}
+	//if strings.TrimSpace(req.QueueName) == "" {
+	//	return ErrQueueNameEmpty
+	//}
 
 	queue, err := s.queues.Get(ctx, req.QueueName)
 	if err != nil {
 		return err
 	}
 
-	if err := queue.StorageQueueDelete(ctx, req.Ids); err != nil {
+	ids := make([]types.ItemID, 0, len(req.Ids))
+	for _, id := range req.Ids {
+		ids = append(ids, types.ItemID(id))
+	}
+
+	if err := queue.StorageQueueDelete(ctx, ids); err != nil {
 		return err
 	}
 	return nil
@@ -336,9 +340,9 @@ func (s *Service) StorageQueueDelete(ctx context.Context, req *proto.StorageQueu
 func (s *Service) QueueStats(ctx context.Context, req *proto.QueueStatsRequest,
 	res *proto.QueueStatsResponse) error {
 
-	if strings.TrimSpace(req.QueueName) == "" {
-		return ErrQueueNameEmpty
-	}
+	//if strings.TrimSpace(req.QueueName) == "" {
+	//	return ErrQueueNameEmpty
+	//}
 
 	queue, err := s.queues.Get(ctx, req.QueueName)
 	if err != nil {

@@ -31,7 +31,7 @@ func (d *Config) ServerTLS() *tls.Config {
 
 func (d *Config) SetDefaults() error {
 	if d.Store == nil {
-		d.Store = store.NewBuntStorage(store.BuntOptions{})
+		d.Store = store.NewBoltStorage(store.BoltOptions{})
 	}
 	return nil
 }

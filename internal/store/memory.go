@@ -20,11 +20,19 @@ func NewMemoryStorage() *MemoryStorage {
 }
 
 func (s *MemoryStorage) NewQueuesStore(opts QueuesStoreOptions) (QueuesStore, error) {
-	return &MemoryQueuesStore{parent: s, mem: make([]types.QueueInfo, 0, 1_000)}, nil
+	return &MemoryQueuesStore{
+		mem:    make([]types.QueueInfo, 0, 1_000),
+		parent: s,
+	}, nil
 }
 
 func (s *MemoryStorage) NewQueue(info types.QueueInfo) (Queue, error) {
-	return &MemoryQueue{info: info, parent: s, mem: make([]types.Item, 0, 1_000)}, nil
+	return &MemoryQueue{
+		mem:    make([]types.Item, 0, 1_000),
+		uid:    ksuid.New(),
+		info:   info,
+		parent: s,
+	}, nil
 }
 
 func (s *MemoryStorage) ParseID(parse types.ItemID, id *StorageID) error {
@@ -79,9 +87,14 @@ func (q *MemoryQueue) Reserve(_ context.Context, batch types.ReserveBatch, opts 
 		item.IsReserved = true
 		count++
 
+		// Item returned gets the public StorageID
+		itemPtr := new(types.Item) // TODO: Memory Pool
+		*itemPtr = item
+		itemPtr.ID = q.parent.BuildStorageID(q.info.Name, item.ID)
+
 		// Assign the item to the next waiting reservation in the batch,
 		// returns false if there are no more reservations available to fill
-		if batchIter.Next(&item) {
+		if batchIter.Next(itemPtr) {
 			// If assignment was a success, put the updated item into the array
 			q.mem[i] = item
 			continue
@@ -131,7 +144,7 @@ func (q *MemoryQueue) List(_ context.Context, items *[]*types.Item, opts types.L
 	var count, idx int
 
 	if sid.ID != nil {
-		idx, _ = q.findID(opts.Pivot)
+		idx, _ = q.findID(sid.ID)
 	}
 	for _, item := range q.mem[idx:] {
 		if count >= opts.Limit {
@@ -180,12 +193,14 @@ func (q *MemoryQueue) Clear(_ context.Context, destructive bool) error {
 		return nil
 	}
 
-	for i, item := range q.mem {
+	mem := make([]types.Item, 0, len(q.mem))
+	for _, item := range q.mem {
 		if item.IsReserved {
+			mem = append(mem, item)
 			continue
 		}
-		q.mem = append(q.mem[:i], q.mem[i+1:]...)
 	}
+	q.mem = mem
 	return nil
 }
 
@@ -244,6 +259,10 @@ var _ QueuesStore = &MemoryQueuesStore{}
 func (s *MemoryQueuesStore) Get(_ context.Context, name string, queue *types.QueueInfo) error {
 	if strings.TrimSpace(name) == "" {
 		return ErrEmptyQueueName
+	}
+
+	if strings.Contains(name, "~") {
+		return transport.NewInvalidOption("invalid queue_name; '%s' cannot contain '~' character", name)
 	}
 
 	idx, ok := s.findQueue(name)

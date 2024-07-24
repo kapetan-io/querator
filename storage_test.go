@@ -31,6 +31,13 @@ func TestQueueStorage(t *testing.T) {
 		Name     string
 	}{
 		{
+			Name: "InMemory",
+			Setup: func() store.Storage {
+				return store.NewMemoryStorage()
+			},
+			TearDown: func() {},
+		},
+		{
 			Name: "BoltDB",
 			Setup: func() store.Storage {
 				return bdb.Setup(store.BoltOptions{})

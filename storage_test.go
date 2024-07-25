@@ -68,7 +68,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 		d, c, ctx := newDaemon(t, _store, 10*time.Second)
 		defer d.Shutdown(t)
 
-		require.NoError(t, c.QueueCreate(ctx, &pb.QueueInfo{QueueName: queueName}))
+		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{QueueName: queueName}))
 
 		now := time.Now().UTC()
 		var items []*pb.StorageQueueItem
@@ -129,7 +129,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 		d, c, ctx := newDaemon(t, _store, 10*time.Second)
 		defer d.Shutdown(t)
 
-		require.NoError(t, c.QueueCreate(ctx, &pb.QueueInfo{QueueName: queueName}))
+		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{QueueName: queueName}))
 		items := writeRandomItems(t, ctx, c, queueName, 10_000)
 
 		var resp pb.StorageQueueListResponse
@@ -167,7 +167,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 			compareStorageItem(t, items[1_000-1], limit.Items[len(limit.Items)-1])
 		})
 
-		t.Run("Get", func(t *testing.T) {
+		t.Run("GetFirstOne", func(t *testing.T) {
 			var limit pb.StorageQueueListResponse
 			require.NoError(t, c.StorageQueueList(ctx, queueName, &limit, &que.ListOptions{Limit: 1}))
 
@@ -175,7 +175,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 			assert.Equal(t, items[0].Id, limit.Items[0].Id)
 		})
 
-		t.Run("GetWithPivot", func(t *testing.T) {
+		t.Run("Get", func(t *testing.T) {
 			var limit pb.StorageQueueListResponse
 			require.NoError(t, c.StorageQueueList(ctx, queueName, &limit,
 				&que.ListOptions{Pivot: items[10].Id, Limit: 1}))
@@ -216,7 +216,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 		d, c, ctx := newDaemon(t, _store, 10*time.Second)
 		defer d.Shutdown(t)
 
-		require.NoError(t, c.QueueCreate(ctx, &pb.QueueInfo{QueueName: queueName}))
+		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{QueueName: queueName}))
 		items := writeRandomItems(t, ctx, c, queueName, 10_000)
 
 		id := items[1000].Id
@@ -265,7 +265,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 		d, c, ctx := newDaemon(t, _store, 5*time.Second)
 		defer d.Shutdown(t)
 
-		require.NoError(t, c.QueueCreate(ctx, &pb.QueueInfo{QueueName: queueName}))
+		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{QueueName: queueName}))
 
 		for _, test := range []struct {
 			Name string

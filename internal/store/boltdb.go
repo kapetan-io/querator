@@ -21,6 +21,7 @@ import (
 )
 
 var ErrQueueNotExist = transport.NewRequestFailed("queue does not exist")
+var ErrQueueExists = transport.NewRequestFailed("queue already exists")
 var bucketName = []byte("queue")
 
 type BoltOptions struct {
@@ -518,8 +519,40 @@ func (s BoltQueuesStore) Get(_ context.Context, name string, queue *types.QueueI
 	})
 }
 
-func (s BoltQueuesStore) Set(_ context.Context, info types.QueueInfo) error {
-	f := errors.Fields{"category", "bolt", "func", "QueuesStore.Set"}
+func (s BoltQueuesStore) Add(_ context.Context, info types.QueueInfo) error {
+	f := errors.Fields{"category", "bolt", "func", "QueuesStore.Add"}
+
+	if strings.TrimSpace(info.Name) == "" {
+		return ErrEmptyQueueName
+	}
+
+	if info.ReserveTimeout > info.DeadTimeout {
+		return transport.NewInvalidOption("reserve_timeout is too long; %s cannot be greater than the "+
+			"dead_timeout %s", info.ReserveTimeout.String(), info.DeadTimeout.String())
+	}
+
+	return s.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bucketName)
+		if b == nil {
+			return f.Error("bucket does not exist in data file")
+		}
+
+		// TODO: Check if the key already exists
+
+		var buf bytes.Buffer // TODO: memory pool
+		if err := gob.NewEncoder(&buf).Encode(info); err != nil {
+			return f.Errorf("during gob.Encode(): %w", err)
+		}
+
+		if err := b.Put([]byte(info.Name), buf.Bytes()); err != nil {
+			return f.Errorf("during Put(): %w", err)
+		}
+		return nil
+	})
+}
+
+func (s BoltQueuesStore) Update(_ context.Context, info types.QueueInfo) error {
+	f := errors.Fields{"category", "bolt", "func", "QueuesStore.Update"}
 
 	if strings.TrimSpace(info.Name) == "" {
 		return ErrEmptyQueueName
@@ -591,6 +624,8 @@ func (s BoltQueuesStore) List(_ context.Context, queues *[]types.QueueInfo, opts
 
 func (s BoltQueuesStore) Delete(_ context.Context, name string) error {
 	f := errors.Fields{"category", "bolt", "func", "QueuesStore.Delete"}
+
+	// TODO: Validate 'name'
 
 	return s.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(bucketName)

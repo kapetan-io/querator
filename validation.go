@@ -88,7 +88,9 @@ func (s *Service) validateQueueOptionsProto(in *proto.QueueInfo, out *types.Queu
 		}
 	}
 
+	out.MaxAttempts = int(in.MaxAttempts)
 	out.DeadQueue = in.DeadQueue
+	out.Reference = in.Reference
 	out.Name = in.QueueName
 	return nil
 }

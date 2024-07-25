@@ -273,7 +273,7 @@ func (s *MemoryQueuesStore) Get(_ context.Context, name string, queue *types.Que
 	return nil
 }
 
-func (s *MemoryQueuesStore) Set(_ context.Context, info types.QueueInfo) error {
+func (s *MemoryQueuesStore) Add(_ context.Context, info types.QueueInfo) error {
 	if strings.TrimSpace(info.Name) == "" {
 		return ErrEmptyQueueName
 	}
@@ -283,22 +283,40 @@ func (s *MemoryQueuesStore) Set(_ context.Context, info types.QueueInfo) error {
 			"dead_timeout %s", info.ReserveTimeout.String(), info.DeadTimeout.String())
 	}
 
+	_, ok := s.findQueue(info.Name)
+	if ok {
+		return transport.NewInvalidOption("invalid queue; '%s' already exists", info.Name)
+	}
+
+	s.mem = append(s.mem, info)
+	return nil
+}
+
+func (s *MemoryQueuesStore) Update(_ context.Context, info types.QueueInfo) error {
+	if strings.TrimSpace(info.Name) == "" {
+		return ErrEmptyQueueName
+	}
+
+	if info.ReserveTimeout > info.DeadTimeout {
+		return transport.NewInvalidOption("reserve_timeout is too long; %s cannot be greater than the "+
+			"dead_timeout %s", info.ReserveTimeout.String(), info.DeadTimeout.String())
+	}
+
+	idx, ok := s.findQueue(info.Name)
+	if ok {
+		s.mem[idx].Update(info)
+		return nil
+	}
 	s.mem = append(s.mem, info)
 	return nil
 }
 
 func (s *MemoryQueuesStore) List(_ context.Context, queues *[]types.QueueInfo, opts types.ListOptions) error {
-	var sid StorageID
-	if opts.Pivot != nil {
-		if err := s.parent.ParseID(opts.Pivot, &sid); err != nil {
-			return transport.NewInvalidOption("invalid storage id; '%s': %s", opts.Pivot, err)
-		}
-	}
-
 	var count, idx int
-	if sid.ID != nil {
+	if opts.Pivot != nil {
 		idx, _ = s.findQueue(string(opts.Pivot))
 	}
+
 	for _, info := range s.mem[idx:] {
 		if count >= opts.Limit {
 			return nil

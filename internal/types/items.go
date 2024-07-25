@@ -130,14 +130,44 @@ type QueueInfo struct {
 	DeadTimeout time.Duration
 	// CreatedAt is the time this queue was created
 	CreatedAt time.Time
+	// UpdatedAt is the time this queue was last updated.
+	UpdatedAt time.Time
+	// MaxAttempts is the maximum number of times this item can be retried
+	MaxAttempts int
+	// Reference is the user supplied field which could contain metadata or specify who owns this queue
+	Reference string
 }
 
 func (i *QueueInfo) ToProto(in *pb.QueueInfo) *pb.QueueInfo {
+	in.ReserveTimeout = i.ReserveTimeout.String()
+	in.UpdatedAt = timestamppb.New(i.UpdatedAt)
+	in.CreatedAt = timestamppb.New(i.CreatedAt)
+	in.DeadTimeout = i.DeadTimeout.String()
+	in.MaxAttempts = int32(i.MaxAttempts)
+	in.DeadQueue = i.DeadQueue
+	in.Reference = i.Reference
 	in.QueueName = i.Name
 	return in
 }
 
-func (i *QueueInfo) FromProto(in *pb.QueueInfo) *QueueInfo {
-	i.Name = in.QueueName
-	return i
+func (i *QueueInfo) Update(r QueueInfo) bool {
+	if r.DeadTimeout.Nanoseconds() != 0 {
+		i.DeadTimeout = r.DeadTimeout
+	}
+	if r.ReserveTimeout.Nanoseconds() != 0 {
+		i.ReserveTimeout = r.ReserveTimeout
+	}
+	if i.MaxAttempts != r.MaxAttempts {
+		i.MaxAttempts = r.MaxAttempts
+	}
+	if i.Reference != r.Reference {
+		i.Reference = r.Reference
+	}
+	if i.DeadQueue != r.DeadQueue {
+		i.DeadQueue = r.DeadQueue
+	}
+	if i.UpdatedAt != r.UpdatedAt {
+		i.UpdatedAt = r.UpdatedAt
+	}
+	return true
 }

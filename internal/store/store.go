@@ -8,7 +8,6 @@ import (
 	"time"
 )
 
-// TODO: Ensure this error is used consistently
 var ErrEmptyQueueName = transport.NewInvalidOption("invalid queue; queue name cannot be empty")
 
 // StorageID is the decoded storage StorageID
@@ -50,8 +49,11 @@ type QueuesStore interface {
 	// queue requested does not exist
 	Get(ctx context.Context, name string, queue *types.QueueInfo) error
 
-	// Set a queue in the store, if the queue already exists, it updates the existing QueueInfo
-	Set(ctx context.Context, opts types.QueueInfo) error
+	// Add a queue in the store. if the queue already exists returns an error
+	Add(ctx context.Context, opts types.QueueInfo) error
+
+	// Update a queue in the store if the queue already exists it updates the existing QueueInfo
+	Update(ctx context.Context, opts types.QueueInfo) error
 
 	// List returns a list of queues
 	List(ctx context.Context, queues *[]types.QueueInfo, opts types.ListOptions) error

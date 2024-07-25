@@ -16,6 +16,11 @@ import (
 	"time"
 )
 
+type ListOptions struct {
+	Pivot string
+	Limit int
+}
+
 type ClientOptions struct {
 	// Users can provide their own http client with TLS config if needed
 	Client *http.Client
@@ -135,7 +140,11 @@ func (c *Client) QueuePause(ctx context.Context, req *pb.QueuePauseRequest) erro
 	return c.client.Do(r, &res)
 }
 
-func (c *Client) QueueCreate(ctx context.Context, req *pb.QueueInfo) error {
+// -------------------------------------------------
+// API to manage lists of queues
+// -------------------------------------------------
+
+func (c *Client) QueuesCreate(ctx context.Context, req *pb.QueueInfo) error {
 	payload, err := proto.Marshal(req)
 	if err != nil {
 		return duh.NewClientError("while marshaling request payload: %w", err, nil)
@@ -152,9 +161,60 @@ func (c *Client) QueueCreate(ctx context.Context, req *pb.QueueInfo) error {
 	return c.client.Do(r, &res)
 }
 
-type ListOptions struct {
-	Pivot string
-	Limit int
+func (c *Client) QueuesList(ctx context.Context, res *pb.QueuesListResponse, opts *ListOptions) error {
+	var req pb.QueuesListRequest
+	if opts != nil {
+		req.Limit = int32(opts.Limit)
+		req.Pivot = opts.Pivot
+	}
+
+	payload, err := proto.Marshal(&req)
+	if err != nil {
+		return duh.NewClientError("while marshaling request payload: %w", err, nil)
+	}
+
+	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("%s%s", c.opts.Endpoint, transport.RPCQueuesList), bytes.NewReader(payload))
+	if err != nil {
+		return duh.NewClientError("", err, nil)
+	}
+
+	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	return c.client.Do(r, res)
+}
+
+func (c *Client) QueuesUpdate(ctx context.Context, req *pb.QueueInfo) error {
+	payload, err := proto.Marshal(req)
+	if err != nil {
+		return duh.NewClientError("while marshaling request payload: %w", err, nil)
+	}
+
+	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("%s%s", c.opts.Endpoint, transport.RPCQueuesUpdate), bytes.NewReader(payload))
+	if err != nil {
+		return duh.NewClientError("", err, nil)
+	}
+
+	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	var res v1.Reply
+	return c.client.Do(r, &res)
+}
+
+func (c *Client) QueuesDelete(ctx context.Context, req *pb.QueuesDeleteRequest) error {
+	payload, err := proto.Marshal(req)
+	if err != nil {
+		return duh.NewClientError("while marshaling request payload: %w", err, nil)
+	}
+
+	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("%s%s", c.opts.Endpoint, transport.RPCQueuesDelete), bytes.NewReader(payload))
+	if err != nil {
+		return duh.NewClientError("", err, nil)
+	}
+
+	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	var res v1.Reply
+	return c.client.Do(r, &res)
 }
 
 // TODO: Write an iterator we can use to iterate through list APIs

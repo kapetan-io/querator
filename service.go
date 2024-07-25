@@ -24,15 +24,12 @@ import (
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/proto"
-	"github.com/kapetan-io/querator/transport"
 	"github.com/kapetan-io/tackle/set"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"log/slog"
 )
 
 const DefaultListLimit = 1_000
-
-var ErrQueueNameEmpty = transport.NewInvalidOption("invalid queue; queue name cannot be empty")
 
 // TODO: Document this and make it configurable via the daemon
 type ServiceOptions struct {
@@ -91,7 +88,9 @@ func (s *Service) QueueProduce(ctx context.Context, req *proto.QueueProduceReque
 	return nil
 }
 
-func (s *Service) QueueReserve(ctx context.Context, req *proto.QueueReserveRequest, res *proto.QueueReserveResponse) error {
+func (s *Service) QueueReserve(ctx context.Context, req *proto.QueueReserveRequest,
+	res *proto.QueueReserveResponse) error {
+
 	queue, err := s.queues.Get(ctx, req.QueueName)
 	if err != nil {
 		return err
@@ -142,10 +141,6 @@ func (s *Service) QueueComplete(ctx context.Context, req *proto.QueueCompleteReq
 }
 
 func (s *Service) QueueClear(ctx context.Context, req *proto.QueueClearRequest) error {
-	//if strings.TrimSpace(req.QueueName) == "" {
-	//	return ErrQueueNameEmpty
-	//}
-
 	queue, err := s.queues.Get(ctx, req.QueueName)
 	if err != nil {
 		return err
@@ -167,10 +162,6 @@ func (s *Service) QueueClear(ctx context.Context, req *proto.QueueClearRequest) 
 
 func (s *Service) QueuePause(ctx context.Context, req *proto.QueuePauseRequest) error {
 	var r types.PauseRequest
-
-	//if strings.TrimSpace(req.QueueName) == "" {
-	//	return ErrQueueNameEmpty
-	//}
 
 	if err := s.validateQueuePauseRequestProto(req, &r); err != nil {
 		return err
@@ -231,7 +222,6 @@ func (s *Service) QueuesList(ctx context.Context, req *proto.QueuesListRequest,
 func (s *Service) QueuesUpdate(ctx context.Context, req *proto.QueueInfo) error {
 	var info types.QueueInfo
 
-	// TODO: Should be the same validation as the Create method
 	if err := s.validateQueueOptionsProto(req, &info); err != nil {
 		return err
 	}
@@ -243,7 +233,6 @@ func (s *Service) QueuesUpdate(ctx context.Context, req *proto.QueueInfo) error 
 }
 
 func (s *Service) QueuesDelete(ctx context.Context, req *proto.QueuesDeleteRequest) error {
-	// TODO: Validate protobuf
 
 	if err := s.queues.Delete(ctx, req.QueueName); err != nil {
 		return err
@@ -257,10 +246,6 @@ func (s *Service) QueuesDelete(ctx context.Context, req *proto.QueuesDeleteReque
 
 func (s *Service) StorageQueueList(ctx context.Context, req *proto.StorageQueueListRequest,
 	res *proto.StorageQueueListResponse) error {
-
-	//if strings.TrimSpace(req.QueueName) == "" {
-	//	return ErrQueueNameEmpty
-	//}
 
 	queue, err := s.queues.Get(ctx, req.QueueName)
 	if err != nil {
@@ -289,10 +274,6 @@ func (s *Service) StorageQueueList(ctx context.Context, req *proto.StorageQueueL
 func (s *Service) StorageQueueAdd(ctx context.Context, req *proto.StorageQueueAddRequest,
 	res *proto.StorageQueueAddResponse) error {
 
-	//if strings.TrimSpace(req.QueueName) == "" {
-	//	return ErrQueueNameEmpty
-	//}
-
 	queue, err := s.queues.Get(ctx, req.QueueName)
 	if err != nil {
 		return err
@@ -317,10 +298,6 @@ func (s *Service) StorageQueueAdd(ctx context.Context, req *proto.StorageQueueAd
 
 func (s *Service) StorageQueueDelete(ctx context.Context, req *proto.StorageQueueDeleteRequest) error {
 
-	//if strings.TrimSpace(req.QueueName) == "" {
-	//	return ErrQueueNameEmpty
-	//}
-
 	queue, err := s.queues.Get(ctx, req.QueueName)
 	if err != nil {
 		return err
@@ -339,10 +316,6 @@ func (s *Service) StorageQueueDelete(ctx context.Context, req *proto.StorageQueu
 
 func (s *Service) QueueStats(ctx context.Context, req *proto.QueueStatsRequest,
 	res *proto.QueueStatsResponse) error {
-
-	//if strings.TrimSpace(req.QueueName) == "" {
-	//	return ErrQueueNameEmpty
-	//}
 
 	queue, err := s.queues.Get(ctx, req.QueueName)
 	if err != nil {

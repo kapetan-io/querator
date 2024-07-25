@@ -54,8 +54,9 @@ func NewDaemon(ctx context.Context, conf Config) (*Daemon, error) {
 	}
 
 	d := &Daemon{
-		service: s,
-		conf:    conf,
+		logAdaptor: duh.NewHttpLogAdaptor(conf.Logger),
+		conf:       conf,
+		service:    s,
 	}
 	return d, d.Start(ctx)
 }

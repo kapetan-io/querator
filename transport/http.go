@@ -21,7 +21,7 @@ import (
 	"fmt"
 	"github.com/duh-rpc/duh-go"
 	v1 "github.com/duh-rpc/duh-go/proto/v1"
-	"github.com/kapetan-io/querator/proto"
+	pb "github.com/kapetan-io/querator/proto"
 	"github.com/prometheus/client_golang/prometheus"
 	"net/http"
 )
@@ -73,17 +73,21 @@ const (
 // abstraction of HTTP code from the implementation. Any attempt to add a non-public facing method or types
 // from other Querator packages will result in a circular dependency warning.
 type Service interface {
-	QueueProduce(context.Context, *proto.QueueProduceRequest) error
-	QueuesCreate(context.Context, *proto.QueueInfo) error
-	QueueReserve(context.Context, *proto.QueueReserveRequest, *proto.QueueReserveResponse) error
-	QueueComplete(context.Context, *proto.QueueCompleteRequest) error
-	QueueStats(context.Context, *proto.QueueStatsRequest, *proto.QueueStatsResponse) error
-	QueuePause(context.Context, *proto.QueuePauseRequest) error
-	QueueClear(context.Context, *proto.QueueClearRequest) error
+	QueueProduce(context.Context, *pb.QueueProduceRequest) error
+	QueueReserve(context.Context, *pb.QueueReserveRequest, *pb.QueueReserveResponse) error
+	QueueComplete(context.Context, *pb.QueueCompleteRequest) error
+	QueueStats(context.Context, *pb.QueueStatsRequest, *pb.QueueStatsResponse) error
+	QueuePause(context.Context, *pb.QueuePauseRequest) error
+	QueueClear(context.Context, *pb.QueueClearRequest) error
 
-	StorageQueueList(context.Context, *proto.StorageQueueListRequest, *proto.StorageQueueListResponse) error
-	StorageQueueAdd(context.Context, *proto.StorageQueueAddRequest, *proto.StorageQueueAddResponse) error
-	StorageQueueDelete(context.Context, *proto.StorageQueueDeleteRequest) error
+	QueuesCreate(context.Context, *pb.QueueInfo) error
+	QueuesList(context.Context, *pb.QueuesListRequest, *pb.QueuesListResponse) error
+	QueuesUpdate(context.Context, *pb.QueueInfo) error
+	QueuesDelete(context.Context, *pb.QueuesDeleteRequest) error
+
+	StorageQueueList(context.Context, *pb.StorageQueueListRequest, *pb.StorageQueueListResponse) error
+	StorageQueueAdd(context.Context, *pb.StorageQueueAddRequest, *pb.StorageQueueAddResponse) error
+	StorageQueueDelete(context.Context, *pb.StorageQueueDeleteRequest) error
 }
 
 type HTTPHandler struct {
@@ -110,6 +114,11 @@ func NewHTTPHandler(s Service, metrics http.Handler) *HTTPHandler {
 func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer prometheus.NewTimer(h.duration.WithLabelValues(r.URL.Path)).ObserveDuration()
 	ctx := r.Context()
+
+	if r.URL.Path == "/metrics" && r.Method == http.MethodGet {
+		h.metrics.ServeHTTP(w, r)
+		return
+	}
 
 	if r.Method != http.MethodPost {
 		duh.ReplyWithCode(w, r, duh.CodeBadRequest, nil,
@@ -140,12 +149,18 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case RPCQueuePause:
 		h.QueuePause(ctx, w, r)
 		return
-	case RPCQueuesList:
 	case RPCQueuesCreate:
 		h.QueuesCreate(ctx, w, r)
 		return
-	case RPCQueuesDelete:
+	case RPCQueuesList:
+		h.QueuesList(ctx, w, r)
+		return
 	case RPCQueuesUpdate:
+		h.QueuesUpdate(ctx, w, r)
+		return
+	case RPCQueuesDelete:
+		h.QueuesDelete(ctx, w, r)
+		return
 	case RPCStorageQueueList:
 		h.StorageQueueList(ctx, w, r)
 		return
@@ -155,15 +170,12 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case RPCStorageQueueDelete:
 		h.StorageQueueDelete(ctx, w, r)
 		return
-	case "/metrics":
-		h.metrics.ServeHTTP(w, r)
-		return
 	}
 	duh.ReplyWithCode(w, r, duh.CodeNotImplemented, nil, "no such method; "+r.URL.Path)
 }
 
 func (h *HTTPHandler) QueueProduce(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-	var req proto.QueueProduceRequest
+	var req pb.QueueProduceRequest
 	if err := duh.ReadRequest(r, &req); err != nil {
 		duh.ReplyError(w, r, err)
 		return
@@ -177,13 +189,13 @@ func (h *HTTPHandler) QueueProduce(ctx context.Context, w http.ResponseWriter, r
 }
 
 func (h *HTTPHandler) QueueReserve(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-	var req proto.QueueReserveRequest
+	var req pb.QueueReserveRequest
 	if err := duh.ReadRequest(r, &req); err != nil {
 		duh.ReplyError(w, r, err)
 		return
 	}
 
-	var resp proto.QueueReserveResponse
+	var resp pb.QueueReserveResponse
 	if err := h.service.QueueReserve(ctx, &req, &resp); err != nil {
 		duh.ReplyError(w, r, err)
 		return
@@ -192,7 +204,7 @@ func (h *HTTPHandler) QueueReserve(ctx context.Context, w http.ResponseWriter, r
 }
 
 func (h *HTTPHandler) QueueComplete(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-	var req proto.QueueCompleteRequest
+	var req pb.QueueCompleteRequest
 	if err := duh.ReadRequest(r, &req); err != nil {
 		duh.ReplyError(w, r, err)
 		return
@@ -205,8 +217,12 @@ func (h *HTTPHandler) QueueComplete(ctx context.Context, w http.ResponseWriter, 
 	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
 }
 
+// -------------------------------------------------
+// API to manage lists of queues
+// -------------------------------------------------
+
 func (h *HTTPHandler) QueuesCreate(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-	var req proto.QueueInfo
+	var req pb.QueueInfo
 	if err := duh.ReadRequest(r, &req); err != nil {
 		duh.ReplyError(w, r, err)
 		return
@@ -219,14 +235,57 @@ func (h *HTTPHandler) QueuesCreate(ctx context.Context, w http.ResponseWriter, r
 	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
 }
 
-func (h *HTTPHandler) QueueStats(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-	var req proto.QueueStatsRequest
+func (h *HTTPHandler) QueuesList(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.QueuesListRequest
 	if err := duh.ReadRequest(r, &req); err != nil {
 		duh.ReplyError(w, r, err)
 		return
 	}
 
-	var resp proto.QueueStatsResponse
+	var resp pb.QueuesListResponse
+	if err := h.service.QueuesList(ctx, &req, &resp); err != nil {
+		duh.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &resp)
+}
+
+func (h *HTTPHandler) QueuesUpdate(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.QueueInfo
+	if err := duh.ReadRequest(r, &req); err != nil {
+		duh.ReplyError(w, r, err)
+		return
+	}
+
+	if err := h.service.QueuesUpdate(ctx, &req); err != nil {
+		duh.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
+}
+
+func (h *HTTPHandler) QueuesDelete(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.QueuesDeleteRequest
+	if err := duh.ReadRequest(r, &req); err != nil {
+		duh.ReplyError(w, r, err)
+		return
+	}
+
+	if err := h.service.QueuesDelete(ctx, &req); err != nil {
+		duh.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
+}
+
+func (h *HTTPHandler) QueueStats(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.QueueStatsRequest
+	if err := duh.ReadRequest(r, &req); err != nil {
+		duh.ReplyError(w, r, err)
+		return
+	}
+
+	var resp pb.QueueStatsResponse
 	if err := h.service.QueueStats(ctx, &req, &resp); err != nil {
 		duh.ReplyError(w, r, err)
 		return
@@ -235,7 +294,7 @@ func (h *HTTPHandler) QueueStats(ctx context.Context, w http.ResponseWriter, r *
 }
 
 func (h *HTTPHandler) QueueClear(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-	var req proto.QueueClearRequest
+	var req pb.QueueClearRequest
 	if err := duh.ReadRequest(r, &req); err != nil {
 		duh.ReplyError(w, r, err)
 		return
@@ -249,7 +308,7 @@ func (h *HTTPHandler) QueueClear(ctx context.Context, w http.ResponseWriter, r *
 }
 
 func (h *HTTPHandler) QueuePause(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-	var req proto.QueuePauseRequest
+	var req pb.QueuePauseRequest
 	if err := duh.ReadRequest(r, &req); err != nil {
 		duh.ReplyError(w, r, err)
 		return
@@ -263,13 +322,13 @@ func (h *HTTPHandler) QueuePause(ctx context.Context, w http.ResponseWriter, r *
 }
 
 func (h *HTTPHandler) StorageQueueList(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-	var req proto.StorageQueueListRequest
+	var req pb.StorageQueueListRequest
 	if err := duh.ReadRequest(r, &req); err != nil {
 		duh.ReplyError(w, r, err)
 		return
 	}
 
-	var resp proto.StorageQueueListResponse
+	var resp pb.StorageQueueListResponse
 	if err := h.service.StorageQueueList(ctx, &req, &resp); err != nil {
 		duh.ReplyError(w, r, err)
 		return
@@ -278,13 +337,13 @@ func (h *HTTPHandler) StorageQueueList(ctx context.Context, w http.ResponseWrite
 }
 
 func (h *HTTPHandler) StorageQueueAdd(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-	var req proto.StorageQueueAddRequest
+	var req pb.StorageQueueAddRequest
 	if err := duh.ReadRequest(r, &req); err != nil {
 		duh.ReplyError(w, r, err)
 		return
 	}
 
-	var resp proto.StorageQueueAddResponse
+	var resp pb.StorageQueueAddResponse
 	if err := h.service.StorageQueueAdd(ctx, &req, &resp); err != nil {
 		duh.ReplyError(w, r, err)
 		return
@@ -293,7 +352,7 @@ func (h *HTTPHandler) StorageQueueAdd(ctx context.Context, w http.ResponseWriter
 }
 
 func (h *HTTPHandler) StorageQueueDelete(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-	var req proto.StorageQueueDeleteRequest
+	var req pb.StorageQueueDeleteRequest
 	if err := duh.ReadRequest(r, &req); err != nil {
 		duh.ReplyError(w, r, err)
 		return

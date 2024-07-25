@@ -82,25 +82,18 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Que
 	set.Default(&info.ReserveTimeout, time.Minute)
 	set.Default(&info.DeadTimeout, 24*time.Hour)
 
-	// Check if the queue already exists in data storage
-	var i types.QueueInfo
-	if err := qm.store.Get(ctx, info.Name, &i); err != nil {
-		if !errors.Is(err, store.ErrQueueNotExist) {
-			return nil, err
-		}
-		// Queue doesn't exist, we are clear to create a new one
-	} else {
-		return nil, transport.NewInvalidOption("invalid queue; '%s' already exists", info.Name)
+	info.CreatedAt = time.Now().UTC()
+	info.UpdatedAt = time.Now().UTC()
+	if err := qm.store.Add(ctx, info); err != nil {
+		return nil, err
 	}
 
 	// Assertion that we are not crazy
 	if _, ok := qm.queues[info.Name]; ok {
-		panic(fmt.Sprintf("queue '%s' does not exist in data store, but is active!", info.Name))
-	}
-
-	info.CreatedAt = time.Now().UTC()
-	if err := qm.store.Set(ctx, info); err != nil {
-		return nil, err
+		// TODO(thrawn01): Consider a preforming a queue.UpdateInfo() if this happens instead of a panic.
+		//  It's possible the data store where we keep queue info is out of sync with our actual state, in
+		//  this case, it's probably better for us to update the queues when this happens.
+		panic(fmt.Sprintf("queue '%s' does not exist in data store, but is running!", info.Name))
 	}
 
 	return qm.startQueue(info)
@@ -154,7 +147,8 @@ func (qm *QueuesManager) Update(ctx context.Context, info types.QueueInfo) error
 	qm.mutex.Lock()
 
 	// Update the queue info in the data store
-	if err := qm.store.Set(ctx, info); err != nil {
+	info.UpdatedAt = time.Now().UTC()
+	if err := qm.store.Update(ctx, info); err != nil {
 		return err
 	}
 

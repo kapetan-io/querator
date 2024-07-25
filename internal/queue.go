@@ -419,7 +419,7 @@ func (q *Queue) synchronizationLoop() {
 
 			ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
 			if err := q.opts.QueueStore.Produce(ctx, state.Producers); err != nil {
-				q.opts.Logger.Error("while calling QueueStore.Add()", "error", err,
+				q.opts.Logger.Error("while calling QueueStore.Produce()", "error", err,
 					"category", "queue", "queueName", q.opts.Name)
 				cancel()
 				// Let clients that are timed out, know we are done with them.
@@ -718,6 +718,7 @@ func (q *Queue) handlePause(state *QueueState, r *QueueRequest) {
 	defer q.opts.Logger.Warn("queue un-paused", "queue", q.opts.Name)
 	for {
 		select {
+		// TODO: Need to handle request timeouts
 		case req := <-q.shutdownCh:
 			q.handleShutdown(state, req)
 			return

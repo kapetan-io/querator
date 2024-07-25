@@ -113,7 +113,12 @@ func (r MockQueuesStore) Get(ctx context.Context, name string, queue *types.Queu
 	panic("implement me")
 }
 
-func (r MockQueuesStore) Set(ctx context.Context, opts types.QueueInfo) error {
+func (r MockQueuesStore) Add(ctx context.Context, opts types.QueueInfo) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (r MockQueuesStore) Update(ctx context.Context, opts types.QueueInfo) error {
 	//TODO implement me
 	panic("implement me")
 }

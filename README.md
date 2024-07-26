@@ -35,3 +35,14 @@ See [Querator OSS API Reference](https://thrawn01-llc.stoplight.io/docs/querator
 
 ### Design
 See our [Architecture Decision Docs](doc/adr) for details on our current implementation design.
+
+### TODOs
+* ReadOnly Queues - The ability to drain a queue of items. A Queue in a "Queue Group" that is put into ReadOnly mode
+  will not allow items to be produced to it, but items already in the queue can be reserved and processed by consumers.
+* "Queue Groups" - See ADR [Queue Groups](doc/adr/0010-queue-groups.md)
+* Experiment with [Badger](https://github.com/dgraph-io/badger) as a replacement for boltDB. Bolt turned out to be much
+  slower than I expected due to the lack of an LSM.
+* Figure out why queue creation is so slow, even using the InMemory implementation, it is quite slow compared
+  to `store.Queue`.
+* Finish Testing existing functionality
+* Implement Scheduled and Defer

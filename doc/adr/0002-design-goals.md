@@ -25,11 +25,15 @@ fast thing we will always choose efficient.
 
 ##### Goals
 * Well known wire protocol HTTP/Protobuf/JSON
-* Separation of item consumer and producers from underlying storage. This allows storage to scale independently of
-  the number of clients and the size and frequency of the items queued.
+* Separation of item consumer and producers from underlying storage (also known as "Disaggregation"). This 
+  allows storage to scale independently of the number of clients and the size and frequency of the items queued.
 * Complexity is handled by the server, with very simple client implementations.
 * Build a service which encourages good distributed design, and can be used to solve many different distributed
   scale problems.
+* Easy integration with third party applications. Because of the simple API design, integrating with Querator 
+  should be simple and easy. Unlike Kafka, where the protocol is complex and very few implementations with a
+  heavy reliance upon third party vendors to integrations. Querator should be easy to integrate with which should
+  encourage its adoption.
 
 ## Consequences
 

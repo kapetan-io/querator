@@ -30,26 +30,18 @@ lightly and the impact of adding more GC overhead be considered carefully.
 
 ## Consequences
 
-The implementation of the abstraction layers will be tied to a struct which is a part of the public interface. This
-does not mean that implementations cannot add additional fields to the struct which are private to the
-implementation. In the following example, `Private` holds a private struct with variables which are not 
+Care should be taken to avoid leaking these internal structs to the public interface. Although, this is likely 
+completely unavoidable, If leaking does occur, we should clearly indicate which fields in a struct are public 
+and which are not. In the following example, `Private` holds a private struct with variables which are not 
 part of the public interface and can change depending on the implementation of `Service.Produce()`.
 
 ```go
-package transport
 type ProduceRequest struct {
     // Public Fields HERE
     RequestTimeout time.Duration
     // etc....
 
     // Private Internal Struct
-    Private internal.ServiceProduceState
-}
-// -------------------
-package internal
-
-type ServiceProduceState struct {
-    // Place variables which are not a part
-    // of the public interface HERE
+    private ServiceProduceState
 }
 ```

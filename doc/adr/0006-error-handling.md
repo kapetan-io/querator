@@ -59,7 +59,6 @@ An error message does not need to include the `<details of the error>` or a `;`.
 When referring to parameters or values passed via protobuf/json. Errors should use the JSON name when referring to
 a value.  
 
-
 #### TODO
 Once we have a documentation site up, all errors should include a URL to the documentation site where more
 details about the error can be found.

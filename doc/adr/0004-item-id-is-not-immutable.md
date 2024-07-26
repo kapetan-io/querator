@@ -8,14 +8,14 @@ Accepted
 
 ## Context
 
-The desire is to simplify client implementations as much as possible. An unstated goal of the project is to make 
+The desire is to simplify client implementations as much as possible. A goal of the project is to make 
 adoption of Querator easy for those interested.
 
 ## Decision
 
 The decision was made to simplify the API by allowing querator to generate a new `id` everytime it is 
 scheduled, deferred, or produced. This allows the `id` to reflect where in storage the item exists by
-encoding that information into the `id`. This allows API to know where the item exists in storage by purely 
+encoding that information into the `id`. This allows the API to know where the item exists in storage by purely 
 looking at the `id` without the need to consult a lookup table or have the consumer remember this information 
 beyond remembering the `id` and the name of the queue when it wants to defer, or complete an item.
 

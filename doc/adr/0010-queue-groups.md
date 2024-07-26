@@ -8,16 +8,16 @@ Proposal
 
 ## Context
 
-A queue is a single synchronization R/W point producers and consumers. As such, eventually throughput will suffer
+A queue is a single synchronization R/W point for producers and consumers. As such, eventually throughput will suffer
 as the bandwidth of items increases. In order to scale, Querator must provide some method of multiplexing production
 and reservation of items across queues.
 
 ## Decision
 
 We propose the creation of Queue Groups which allow users to combine multiple queues by creating a "Queue Group". 
-Then a client can produce/reserve from the queue group, and the queue group round robins the request to each queue
+Then a client can produce/reserve via a "Queue Group", and the "Queue Group" round robins the requests to each queue
 in the group. The API for interacting with Queue Groups should be almost identical to the API for interacting with a
-queue. 
+single queue. 
 
 ## Consequences
 

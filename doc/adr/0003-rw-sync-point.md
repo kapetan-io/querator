@@ -14,9 +14,8 @@ have an impact on efficiency and scalability, in addition to what storage engine
 
 ## Decision
 
-We want to avoid placing the R/W synchronization burden on the underlying storage system querator uses. 
-
-Instead, the synchronization point for all queue operations will be handled by the `Queue` interface. 
+We want to avoid placing the R/W synchronization burden on the underlying storage system querator uses. Instead, 
+the synchronization point for all queue operations will be handled by the `Queue` interface. 
 
 The `Queue` interface handles processing for a single queue, it handles processing of both producing and reserving
 clients. It is the synchronization point where reads and writes to the queue are handled. Because reads and writes 

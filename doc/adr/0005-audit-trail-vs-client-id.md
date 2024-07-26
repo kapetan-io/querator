@@ -26,6 +26,8 @@ the payload to track the item, and log everytime the item is deferred, or reserv
 into a dead letter queue an external system can consume that item and then report on the audit trail using the
 external system.
 
+We reserve the right to implement such an audit trail in the future.
+
 ## Consequences
 
 By not implementing a built-in audit system for Querator, users will need to invest additional resources to 

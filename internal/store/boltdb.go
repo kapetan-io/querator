@@ -78,7 +78,14 @@ func (b *BoltStorage) NewQueue(info types.QueueInfo) (Queue, error) {
 	f := errors.Fields{"category", "bolt", "func", "Storage.NewQueue"}
 
 	file := filepath.Join(b.opts.StorageDir, fmt.Sprintf("%s.db", info.Name))
-	db, err := bolt.Open(file, 0600, bolt.DefaultOptions)
+
+	opts := &bolt.Options{
+		FreelistType: bolt.FreelistArrayType,
+		Timeout:      time.Second,
+		NoGrowSync:   false,
+	}
+
+	db, err := bolt.Open(file, 0600, opts)
 	if err != nil {
 		return nil, f.Errorf("while opening db '%s': %w", file, err)
 	}
@@ -536,7 +543,10 @@ func (s BoltQueuesStore) Add(_ context.Context, info types.QueueInfo) error {
 			return f.Error("bucket does not exist in data file")
 		}
 
-		// TODO: Check if the key already exists
+		// If the queue already exists in the store
+		if b.Get([]byte(info.Name)) != nil {
+			return transport.NewInvalidOption("invalid queue; '%s' already exists", info.Name)
+		}
 
 		var buf bytes.Buffer // TODO: memory pool
 		if err := gob.NewEncoder(&buf).Encode(info); err != nil {

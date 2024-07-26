@@ -39,7 +39,7 @@ func BenchmarkProduce(b *testing.B) {
 			},
 		},
 		{
-			Name: "MemoryDB",
+			Name: "InMemory",
 			Setup: func() store.Storage {
 				return store.NewMemoryStorage()
 			},
@@ -96,6 +96,30 @@ func BenchmarkProduce(b *testing.B) {
 	}
 }
 
+type Pair struct {
+	Reserve string
+	Dead    string
+}
+
+var validTimeouts = []Pair{
+	{
+		Reserve: "15s",
+		Dead:    "1m0s",
+	},
+	{
+		Reserve: "1m0s",
+		Dead:    "10m0s",
+	},
+	{
+		Reserve: "10m0s",
+		Dead:    "24h0m0s",
+	},
+	{
+		Reserve: "30m0s",
+		Dead:    "1h0m0s",
+	},
+}
+
 func generateProduceItems(size int) []*pb.QueueProduceItem {
 	items := make([]*pb.QueueProduceItem, 0, size)
 	for i := 0; i < size; i++ {
@@ -109,4 +133,78 @@ func generateProduceItems(size int) []*pb.QueueProduceItem {
 	return items
 }
 
-// TODO: Benchmark QueuesCreate() to find out why it's so slow.
+func BenchmarkQueuesCreate(b *testing.B) {
+	fmt.Printf("Current Operating System has '%d' CPUs\n", runtime.NumCPU())
+	bdb := store.BoltDBTesting{Dir: b.TempDir()}
+	//bdb := store.BoltDBTesting{Dir: "/tmp/querator"}
+
+	testCases := []struct {
+		Setup    NewStorageFunc
+		TearDown func()
+		Name     string
+	}{
+		{
+			Name: "BoltDB",
+			Setup: func() store.Storage {
+				return bdb.Setup(store.BoltOptions{})
+			},
+			TearDown: func() {
+				bdb.Teardown()
+			},
+		},
+		{
+			Name: "InMemory",
+			Setup: func() store.Storage {
+				return store.NewMemoryStorage()
+			},
+			TearDown: func() {},
+		},
+		//{
+		//	Name: "PostgresSQL",
+		//},
+	}
+
+	for _, tc := range testCases {
+		b.Run(tc.Name, func(b *testing.B) {
+			//items := generateQueueInfo(100_000)
+
+			d, err := daemon.NewDaemon(context.Background(), daemon.Config{
+				Store:  tc.Setup(),
+				Logger: log,
+			})
+			require.NoError(b, err)
+			defer func() {
+				fmt.Printf("Shutdown\n")
+				_ = d.Shutdown(context.Background())
+			}()
+			s := d.Service()
+
+			b.Run("QueuesCreate", func(b *testing.B) {
+				start := time.Now()
+				b.ResetTimer()
+
+				for n := 0; n < b.N; n++ {
+					timeOuts := random.Slice(validTimeouts)
+					info := pb.QueueInfo{
+						QueueName:      random.String("queue-", 10),
+						DeadQueue:      random.String("dead-", 10),
+						Reference:      random.String("ref-", 10),
+						MaxAttempts:    int32(rand.Intn(100)),
+						ReserveTimeout: timeOuts.Reserve,
+						DeadTimeout:    timeOuts.Dead,
+					}
+
+					err = s.QueuesCreate(context.Background(), &info)
+					if err != nil {
+						fmt.Printf("Error creating queue: %s\n", err)
+						b.Error(err)
+						return
+					}
+				}
+
+				opsPerSec := float64(b.N) / time.Since(start).Seconds()
+				b.ReportMetric(opsPerSec, "ops/s")
+			})
+		})
+	}
+}

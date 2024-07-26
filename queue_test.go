@@ -874,6 +874,10 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	// TODO: Test duplicate client id on reserve
 	// TODO: Test pause and unpause, ensure can produce and consume after un-paused and Ensure can shutdown
 	// TODO: Test pause false without pause true
+	// TODO: Implement clock style thingy so we can freeze time and advance time in order to test Deadlines and such.
+	// TODO: Test /queue.produce and all the possible incorrect way it could be called
+	// TODO: Test /queue.reserve and all the possible incorrect way it could be called
+	// TODO: Test /queue.complete and all the possible incorrect way it could be called
 }
 
 func findInResponses(t *testing.T, responses []*pb.QueueReserveResponse, id string) bool {
@@ -887,19 +891,6 @@ func findInResponses(t *testing.T, responses []*pb.QueueReserveResponse, id stri
 		}
 	}
 	return false
-}
-
-func compareStorageItem(t *testing.T, l *pb.StorageQueueItem, r *pb.StorageQueueItem) {
-	t.Helper()
-	require.Equal(t, l.Id, r.Id)
-	require.Equal(t, l.IsReserved, r.IsReserved)
-	require.Equal(t, l.DeadDeadline.AsTime(), r.DeadDeadline.AsTime())
-	require.Equal(t, l.ReserveDeadline.AsTime(), r.ReserveDeadline.AsTime())
-	require.Equal(t, l.Attempts, r.Attempts)
-	require.Equal(t, l.Reference, r.Reference)
-	require.Equal(t, l.Encoding, r.Encoding)
-	require.Equal(t, l.Kind, r.Kind)
-	require.Equal(t, l.Payload, r.Payload)
 }
 
 func writeRandomItems(t *testing.T, ctx context.Context, c *que.Client,

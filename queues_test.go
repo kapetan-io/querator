@@ -2,14 +2,16 @@ package querator_test
 
 import (
 	"context"
-	"math/rand"
-
+	"errors"
+	"fmt"
+	"github.com/duh-rpc/duh-go"
 	que "github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/internal/store"
 	pb "github.com/kapetan-io/querator/proto"
 	"github.com/kapetan-io/tackle/random"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"math/rand"
 	"testing"
 	"time"
 )
@@ -52,14 +54,14 @@ func TestQueuesStorage(t *testing.T) {
 }
 
 func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
-	_store := newStore()
-	defer tearDown()
 	t.Run("CRUD", func(t *testing.T) {
-		var queueName = random.String("queue-", 10)
+		_store := newStore()
+		defer tearDown()
 		d, c, ctx := newDaemon(t, _store, 10*time.Second)
 		defer d.Shutdown(t)
 
 		t.Run("Create", func(t *testing.T) {
+			var queueName = random.String("queue-", 10)
 			now := time.Now().UTC()
 			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
 				QueueName:      queueName,
@@ -251,34 +253,403 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 			})
 		})
 		t.Run("Delete", func(t *testing.T) {
-			// TODO: <---- DO THIS NEXT
-			// TODO: Delete the first queue in the list
-			// TODO: Delete the last queue in the list
+			l := queues[0]
+
+			// Ensure the queue still exists
+			var list pb.QueuesListResponse
+			require.NoError(t, c.QueuesList(ctx, &list, &que.ListOptions{
+				Pivot: l.QueueName,
+				Limit: 1,
+			}))
+			r := list.Items[0]
+			assert.Equal(t, l.QueueName, r.QueueName)
+
+			// Attempt to delete
+			require.NoError(t, c.QueuesDelete(ctx, &pb.QueuesDeleteRequest{QueueName: l.QueueName}))
+
+			// Queue should no longer exist
+			require.NoError(t, c.QueuesList(ctx, &list, &que.ListOptions{
+				Pivot: l.QueueName,
+				Limit: 1,
+			}))
+			// List should return the next item in the list, not the one we requested
+			r = list.Items[0]
+			assert.NotEqual(t, l.QueueName, r.QueueName)
+
+			// TODO
+			t.Run("DeleteAlreadyDeletedIsOk", func(t *testing.T) {})
 		})
 	})
 
-	t.Run("List", func(t *testing.T) {})
-	t.Run("ListWithPivot", func(t *testing.T) {})
-	t.Run("ListMoreThanAvailable", func(t *testing.T) {})
-	t.Run("ListLessThanAvailable", func(t *testing.T) {})
-	t.Run("ListWithPivot", func(t *testing.T) {})
-	t.Run("ListIncludePivot", func(t *testing.T) {})
-	t.Run("ListIterator", func(t *testing.T) {})
-	t.Run("DeleteAlreadyDeletedIsOk", func(t *testing.T) {})
+	t.Run("List", func(t *testing.T) {
+		_store := newStore()
+		defer tearDown()
+		d, c, ctx := newDaemon(t, _store, 10*time.Second)
+		defer d.Shutdown(t)
 
-	t.Run("QueuesCreateErrors", func(t *testing.T) {
-		// TODO: Already exists
-	})
-	t.Run("QueuesGetErrors", func(t *testing.T) {})
-	t.Run("QueuesListErrors", func(t *testing.T) {})
-	t.Run("QueuesUpdateErrors", func(t *testing.T) {
-		// TODO: Update the queue name is not allowed
-		// TODO: No Such Queue
-		// TODO: ReserveTimeout larger than DeadTimeout
-		// TODO: Missing ReserveTimeout and DeadTimeout
-	})
-	t.Run("QueuesDeleteErrors", func(t *testing.T) {})
+		queues := createRandomQueues(t, ctx, c, 100)
 
+		var list pb.QueuesListResponse
+		require.NoError(t, c.QueuesList(ctx, &list, nil))
+		assert.Equal(t, 100, len(list.Items))
+
+		t.Run("MoreThanAvailable", func(t *testing.T) {
+			var more pb.QueuesListResponse
+			require.NoError(t, c.QueuesList(ctx, &more, &que.ListOptions{Limit: 20_000}))
+			assert.Equal(t, 100, len(more.Items))
+
+			compareQueueInfo(t, queues[0], more.Items[0])
+			compareQueueInfo(t, queues[100-1], more.Items[len(more.Items)-1])
+		})
+		t.Run("LessThanAvailable", func(t *testing.T) {
+			var less pb.QueuesListResponse
+			require.NoError(t, c.QueuesList(ctx, &less, &que.ListOptions{Limit: 50}))
+			assert.Equal(t, 50, len(less.Items))
+
+			compareQueueInfo(t, queues[0], less.Items[0])
+			compareQueueInfo(t, queues[50-1], less.Items[len(less.Items)-1])
+		})
+		t.Run("GetOne", func(t *testing.T) {
+			var one pb.QueuesListResponse
+			require.NoError(t, c.QueuesList(ctx, &one, &que.ListOptions{Pivot: queues[20].QueueName, Limit: 1}))
+			assert.Equal(t, 1, len(one.Items))
+
+			compareQueueInfo(t, queues[20], one.Items[len(one.Items)-1])
+		})
+		t.Run("First", func(t *testing.T) {
+			var first pb.QueuesListResponse
+			require.NoError(t, c.QueuesList(ctx, &first, &que.ListOptions{Limit: 1}))
+			assert.Equal(t, 1, len(first.Items))
+
+			compareQueueInfo(t, queues[0], first.Items[len(first.Items)-1])
+		})
+		t.Run("WithPivot", func(t *testing.T) {
+			name := queues[60].QueueName
+			var pivot pb.QueuesListResponse
+			err := c.QueuesList(ctx, &pivot, &que.ListOptions{Pivot: name, Limit: 10})
+			require.NoError(t, err)
+
+			assert.Equal(t, 10, len(pivot.Items))
+			compareQueueInfo(t, queues[60], pivot.Items[0])
+			for i := range pivot.Items {
+				compareQueueInfo(t, queues[i+60], pivot.Items[i])
+			}
+			t.Run("PageThroughItems", func(t *testing.T) {
+				name := queues[0].QueueName
+				var page pb.QueuesListResponse
+				err := c.QueuesList(ctx, &page, &que.ListOptions{Pivot: name, Limit: 10})
+				require.NoError(t, err)
+				compareQueueInfo(t, queues[0], page.Items[0])
+				compareQueueInfo(t, queues[9], page.Items[9])
+
+				t.Run("PageIncludesPivot", func(t *testing.T) {
+					name = queues[9].QueueName
+					err = c.QueuesList(ctx, &page, &que.ListOptions{Pivot: name, Limit: 10})
+					require.NoError(t, err)
+					compareQueueInfo(t, queues[9], page.Items[0])
+					compareQueueInfo(t, queues[18], page.Items[9])
+				})
+			})
+		})
+	})
+
+	t.Run("Errors", func(t *testing.T) {
+		_store := newStore()
+		defer tearDown()
+		d, c, ctx := newDaemon(t, _store, 10*time.Second)
+		defer d.Shutdown(t)
+
+		var queueName = random.String("queue-", 10)
+		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+			QueueName:      queueName,
+			DeadQueue:      queueName + "-dead",
+			Reference:      "CreateTestRef",
+			ReserveTimeout: "1m",
+			DeadTimeout:    "10m",
+			MaxAttempts:    10,
+		}))
+
+		t.Run("QueuesCreate", func(t *testing.T) {
+			for _, test := range []struct {
+				Name string
+				Req  *pb.QueueInfo
+				Msg  string
+				Code int
+			}{
+				{
+					Name: "EmptyRequest",
+					Req:  &pb.QueueInfo{},
+					Msg:  "invalid queue; queue name cannot be empty",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "InvalidQueue",
+					Req: &pb.QueueInfo{
+						QueueName: "invalid~queue",
+					},
+					Msg:  "invalid queue_name; 'invalid~queue' cannot contain '~' character",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "AlreadyExists",
+					Req: &pb.QueueInfo{
+						QueueName: queueName,
+					},
+					Msg:  "foo",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "ReferenceTooLong",
+					Req: &pb.QueueInfo{
+						QueueName: "ReferenceTooLong",
+						Reference: random.String("", 2_001),
+					},
+					Msg:  "foo",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "ReserveTimeoutTooLong",
+					Req: &pb.QueueInfo{
+						QueueName:      "ReserveTimeoutTooLong",
+						ReserveTimeout: "1h0m0s",
+						DeadTimeout:    "30m0s",
+					},
+					Msg:  "foo",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "InvalidReserveTimeout",
+					Req: &pb.QueueInfo{
+						QueueName:      "InvalidReserveTimeout",
+						ReserveTimeout: "foo",
+					},
+					Msg:  "foo",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "InvalidDeadTimeout",
+					Req: &pb.QueueInfo{
+						QueueName:   "InvalidDeadTimeout",
+						DeadTimeout: "foo",
+					},
+					Msg:  "foo",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "InvalidDeadLetterQueue",
+					Req: &pb.QueueInfo{
+						QueueName: "InvalidDeadLetterQueue",
+						DeadQueue: "invalid~deadLetter",
+					},
+					Msg:  "foo",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "InvalidDeadLetterQueue",
+					Req: &pb.QueueInfo{
+						QueueName: "InvalidDeadLetterQueue",
+						DeadQueue: "invalid~deadLetter",
+					},
+					Msg:  "foo",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					// TODO: This might be allowed later to indicate infinite retries
+					Name: "InvalidMaxAttempts",
+					Req: &pb.QueueInfo{
+						QueueName:   "InvalidMaxAttempts",
+						MaxAttempts: -1,
+					},
+					Msg:  "foo",
+					Code: duh.CodeBadRequest,
+				},
+			} {
+				t.Run(test.Name, func(t *testing.T) {
+					err := c.QueuesCreate(ctx, test.Req)
+					if test.Code != duh.CodeOK {
+						var e duh.Error
+						require.True(t, errors.As(err, &e))
+						assert.Equal(t, test.Msg, e.Message())
+						assert.Equal(t, test.Code, e.Code())
+					}
+				})
+			}
+		})
+		t.Run("QueuesList", func(t *testing.T) {
+			for _, test := range []struct {
+				Name string
+				Opts *que.ListOptions
+				Msg  string
+				Code int
+			}{
+				{
+					Name: "InvalidLimit",
+					Opts: &que.ListOptions{
+						Limit: -1,
+					},
+					Msg:  "foo",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "InvalidPivot",
+					Opts: &que.ListOptions{
+						Pivot: "invalid~queue",
+					},
+					Msg:  "foo",
+					Code: duh.CodeBadRequest,
+				},
+			} {
+				t.Run(test.Name, func(t *testing.T) {
+					var resp pb.QueuesListResponse
+					err := c.QueuesList(ctx, &resp, test.Opts)
+					if test.Code != duh.CodeOK {
+						var e duh.Error
+						require.True(t, errors.As(err, &e))
+						assert.Equal(t, test.Msg, e.Message())
+						assert.Equal(t, test.Code, e.Code())
+					}
+				})
+			}
+		})
+		t.Run("QueuesUpdate", func(t *testing.T) {
+			for _, test := range []struct {
+				Name string
+				Req  *pb.QueueInfo
+				Msg  string
+				Code int
+			}{
+				{
+					Name: "EmptyRequest",
+					Req:  &pb.QueueInfo{},
+					Msg:  "invalid queue; queue name cannot be empty",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "InvalidQueue",
+					Req: &pb.QueueInfo{
+						QueueName: "invalid~queue",
+					},
+					Msg:  "invalid queue_name; 'invalid~queue' cannot contain '~' character",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "ReferenceTooLong",
+					Req: &pb.QueueInfo{
+						QueueName: queueName,
+						Reference: random.String("", 2_001),
+					},
+					Msg:  "foo",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "ReserveTimeoutTooLong",
+					Req: &pb.QueueInfo{
+						QueueName:      queueName,
+						ReserveTimeout: "1h0m0s",
+						DeadTimeout:    "30m0s",
+					},
+					Msg:  "foo",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "InvalidReserveTimeout",
+					Req: &pb.QueueInfo{
+						QueueName:      queueName,
+						ReserveTimeout: "foo",
+					},
+					Msg:  "foo",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "InvalidDeadTimeout",
+					Req: &pb.QueueInfo{
+						QueueName:   queueName,
+						DeadTimeout: "foo",
+					},
+					Msg:  "foo",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "InvalidDeadLetterQueue",
+					Req: &pb.QueueInfo{
+						QueueName: queueName,
+						DeadQueue: "invalid~deadLetter",
+					},
+					Msg:  "foo",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "InvalidDeadLetterQueue",
+					Req: &pb.QueueInfo{
+						QueueName: queueName,
+						DeadQueue: "invalid~deadLetter",
+					},
+					Msg:  "foo",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					// TODO: This might be allowed later to indicate infinite retries
+					Name: "InvalidMaxAttempts",
+					Req: &pb.QueueInfo{
+						QueueName:   queueName,
+						MaxAttempts: -1,
+					},
+					Msg:  "foo",
+					Code: duh.CodeBadRequest,
+				},
+			} {
+				t.Run(test.Name, func(t *testing.T) {
+					err := c.QueuesUpdate(ctx, test.Req)
+					if test.Code != duh.CodeOK {
+						var e duh.Error
+						require.True(t, errors.As(err, &e))
+						assert.Equal(t, test.Msg, e.Message())
+						assert.Equal(t, test.Code, e.Code())
+					}
+				})
+			}
+			// TODO: No Such Queue
+			// TODO: ReserveTimeout larger than DeadTimeout
+			// TODO: Missing ReserveTimeout and DeadTimeout
+		})
+		t.Run("QueuesDelete", func(t *testing.T) {
+			for _, test := range []struct {
+				Name string
+				Req  *pb.QueuesDeleteRequest
+				Msg  string
+				Code int
+			}{
+				{
+					Name: "InvalidQueue",
+					Req: &pb.QueuesDeleteRequest{
+						QueueName: "invalid~queue",
+					},
+					Msg:  "foo",
+					Code: duh.CodeBadRequest,
+				},
+			} {
+				t.Run(test.Name, func(t *testing.T) {
+					err := c.QueuesDelete(ctx, test.Req)
+					if test.Code != duh.CodeOK {
+						var e duh.Error
+						require.True(t, errors.As(err, &e))
+						assert.Equal(t, test.Msg, e.Message())
+						assert.Equal(t, test.Code, e.Code())
+					}
+				})
+			}
+		})
+	})
+}
+
+func compareQueueInfo(t *testing.T, expected *pb.QueueInfo, actual *pb.QueueInfo) {
+	t.Helper()
+	require.Equal(t, expected.QueueName, actual.QueueName)
+	require.Equal(t, expected.DeadTimeout, actual.DeadTimeout)
+	require.Equal(t, expected.ReserveTimeout, actual.ReserveTimeout)
+	require.Equal(t, expected.MaxAttempts, actual.MaxAttempts)
+	require.Equal(t, expected.DeadQueue, actual.DeadQueue)
+	require.Equal(t, expected.Reference, actual.Reference)
 }
 
 type Pair struct {
@@ -308,17 +679,19 @@ var validTimeouts = []Pair{
 func createRandomQueues(t *testing.T, ctx context.Context, c *que.Client, count int) []*pb.QueueInfo {
 	t.Helper()
 
+	var idx int
 	var items []*pb.QueueInfo
 	for i := 0; i < count; i++ {
-		p := random.Slice(validTimeouts)
+		timeOuts := random.Slice(validTimeouts)
 		info := pb.QueueInfo{
-			QueueName:      random.String("queue-", 10),
+			QueueName:      fmt.Sprintf("queue-%05d", idx),
 			DeadQueue:      random.String("dead-", 10),
 			Reference:      random.String("ref-", 10),
 			MaxAttempts:    int32(rand.Intn(100)),
-			ReserveTimeout: p.Reserve,
-			DeadTimeout:    p.Dead,
+			ReserveTimeout: timeOuts.Reserve,
+			DeadTimeout:    timeOuts.Dead,
 		}
+		idx++
 		items = append(items, &info)
 		require.NoError(t, c.QueuesCreate(ctx, &info))
 	}

@@ -132,56 +132,95 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{QueueName: queueName}))
 		items := writeRandomItems(t, ctx, c, queueName, 10_000)
 
-		var resp pb.StorageQueueListResponse
-		err := c.StorageQueueList(ctx, queueName, &resp, &que.ListOptions{Limit: 10_000})
-		require.NoError(t, err)
-
-		assert.Equal(t, len(items), len(resp.Items))
-		for i := range items {
-			assert.NotEmpty(t, resp.Items[i].CreatedAt.AsTime())
-			assert.Equal(t, items[i].Id, resp.Items[i].Id)
-			assert.Equal(t, items[i].IsReserved, resp.Items[i].IsReserved)
-			assert.Equal(t, items[i].Attempts, resp.Items[i].Attempts)
-			assert.Equal(t, items[i].Reference, resp.Items[i].Reference)
-			assert.Equal(t, items[i].Encoding, resp.Items[i].Encoding)
-			assert.Equal(t, items[i].Kind, resp.Items[i].Kind)
-			assert.Equal(t, items[i].Payload, resp.Items[i].Payload)
-		}
-
-		t.Run("ListMoreThanAvailable", func(t *testing.T) {
-			var more pb.StorageQueueListResponse
-			err = c.StorageQueueList(ctx, queueName, &more, &que.ListOptions{Limit: 20_000})
+		t.Run("List", func(t *testing.T) {
+			var resp pb.StorageQueueListResponse
+			err := c.StorageQueueList(ctx, queueName, &resp, &que.ListOptions{Limit: 10_000})
 			require.NoError(t, err)
-			assert.Equal(t, 10_000, len(more.Items))
 
-			compareStorageItem(t, items[0], more.Items[0])
-			compareStorageItem(t, items[10_000-1], more.Items[len(more.Items)-1])
-		})
+			assert.Equal(t, len(items), len(resp.Items))
+			for i := range items {
+				assert.NotEmpty(t, resp.Items[i].CreatedAt.AsTime())
+				assert.Equal(t, items[i].Id, resp.Items[i].Id)
+				assert.Equal(t, items[i].IsReserved, resp.Items[i].IsReserved)
+				assert.Equal(t, items[i].Attempts, resp.Items[i].Attempts)
+				assert.Equal(t, items[i].Reference, resp.Items[i].Reference)
+				assert.Equal(t, items[i].Encoding, resp.Items[i].Encoding)
+				assert.Equal(t, items[i].Kind, resp.Items[i].Kind)
+				assert.Equal(t, items[i].Payload, resp.Items[i].Payload)
+			}
 
-		t.Run("ListLessThanAvailable", func(t *testing.T) {
-			var limit pb.StorageQueueListResponse
-			err = c.StorageQueueList(ctx, queueName, &limit, &que.ListOptions{Limit: 1_000})
-			require.NoError(t, err)
-			assert.Equal(t, 1_000, len(limit.Items))
-			compareStorageItem(t, items[0], limit.Items[0])
-			compareStorageItem(t, items[1_000-1], limit.Items[len(limit.Items)-1])
-		})
+			t.Run("MoreThanAvailable", func(t *testing.T) {
+				var more pb.StorageQueueListResponse
+				err = c.StorageQueueList(ctx, queueName, &more, &que.ListOptions{Limit: 20_000})
+				require.NoError(t, err)
+				assert.Equal(t, 10_000, len(more.Items))
 
-		t.Run("GetFirstOne", func(t *testing.T) {
-			var limit pb.StorageQueueListResponse
-			require.NoError(t, c.StorageQueueList(ctx, queueName, &limit, &que.ListOptions{Limit: 1}))
+				compareStorageItem(t, items[0], more.Items[0])
+				compareStorageItem(t, items[10_000-1], more.Items[len(more.Items)-1])
+			})
 
-			assert.Equal(t, 1, len(limit.Items))
-			assert.Equal(t, items[0].Id, limit.Items[0].Id)
-		})
+			t.Run("LessThanAvailable", func(t *testing.T) {
+				var limit pb.StorageQueueListResponse
+				err = c.StorageQueueList(ctx, queueName, &limit, &que.ListOptions{Limit: 1_000})
+				require.NoError(t, err)
+				assert.Equal(t, 1_000, len(limit.Items))
+				compareStorageItem(t, items[0], limit.Items[0])
+				compareStorageItem(t, items[1_000-1], limit.Items[len(limit.Items)-1])
+			})
 
-		t.Run("Get", func(t *testing.T) {
-			var limit pb.StorageQueueListResponse
-			require.NoError(t, c.StorageQueueList(ctx, queueName, &limit,
-				&que.ListOptions{Pivot: items[10].Id, Limit: 1}))
+			t.Run("GetOne", func(t *testing.T) {
+				var limit pb.StorageQueueListResponse
+				require.NoError(t, c.StorageQueueList(ctx, queueName, &limit,
+					&que.ListOptions{Pivot: items[10].Id, Limit: 1}))
 
-			assert.Equal(t, 1, len(limit.Items))
-			assert.Equal(t, items[10].Id, limit.Items[0].Id)
+				assert.Equal(t, 1, len(limit.Items))
+				assert.Equal(t, items[10].Id, limit.Items[0].Id)
+			})
+
+			t.Run("FirstOne", func(t *testing.T) {
+				var limit pb.StorageQueueListResponse
+				require.NoError(t, c.StorageQueueList(ctx, queueName, &limit, &que.ListOptions{Limit: 1}))
+
+				assert.Equal(t, 1, len(limit.Items))
+				assert.Equal(t, items[0].Id, limit.Items[0].Id)
+			})
+
+			t.Run("WithPivot", func(t *testing.T) {
+				id := items[1000].Id
+				var list pb.StorageQueueListResponse
+				err := c.StorageQueueList(ctx, queueName, &list, &que.ListOptions{Pivot: id, Limit: 10})
+				require.NoError(t, err)
+
+				assert.Equal(t, 10, len(list.Items))
+				compareStorageItem(t, items[1000], list.Items[0])
+				for i := range list.Items {
+					compareStorageItem(t, items[i+1000], list.Items[i])
+				}
+
+				// TODO: Replace this test with a test of the list iterator for client.StorageQueueList()
+				t.Run("PageThroughItems", func(t *testing.T) {
+					item := list.Items[0]
+					err = c.StorageQueueList(ctx, queueName, &list, &que.ListOptions{Pivot: item.Id, Limit: 10})
+					require.NoError(t, err)
+					compareStorageItem(t, items[1018], list.Items[len(list.Items)-1])
+
+					item = list.Items[9]
+					err = c.StorageQueueList(ctx, queueName, &list, &que.ListOptions{Pivot: item.Id, Limit: 10})
+					require.NoError(t, err)
+					compareStorageItem(t, items[1027], list.Items[len(list.Items)-1])
+				})
+
+				t.Run("PageIncludesPivot", func(t *testing.T) {
+					item := list.Items[9]
+					err = c.StorageQueueList(ctx, queueName, &list, &que.ListOptions{Pivot: item.Id, Limit: 1})
+					require.NoError(t, err)
+
+					require.Equal(t, 1, len(list.Items))
+					assert.Equal(t, item.Id, list.Items[0].Id)
+					compareStorageItem(t, item, list.Items[0])
+					compareStorageItem(t, items[1009], list.Items[0])
+				})
+			})
 		})
 
 		t.Run("Delete", func(t *testing.T) {
@@ -202,58 +241,13 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 				}
 			}
 
-			t.Run("DeleteAlreadyDeletedIsOk", func(t *testing.T) {
+			t.Run("AlreadyDeletedIsOk", func(t *testing.T) {
 				require.NoError(t, c.StorageQueueDelete(ctx, &pb.StorageQueueDeleteRequest{
 					QueueName: queueName,
 					Ids:       que.CollectIDs(items[0:1_000]),
 				}))
 			})
 		})
-	})
-
-	t.Run("ListWithPivot", func(t *testing.T) {
-		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, _store, 10*time.Second)
-		defer d.Shutdown(t)
-
-		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{QueueName: queueName}))
-		items := writeRandomItems(t, ctx, c, queueName, 10_000)
-
-		id := items[1000].Id
-		var list pb.StorageQueueListResponse
-		err := c.StorageQueueList(ctx, queueName, &list, &que.ListOptions{Pivot: id, Limit: 10})
-		require.NoError(t, err)
-
-		assert.Equal(t, 10, len(list.Items))
-		compareStorageItem(t, items[1000], list.Items[0])
-		for i := range list.Items {
-			compareStorageItem(t, items[i+1000], list.Items[i])
-		}
-
-		t.Run("ListIncludePivot", func(t *testing.T) {
-			item := list.Items[9]
-			err = c.StorageQueueList(ctx, queueName, &list, &que.ListOptions{Pivot: item.Id, Limit: 1})
-			require.NoError(t, err)
-
-			require.Equal(t, 1, len(list.Items))
-			assert.Equal(t, item.Id, list.Items[0].Id)
-			compareStorageItem(t, item, list.Items[0])
-			compareStorageItem(t, items[1009], list.Items[0])
-		})
-
-		// TODO: Replace this test with a test of the list iterator for client.StorageQueueList()
-		t.Run("PivotMorePages", func(t *testing.T) {
-			item := list.Items[0]
-			err = c.StorageQueueList(ctx, queueName, &list, &que.ListOptions{Pivot: item.Id, Limit: 10})
-			require.NoError(t, err)
-			compareStorageItem(t, items[1018], list.Items[len(list.Items)-1])
-
-			item = list.Items[9]
-			err = c.StorageQueueList(ctx, queueName, &list, &que.ListOptions{Pivot: item.Id, Limit: 10})
-			require.NoError(t, err)
-			compareStorageItem(t, items[1027], list.Items[len(list.Items)-1])
-		})
-
 	})
 
 	// TODO: Finish these tests
@@ -373,8 +367,15 @@ func randomProduceItems(count int) []*pb.QueueProduceItem {
 	return items
 }
 
-// TODO: Defer
-// TODO: Implement clock style thingy so we can freeze time and advance time in order to test Deadlines and such.
-// TODO: Test /queue.produce and all the possible incorrect way it could be called
-// TODO: Test /queue.reserve and all the possible incorrect way it could be called
-// TODO: Test /queue.complete and all the possible incorrect way it could be called
+func compareStorageItem(t *testing.T, l *pb.StorageQueueItem, r *pb.StorageQueueItem) {
+	t.Helper()
+	require.Equal(t, l.Id, r.Id)
+	require.Equal(t, l.IsReserved, r.IsReserved)
+	require.Equal(t, l.DeadDeadline.AsTime(), r.DeadDeadline.AsTime())
+	require.Equal(t, l.ReserveDeadline.AsTime(), r.ReserveDeadline.AsTime())
+	require.Equal(t, l.Attempts, r.Attempts)
+	require.Equal(t, l.Reference, r.Reference)
+	require.Equal(t, l.Encoding, r.Encoding)
+	require.Equal(t, l.Kind, r.Kind)
+	require.Equal(t, l.Payload, r.Payload)
+}

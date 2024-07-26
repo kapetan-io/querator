@@ -297,18 +297,19 @@ func (s *MemoryQueuesStore) Update(_ context.Context, info types.QueueInfo) erro
 		return ErrEmptyQueueName
 	}
 
-	if info.ReserveTimeout > info.DeadTimeout {
-		return transport.NewInvalidOption("reserve_timeout is too long; %s cannot be greater than the "+
-			"dead_timeout %s", info.ReserveTimeout.String(), info.DeadTimeout.String())
+	idx, ok := s.findQueue(info.Name)
+	if !ok {
+		return ErrQueueNotExist
 	}
 
-	idx, ok := s.findQueue(info.Name)
-	if ok {
-		s.mem[idx].Update(info)
-		return nil
+	if info.ReserveTimeout > s.mem[idx].DeadTimeout {
+		return transport.NewInvalidOption("reserve_timeout is too long; %s cannot be greater than the "+
+			"dead_timeout %s", info.ReserveTimeout.String(), s.mem[idx].DeadTimeout.String())
 	}
-	s.mem = append(s.mem, info)
+
+	s.mem[idx].Update(info)
 	return nil
+
 }
 
 func (s *MemoryQueuesStore) List(_ context.Context, queues *[]types.QueueInfo, opts types.ListOptions) error {

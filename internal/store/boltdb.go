@@ -21,7 +21,6 @@ import (
 )
 
 var ErrQueueNotExist = transport.NewRequestFailed("queue does not exist")
-var ErrQueueExists = transport.NewRequestFailed("queue already exists")
 var bucketName = []byte("queue")
 
 type BoltOptions struct {
@@ -558,19 +557,31 @@ func (s BoltQueuesStore) Update(_ context.Context, info types.QueueInfo) error {
 		return ErrEmptyQueueName
 	}
 
-	if info.ReserveTimeout > info.DeadTimeout {
-		return transport.NewInvalidOption("reserve_timeout is too long; %s cannot be greater than the "+
-			"dead_timeout %s", info.ReserveTimeout.String(), info.DeadTimeout.String())
-	}
-
 	return s.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(bucketName)
 		if b == nil {
 			return f.Error("bucket does not exist in data file")
 		}
 
-		var buf bytes.Buffer // TODO: memory pool
-		if err := gob.NewEncoder(&buf).Encode(info); err != nil {
+		v := b.Get([]byte(info.Name))
+		if v == nil {
+			return ErrQueueNotExist
+		}
+
+		var found types.QueueInfo
+		if err := gob.NewDecoder(bytes.NewReader(v)).Decode(&found); err != nil {
+			return f.Errorf("during Decode(): %w", err)
+		}
+
+		found.Update(info)
+
+		if found.ReserveTimeout > found.DeadTimeout {
+			return transport.NewInvalidOption("reserve_timeout is too long; %s cannot be greater than the "+
+				"dead_timeout %s", info.ReserveTimeout.String(), found.DeadTimeout.String())
+		}
+
+		var buf bytes.Buffer
+		if err := gob.NewEncoder(&buf).Encode(found); err != nil {
 			return f.Errorf("during gob.Encode(): %w", err)
 		}
 
@@ -592,21 +603,30 @@ func (s BoltQueuesStore) List(_ context.Context, queues *[]types.QueueInfo, opts
 
 		c := b.Cursor()
 		var count int
-		if opts.Pivot == nil {
-			k, v := c.Seek(opts.Pivot)
+		var k, v []byte
+		if opts.Pivot != nil {
+			k, v = c.Seek(opts.Pivot)
 			if k == nil {
 				return transport.NewInvalidOption("invalid pivot; '%s' does not exist", opts.Pivot)
 			}
 
-			var info types.QueueInfo
-			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(&info); err != nil {
-				return f.Errorf("during Decode(): %w", err)
+		} else {
+			k, v = c.First()
+			if k == nil {
+				// TODO: Add a test for this code path, attempt to list an empty queue
+				// we get here if the bucket is empty
+				return nil
 			}
-			*queues = append(*queues, info)
-			count++
 		}
 
-		for k, v := c.Next(); k != nil; k, v = c.Next() {
+		var info types.QueueInfo
+		if err := gob.NewDecoder(bytes.NewReader(v)).Decode(&info); err != nil {
+			return f.Errorf("during Decode(): %w", err)
+		}
+		*queues = append(*queues, info)
+		count++
+
+		for k, v = c.Next(); k != nil; k, v = c.Next() {
 			if count >= opts.Limit {
 				return nil
 			}

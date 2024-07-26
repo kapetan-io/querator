@@ -313,6 +313,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		// TODO: Ensure that a reference provided by the user overrides the reference field provided by when the queue was created
 		//  Ensure all the queue level options are respected when producing items
+		// TODO: Produce an item, and ensure it goes to the dead queue once that functionality is complete
 		t.Run("RespectsQueue", func(t *testing.T) {
 			t.Run("Reference", func(t *testing.T) {})
 			t.Run("ReferenceOverride", func(t *testing.T) {})

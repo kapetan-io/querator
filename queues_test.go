@@ -54,8 +54,6 @@ func TestQueuesStorage(t *testing.T) {
 func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 	_store := newStore()
 	defer tearDown()
-	t.Run("CRUDCompare", func(t *testing.T) {})
-
 	t.Run("CRUD", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
 		d, c, ctx := newDaemon(t, _store, 10*time.Second)
@@ -92,11 +90,11 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 
 		t.Run("Get", func(t *testing.T) {
 			var list pb.QueuesListResponse
+			l := queues[100]
 			require.NoError(t, c.QueuesList(ctx, &list, &que.ListOptions{
-				Pivot: queues[100].QueueName,
+				Pivot: l.QueueName,
 				Limit: 1,
 			}))
-			l := queues[100]
 			r := list.Items[0]
 			require.Equal(t, 1, len(list.Items))
 			assert.Equal(t, l.QueueName, r.QueueName)
@@ -113,36 +111,150 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 		t.Run("Update", func(t *testing.T) {
 
 			t.Run("MaxAttempts", func(t *testing.T) {
+				l := queues[51]
 				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
-					QueueName:   queues[50].QueueName,
-					MaxAttempts: queues[50].MaxAttempts + 1,
+					QueueName:   l.QueueName,
+					MaxAttempts: l.MaxAttempts + 1,
 				}))
 
 				var list pb.QueuesListResponse
 				require.NoError(t, c.QueuesList(ctx, &list, &que.ListOptions{
-					Pivot: queues[50].QueueName,
+					Pivot: l.QueueName,
 					Limit: 1,
 				}))
-				l := list.Items[0]
-				assert.Equal(t, queues[50].QueueName, l.QueueName)
-				assert.NotEmpty(t, l.CreatedAt)
-				assert.True(t, now.Before(l.CreatedAt.AsTime()))
-				assert.NotEmpty(t, l.UpdatedAt)
-				assert.True(t, time.Now().After(l.UpdatedAt.AsTime()))
-				assert.True(t, now.Before(l.UpdatedAt.AsTime()))
-				assert.True(t, l.CreatedAt.AsTime().Before(l.UpdatedAt.AsTime()))
-				assert.Equal(t, queues[50].MaxAttempts+1, l.MaxAttempts)
+				r := list.Items[0]
+				assert.Equal(t, l.QueueName, r.QueueName)
+				assert.NotEmpty(t, r.CreatedAt)
+				assert.True(t, now.Before(r.CreatedAt.AsTime()))
+				assert.NotEmpty(t, r.UpdatedAt)
+				assert.True(t, time.Now().After(r.UpdatedAt.AsTime()))
+				assert.True(t, now.Before(r.UpdatedAt.AsTime()))
+				assert.True(t, r.CreatedAt.AsTime().Before(r.UpdatedAt.AsTime()))
+				assert.Equal(t, l.MaxAttempts+1, r.MaxAttempts)
 			})
-			t.Run("ReserveTimeout", func(t *testing.T) {})
-			t.Run("DeadTimeout", func(t *testing.T) {})
-			t.Run("Reference", func(t *testing.T) {})
 
-			//t.Run("UpdateDeadQueue", func(t *testing.T) {
-			//	// TODO: Produce an item, and ensure it goes to the dead queue once that functionality is complete
-			//})
+			t.Run("ReserveTimeout", func(t *testing.T) {
+				l := queues[51]
 
+				rt, err := time.ParseDuration(l.ReserveTimeout)
+				require.NoError(t, err)
+				rt += 10 * time.Second
+
+				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+					QueueName:      l.QueueName,
+					ReserveTimeout: rt.String(),
+				}))
+
+				var list pb.QueuesListResponse
+				require.NoError(t, c.QueuesList(ctx, &list, &que.ListOptions{
+					Pivot: l.QueueName,
+					Limit: 1,
+				}))
+				r := list.Items[0]
+				assert.Equal(t, l.QueueName, r.QueueName)
+				assert.NotEmpty(t, r.CreatedAt)
+				assert.True(t, now.Before(r.CreatedAt.AsTime()))
+				assert.NotEmpty(t, r.UpdatedAt)
+				assert.True(t, time.Now().After(r.UpdatedAt.AsTime()))
+				assert.True(t, now.Before(r.UpdatedAt.AsTime()))
+				assert.True(t, r.CreatedAt.AsTime().Before(r.UpdatedAt.AsTime()))
+				assert.Equal(t, rt.String(), r.ReserveTimeout)
+			})
+			t.Run("DeadTimeout", func(t *testing.T) {
+				l := queues[52]
+
+				dt, err := time.ParseDuration(l.DeadTimeout)
+				require.NoError(t, err)
+				dt += 20 * time.Second
+
+				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+					QueueName:   l.QueueName,
+					DeadTimeout: dt.String(),
+				}))
+
+				var list pb.QueuesListResponse
+				require.NoError(t, c.QueuesList(ctx, &list, &que.ListOptions{
+					Pivot: l.QueueName,
+					Limit: 1,
+				}))
+				r := list.Items[0]
+				assert.Equal(t, l.QueueName, r.QueueName)
+				assert.NotEmpty(t, r.CreatedAt)
+				assert.True(t, now.Before(r.CreatedAt.AsTime()))
+				assert.NotEmpty(t, r.UpdatedAt)
+				assert.True(t, time.Now().After(r.UpdatedAt.AsTime()))
+				assert.True(t, now.Before(r.UpdatedAt.AsTime()))
+				assert.True(t, r.CreatedAt.AsTime().Before(r.UpdatedAt.AsTime()))
+				assert.Equal(t, dt.String(), r.DeadTimeout)
+			})
+			t.Run("Reference", func(t *testing.T) {
+				l := queues[53]
+
+				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+					QueueName: l.QueueName,
+					Reference: "SomethingElse",
+				}))
+
+				var list pb.QueuesListResponse
+				require.NoError(t, c.QueuesList(ctx, &list, &que.ListOptions{
+					Pivot: l.QueueName,
+					Limit: 1,
+				}))
+				r := list.Items[0]
+				assert.Equal(t, l.QueueName, r.QueueName)
+				assert.NotEmpty(t, r.CreatedAt)
+				assert.True(t, now.Before(r.CreatedAt.AsTime()))
+				assert.NotEmpty(t, r.UpdatedAt)
+				assert.True(t, time.Now().After(r.UpdatedAt.AsTime()))
+				assert.True(t, now.Before(r.UpdatedAt.AsTime()))
+				assert.True(t, r.CreatedAt.AsTime().Before(r.UpdatedAt.AsTime()))
+				assert.Equal(t, "SomethingElse", r.Reference)
+			})
+
+			t.Run("Everything", func(t *testing.T) {
+				l := queues[54]
+
+				dt, err := time.ParseDuration(l.DeadTimeout)
+				require.NoError(t, err)
+				dt += 35 * time.Second
+
+				rt, err := time.ParseDuration(l.ReserveTimeout)
+				require.NoError(t, err)
+				rt += 5 * time.Second
+
+				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+					QueueName:      l.QueueName,
+					Reference:      "FriendshipIsMagic",
+					MaxAttempts:    l.MaxAttempts + 1,
+					ReserveTimeout: rt.String(),
+					DeadTimeout:    dt.String(),
+				}))
+
+				var list pb.QueuesListResponse
+				require.NoError(t, c.QueuesList(ctx, &list, &que.ListOptions{
+					Pivot: l.QueueName,
+					Limit: 1,
+				}))
+
+				r := list.Items[0]
+				assert.Equal(t, l.QueueName, r.QueueName)
+				assert.NotEmpty(t, r.CreatedAt)
+				assert.True(t, now.Before(r.CreatedAt.AsTime()))
+				assert.NotEmpty(t, r.UpdatedAt)
+				assert.True(t, time.Now().After(r.UpdatedAt.AsTime()))
+				assert.True(t, now.Before(r.UpdatedAt.AsTime()))
+				assert.True(t, r.CreatedAt.AsTime().Before(r.UpdatedAt.AsTime()))
+				assert.Equal(t, "FriendshipIsMagic", r.Reference)
+				assert.Equal(t, l.MaxAttempts+1, r.MaxAttempts)
+				assert.Equal(t, dt.String(), r.DeadTimeout)
+				assert.Equal(t, rt.String(), r.ReserveTimeout)
+			})
 		})
-		t.Run("Delete", func(t *testing.T) {})
+		t.Run("Delete", func(t *testing.T) {
+			// TODO: <---- DO THIS NEXT
+			// TODO: Delete the first queue in the list
+			// TODO: Delete the last queue in the list
+		})
 	})
 
 	t.Run("List", func(t *testing.T) {})
@@ -162,6 +274,8 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 	t.Run("QueuesUpdateErrors", func(t *testing.T) {
 		// TODO: Update the queue name is not allowed
 		// TODO: No Such Queue
+		// TODO: ReserveTimeout larger than DeadTimeout
+		// TODO: Missing ReserveTimeout and DeadTimeout
 	})
 	t.Run("QueuesDeleteErrors", func(t *testing.T) {})
 

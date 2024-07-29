@@ -79,8 +79,8 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Que
 	defer qm.mutex.Unlock()
 	qm.mutex.Lock()
 
-	set.Default(&info.ReserveTimeout, time.Minute)
-	set.Default(&info.DeadTimeout, 24*time.Hour)
+	//set.Default(&info.ReserveTimeout, time.Minute)
+	//set.Default(&info.DeadTimeout, 24*time.Hour)
 
 	info.CreatedAt = time.Now().UTC()
 	info.UpdatedAt = time.Now().UTC()

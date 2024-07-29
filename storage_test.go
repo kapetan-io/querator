@@ -68,7 +68,11 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 		d, c, ctx := newDaemon(t, _store, 10*time.Second)
 		defer d.Shutdown(t)
 
-		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{QueueName: queueName}))
+		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+			ReserveTimeout: ReserveTimeout,
+			DeadTimeout:    DeadTimeout,
+			QueueName:      queueName,
+		}))
 
 		now := time.Now().UTC()
 		var items []*pb.StorageQueueItem
@@ -129,7 +133,11 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 		d, c, ctx := newDaemon(t, _store, 10*time.Second)
 		defer d.Shutdown(t)
 
-		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{QueueName: queueName}))
+		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+			ReserveTimeout: ReserveTimeout,
+			DeadTimeout:    DeadTimeout,
+			QueueName:      queueName,
+		}))
 		items := writeRandomItems(t, ctx, c, queueName, 10_000)
 
 		t.Run("List", func(t *testing.T) {
@@ -199,15 +207,24 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 
 				// TODO: Replace this test with a test of the list iterator for client.StorageQueueList()
 				t.Run("PageThroughItems", func(t *testing.T) {
-					item := list.Items[0]
-					err = c.StorageQueueList(ctx, queueName, &list, &que.ListOptions{Pivot: item.Id, Limit: 10})
+					pivot := list.Items[9]
+					var page pb.StorageQueueListResponse
+					err = c.StorageQueueList(ctx, queueName, &page, &que.ListOptions{Pivot: pivot.Id, Limit: 10})
 					require.NoError(t, err)
-					compareStorageItem(t, items[1018], list.Items[len(list.Items)-1])
+					// First item in the returned page is the pivot we requested
+					compareStorageItem(t, pivot, page.Items[0])
+					// And 9 other items after the pivot
+					compareStorageItem(t, items[1009], page.Items[0])
+					compareStorageItem(t, items[1018], page.Items[9])
 
-					item = list.Items[9]
-					err = c.StorageQueueList(ctx, queueName, &list, &que.ListOptions{Pivot: item.Id, Limit: 10})
+					pivot = page.Items[9]
+					err = c.StorageQueueList(ctx, queueName, &page, &que.ListOptions{Pivot: pivot.Id, Limit: 10})
 					require.NoError(t, err)
-					compareStorageItem(t, items[1027], list.Items[len(list.Items)-1])
+					// Includes the pivot
+					compareStorageItem(t, pivot, page.Items[0])
+					// And 9 other items
+					compareStorageItem(t, items[1018], page.Items[0])
+					compareStorageItem(t, items[1027], page.Items[9])
 				})
 
 				t.Run("PageIncludesPivot", func(t *testing.T) {
@@ -259,7 +276,11 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 		d, c, ctx := newDaemon(t, _store, 5*time.Second)
 		defer d.Shutdown(t)
 
-		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{QueueName: queueName}))
+		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+			ReserveTimeout: ReserveTimeout,
+			DeadTimeout:    DeadTimeout,
+			QueueName:      queueName,
+		}))
 
 		for _, test := range []struct {
 			Name string
@@ -270,7 +291,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 			{
 				Name: "EmptyRequest",
 				Req:  &pb.StorageQueueDeleteRequest{},
-				Msg:  "invalid queue; queue name cannot be empty",
+				Msg:  "queue name is invalid; queue name cannot be empty",
 				Code: duh.CodeBadRequest,
 			},
 			{
@@ -278,7 +299,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 				Req: &pb.StorageQueueDeleteRequest{
 					QueueName: "invalid~queue",
 				},
-				Msg:  "invalid queue_name; 'invalid~queue' cannot contain '~' character",
+				Msg:  "queue name is invalid; 'invalid~queue' cannot contain '~' character",
 				Code: duh.CodeBadRequest,
 			},
 			{

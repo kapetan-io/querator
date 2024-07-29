@@ -35,6 +35,11 @@ import (
 //
 //}
 
+const (
+	DeadTimeout    = "24h0m0s"
+	ReserveTimeout = "1m0s"
+)
+
 var RetryTenTimes = retry.Policy{Interval: retry.Sleep(time.Second), Attempts: 10}
 
 type NewStorageFunc func() store.Storage
@@ -86,7 +91,11 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer d.Shutdown(t)
 
 		// Create a queue
-		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{QueueName: queueName}))
+		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+			ReserveTimeout: ReserveTimeout,
+			DeadTimeout:    DeadTimeout,
+			QueueName:      queueName,
+		}))
 
 		// Produce a single message
 		ref := random.String("ref-", 10)
@@ -161,7 +170,11 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		var reserved []*pb.StorageQueueItem
 		var list pb.StorageQueueListResponse
-		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{QueueName: queueName}))
+		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+			ReserveTimeout: ReserveTimeout,
+			DeadTimeout:    DeadTimeout,
+			QueueName:      queueName,
+		}))
 
 		// Write some items to the queue
 		_ = writeRandomItems(t, ctx, c, queueName, 500)
@@ -224,7 +237,12 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer d.Shutdown(t)
 		now := time.Now().UTC()
 
-		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{QueueName: queueName}))
+		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+			ReserveTimeout: ReserveTimeout,
+			DeadTimeout:    DeadTimeout,
+			QueueName:      queueName,
+		}))
+
 		var lastItem *pb.StorageQueueItem
 		t.Run("Bytes", func(t *testing.T) {
 			var items []*pb.QueueProduceItem
@@ -330,7 +348,11 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		d, c, ctx := newDaemon(t, _store, 30*time.Second)
 		defer d.Shutdown(t)
 
-		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{QueueName: queueName}))
+		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+			ReserveTimeout: ReserveTimeout,
+			DeadTimeout:    DeadTimeout,
+			QueueName:      queueName,
+		}))
 		items := writeRandomItems(t, ctx, c, queueName, 10_000)
 		require.Len(t, items, 10_000)
 
@@ -527,7 +549,11 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		d, c, ctx := newDaemon(t, _store, 30*time.Second)
 		defer d.Shutdown(t)
 
-		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{QueueName: queueName}))
+		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+			ReserveTimeout: ReserveTimeout,
+			DeadTimeout:    DeadTimeout,
+			QueueName:      queueName,
+		}))
 
 		t.Run("Success", func(t *testing.T) {
 			items := writeRandomItems(t, ctx, c, queueName, 10)
@@ -606,7 +632,11 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		d, c, ctx := newDaemon(t, _store, 30*time.Second)
 		defer d.Shutdown(t)
 
-		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{QueueName: queueName}))
+		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+			ReserveTimeout: ReserveTimeout,
+			DeadTimeout:    DeadTimeout,
+			QueueName:      queueName,
+		}))
 
 		items := writeRandomItems(t, ctx, c, queueName, 500)
 		require.Len(t, items, 500)
@@ -641,7 +671,11 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer d.Shutdown(t)
 		maxItems := randomProduceItems(1_001)
 
-		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{QueueName: queueName}))
+		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+			ReserveTimeout: ReserveTimeout,
+			DeadTimeout:    DeadTimeout,
+			QueueName:      queueName,
+		}))
 
 		for _, test := range []struct {
 			Name string
@@ -652,7 +686,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			{
 				Name: "EmptyRequest",
 				Req:  &pb.QueueProduceRequest{},
-				Msg:  "invalid queue; queue name cannot be empty",
+				Msg:  "queue name is invalid; queue name cannot be empty",
 				Code: duh.CodeBadRequest,
 			},
 			{
@@ -660,7 +694,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				Req: &pb.QueueProduceRequest{
 					QueueName: "invalid~queue",
 				},
-				Msg:  "invalid queue_name; 'invalid~queue' cannot contain '~' character",
+				Msg:  "queue name is invalid; 'invalid~queue' cannot contain '~' character",
 				Code: duh.CodeBadRequest,
 			},
 			{
@@ -701,7 +735,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 						{},
 					},
 				},
-				Msg:  "request_timeout is required; '5m' is recommended, 15m is the maximum",
+				Msg:  "request timeout is required; '5m' is recommended, 15m is the maximum",
 				Code: duh.CodeBadRequest,
 			},
 			{
@@ -713,7 +747,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 						{},
 					},
 				},
-				Msg:  "request_timeout is invalid; maximum timeout is '15m' but '16m0s' was requested",
+				Msg:  "request timeout is invalid; maximum timeout is '15m' but '16m0s' was requested",
 				Code: duh.CodeBadRequest,
 			},
 			{
@@ -725,7 +759,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 						{},
 					},
 				},
-				Msg:  "request_timeout is invalid; time: invalid duration \"foo\" - expected format: 900ms, 5m or 15m",
+				Msg:  "request timeout is invalid; time: invalid duration \"foo\" - expected format: 900ms, 5m or 15m",
 				Code: duh.CodeBadRequest,
 			},
 			{
@@ -757,7 +791,11 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		d, c, ctx := newDaemon(t, _store, 5*time.Second)
 		defer d.Shutdown(t)
 
-		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{QueueName: queueName}))
+		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+			ReserveTimeout: ReserveTimeout,
+			DeadTimeout:    DeadTimeout,
+			QueueName:      queueName,
+		}))
 
 		for _, tc := range []struct {
 			Name string
@@ -768,7 +806,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			{
 				Name: "EmptyRequest",
 				Req:  &pb.QueueReserveRequest{},
-				Msg:  "invalid queue; queue name cannot be empty",
+				Msg:  "queue name is invalid; queue name cannot be empty",
 				Code: duh.CodeBadRequest,
 			},
 			{
@@ -805,7 +843,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					ClientId:  clientID,
 					BatchSize: 111,
 				},
-				Msg:  "request_timeout is required; '5m' is recommended, 15m is the maximum",
+				Msg:  "request timeout is required; '5m' is recommended, 15m is the maximum",
 				Code: duh.CodeBadRequest,
 			},
 			{
@@ -816,7 +854,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					BatchSize:      1_000,
 					RequestTimeout: "16m",
 				},
-				Msg:  "invalid request_timeout; maximum timeout is '15m' but '16m0s' requested",
+				Msg:  "invalid request timeout; maximum timeout is '15m' but '16m0s' requested",
 				Code: duh.CodeBadRequest,
 			},
 			{
@@ -827,7 +865,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					BatchSize:      1_000,
 					RequestTimeout: "foo",
 				},
-				Msg:  "request_timeout is invalid; time: invalid duration \"foo\" - expected format: 900ms, 5m or 15m",
+				Msg:  "request timeout is invalid; time: invalid duration \"foo\" - expected format: 900ms, 5m or 15m",
 				Code: duh.CodeBadRequest,
 			},
 			{
@@ -848,7 +886,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					BatchSize:      1_000,
 					RequestTimeout: "1ms",
 				},
-				Msg:  "request_timeout is invalid; minimum timeout is '10ms' but '1ms' was requested",
+				Msg:  "request timeout is invalid; minimum timeout is '10ms' but '1ms' was requested",
 				Code: duh.CodeBadRequest,
 			},
 		} {

@@ -250,6 +250,7 @@ func (q *MemoryQueue) findID(id []byte) (int, bool) {
 // ---------------------------------------------
 
 type MemoryQueuesStore struct {
+	QueuesValidation
 	mem    []types.QueueInfo
 	parent *MemoryStorage
 }
@@ -257,12 +258,8 @@ type MemoryQueuesStore struct {
 var _ QueuesStore = &MemoryQueuesStore{}
 
 func (s *MemoryQueuesStore) Get(_ context.Context, name string, queue *types.QueueInfo) error {
-	if strings.TrimSpace(name) == "" {
-		return ErrEmptyQueueName
-	}
-
-	if strings.Contains(name, "~") {
-		return transport.NewInvalidOption("invalid queue_name; '%s' cannot contain '~' character", name)
+	if err := s.validateGet(name); err != nil {
+		return err
 	}
 
 	idx, ok := s.findQueue(name)
@@ -274,13 +271,8 @@ func (s *MemoryQueuesStore) Get(_ context.Context, name string, queue *types.Que
 }
 
 func (s *MemoryQueuesStore) Add(_ context.Context, info types.QueueInfo) error {
-	if strings.TrimSpace(info.Name) == "" {
-		return ErrEmptyQueueName
-	}
-
-	if info.ReserveTimeout > info.DeadTimeout {
-		return transport.NewInvalidOption("reserve_timeout is too long; %s cannot be greater than the "+
-			"dead_timeout %s", info.ReserveTimeout.String(), info.DeadTimeout.String())
+	if err := s.validateAdd(info); err != nil {
+		return err
 	}
 
 	_, ok := s.findQueue(info.Name)
@@ -293,8 +285,8 @@ func (s *MemoryQueuesStore) Add(_ context.Context, info types.QueueInfo) error {
 }
 
 func (s *MemoryQueuesStore) Update(_ context.Context, info types.QueueInfo) error {
-	if strings.TrimSpace(info.Name) == "" {
-		return ErrEmptyQueueName
+	if err := s.validateUpdate(info); err != nil {
+		return err
 	}
 
 	idx, ok := s.findQueue(info.Name)
@@ -302,9 +294,16 @@ func (s *MemoryQueuesStore) Update(_ context.Context, info types.QueueInfo) erro
 		return ErrQueueNotExist
 	}
 
+	if info.DeadTimeout.Nanoseconds() != 0 {
+		if info.ReserveTimeout > info.DeadTimeout {
+			return transport.NewInvalidOption("reserve timeout is too long; %s cannot be greater than the "+
+				"dead timeout %s", info.ReserveTimeout.String(), info.DeadTimeout.String())
+		}
+	}
+
 	if info.ReserveTimeout > s.mem[idx].DeadTimeout {
-		return transport.NewInvalidOption("reserve_timeout is too long; %s cannot be greater than the "+
-			"dead_timeout %s", info.ReserveTimeout.String(), s.mem[idx].DeadTimeout.String())
+		return transport.NewInvalidOption("reserve timeout is too long; %s cannot be greater than the "+
+			"dead timeout %s", info.ReserveTimeout.String(), s.mem[idx].DeadTimeout.String())
 	}
 
 	s.mem[idx].Update(info)
@@ -313,6 +312,10 @@ func (s *MemoryQueuesStore) Update(_ context.Context, info types.QueueInfo) erro
 }
 
 func (s *MemoryQueuesStore) List(_ context.Context, queues *[]types.QueueInfo, opts types.ListOptions) error {
+	if err := s.validateList(opts); err != nil {
+		return err
+	}
+
 	var count, idx int
 	if opts.Pivot != nil {
 		idx, _ = s.findQueue(string(opts.Pivot))
@@ -325,6 +328,24 @@ func (s *MemoryQueuesStore) List(_ context.Context, queues *[]types.QueueInfo, o
 		*queues = append(*queues, info)
 		count++
 	}
+	return nil
+}
+
+func (s *MemoryQueuesStore) Delete(_ context.Context, name string) error {
+	if err := s.validateDelete(name); err != nil {
+		return err
+	}
+
+	idx, ok := s.findQueue(name)
+	if !ok {
+		return nil
+	}
+	s.mem = append(s.mem[:idx], s.mem[idx+1:]...)
+	return nil
+}
+
+func (s *MemoryQueuesStore) Close(_ context.Context) error {
+	s.mem = nil
 	return nil
 }
 
@@ -343,18 +364,4 @@ func (s *MemoryQueuesStore) findQueue(name string) (int, bool) {
 		}
 	}
 	return nearestIdx, false
-}
-
-func (s *MemoryQueuesStore) Delete(_ context.Context, name string) error {
-	idx, ok := s.findQueue(name)
-	if !ok {
-		return nil
-	}
-	s.mem = append(s.mem[:idx], s.mem[idx+1:]...)
-	return nil
-}
-
-func (s *MemoryQueuesStore) Close(_ context.Context) error {
-	s.mem = nil
-	return nil
 }

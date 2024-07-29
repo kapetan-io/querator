@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-var ErrEmptyQueueName = transport.NewInvalidOption("invalid queue; queue name cannot be empty")
+var ErrQueueNotExist = transport.NewRequestFailed("queue does not exist")
 
 // StorageID is the decoded storage StorageID
 type StorageID struct {

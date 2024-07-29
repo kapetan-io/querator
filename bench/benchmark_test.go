@@ -64,7 +64,11 @@ func BenchmarkProduce(b *testing.B) {
 				_ = d.Shutdown(context.Background())
 			}()
 			s := d.Service()
-			require.NoError(b, s.QueuesCreate(context.Background(), &pb.QueueInfo{QueueName: "bench-queue"}))
+			require.NoError(b, s.QueuesCreate(context.Background(), &pb.QueueInfo{
+				QueueName:      "bench-queue",
+				DeadTimeout:    "24h0m0s",
+				ReserveTimeout: "1m0s",
+			}))
 
 			for _, p := range []int{1, 8, 24, 32} {
 				b.Run(fmt.Sprintf("Produce_%d", p), func(b *testing.B) {

@@ -247,6 +247,7 @@ func (h *HTTPHandler) QueuesList(ctx context.Context, w http.ResponseWriter, r *
 		duh.ReplyError(w, r, err)
 		return
 	}
+
 	duh.Reply(w, r, duh.CodeOK, &resp)
 }
 

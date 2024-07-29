@@ -119,16 +119,16 @@ func (q *Queue) Produce(ctx context.Context, req *types.ProduceRequest) error {
 	}
 
 	if req.RequestTimeout == time.Duration(0) {
-		return transport.NewInvalidOption("request_timeout is required; '5m' is recommended, 15m is the maximum")
+		return transport.NewInvalidOption("request timeout is required; '5m' is recommended, 15m is the maximum")
 	}
 
 	if req.RequestTimeout >= maxRequestTimeout {
-		return transport.NewInvalidOption("request_timeout is invalid; maximum timeout is '15m' but"+
+		return transport.NewInvalidOption("request timeout is invalid; maximum timeout is '15m' but"+
 			" '%s' was requested", req.RequestTimeout.String())
 	}
 
 	if req.RequestTimeout <= minRequestTimeout {
-		return transport.NewInvalidOption("request_timeout is invalid; minimum timeout is '10ms' but"+
+		return transport.NewInvalidOption("request timeout is invalid; minimum timeout is '10ms' but"+
 			" '%s' was requested", req.RequestTimeout.String())
 	}
 
@@ -178,16 +178,16 @@ func (q *Queue) Reserve(ctx context.Context, req *types.ReserveRequest) error {
 	}
 
 	if req.RequestTimeout == time.Duration(0) {
-		return transport.NewInvalidOption("request_timeout is required; '5m' is recommended, 15m is the maximum")
+		return transport.NewInvalidOption("request timeout is required; '5m' is recommended, 15m is the maximum")
 	}
 
 	if req.RequestTimeout > maxRequestTimeout {
-		return transport.NewInvalidOption("invalid request_timeout; maximum timeout is '15m' but '%s' "+
+		return transport.NewInvalidOption("invalid request timeout; maximum timeout is '15m' but '%s' "+
 			"requested", req.RequestTimeout.String())
 	}
 
 	if req.RequestTimeout <= minRequestTimeout {
-		return transport.NewInvalidOption("request_timeout is invalid; minimum timeout is '10ms' but"+
+		return transport.NewInvalidOption("request timeout is invalid; minimum timeout is '10ms' but"+
 			" '%s' was requested", req.RequestTimeout.String())
 	}
 
@@ -212,12 +212,12 @@ func (q *Queue) Complete(ctx context.Context, req *types.CompleteRequest) error 
 	}
 
 	if req.RequestTimeout > maxRequestTimeout {
-		return transport.NewInvalidOption("request_timeout is invalid; maximum timeout is '15m' but '%s' "+
+		return transport.NewInvalidOption("request timeout is invalid; maximum timeout is '15m' but '%s' "+
 			"requested", req.RequestTimeout.String())
 	}
 
 	if req.RequestTimeout == time.Duration(0) {
-		return transport.NewInvalidOption("request_timeout is required; '5m' is recommended, 15m is the maximum")
+		return transport.NewInvalidOption("request timeout is required; '5m' is recommended, 15m is the maximum")
 	}
 
 	req.RequestDeadline = time.Now().UTC().Add(req.RequestTimeout)

@@ -7,13 +7,29 @@ import (
 	"time"
 )
 
+const (
+	maxTimeoutLength  = 15
+	defaultAllocation = 512  // 2<<8
+	maxAllocation     = 2048 // 2<<10
+)
+
+func allocInt32(mem int32) int {
+	if mem < 0 {
+		return defaultAllocation
+	}
+	if mem > maxAllocation {
+		return defaultAllocation
+	}
+	return int(mem)
+}
+
 func (s *Service) validateQueueProduceProto(in *proto.QueueProduceRequest, out *types.ProduceRequest) error {
 	var err error
 
 	if in.RequestTimeout != "" {
 		out.RequestTimeout, err = time.ParseDuration(in.RequestTimeout)
 		if err != nil {
-			return transport.NewInvalidOption("request_timeout is invalid; %s - expected format: 900ms, 5m or 15m", err.Error())
+			return transport.NewInvalidOption("request timeout is invalid; %s - expected format: 900ms, 5m or 15m", err.Error())
 		}
 	}
 
@@ -39,7 +55,7 @@ func (s *Service) validateQueueReserveProto(in *proto.QueueReserveRequest, out *
 	if in.RequestTimeout != "" {
 		out.RequestTimeout, err = time.ParseDuration(in.RequestTimeout)
 		if err != nil {
-			return transport.NewInvalidOption("request_timeout is invalid; %s - expected format: 900ms, 5m or 15m", err.Error())
+			return transport.NewInvalidOption("request timeout is invalid; %s - expected format: 900ms, 5m or 15m", err.Error())
 		}
 	}
 
@@ -60,7 +76,7 @@ func (s *Service) validateQueueCompleteProto(in *proto.QueueCompleteRequest, out
 	if in.RequestTimeout != "" {
 		out.RequestTimeout, err = time.ParseDuration(in.RequestTimeout)
 		if err != nil {
-			return transport.NewInvalidOption("request_timeout is invalid; %s - expected format: 900ms, 5m or 15m", err.Error())
+			return transport.NewInvalidOption("request timeout is invalid; %s - expected format: 900ms, 5m or 15m", err.Error())
 		}
 	}
 
@@ -74,17 +90,25 @@ func (s *Service) validateQueueCompleteProto(in *proto.QueueCompleteRequest, out
 func (s *Service) validateQueueOptionsProto(in *proto.QueueInfo, out *types.QueueInfo) error {
 	var err error
 
+	if len(in.ReserveTimeout) > maxTimeoutLength {
+		return transport.NewInvalidOption("reserve timeout is invalid; cannot be greater than '%d' characters", maxTimeoutLength)
+	}
+
+	if len(in.DeadTimeout) > maxTimeoutLength {
+		return transport.NewInvalidOption("dead timeout is invalid; cannot be greater than '%d' characters", maxTimeoutLength)
+	}
+
 	if in.DeadTimeout != "" {
 		out.DeadTimeout, err = time.ParseDuration(in.DeadTimeout)
 		if err != nil {
-			return transport.NewInvalidOption("dead_timeout is invalid; %s - expected format: 60m, 2h or 24h", err.Error())
+			return transport.NewInvalidOption("dead timeout is invalid; %s - expected format: 60m, 2h or 24h", err.Error())
 		}
 	}
 
 	if in.ReserveTimeout != "" {
 		out.ReserveTimeout, err = time.ParseDuration(in.ReserveTimeout)
 		if err != nil {
-			return transport.NewInvalidOption("res is invalid; %s -  expected format: 8m, 15m or 1h", err.Error())
+			return transport.NewInvalidOption("reserve timeout is invalid; %s -  expected format: 8m, 15m or 1h", err.Error())
 		}
 	}
 
@@ -101,7 +125,7 @@ func (s *Service) validateQueuePauseRequestProto(in *proto.QueuePauseRequest, ou
 	if in.PauseDuration != "" {
 		out.PauseDuration, err = time.ParseDuration(in.PauseDuration)
 		if err != nil {
-			return transport.NewInvalidOption("pause_duration is invalid; %s - expected format: 60m, 2h or 24h", err.Error())
+			return transport.NewInvalidOption("pause duration is invalid; %s - expected format: 60m, 2h or 24h", err.Error())
 		}
 	}
 	out.Pause = in.Pause

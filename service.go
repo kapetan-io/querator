@@ -205,7 +205,7 @@ func (s *Service) QueuesList(ctx context.Context, req *proto.QueuesListRequest,
 		req.Limit = DefaultListLimit
 	}
 
-	items := make([]types.QueueInfo, 0, req.Limit)
+	items := make([]types.QueueInfo, 0, allocInt32(req.Limit))
 	if err := s.queues.List(ctx, &items, types.ListOptions{
 		Pivot: types.ToItemID(req.Pivot),
 		Limit: int(req.Limit),
@@ -256,7 +256,7 @@ func (s *Service) StorageQueueList(ctx context.Context, req *proto.StorageQueueL
 		req.Limit = DefaultListLimit
 	}
 
-	items := make([]*types.Item, 0, req.Limit)
+	items := make([]*types.Item, 0, allocInt32(req.Limit))
 	if err := queue.StorageQueueList(ctx, &items, types.ListOptions{
 		Pivot: types.ToItemID(req.Pivot),
 		Limit: int(req.Limit),

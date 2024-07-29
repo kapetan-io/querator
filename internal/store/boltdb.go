@@ -16,11 +16,9 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
-var ErrQueueNotExist = transport.NewRequestFailed("queue does not exist")
 var bucketName = []byte("queue")
 
 type BoltOptions struct {
@@ -491,6 +489,7 @@ func (b *BoltStorage) NewQueuesStore(opts QueuesStoreOptions) (QueuesStore, erro
 }
 
 type BoltQueuesStore struct {
+	QueuesValidation
 	db *bolt.DB
 }
 
@@ -499,12 +498,8 @@ var _ QueuesStore = &BoltQueuesStore{}
 func (s BoltQueuesStore) Get(_ context.Context, name string, queue *types.QueueInfo) error {
 	f := errors.Fields{"category", "bolt", "func", "QueuesStore.Get"}
 
-	if strings.TrimSpace(name) == "" {
-		return ErrEmptyQueueName
-	}
-
-	if strings.Contains(name, "~") {
-		return transport.NewInvalidOption("invalid queue_name; '%s' cannot contain '~' character", name)
+	if err := s.validateGet(name); err != nil {
+		return err
 	}
 
 	return s.db.View(func(tx *bolt.Tx) error {
@@ -528,13 +523,8 @@ func (s BoltQueuesStore) Get(_ context.Context, name string, queue *types.QueueI
 func (s BoltQueuesStore) Add(_ context.Context, info types.QueueInfo) error {
 	f := errors.Fields{"category", "bolt", "func", "QueuesStore.Add"}
 
-	if strings.TrimSpace(info.Name) == "" {
-		return ErrEmptyQueueName
-	}
-
-	if info.ReserveTimeout > info.DeadTimeout {
-		return transport.NewInvalidOption("reserve_timeout is too long; %s cannot be greater than the "+
-			"dead_timeout %s", info.ReserveTimeout.String(), info.DeadTimeout.String())
+	if err := s.validateAdd(info); err != nil {
+		return err
 	}
 
 	return s.db.Update(func(tx *bolt.Tx) error {
@@ -563,8 +553,8 @@ func (s BoltQueuesStore) Add(_ context.Context, info types.QueueInfo) error {
 func (s BoltQueuesStore) Update(_ context.Context, info types.QueueInfo) error {
 	f := errors.Fields{"category", "bolt", "func", "QueuesStore.Update"}
 
-	if strings.TrimSpace(info.Name) == "" {
-		return ErrEmptyQueueName
+	if err := s.validateUpdate(info); err != nil {
+		return err
 	}
 
 	return s.db.Update(func(tx *bolt.Tx) error {
@@ -586,8 +576,8 @@ func (s BoltQueuesStore) Update(_ context.Context, info types.QueueInfo) error {
 		found.Update(info)
 
 		if found.ReserveTimeout > found.DeadTimeout {
-			return transport.NewInvalidOption("reserve_timeout is too long; %s cannot be greater than the "+
-				"dead_timeout %s", info.ReserveTimeout.String(), found.DeadTimeout.String())
+			return transport.NewInvalidOption("reserve timeout is too long; %s cannot be greater than the "+
+				"dead timeout %s", info.ReserveTimeout.String(), found.DeadTimeout.String())
 		}
 
 		var buf bytes.Buffer
@@ -604,6 +594,10 @@ func (s BoltQueuesStore) Update(_ context.Context, info types.QueueInfo) error {
 
 func (s BoltQueuesStore) List(_ context.Context, queues *[]types.QueueInfo, opts types.ListOptions) error {
 	f := errors.Fields{"category", "bolt", "func", "QueuesStore.List"}
+
+	if err := s.validateList(opts); err != nil {
+		return err
+	}
 
 	return s.db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket(bucketName)
@@ -655,7 +649,9 @@ func (s BoltQueuesStore) List(_ context.Context, queues *[]types.QueueInfo, opts
 func (s BoltQueuesStore) Delete(_ context.Context, name string) error {
 	f := errors.Fields{"category", "bolt", "func", "QueuesStore.Delete"}
 
-	// TODO: Validate 'name'
+	if err := s.validateDelete(name); err != nil {
+		return err
+	}
 
 	return s.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(bucketName)

@@ -11,6 +11,7 @@ import (
 	"github.com/kapetan-io/tackle/random"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"math"
 	"math/rand"
 	"testing"
 	"time"
@@ -86,6 +87,8 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 			assert.Equal(t, queueName+"-dead", list.Items[0].DeadQueue)
 			assert.Equal(t, "CreateTestRef", list.Items[0].Reference)
 		})
+
+		// TODO: Test Create with Named DeadLetter queue
 
 		now := time.Now().UTC()
 		queues := createRandomQueues(t, ctx, c, 200)
@@ -379,7 +382,7 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 				{
 					Name: "EmptyRequest",
 					Req:  &pb.QueueInfo{},
-					Msg:  "invalid queue; queue name cannot be empty",
+					Msg:  "queue name is invalid; queue name cannot be empty",
 					Code: duh.CodeBadRequest,
 				},
 				{
@@ -387,24 +390,61 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 					Req: &pb.QueueInfo{
 						QueueName: "invalid~queue",
 					},
-					Msg:  "invalid queue_name; 'invalid~queue' cannot contain '~' character",
+					Msg:  "queue name is invalid; 'invalid~queue' cannot contain '~' character",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "QueueNameMaxLength",
+					Req: &pb.QueueInfo{
+						QueueName: random.String("", 2_001),
+					},
+					Msg:  "queue name is invalid; cannot be greater than '512' characters",
 					Code: duh.CodeBadRequest,
 				},
 				{
 					Name: "AlreadyExists",
 					Req: &pb.QueueInfo{
-						QueueName: queueName,
+						ReserveTimeout: ReserveTimeout,
+						DeadTimeout:    DeadTimeout,
+						QueueName:      queueName,
 					},
-					Msg:  "foo",
+					Msg:  "invalid queue; '" + queueName + "' already exists",
 					Code: duh.CodeBadRequest,
 				},
 				{
-					Name: "ReferenceTooLong",
+					Name: "MissingReservationTimeout",
 					Req: &pb.QueueInfo{
-						QueueName: "ReferenceTooLong",
+						QueueName:   random.String("queue-", 10),
+						DeadTimeout: "24h0m0s",
+					},
+					Msg:  "reserve timeout is invalid; cannot be empty",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "MissingDeadTimeout",
+					Req: &pb.QueueInfo{
+						QueueName:      random.String("queue-", 10),
+						ReserveTimeout: "24h0m0s",
+					},
+					Msg:  "dead timeout is invalid; cannot be empty",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "ReferenceMaxLength",
+					Req: &pb.QueueInfo{
+						QueueName: "ReferenceMaxLength",
 						Reference: random.String("", 2_001),
 					},
-					Msg:  "foo",
+					Msg:  "reference field is invalid; cannot be greater than '2000' characters",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "ReserveTimeoutMaxLength",
+					Req: &pb.QueueInfo{
+						QueueName:      "ReserveTimeoutMaxLength",
+						ReserveTimeout: random.String("", 2_001),
+					},
+					Msg:  "reserve timeout is invalid; cannot be greater than '15' characters",
 					Code: duh.CodeBadRequest,
 				},
 				{
@@ -414,7 +454,7 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 						ReserveTimeout: "1h0m0s",
 						DeadTimeout:    "30m0s",
 					},
-					Msg:  "foo",
+					Msg:  "reserve timeout is too long; 1h0m0s cannot be greater than the dead timeout 30m0s",
 					Code: duh.CodeBadRequest,
 				},
 				{
@@ -423,7 +463,7 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 						QueueName:      "InvalidReserveTimeout",
 						ReserveTimeout: "foo",
 					},
-					Msg:  "foo",
+					Msg:  "reserve timeout is invalid; time: invalid duration \"foo\" -  expected format: 8m, 15m or 1h",
 					Code: duh.CodeBadRequest,
 				},
 				{
@@ -432,7 +472,16 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 						QueueName:   "InvalidDeadTimeout",
 						DeadTimeout: "foo",
 					},
-					Msg:  "foo",
+					Msg:  "dead timeout is invalid; time: invalid duration \"foo\" - expected format: 60m, 2h or 24h",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "DeadTimeoutMaxLength",
+					Req: &pb.QueueInfo{
+						QueueName:   "DeadTimeoutMaxLength",
+						DeadTimeout: random.String("", 2_001),
+					},
+					Msg:  "dead timeout is invalid; cannot be greater than '15' characters",
 					Code: duh.CodeBadRequest,
 				},
 				{
@@ -441,26 +490,35 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 						QueueName: "InvalidDeadLetterQueue",
 						DeadQueue: "invalid~deadLetter",
 					},
-					Msg:  "foo",
+					Msg:  "dead queue is invalid; 'invalid~deadLetter' cannot contain '~' character",
 					Code: duh.CodeBadRequest,
 				},
 				{
-					Name: "InvalidDeadLetterQueue",
+					Name: "DeadQueueMaxLength",
 					Req: &pb.QueueInfo{
-						QueueName: "InvalidDeadLetterQueue",
-						DeadQueue: "invalid~deadLetter",
+						QueueName:   "DeadTimeoutMaxLength",
+						DeadTimeout: random.String("", 2_001),
 					},
-					Msg:  "foo",
+					Msg:  "dead timeout is invalid; cannot be greater than '15' characters",
 					Code: duh.CodeBadRequest,
 				},
 				{
-					// TODO: This might be allowed later to indicate infinite retries
+					// TODO: We may want to allow -1 to indicate infinite retries
+					Name: "InvalidNegativeMaxAttempts",
+					Req: &pb.QueueInfo{
+						QueueName:   "InvalidMaxAttempts",
+						MaxAttempts: math.MinInt32,
+					},
+					Msg:  "max attempts is invalid; cannot be negative number",
+					Code: duh.CodeBadRequest,
+				},
+				{
 					Name: "InvalidMaxAttempts",
 					Req: &pb.QueueInfo{
 						QueueName:   "InvalidMaxAttempts",
-						MaxAttempts: -1,
+						MaxAttempts: math.MaxInt32,
 					},
-					Msg:  "foo",
+					Msg:  "max attempts is invalid; cannot be greater than 65536",
 					Code: duh.CodeBadRequest,
 				},
 			} {
@@ -471,6 +529,7 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 						require.True(t, errors.As(err, &e))
 						assert.Equal(t, test.Msg, e.Message())
 						assert.Equal(t, test.Code, e.Code())
+						assert.Contains(t, e.Error(), test.Msg)
 					}
 				})
 			}
@@ -487,7 +546,15 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 					Opts: &que.ListOptions{
 						Limit: -1,
 					},
-					Msg:  "foo",
+					Msg:  "limit is invalid; limit cannot be negative",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "InvalidLimit",
+					Opts: &que.ListOptions{
+						Limit: math.MaxInt32,
+					},
+					Msg:  "limit is invalid; cannot be greater than 65536",
 					Code: duh.CodeBadRequest,
 				},
 				{
@@ -495,7 +562,7 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 					Opts: &que.ListOptions{
 						Pivot: "invalid~queue",
 					},
-					Msg:  "foo",
+					Msg:  "pivot is invalid; 'invalid~queue' cannot contain '~' character",
 					Code: duh.CodeBadRequest,
 				},
 			} {
@@ -507,6 +574,7 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 						require.True(t, errors.As(err, &e))
 						assert.Equal(t, test.Msg, e.Message())
 						assert.Equal(t, test.Code, e.Code())
+						assert.Contains(t, e.Error(), test.Msg)
 					}
 				})
 			}
@@ -521,7 +589,7 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 				{
 					Name: "EmptyRequest",
 					Req:  &pb.QueueInfo{},
-					Msg:  "invalid queue; queue name cannot be empty",
+					Msg:  "queue name is invalid; queue name cannot be empty",
 					Code: duh.CodeBadRequest,
 				},
 				{
@@ -529,16 +597,32 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 					Req: &pb.QueueInfo{
 						QueueName: "invalid~queue",
 					},
-					Msg:  "invalid queue_name; 'invalid~queue' cannot contain '~' character",
+					Msg:  "queue name is invalid; 'invalid~queue' cannot contain '~' character",
 					Code: duh.CodeBadRequest,
 				},
 				{
-					Name: "ReferenceTooLong",
+					Name: "NoSuchQueue",
+					Req: &pb.QueueInfo{
+						QueueName: "noSuchQueue",
+					},
+					Msg:  "queue does not exist",
+					Code: duh.CodeRequestFailed,
+				},
+				{
+					Name: "QueueNameMaxLength",
+					Req: &pb.QueueInfo{
+						QueueName: random.String("", 2_001),
+					},
+					Msg:  "queue name is invalid; cannot be greater than '512' characters",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "ReferenceMaxLength",
 					Req: &pb.QueueInfo{
 						QueueName: queueName,
 						Reference: random.String("", 2_001),
 					},
-					Msg:  "foo",
+					Msg:  "reference field is invalid; cannot be greater than '2000' characters",
 					Code: duh.CodeBadRequest,
 				},
 				{
@@ -548,7 +632,7 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 						ReserveTimeout: "1h0m0s",
 						DeadTimeout:    "30m0s",
 					},
-					Msg:  "foo",
+					Msg:  "reserve timeout is too long; 1h0m0s cannot be greater than the dead timeout 30m0s",
 					Code: duh.CodeBadRequest,
 				},
 				{
@@ -557,7 +641,7 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 						QueueName:      queueName,
 						ReserveTimeout: "foo",
 					},
-					Msg:  "foo",
+					Msg:  "reserve timeout is invalid; time: invalid duration \"foo\" -  expected format: 8m, 15m or 1h",
 					Code: duh.CodeBadRequest,
 				},
 				{
@@ -566,7 +650,25 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 						QueueName:   queueName,
 						DeadTimeout: "foo",
 					},
-					Msg:  "foo",
+					Msg:  "dead timeout is invalid; time: invalid duration \"foo\" - expected format: 60m, 2h or 24h",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "DeadTimeoutMaxLength",
+					Req: &pb.QueueInfo{
+						QueueName:   "DeadTimeoutMaxLength",
+						DeadTimeout: random.String("", 2_001),
+					},
+					Msg:  "dead timeout is invalid; cannot be greater than '15' characters",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "DeadQueueMaxLength",
+					Req: &pb.QueueInfo{
+						QueueName:   "DeadTimeoutMaxLength",
+						DeadTimeout: random.String("", 2_001),
+					},
+					Msg:  "dead timeout is invalid; cannot be greater than '15' characters",
 					Code: duh.CodeBadRequest,
 				},
 				{
@@ -575,16 +677,7 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 						QueueName: queueName,
 						DeadQueue: "invalid~deadLetter",
 					},
-					Msg:  "foo",
-					Code: duh.CodeBadRequest,
-				},
-				{
-					Name: "InvalidDeadLetterQueue",
-					Req: &pb.QueueInfo{
-						QueueName: queueName,
-						DeadQueue: "invalid~deadLetter",
-					},
-					Msg:  "foo",
+					Msg:  "dead queue is invalid; 'invalid~deadLetter' cannot contain '~' character",
 					Code: duh.CodeBadRequest,
 				},
 				{
@@ -594,7 +687,16 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 						QueueName:   queueName,
 						MaxAttempts: -1,
 					},
-					Msg:  "foo",
+					Msg:  "max attempts is invalid; cannot be negative number",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "InvalidMaxAttempts",
+					Req: &pb.QueueInfo{
+						QueueName:   "InvalidMaxAttempts",
+						MaxAttempts: math.MaxInt32,
+					},
+					Msg:  "max attempts is invalid; cannot be greater than 65536",
 					Code: duh.CodeBadRequest,
 				},
 			} {
@@ -608,9 +710,6 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 					}
 				})
 			}
-			// TODO: No Such Queue
-			// TODO: ReserveTimeout larger than DeadTimeout
-			// TODO: Missing ReserveTimeout and DeadTimeout
 		})
 		t.Run("QueuesDelete", func(t *testing.T) {
 			for _, test := range []struct {
@@ -620,11 +719,25 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 				Code int
 			}{
 				{
+					Name: "EmptyRequest",
+					Req:  &pb.QueuesDeleteRequest{},
+					Msg:  "queue name is invalid; queue name cannot be empty",
+					Code: duh.CodeBadRequest,
+				},
+				{
 					Name: "InvalidQueue",
 					Req: &pb.QueuesDeleteRequest{
 						QueueName: "invalid~queue",
 					},
-					Msg:  "foo",
+					Msg:  "queue name is invalid; 'invalid~queue' cannot contain '~' character",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "QueueNameMaxLength",
+					Req: &pb.QueuesDeleteRequest{
+						QueueName: random.String("", 2_001),
+					},
+					Msg:  "queue name is invalid; cannot be greater than '512' characters",
 					Code: duh.CodeBadRequest,
 				},
 			} {

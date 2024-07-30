@@ -109,7 +109,7 @@ func (qm *QueuesManager) startQueue(info types.QueueInfo) (*Queue, error) {
 	// Assign all the server level configuration to QueueOptions.
 	set.Default(&opts.MaxProduceBatchSize, qm.opts.QueueOptions.MaxProduceBatchSize)
 	set.Default(&opts.MaxReserveBatchSize, qm.opts.QueueOptions.MaxReserveBatchSize)
-	set.Default(&opts.MaxCompleteSize, qm.opts.QueueOptions.MaxCompleteSize)
+	set.Default(&opts.MaxCompleteBatchSize, qm.opts.QueueOptions.MaxCompleteBatchSize)
 	set.Default(&opts.WriteTimeout, qm.opts.QueueOptions.WriteTimeout)
 	set.Default(&opts.ReadTimeout, qm.opts.QueueOptions.ReadTimeout)
 	set.Default(&opts.Logger, qm.opts.Logger)

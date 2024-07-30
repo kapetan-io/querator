@@ -51,8 +51,8 @@ type QueueOptions struct {
 	MaxReserveBatchSize int
 	// MaxProduceBatchSize is the maximum number of items a client can produce in a single produce request
 	MaxProduceBatchSize int
-	// MaxCompleteSize is the maximum number of ids a client can complete in a single complete request
-	MaxCompleteSize int // TODO: implement this limit and limit storage deletion also
+	// MaxCompleteBatchSize is the maximum number of ids a client can mark complete in a single complete request
+	MaxCompleteBatchSize int
 }
 
 // Queue manages job is to evenly distribute and consume items from a single queue. Ensuring consumers and
@@ -75,7 +75,7 @@ func NewQueue(opts QueueOptions) (*Queue, error) {
 	set.Default(&opts.Logger, slog.Default())
 	set.Default(&opts.MaxReserveBatchSize, 1_000)
 	set.Default(&opts.MaxProduceBatchSize, 1_000)
-	set.Default(&opts.MaxCompleteSize, 1_000)
+	set.Default(&opts.MaxCompleteBatchSize, 1_000)
 
 	if opts.QueueStore == nil {
 		return nil, transport.NewInvalidOption("QueueOptions.QueuesStore cannot be nil")
@@ -109,15 +109,6 @@ func (q *Queue) Produce(ctx context.Context, req *types.ProduceRequest) error {
 		return ErrQueueShutdown
 	}
 
-	if len(req.Items) == 0 {
-		return transport.NewInvalidOption("items cannot be empty; at least one item is required")
-	}
-
-	if len(req.Items) > q.opts.MaxProduceBatchSize {
-		return transport.NewInvalidOption("too many items in request; max_produce_batch_size is"+
-			" %d but received %d", q.opts.MaxProduceBatchSize, len(req.Items))
-	}
-
 	if req.RequestTimeout == time.Duration(0) {
 		return transport.NewInvalidOption("request timeout is required; '5m' is recommended, 15m is the maximum")
 	}
@@ -130,6 +121,15 @@ func (q *Queue) Produce(ctx context.Context, req *types.ProduceRequest) error {
 	if req.RequestTimeout <= minRequestTimeout {
 		return transport.NewInvalidOption("request timeout is invalid; minimum timeout is '10ms' but"+
 			" '%s' was requested", req.RequestTimeout.String())
+	}
+
+	if len(req.Items) == 0 {
+		return transport.NewInvalidOption("items cannot be empty; at least one item is required")
+	}
+
+	if len(req.Items) > q.opts.MaxProduceBatchSize {
+		return transport.NewInvalidOption("items is invalid; max_produce_batch_size is"+
+			" %d but received %d", q.opts.MaxProduceBatchSize, len(req.Items))
 	}
 
 	req.RequestDeadline = time.Now().UTC().Add(req.RequestTimeout)
@@ -173,7 +173,7 @@ func (q *Queue) Reserve(ctx context.Context, req *types.ReserveRequest) error {
 	}
 
 	if req.NumRequested > q.opts.MaxReserveBatchSize {
-		return transport.NewInvalidOption("invalid batch_size; exceeds maximum limit max_reserve_batch_size is %d, "+
+		return transport.NewInvalidOption("invalid batch_size; max_reserve_batch_size is %d, "+
 			"but %d was requested", q.opts.MaxProduceBatchSize, req.NumRequested)
 	}
 
@@ -209,6 +209,15 @@ func (q *Queue) Reserve(ctx context.Context, req *types.ReserveRequest) error {
 func (q *Queue) Complete(ctx context.Context, req *types.CompleteRequest) error {
 	if q.inShutdown.Load() {
 		return ErrQueueShutdown
+	}
+
+	if len(req.Ids) == 0 {
+		return transport.NewInvalidOption("ids is invalid; list of ids cannot be empty")
+	}
+
+	if len(req.Ids) > q.opts.MaxCompleteBatchSize {
+		return transport.NewInvalidOption("ids is invalid; max_complete_batch_size is"+
+			" %d but received %d", q.opts.MaxCompleteBatchSize, len(req.Ids))
 	}
 
 	if req.RequestTimeout > maxRequestTimeout {

@@ -527,19 +527,19 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					ClientId:       random.String("client-", 10),
 					QueueName:      queueName,
 					BatchSize:      20,
-					RequestTimeout: "4s",
+					RequestTimeout: "2s",
 				},
 				{
 					ClientId:       random.String("client-", 10),
 					QueueName:      queueName,
 					BatchSize:      6,
-					RequestTimeout: "4s",
+					RequestTimeout: "2s",
 				},
 				{
 					ClientId:       random.String("client-", 10),
 					QueueName:      queueName,
 					BatchSize:      1,
-					RequestTimeout: "5s",
+					RequestTimeout: "3s",
 				},
 			}
 			responses := pauseAndReserve(t, ctx, c, queueName, requests)
@@ -782,7 +782,8 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				{
 					Name: "InvalidQueue",
 					Req: &pb.QueueProduceRequest{
-						QueueName: "invalid~queue",
+						QueueName:      "invalid~queue",
+						RequestTimeout: "1m",
 					},
 					Msg:  "queue name is invalid; 'invalid~queue' cannot contain '~' character",
 					Code: duh.CodeBadRequest,
@@ -790,8 +791,9 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				{
 					Name: "NoItemsNilPointer",
 					Req: &pb.QueueProduceRequest{
-						QueueName: queueName,
-						Items:     nil,
+						QueueName:      queueName,
+						RequestTimeout: "1m",
+						Items:          nil,
 					},
 					Msg:  "items cannot be empty; at least one item is required",
 					Code: duh.CodeBadRequest,
@@ -799,8 +801,9 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				{
 					Name: "NoItemsEmptyList",
 					Req: &pb.QueueProduceRequest{
-						QueueName: queueName,
-						Items:     []*pb.QueueProduceItem{},
+						QueueName:      queueName,
+						RequestTimeout: "1m",
+						Items:          []*pb.QueueProduceItem{},
 					},
 					Msg:  "items cannot be empty; at least one item is required",
 					Code: duh.CodeBadRequest,
@@ -853,13 +856,13 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					Code: duh.CodeBadRequest,
 				},
 				{
-					Name: "MaxItemsReached",
+					Name: "MaxNumberOfItems",
 					Req: &pb.QueueProduceRequest{
 						QueueName:      queueName,
 						RequestTimeout: "1m",
 						Items:          maxItems,
 					},
-					Msg:  "too many items in request; max_produce_batch_size is 1000 but received 1001",
+					Msg:  "items is invalid; max_produce_batch_size is 1000 but received 1001",
 					Code: duh.CodeBadRequest,
 				},
 			} {
@@ -923,7 +926,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 						ClientId:  clientID,
 						BatchSize: 1_001,
 					},
-					Msg:  "invalid batch_size; exceeds maximum limit max_reserve_batch_size is 1000, but 1001 was requested",
+					Msg:  "invalid batch_size; max_reserve_batch_size is 1000, but 1001 was requested",
 					Code: duh.CodeBadRequest,
 				},
 				{
@@ -995,11 +998,115 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				})
 			}
 		})
-		// TODO: Finish error testing
 		t.Run("QueueComplete", func(t *testing.T) {
-			// TODO: <--- DO THIS NEXT
-		})
+			var queueName = random.String("queue-", 10)
+			d, c, ctx := newDaemon(t, _store, 5*time.Second)
+			defer d.Shutdown(t)
 
+			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+				ReserveTimeout: ReserveTimeout,
+				DeadTimeout:    DeadTimeout,
+				QueueName:      queueName,
+			}))
+
+			// TODO: Produce and Reserve some items to create actual ids
+			listOfValidIds := []string{"valid-id"}
+
+			for _, tc := range []struct {
+				Name string
+				Req  *pb.QueueCompleteRequest
+				Msg  string
+				Code int
+			}{
+				{
+					Name: "EmptyRequest",
+					Req:  &pb.QueueCompleteRequest{},
+					Msg:  "queue name is invalid; queue name cannot be empty",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "IdsCannotBeEmpty",
+					Req: &pb.QueueCompleteRequest{
+						QueueName:      queueName,
+						RequestTimeout: "1m0s",
+					},
+					Msg:  "ids is invalid; list of ids cannot be empty",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "RequestTimeoutRequired",
+					Req: &pb.QueueCompleteRequest{
+						Ids:       listOfValidIds,
+						QueueName: queueName,
+					},
+					Msg:  "request timeout is required; '5m' is recommended, 15m is the maximum",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "RequestTimeoutTooLong",
+					Req: &pb.QueueCompleteRequest{
+						Ids:            listOfValidIds,
+						QueueName:      queueName,
+						RequestTimeout: "16m0s",
+					},
+					Msg:  "request timeout is invalid; maximum timeout is '15m' but '16m0s' requested",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "RequestTimeoutInvalid",
+					Req: &pb.QueueCompleteRequest{
+						Ids:            listOfValidIds,
+						QueueName:      queueName,
+						RequestTimeout: "foo",
+					},
+					Msg:  "request timeout is invalid; time: invalid duration \"foo\" - expected format: 900ms, 5m or 15m",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "RequestTimeoutTooShort",
+					Req: &pb.QueueCompleteRequest{
+						Ids:            listOfValidIds,
+						QueueName:      queueName,
+						RequestTimeout: "0ms",
+					},
+					Msg:  "request timeout is required; '5m' is recommended, 15m is the maximum",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "InvalidIds",
+					Req: &pb.QueueCompleteRequest{
+						Ids:            []string{"invalid-id", "invalid-ids"},
+						QueueName:      queueName,
+						RequestTimeout: "1m",
+					},
+					Msg:  "invalid storage id; 'invalid-id': expected format <queue_name>~<storage_id>",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "MaxNumberOfIds",
+					Req: &pb.QueueCompleteRequest{
+						QueueName:      queueName,
+						RequestTimeout: "1m",
+						Ids:            randomSliceStrings(1_001),
+					},
+					Msg:  "ids is invalid; max_complete_batch_size is 1000 but received 1001",
+					Code: duh.CodeBadRequest,
+				},
+			} {
+				t.Run(tc.Name, func(t *testing.T) {
+					err := c.QueueComplete(ctx, tc.Req)
+					if tc.Code != duh.CodeOK {
+						var e duh.Error
+						require.True(t, errors.As(err, &e))
+						assert.Equal(t, tc.Msg, e.Message())
+						assert.Equal(t, tc.Code, e.Code())
+						if e.Message() == "" {
+							t.Logf("Error: %s", e.Error())
+						}
+					}
+				})
+			}
+		})
 	})
 
 	// TODO: Test duplicate client id on reserve
@@ -1046,6 +1153,14 @@ func writeRandomItems(t *testing.T, ctx context.Context, c *que.Client,
 	err := c.StorageQueueAdd(ctx, &pb.StorageQueueAddRequest{Items: items, QueueName: name}, &resp)
 	require.NoError(t, err)
 	return resp.Items
+}
+
+func randomSliceStrings(count int) []string {
+	var result []string
+	for i := 0; i < count; i++ {
+		result = append(result, fmt.Sprintf("string-%d", i))
+	}
+	return result
 }
 
 func pauseAndReserve(t *testing.T, ctx context.Context, c *que.Client, name string,

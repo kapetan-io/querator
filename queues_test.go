@@ -136,6 +136,10 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 				assert.True(t, now.Before(r.UpdatedAt.AsTime()))
 				assert.True(t, r.CreatedAt.AsTime().Before(r.UpdatedAt.AsTime()))
 				assert.Equal(t, l.MaxAttempts+1, r.MaxAttempts)
+
+				t.Run("Respected", func(t *testing.T) {
+					// TODO: Ensure producing and consuming on this queue respects the updated MaxAttempts
+				})
 			})
 
 			t.Run("ReserveTimeout", func(t *testing.T) {
@@ -164,6 +168,9 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 				assert.True(t, now.Before(r.UpdatedAt.AsTime()))
 				assert.True(t, r.CreatedAt.AsTime().Before(r.UpdatedAt.AsTime()))
 				assert.Equal(t, rt.String(), r.ReserveTimeout)
+				t.Run("Respected", func(t *testing.T) {
+					// TODO: Ensure producing and consuming on this queue respects the updated value
+				})
 			})
 			t.Run("DeadTimeout", func(t *testing.T) {
 				l := queues[52]
@@ -191,6 +198,9 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 				assert.True(t, now.Before(r.UpdatedAt.AsTime()))
 				assert.True(t, r.CreatedAt.AsTime().Before(r.UpdatedAt.AsTime()))
 				assert.Equal(t, dt.String(), r.DeadTimeout)
+				t.Run("Respected", func(t *testing.T) {
+					// TODO: Ensure producing and consuming on this queue respects the updated value
+				})
 			})
 			t.Run("Reference", func(t *testing.T) {
 				l := queues[53]
@@ -503,7 +513,7 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 					Code: duh.CodeBadRequest,
 				},
 				{
-					// TODO: We may want to allow -1 to indicate infinite retries
+					// TODO: We may want to allow -1 to indicate infinite retries, or just use 0
 					Name: "InvalidNegativeMaxAttempts",
 					Req: &pb.QueueInfo{
 						QueueName:   "InvalidMaxAttempts",

@@ -82,10 +82,10 @@ func TestQueue(t *testing.T) {
 }
 
 func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
-	_store := setup()
-	defer tearDown()
 
 	t.Run("ProduceAndConsume", func(t *testing.T) {
+		_store := setup()
+		defer tearDown()
 		var queueName = random.String("queue-", 10)
 		d, c, ctx := newDaemon(t, _store, 10*time.Second)
 		defer d.Shutdown(t)
@@ -157,93 +157,99 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		// Queue storage should be empty
 		require.NoError(t, c.StorageQueueList(ctx, queueName, &list, &que.ListOptions{Limit: 10}))
-
 		assert.Equal(t, 0, len(list.Items))
 
-		// TODO: Delete the queue
-	})
-
-	t.Run("QueueClear", func(t *testing.T) {
-		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, _store, 10*time.Second)
-		defer d.Shutdown(t)
-
-		var reserved []*pb.StorageQueueItem
-		var list pb.StorageQueueListResponse
-		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
-			ReserveTimeout: ReserveTimeout,
-			DeadTimeout:    DeadTimeout,
-			QueueName:      queueName,
-		}))
-
-		// Write some items to the queue
-		_ = writeRandomItems(t, ctx, c, queueName, 500)
-		// Ensure the items exist
-		require.NoError(t, c.StorageQueueList(ctx, queueName, &list, nil))
-		assert.Equal(t, 500, len(list.Items))
-
-		expire := time.Now().UTC().Add(random.Duration(10*time.Second, time.Minute))
-		reserved = append(reserved, &pb.StorageQueueItem{
-			DeadDeadline:    timestamppb.New(expire),
-			ReserveDeadline: timestamppb.New(expire),
-			Attempts:        int32(rand.Intn(10)),
-			Reference:       random.String("ref-", 10),
-			Encoding:        random.String("enc-", 10),
-			Kind:            random.String("kind-", 10),
-			Payload:         []byte("Reserved 1"),
-			IsReserved:      true,
-		})
-		reserved = append(reserved, &pb.StorageQueueItem{
-			DeadDeadline:    timestamppb.New(expire),
-			ReserveDeadline: timestamppb.New(expire),
-			Attempts:        int32(rand.Intn(10)),
-			Reference:       random.String("ref-", 10),
-			Encoding:        random.String("enc-", 10),
-			Kind:            random.String("kind-", 10),
-			Payload:         []byte("Reserved 2"),
-			IsReserved:      true,
-		})
-
-		// Add some reserved items
-		var resp pb.StorageQueueAddResponse
-		err := c.StorageQueueAdd(ctx, &pb.StorageQueueAddRequest{Items: reserved, QueueName: queueName}, &resp)
-		require.NoError(t, err)
-		require.NoError(t, c.StorageQueueList(ctx, queueName, &list, nil))
-		assert.Equal(t, 502, len(list.Items))
-
-		t.Run("NonDestructive", func(t *testing.T) {
-			require.NoError(t, c.QueueClear(ctx, &pb.QueueClearRequest{QueueName: queueName, Queue: true}))
-			require.NoError(t, c.StorageQueueList(ctx, queueName, &list, nil))
-			assert.Equal(t, 2, len(list.Items))
-		})
-
-		t.Run("Destructive", func(t *testing.T) {
-			_ = writeRandomItems(t, ctx, c, queueName, 200)
-			require.NoError(t, c.StorageQueueList(ctx, queueName, &list, nil))
-			assert.Equal(t, 202, len(list.Items))
-			require.NoError(t, c.QueueClear(ctx, &pb.QueueClearRequest{
-				QueueName:   queueName,
-				Destructive: true,
-				Queue:       true}))
-			require.NoError(t, c.StorageQueueList(ctx, queueName, &list, nil))
-			assert.Equal(t, 0, len(list.Items))
-		})
+		// Remove queue
+		require.NoError(t, c.QueuesDelete(ctx, &pb.QueuesDeleteRequest{QueueName: queueName}))
+		var queues pb.QueuesListResponse
+		require.NoError(t, c.QueuesList(ctx, &queues, &que.ListOptions{Limit: 10}))
+		for _, q := range queues.Items {
+			assert.NotEqual(t, q.QueueName, queueName)
+		}
 
 	})
 
 	t.Run("Produce", func(t *testing.T) {
+		_store := setup()
+		defer tearDown()
 		var queueName = random.String("queue-", 10)
 		d, c, ctx := newDaemon(t, _store, 10*time.Second)
 		defer d.Shutdown(t)
-		now := time.Now().UTC()
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
-			ReserveTimeout: ReserveTimeout,
-			DeadTimeout:    DeadTimeout,
+			Reference:      "rainbow@dash.com",
+			DeadTimeout:    "20h0m0s",
 			QueueName:      queueName,
+			ReserveTimeout: "1m0s",
+			MaxAttempts:    256,
 		}))
 
-		var lastItem *pb.StorageQueueItem
+		t.Run("InheritsQueueInfo", func(t *testing.T) {
+			now := time.Now().UTC()
+			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+				QueueName:      queueName,
+				RequestTimeout: "1m",
+				Items: []*pb.QueueProduceItem{
+					{
+						Reference: "flutter@shy.com",
+						Encoding:  "friendship",
+						Kind:      "yes",
+						Bytes:     []byte("You're...going...TO LOVE ME!"),
+					},
+					{
+						Reference: "",
+						Encoding:  "application/json",
+						Kind:      "no",
+						Bytes:     []byte("It needs to be about 20% cooler"),
+					},
+				}}))
+			deadDeadline := time.Now().UTC().Add(20 * time.Hour)
+
+			var list pb.StorageQueueListResponse
+			err := c.StorageQueueList(ctx, queueName, &list, &que.ListOptions{Limit: 20})
+			require.NoError(t, err)
+
+			assert.Equal(t, 2, len(list.Items))
+			assert.Equal(t, "flutter@shy.com", list.Items[0].Reference)
+			assert.Equal(t, "friendship", list.Items[0].Encoding)
+			assert.Equal(t, "yes", list.Items[0].Kind)
+			assert.True(t, list.Items[0].ReserveDeadline.AsTime().IsZero())
+			assert.False(t, list.Items[0].DeadDeadline.AsTime().IsZero())
+			assert.True(t, list.Items[0].DeadDeadline.AsTime().After(now))
+			assert.True(t, list.Items[0].DeadDeadline.AsTime().Before(deadDeadline))
+
+			assert.Equal(t, "", list.Items[1].Reference)
+			assert.Equal(t, "application/json", list.Items[1].Encoding)
+			assert.Equal(t, "no", list.Items[1].Kind)
+			assert.True(t, list.Items[1].ReserveDeadline.AsTime().IsZero())
+			assert.False(t, list.Items[1].DeadDeadline.AsTime().IsZero())
+			assert.True(t, list.Items[1].DeadDeadline.AsTime().After(now))
+			assert.True(t, list.Items[1].DeadDeadline.AsTime().Before(deadDeadline))
+		})
+
+		t.Run("MaxAttempts", func(t *testing.T) {
+			// TODO: Reserve and defer one of the items multiple times until we exhaust the MaxAttempts,
+			//  then assert item was deleted.
+		})
+		t.Run("ReserveTimeout", func(t *testing.T) {})
+		t.Run("DeadTimeout", func(t *testing.T) {
+			// TODO: Fast Forward to the future, and ensure the item is removed after the dead timeout
+		})
+		t.Run("DeadQueue", func(t *testing.T) {
+			// TODO: Create a new queue with a dead queue. Ensure an item produced in this queue is moved to
+			//  the dead queue after all attempts are exhausted
+
+			t.Run("DeadTimeout", func(t *testing.T) {
+				// TODO: Fast forward to the future, and ensure the item is moved to the dead queue after dead timeout
+			})
+		})
+
+		// Get the last item in the queue, so the following tests know where to begin their assertions.
+		var last pb.StorageQueueListResponse
+		err := c.StorageQueueList(ctx, queueName, &last, nil)
+		require.NoError(t, err)
+		lastItem := last.Items[len(last.Items)-1]
+
 		t.Run("Bytes", func(t *testing.T) {
 			var items []*pb.QueueProduceItem
 			for i := 0; i < 10; i++ {
@@ -255,32 +261,37 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				})
 			}
 
+			now := time.Now().UTC()
 			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
 				QueueName:      queueName,
 				RequestTimeout: "1m",
 				Items:          items,
 			}))
+			deadDeadline := time.Now().UTC().Add(24 * time.Hour)
 
 			// Ensure the items produced are in the data store
 			var list pb.StorageQueueListResponse
-			err := c.StorageQueueList(ctx, queueName, &list, &que.ListOptions{Limit: 20})
+			err := c.StorageQueueList(ctx, queueName, &list, &que.ListOptions{Pivot: lastItem.Id, Limit: 20})
 			require.NoError(t, err)
+			assert.Equal(t, len(items), len(list.Items[1:]))
+			produced := list.Items[1:]
 
-			require.Len(t, items, 10)
-			assert.Equal(t, len(items), len(list.Items))
-			for i := range items {
-				assert.True(t, list.Items[i].CreatedAt.AsTime().After(now))
-				// TODO: Ensure the DeadDeadline is set to something reasonable and then
-				//  change this test to ensure the they are also Before the time we think it should be.
-				assert.True(t, list.Items[i].DeadDeadline.AsTime().After(now))
-				assert.True(t, list.Items[i].ReserveDeadline.AsTime().IsZero())
+			require.Len(t, produced, 10)
+			for i := range produced {
+				assert.True(t, produced[i].CreatedAt.AsTime().After(now))
 
-				assert.Equal(t, false, list.Items[i].IsReserved)
-				assert.Equal(t, int32(0), list.Items[i].Attempts)
-				assert.Equal(t, items[i].Reference, list.Items[i].Reference)
-				assert.Equal(t, items[i].Encoding, list.Items[i].Encoding)
-				assert.Equal(t, items[i].Bytes, list.Items[i].Payload)
-				assert.Equal(t, items[i].Kind, list.Items[i].Kind)
+				// DeadDeadline should be after we produced the item, but before the dead timeout
+				assert.True(t, produced[i].ReserveDeadline.AsTime().IsZero())
+				assert.False(t, produced[i].DeadDeadline.AsTime().IsZero())
+				assert.True(t, produced[i].DeadDeadline.AsTime().After(now))
+				assert.True(t, produced[i].DeadDeadline.AsTime().Before(deadDeadline))
+
+				assert.Equal(t, false, produced[i].IsReserved)
+				assert.Equal(t, int32(0), produced[i].Attempts)
+				assert.Equal(t, items[i].Reference, produced[i].Reference)
+				assert.Equal(t, items[i].Encoding, produced[i].Encoding)
+				assert.Equal(t, items[i].Bytes, produced[i].Payload)
+				assert.Equal(t, items[i].Kind, produced[i].Kind)
 			}
 			lastItem = list.Items[len(list.Items)-1]
 		})
@@ -296,13 +307,15 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				})
 			}
 
+			now := time.Now().UTC()
 			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
 				QueueName:      queueName,
 				RequestTimeout: "1m",
 				Items:          items,
 			}))
+			deadDeadline := time.Now().UTC().Add(24 * time.Hour)
 
-			// Ensure the items produced are in the data store
+			// List all the items we just produced
 			var list pb.StorageQueueListResponse
 			err := c.StorageQueueList(ctx, queueName, &list, &que.ListOptions{Pivot: lastItem.Id, Limit: 101})
 			require.NoError(t, err)
@@ -315,10 +328,11 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 			for i := range produced {
 				assert.True(t, produced[i].CreatedAt.AsTime().After(now))
-				// TODO: Ensure the DeadDeadline is set to something reasonable and then
-				//  change this test to ensure the they are also Before the time we think it should be.
+
+				// DeadDeadline should be after we produced the item, but before the dead timeout
+				assert.False(t, produced[i].DeadDeadline.AsTime().IsZero())
 				assert.True(t, produced[i].DeadDeadline.AsTime().After(now))
-				assert.True(t, produced[i].ReserveDeadline.AsTime().IsZero())
+				assert.True(t, produced[i].DeadDeadline.AsTime().Before(deadDeadline))
 
 				assert.Equal(t, false, produced[i].IsReserved)
 				assert.Equal(t, int32(0), produced[i].Attempts)
@@ -329,29 +343,21 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			}
 		})
 
-		// TODO: Ensure that a reference provided by the user overrides the reference field provided by when the queue was created
-		//  Ensure all the queue level options are respected when producing items
-		// TODO: Produce an item, and ensure it goes to the dead queue once that functionality is complete
-		t.Run("RespectsQueue", func(t *testing.T) {
-			t.Run("Reference", func(t *testing.T) {})
-			t.Run("ReferenceOverride", func(t *testing.T) {})
-			t.Run("MaxAttempts", func(t *testing.T) {})
-			t.Run("ReserveTimeout", func(t *testing.T) {})
-			t.Run("DeadTimeout", func(t *testing.T) {})
-			t.Run("DeadQueue", func(t *testing.T) {})
-		})
 	})
 
 	t.Run("Reserve", func(t *testing.T) {
+		_store := setup()
+		defer tearDown()
+
 		var queueName = random.String("queue-", 10)
 		clientID := random.String("client-", 10)
 		d, c, ctx := newDaemon(t, _store, 30*time.Second)
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
-			ReserveTimeout: ReserveTimeout,
 			DeadTimeout:    DeadTimeout,
 			QueueName:      queueName,
+			ReserveTimeout: "2m0s",
 		}))
 		items := writeRandomItems(t, ctx, c, queueName, 10_000)
 		require.Len(t, items, 10_000)
@@ -368,8 +374,10 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				RequestTimeout: "1m",
 			}
 
+			now := time.Now().UTC()
 			require.NoError(t, c.QueueReserve(ctx, &req, &reserved))
 			require.Equal(t, 10, len(reserved.Items))
+			reserveDeadline := time.Now().UTC().Add(2 * time.Minute)
 
 			// Ensure the items reserved are marked as reserved in the database
 			require.NoError(t, c.StorageQueueList(ctx, queueName, &list, &que.ListOptions{Limit: 10_000}))
@@ -377,8 +385,11 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			for i := range reserved.Items {
 				assert.Equal(t, list.Items[i].Id, reserved.Items[i].Id)
 				assert.Equal(t, true, list.Items[i].IsReserved)
-				// TODO: Allow config of the reservation deadline on the queue and then
-				//  assert the ReserveDeadline is correct.
+
+				// ReserveDeadline should be after we reserved the item, but before the reserve timeout
+				assert.False(t, list.Items[i].ReserveDeadline.AsTime().IsZero())
+				assert.True(t, list.Items[i].ReserveDeadline.AsTime().After(now))
+				assert.True(t, list.Items[i].ReserveDeadline.AsTime().Before(reserveDeadline))
 				assert.True(t, list.Items[i].ReserveDeadline.AsTime().Before(expire))
 			}
 		})
@@ -544,6 +555,8 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	})
 
 	t.Run("Complete", func(t *testing.T) {
+		_store := setup()
+		defer tearDown()
 		var queueName = random.String("queue-", 10)
 		clientID := random.String("client-", 10)
 		d, c, ctx := newDaemon(t, _store, 30*time.Second)
@@ -627,6 +640,8 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	})
 
 	t.Run("Stats", func(t *testing.T) {
+		_store := setup()
+		defer tearDown()
 		var queueName = random.String("queue-", 10)
 		clientID := random.String("client-", 10)
 		d, c, ctx := newDaemon(t, _store, 30*time.Second)
@@ -661,253 +676,331 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		assert.NotEmpty(t, stats.AverageReservedAge)
 		t.Logf("total: %d average-age: %s reserved %d average-reserved: %s",
 			stats.Total, stats.AverageAge, stats.TotalReserved, stats.AverageReservedAge)
-
-		// TODO: After adding the ability to change the reserve duration, Use this Stats() to test the reserved age
 	})
 
-	t.Run("QueueProduceErrors", func(t *testing.T) {
-		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, _store, 5*time.Second)
-		defer d.Shutdown(t)
-		maxItems := randomProduceItems(1_001)
+	t.Run("QueueClear", func(t *testing.T) {
+		_store := setup()
+		defer tearDown()
 
+		var queueName = random.String("queue-", 10)
+		d, c, ctx := newDaemon(t, _store, 10*time.Second)
+		defer d.Shutdown(t)
+
+		var reserved []*pb.StorageQueueItem
+		var list pb.StorageQueueListResponse
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
 			ReserveTimeout: ReserveTimeout,
 			DeadTimeout:    DeadTimeout,
 			QueueName:      queueName,
 		}))
 
-		for _, test := range []struct {
-			Name string
-			Req  *pb.QueueProduceRequest
-			Msg  string
-			Code int
-		}{
-			{
-				Name: "EmptyRequest",
-				Req:  &pb.QueueProduceRequest{},
-				Msg:  "queue name is invalid; queue name cannot be empty",
-				Code: duh.CodeBadRequest,
-			},
-			{
-				Name: "InvalidQueue",
-				Req: &pb.QueueProduceRequest{
-					QueueName: "invalid~queue",
-				},
-				Msg:  "queue name is invalid; 'invalid~queue' cannot contain '~' character",
-				Code: duh.CodeBadRequest,
-			},
-			{
-				Name: "NoItemsNilPointer",
-				Req: &pb.QueueProduceRequest{
-					QueueName: queueName,
-					Items:     nil,
-				},
-				Msg:  "items cannot be empty; at least one item is required",
-				Code: duh.CodeBadRequest,
-			},
-			{
-				Name: "NoItemsEmptyList",
-				Req: &pb.QueueProduceRequest{
-					QueueName: queueName,
-					Items:     []*pb.QueueProduceItem{},
-				},
-				Msg:  "items cannot be empty; at least one item is required",
-				Code: duh.CodeBadRequest,
-			},
-			{
-				Name: "ItemsWithNoPayloadAreOkay",
-				Req: &pb.QueueProduceRequest{
-					QueueName:      queueName,
-					RequestTimeout: "5m",
-					Items: []*pb.QueueProduceItem{
-						{},
-						{},
-					},
-				},
-				Code: duh.CodeOK,
-			},
-			{
-				Name: "RequestTimeoutIsRequired",
-				Req: &pb.QueueProduceRequest{
-					QueueName: queueName,
-					Items: []*pb.QueueProduceItem{
-						{},
-					},
-				},
-				Msg:  "request timeout is required; '5m' is recommended, 15m is the maximum",
-				Code: duh.CodeBadRequest,
-			},
-			{
-				Name: "RequestTimeoutTooLong",
-				Req: &pb.QueueProduceRequest{
-					QueueName:      queueName,
-					RequestTimeout: "16m",
-					Items: []*pb.QueueProduceItem{
-						{},
-					},
-				},
-				Msg:  "request timeout is invalid; maximum timeout is '15m' but '16m0s' was requested",
-				Code: duh.CodeBadRequest,
-			},
-			{
-				Name: "InvalidRequestTimeout",
-				Req: &pb.QueueProduceRequest{
-					QueueName:      queueName,
-					RequestTimeout: "foo",
-					Items: []*pb.QueueProduceItem{
-						{},
-					},
-				},
-				Msg:  "request timeout is invalid; time: invalid duration \"foo\" - expected format: 900ms, 5m or 15m",
-				Code: duh.CodeBadRequest,
-			},
-			{
-				Name: "MaxItemsReached",
-				Req: &pb.QueueProduceRequest{
-					QueueName:      queueName,
-					RequestTimeout: "1m",
-					Items:          maxItems,
-				},
-				Msg:  "too many items in request; max_produce_batch_size is 1000 but received 1001",
-				Code: duh.CodeBadRequest,
-			},
-		} {
-			t.Run(test.Name, func(t *testing.T) {
-				err := c.QueueProduce(ctx, test.Req)
-				if test.Code != duh.CodeOK {
-					var e duh.Error
-					require.True(t, errors.As(err, &e))
-					assert.Equal(t, test.Msg, e.Message())
-					assert.Equal(t, test.Code, e.Code())
-				}
-			})
-		}
+		// Write some items to the queue
+		_ = writeRandomItems(t, ctx, c, queueName, 500)
+		// Ensure the items exist
+		require.NoError(t, c.StorageQueueList(ctx, queueName, &list, nil))
+		assert.Equal(t, 500, len(list.Items))
+
+		expire := time.Now().UTC().Add(random.Duration(10*time.Second, time.Minute))
+		reserved = append(reserved, &pb.StorageQueueItem{
+			DeadDeadline:    timestamppb.New(expire),
+			ReserveDeadline: timestamppb.New(expire),
+			Attempts:        int32(rand.Intn(10)),
+			Reference:       random.String("ref-", 10),
+			Encoding:        random.String("enc-", 10),
+			Kind:            random.String("kind-", 10),
+			Payload:         []byte("Reserved 1"),
+			IsReserved:      true,
+		})
+		reserved = append(reserved, &pb.StorageQueueItem{
+			DeadDeadline:    timestamppb.New(expire),
+			ReserveDeadline: timestamppb.New(expire),
+			Attempts:        int32(rand.Intn(10)),
+			Reference:       random.String("ref-", 10),
+			Encoding:        random.String("enc-", 10),
+			Kind:            random.String("kind-", 10),
+			Payload:         []byte("Reserved 2"),
+			IsReserved:      true,
+		})
+
+		// Add some reserved items
+		var resp pb.StorageQueueAddResponse
+		err := c.StorageQueueAdd(ctx, &pb.StorageQueueAddRequest{Items: reserved, QueueName: queueName}, &resp)
+		require.NoError(t, err)
+		require.NoError(t, c.StorageQueueList(ctx, queueName, &list, nil))
+		assert.Equal(t, 502, len(list.Items))
+
+		t.Run("NonDestructive", func(t *testing.T) {
+			require.NoError(t, c.QueueClear(ctx, &pb.QueueClearRequest{QueueName: queueName, Queue: true}))
+			require.NoError(t, c.StorageQueueList(ctx, queueName, &list, nil))
+			assert.Equal(t, 2, len(list.Items))
+		})
+
+		t.Run("Destructive", func(t *testing.T) {
+			_ = writeRandomItems(t, ctx, c, queueName, 200)
+			require.NoError(t, c.StorageQueueList(ctx, queueName, &list, nil))
+			assert.Equal(t, 202, len(list.Items))
+			require.NoError(t, c.QueueClear(ctx, &pb.QueueClearRequest{
+				QueueName:   queueName,
+				Destructive: true,
+				Queue:       true}))
+			require.NoError(t, c.StorageQueueList(ctx, queueName, &list, nil))
+			assert.Equal(t, 0, len(list.Items))
+		})
+
 	})
+	t.Run("Errors", func(t *testing.T) {
+		_store := setup()
+		defer tearDown()
 
-	t.Run("QueueReserveErrors", func(t *testing.T) {
-		var queueName = random.String("queue-", 10)
-		var clientID = random.String("client-", 10)
-		d, c, ctx := newDaemon(t, _store, 5*time.Second)
-		defer d.Shutdown(t)
+		t.Run("QueueProduce", func(t *testing.T) {
+			_store := setup()
+			defer tearDown()
 
-		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
-			ReserveTimeout: ReserveTimeout,
-			DeadTimeout:    DeadTimeout,
-			QueueName:      queueName,
-		}))
+			var queueName = random.String("queue-", 10)
+			d, c, ctx := newDaemon(t, _store, 5*time.Second)
+			defer d.Shutdown(t)
+			maxItems := randomProduceItems(1_001)
 
-		for _, tc := range []struct {
-			Name string
-			Req  *pb.QueueReserveRequest
-			Msg  string
-			Code int
-		}{
-			{
-				Name: "EmptyRequest",
-				Req:  &pb.QueueReserveRequest{},
-				Msg:  "queue name is invalid; queue name cannot be empty",
-				Code: duh.CodeBadRequest,
-			},
-			{
-				Name: "ClientIdMissing",
-				Req: &pb.QueueReserveRequest{
-					QueueName: queueName,
+			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+				ReserveTimeout: ReserveTimeout,
+				DeadTimeout:    DeadTimeout,
+				QueueName:      queueName,
+			}))
+
+			for _, test := range []struct {
+				Name string
+				Req  *pb.QueueProduceRequest
+				Msg  string
+				Code int
+			}{
+				{
+					Name: "EmptyRequest",
+					Req:  &pb.QueueProduceRequest{},
+					Msg:  "queue name is invalid; queue name cannot be empty",
+					Code: duh.CodeBadRequest,
 				},
-				Msg:  "invalid client_id; cannot be empty",
-				Code: duh.CodeBadRequest,
-			},
-			{
-				Name: "BatchSizeCannotBeEmpty",
-				Req: &pb.QueueReserveRequest{
-					QueueName: queueName,
-					ClientId:  clientID,
+				{
+					Name: "InvalidQueue",
+					Req: &pb.QueueProduceRequest{
+						QueueName: "invalid~queue",
+					},
+					Msg:  "queue name is invalid; 'invalid~queue' cannot contain '~' character",
+					Code: duh.CodeBadRequest,
 				},
-				Msg:  "invalid batch_size; must be greater than zero",
-				Code: duh.CodeBadRequest,
-			},
-			{
-				Name: "BatchSizeMaximum",
-				Req: &pb.QueueReserveRequest{
-					QueueName: queueName,
-					ClientId:  clientID,
-					BatchSize: 1_001,
+				{
+					Name: "NoItemsNilPointer",
+					Req: &pb.QueueProduceRequest{
+						QueueName: queueName,
+						Items:     nil,
+					},
+					Msg:  "items cannot be empty; at least one item is required",
+					Code: duh.CodeBadRequest,
 				},
-				Msg:  "invalid batch_size; exceeds maximum limit max_reserve_batch_size is 1000, but 1001 was requested",
-				Code: duh.CodeBadRequest,
-			},
-			{
-				Name: "RequestTimeoutRequired",
-				Req: &pb.QueueReserveRequest{
-					QueueName: queueName,
-					ClientId:  clientID,
-					BatchSize: 111,
+				{
+					Name: "NoItemsEmptyList",
+					Req: &pb.QueueProduceRequest{
+						QueueName: queueName,
+						Items:     []*pb.QueueProduceItem{},
+					},
+					Msg:  "items cannot be empty; at least one item is required",
+					Code: duh.CodeBadRequest,
 				},
-				Msg:  "request timeout is required; '5m' is recommended, 15m is the maximum",
-				Code: duh.CodeBadRequest,
-			},
-			{
-				Name: "RequestTimeoutTooLong",
-				Req: &pb.QueueReserveRequest{
-					QueueName:      queueName,
-					ClientId:       clientID,
-					BatchSize:      1_000,
-					RequestTimeout: "16m",
+				{
+					Name: "ItemsWithNoPayloadAreOkay",
+					Req: &pb.QueueProduceRequest{
+						QueueName:      queueName,
+						RequestTimeout: "5m",
+						Items: []*pb.QueueProduceItem{
+							{},
+							{},
+						},
+					},
+					Code: duh.CodeOK,
 				},
-				Msg:  "invalid request timeout; maximum timeout is '15m' but '16m0s' requested",
-				Code: duh.CodeBadRequest,
-			},
-			{
-				Name: "RequestTimeoutInvalid",
-				Req: &pb.QueueReserveRequest{
-					QueueName:      queueName,
-					ClientId:       clientID,
-					BatchSize:      1_000,
-					RequestTimeout: "foo",
+				{
+					Name: "RequestTimeoutIsRequired",
+					Req: &pb.QueueProduceRequest{
+						QueueName: queueName,
+						Items: []*pb.QueueProduceItem{
+							{},
+						},
+					},
+					Msg:  "request timeout is required; '5m' is recommended, 15m is the maximum",
+					Code: duh.CodeBadRequest,
 				},
-				Msg:  "request timeout is invalid; time: invalid duration \"foo\" - expected format: 900ms, 5m or 15m",
-				Code: duh.CodeBadRequest,
-			},
-			{
-				Name: "MinimumRequestTimeoutIsAllowed",
-				Req: &pb.QueueReserveRequest{
-					QueueName:      queueName,
-					ClientId:       clientID,
-					BatchSize:      1_000,
-					RequestTimeout: "10ms",
+				{
+					Name: "RequestTimeoutTooLong",
+					Req: &pb.QueueProduceRequest{
+						QueueName:      queueName,
+						RequestTimeout: "16m",
+						Items: []*pb.QueueProduceItem{
+							{},
+						},
+					},
+					Msg:  "request timeout is invalid; maximum timeout is '15m' but '16m0s' was requested",
+					Code: duh.CodeBadRequest,
 				},
-				Code: duh.CodeOK,
-			},
-			{
-				Name: "RequestTimeoutIsTooShort",
-				Req: &pb.QueueReserveRequest{
-					QueueName:      queueName,
-					ClientId:       clientID,
-					BatchSize:      1_000,
-					RequestTimeout: "1ms",
+				{
+					Name: "InvalidRequestTimeout",
+					Req: &pb.QueueProduceRequest{
+						QueueName:      queueName,
+						RequestTimeout: "foo",
+						Items: []*pb.QueueProduceItem{
+							{},
+						},
+					},
+					Msg:  "request timeout is invalid; time: invalid duration \"foo\" - expected format: 900ms, 5m or 15m",
+					Code: duh.CodeBadRequest,
 				},
-				Msg:  "request timeout is invalid; minimum timeout is '10ms' but '1ms' was requested",
-				Code: duh.CodeBadRequest,
-			},
-		} {
-			t.Run(tc.Name, func(t *testing.T) {
-				var res pb.QueueReserveResponse
-				err := c.QueueReserve(ctx, tc.Req, &res)
-				if tc.Code != duh.CodeOK {
-					var e duh.Error
-					require.True(t, errors.As(err, &e))
-					assert.Equal(t, tc.Msg, e.Message())
-					assert.Equal(t, tc.Code, e.Code())
-					if e.Message() == "" {
-						t.Logf("Error: %s", e.Error())
+				{
+					Name: "MaxItemsReached",
+					Req: &pb.QueueProduceRequest{
+						QueueName:      queueName,
+						RequestTimeout: "1m",
+						Items:          maxItems,
+					},
+					Msg:  "too many items in request; max_produce_batch_size is 1000 but received 1001",
+					Code: duh.CodeBadRequest,
+				},
+			} {
+				t.Run(test.Name, func(t *testing.T) {
+					err := c.QueueProduce(ctx, test.Req)
+					if test.Code != duh.CodeOK {
+						var e duh.Error
+						require.True(t, errors.As(err, &e))
+						assert.Equal(t, test.Msg, e.Message())
+						assert.Equal(t, test.Code, e.Code())
 					}
-				}
-			})
-		}
-	})
+				})
+			}
+		})
 
-	// TODO: Finish error testing
-	t.Run("QueueCompleteErrors", func(t *testing.T) {})
+		t.Run("QueueReserve", func(t *testing.T) {
+			var queueName = random.String("queue-", 10)
+			var clientID = random.String("client-", 10)
+			d, c, ctx := newDaemon(t, _store, 5*time.Second)
+			defer d.Shutdown(t)
+
+			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+				ReserveTimeout: ReserveTimeout,
+				DeadTimeout:    DeadTimeout,
+				QueueName:      queueName,
+			}))
+
+			for _, tc := range []struct {
+				Name string
+				Req  *pb.QueueReserveRequest
+				Msg  string
+				Code int
+			}{
+				{
+					Name: "EmptyRequest",
+					Req:  &pb.QueueReserveRequest{},
+					Msg:  "queue name is invalid; queue name cannot be empty",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "ClientIdMissing",
+					Req: &pb.QueueReserveRequest{
+						QueueName: queueName,
+					},
+					Msg:  "invalid client_id; cannot be empty",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "BatchSizeCannotBeEmpty",
+					Req: &pb.QueueReserveRequest{
+						QueueName: queueName,
+						ClientId:  clientID,
+					},
+					Msg:  "invalid batch_size; must be greater than zero",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "BatchSizeMaximum",
+					Req: &pb.QueueReserveRequest{
+						QueueName: queueName,
+						ClientId:  clientID,
+						BatchSize: 1_001,
+					},
+					Msg:  "invalid batch_size; exceeds maximum limit max_reserve_batch_size is 1000, but 1001 was requested",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "RequestTimeoutRequired",
+					Req: &pb.QueueReserveRequest{
+						QueueName: queueName,
+						ClientId:  clientID,
+						BatchSize: 111,
+					},
+					Msg:  "request timeout is required; '5m' is recommended, 15m is the maximum",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "RequestTimeoutTooLong",
+					Req: &pb.QueueReserveRequest{
+						QueueName:      queueName,
+						ClientId:       clientID,
+						BatchSize:      1_000,
+						RequestTimeout: "16m",
+					},
+					Msg:  "invalid request timeout; maximum timeout is '15m' but '16m0s' requested",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "RequestTimeoutInvalid",
+					Req: &pb.QueueReserveRequest{
+						QueueName:      queueName,
+						ClientId:       clientID,
+						BatchSize:      1_000,
+						RequestTimeout: "foo",
+					},
+					Msg:  "request timeout is invalid; time: invalid duration \"foo\" - expected format: 900ms, 5m or 15m",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "MinimumRequestTimeoutIsAllowed",
+					Req: &pb.QueueReserveRequest{
+						QueueName:      queueName,
+						ClientId:       clientID,
+						BatchSize:      1_000,
+						RequestTimeout: "10ms",
+					},
+					Code: duh.CodeOK,
+				},
+				{
+					Name: "RequestTimeoutIsTooShort",
+					Req: &pb.QueueReserveRequest{
+						QueueName:      queueName,
+						ClientId:       clientID,
+						BatchSize:      1_000,
+						RequestTimeout: "1ms",
+					},
+					Msg:  "request timeout is invalid; minimum timeout is '10ms' but '1ms' was requested",
+					Code: duh.CodeBadRequest,
+				},
+			} {
+				t.Run(tc.Name, func(t *testing.T) {
+					var res pb.QueueReserveResponse
+					err := c.QueueReserve(ctx, tc.Req, &res)
+					if tc.Code != duh.CodeOK {
+						var e duh.Error
+						require.True(t, errors.As(err, &e))
+						assert.Equal(t, tc.Msg, e.Message())
+						assert.Equal(t, tc.Code, e.Code())
+						if e.Message() == "" {
+							t.Logf("Error: %s", e.Error())
+						}
+					}
+				})
+			}
+		})
+		// TODO: Finish error testing
+		t.Run("QueueComplete", func(t *testing.T) {
+			// TODO: <--- DO THIS NEXT
+		})
+
+	})
 
 	// TODO: Test duplicate client id on reserve
 	// TODO: Test pause and unpause, ensure can produce and consume after un-paused and Ensure can shutdown

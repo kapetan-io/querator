@@ -8,12 +8,18 @@ import (
 	"fmt"
 	"github.com/duh-rpc/duh-go"
 	v1 "github.com/duh-rpc/duh-go/proto/v1"
+	"github.com/kapetan-io/querator/internal"
 	pb "github.com/kapetan-io/querator/proto"
 	"github.com/kapetan-io/querator/transport"
 	"github.com/kapetan-io/tackle/set"
 	"google.golang.org/protobuf/proto"
 	"net/http"
 	"time"
+)
+
+const (
+	MsgRequestTimeout    = internal.MsgRequestTimeout
+	MsgDuplicateClientID = internal.MsgDuplicateClientID
 )
 
 type ListOptions struct {

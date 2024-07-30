@@ -15,11 +15,15 @@ import (
 	"time"
 )
 
+const (
+	MsgRequestTimeout    = "request timeout; no items are in the queue, try again"
+	MsgDuplicateClientID = "duplicate client id; a client cannot make multiple reserve requests to the same queue"
+)
+
 var (
-	ErrQueueShutdown     = transport.NewRequestFailed("queue is shutting down")
-	ErrDuplicateClientID = transport.NewInvalidOption("duplicate client id")
-	ErrRequestTimeout    = transport.NewRetryRequest("request timeout, try again")
-	ErrInternalRetry     = transport.NewRetryRequest("internal error, try your request again")
+	ErrQueueShutdown  = transport.NewRequestFailed("queue is shutting down")
+	ErrRequestTimeout = transport.NewRetryRequest(MsgRequestTimeout)
+	ErrInternalRetry  = transport.NewRetryRequest("internal error, try your request again")
 )
 
 const (
@@ -149,7 +153,7 @@ func (q *Queue) Produce(ctx context.Context, req *types.ProduceRequest) error {
 // is reached.
 //
 // # Context Cancellation
-// IT IS NOT recommend to use context.WithTimeout() or context.WithDeadline() with Reserve() since
+// IT IS NOT recommend to cancel wit context.WithTimeout() or context.WithDeadline() on Reserve() since
 // Reserve() will block until the duration provided via ReserveRequest.RequestTimeout has been reached.
 // Callers SHOULD cancel the context if the client has gone away, in this case Queue will abort the reservation
 // request. If the context is cancelled after reservation has been written to the data store
@@ -158,7 +162,7 @@ func (q *Queue) Produce(ctx context.Context, req *types.ProduceRequest) error {
 //
 // # Unique Requests
 // ClientID must NOT be empty and each request must be unique, Non-unique requests will be rejected with
-// ErrDuplicateClientID. See doc/adr/0007-encourage-simple-clients.md for an explanation.
+// MsgDuplicateClientID. See doc/adr/0007-encourage-simple-clients.md for an explanation.
 func (q *Queue) Reserve(ctx context.Context, req *types.ReserveRequest) error {
 	if q.inShutdown.Load() {
 		return ErrQueueShutdown
@@ -827,7 +831,7 @@ func (q *Queue) nextTimeout(r *types.ReserveBatch) time.Duration {
 func addIfUnique(r *types.ReserveBatch, req *types.ReserveRequest) bool {
 	for _, existing := range r.Requests {
 		if existing.ClientID == req.ClientID {
-			req.Err = ErrDuplicateClientID
+			req.Err = transport.NewInvalidOption(MsgDuplicateClientID)
 			close(req.ReadyCh)
 			return false
 		}

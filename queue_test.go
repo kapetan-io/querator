@@ -881,7 +881,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		t.Run("QueueReserve", func(t *testing.T) {
 			var queueName = random.String("queue-", 10)
 			var clientID = random.String("client-", 10)
-			d, c, ctx := newDaemon(t, _store, 5*time.Second)
+			d, c, ctx := newDaemon(t, _store, 10*time.Second)
 			defer d.Shutdown(t)
 
 			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -997,6 +997,47 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					}
 				})
 			}
+
+			t.Run("DuplicateClientId", func(t *testing.T) {
+				clientID := random.String("client-", 10)
+				resultCh := make(chan error)
+				var wg sync.WaitGroup
+				wg.Add(1)
+				go func() {
+					var res pb.QueueReserveResponse
+					resultCh <- c.QueueReserve(ctx, &pb.QueueReserveRequest{
+						QueueName:      queueName,
+						ClientId:       clientID,
+						RequestTimeout: "2s",
+						BatchSize:      1,
+					}, &res)
+					wg.Done()
+				}()
+
+				// Wait until there is one reserve client blocking on the queue.
+				require.NoError(t, untilReserveClientBlocked(t, c, queueName, 1))
+
+				// Should fail immediately
+				var res pb.QueueReserveResponse
+				err := c.QueueReserve(ctx, &pb.QueueReserveRequest{
+					QueueName:      queueName,
+					ClientId:       clientID,
+					RequestTimeout: "2s",
+					BatchSize:      1,
+				}, &res)
+
+				require.Error(t, err)
+				var e duh.Error
+				require.True(t, errors.As(err, &e))
+				assert.Equal(t, que.MsgDuplicateClientID, e.Message())
+				assert.Equal(t, duh.CodeBadRequest, e.Code())
+				err = <-resultCh
+				require.Error(t, err)
+				require.True(t, errors.As(err, &e))
+				assert.Equal(t, que.MsgRequestTimeout, e.Message())
+				assert.Equal(t, duh.CodeRetryRequest, e.Code())
+				wg.Wait()
+			})
 		})
 		t.Run("QueueComplete", func(t *testing.T) {
 			var queueName = random.String("queue-", 10)
@@ -1226,4 +1267,20 @@ func pauseAndReserve(t *testing.T, ctx context.Context, c *que.Client, name stri
 		t.Fatalf("timed out waiting for distribution of requests")
 	}
 	return responses
+}
+
+func untilReserveClientBlocked(t *testing.T, c *que.Client, queueName string, numBlocked int) error {
+	_ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	t.Helper()
+
+	// Wait until every request is waiting
+	return retry.On(_ctx, RetryTenTimes, func(ctx context.Context, i int) error {
+		var resp pb.QueueStatsResponse
+		require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &resp))
+		if int(resp.ReserveBlocked) != numBlocked {
+			return fmt.Errorf("ReserveBlocked never reached expected %d", numBlocked)
+		}
+		return nil
+	})
 }

@@ -6,12 +6,12 @@ LINT_VERSION = 1.56.2
 proto: ## Build protos
 	./buf.gen.yaml
 
-.PHONY: test
-test:
-	go test -timeout 10m -v -p 1 -count=1 -race -parallel=1 ./...
-
 $(LINT): ## Download Go linter
 	curl -sfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(GOPATH)/bin $(LINT_VERSION)
+
+.PHONY: test
+test:
+	go test -timeout 10m -v -p=1 -count=1 -race ./...
 
 .PHONY: lint
 lint: $(LINT) ## Run Go linter
@@ -21,7 +21,7 @@ lint: $(LINT) ## Run Go linter
 tidy:
 	go mod tidy && git diff --exit-code
 
-.PHONY: validate
-validate: tidy lint test
+.PHONY: ci
+ci: tidy lint test
 	@echo
 	@echo "\033[32mEVERYTHING PASSED!\033[0m"

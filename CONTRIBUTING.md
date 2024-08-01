@@ -18,6 +18,9 @@ and issue and discuss.
 If this is something you think you can fix, then fork https://github.com/kapetan-io/querator and create
 a branch with a descriptive name.
 
+## Style Guide
+See [Naming Guide](doc/NAMING.md)
+
 ## Functional Tests
 Functional tests should always make up 90% of all testing done on Querator. If there is a bit of code that
 should be tested, and can't be deleted, you may create a unit test to exercise that bit of code. Unit tests

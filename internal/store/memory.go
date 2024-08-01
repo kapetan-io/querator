@@ -19,7 +19,7 @@ func NewMemoryStorage() *MemoryStorage {
 	return &MemoryStorage{}
 }
 
-func (s *MemoryStorage) NewQueuesStore(opts QueuesStoreOptions) (QueuesStore, error) {
+func (s *MemoryStorage) NewQueuesStore(conf QueuesStoreConfig) (QueuesStore, error) {
 	return &MemoryQueuesStore{
 		mem:    make([]types.QueueInfo, 0, 1_000),
 		parent: s,

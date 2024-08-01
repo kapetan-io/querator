@@ -16,6 +16,21 @@ import (
 )
 
 const (
+	maxRequestTimeout      = 15 * time.Minute
+	minRequestTimeout      = 10 * time.Millisecond
+	MethodStorageQueueList = iota
+	MethodStorageQueueAdd
+	MethodStorageQueueDelete
+	MethodQueueStats
+	MethodQueuePause
+	MethodQueueClear
+	MethodUpdateInfo
+
+	DefaultMaxReserveBatchSize  = 1_000
+	DefaultMaxProduceBatchSize  = 1_000
+	DefaultMaxCompleteBatchSize = 1_000
+	DefaultMaxClientsPerQueue   = 3_000
+
 	MsgRequestTimeout    = "request timeout; no items are in the queue, try again"
 	MsgDuplicateClientID = "duplicate client id; a client cannot make multiple reserve requests to the same queue"
 	MsgQueueInShutdown   = "queue is shutting down"
@@ -28,19 +43,7 @@ var (
 	ErrInternalRetry  = transport.NewRetryRequest("internal error, try your request again")
 )
 
-const (
-	maxRequestTimeout      = 15 * time.Minute
-	minRequestTimeout      = 10 * time.Millisecond
-	MethodStorageQueueList = iota
-	MethodStorageQueueAdd
-	MethodStorageQueueDelete
-	MethodQueueStats
-	MethodQueuePause
-	MethodQueueClear
-	MethodUpdateInfo
-)
-
-type QueueOptions struct {
+type QueueConfig struct {
 	types.QueueInfo
 	// If defined, is the logger used by the queue
 	Logger duh.StandardLogger
@@ -48,9 +51,9 @@ type QueueOptions struct {
 	QueueStore store.Queue
 
 	// TODO: Make these configurable at the Service level
-	// WriteTimeout (Optional) The time it should take for a single batched write to complete
+	// WriteTimeout The time it should take for a single batched write to complete
 	WriteTimeout time.Duration
-	// ReadTimeout (Optional) The time it should take for a single batched read to complete
+	// ReadTimeout The time it should take for a single batched read to complete
 	ReadTimeout time.Duration
 	// MaxReserveBatchSize is the maximum number of items a client can request in a single reserve request
 	MaxReserveBatchSize int
@@ -75,25 +78,25 @@ type Queue struct {
 	shutdownCh     chan *types.ShutdownRequest
 	queueRequestCh chan *QueueRequest
 	wg             sync.WaitGroup
-	opts           QueueOptions
+	conf           QueueConfig
 	inFlight       atomic.Int32
 	inShutdown     atomic.Bool
 }
 
-func NewQueue(opts QueueOptions) (*Queue, error) {
-	set.Default(&opts.Logger, slog.Default())
-	set.Default(&opts.MaxReserveBatchSize, 1_000)
-	set.Default(&opts.MaxProduceBatchSize, 1_000)
-	set.Default(&opts.MaxCompleteBatchSize, 1_000)
-	set.Default(&opts.MaxClientsPerQueue, 3_000)
+func NewQueue(conf QueueConfig) (*Queue, error) {
+	set.Default(&conf.Logger, slog.Default())
+	set.Default(&conf.MaxReserveBatchSize, DefaultMaxReserveBatchSize)
+	set.Default(&conf.MaxProduceBatchSize, DefaultMaxProduceBatchSize)
+	set.Default(&conf.MaxCompleteBatchSize, DefaultMaxCompleteBatchSize)
+	set.Default(&conf.MaxClientsPerQueue, DefaultMaxClientsPerQueue)
 
 	// TODO: Change this to a multiple of 4 once we implement /queue.defer
-	if opts.MaxClientsPerQueue%3 != 0 {
+	if conf.MaxClientsPerQueue%3 != 0 {
 		return nil, transport.NewRetryRequest("MaxClientsPerQueue must be a multiple of 3")
 	}
 
-	if opts.QueueStore == nil {
-		return nil, transport.NewInvalidOption("QueueOptions.QueuesStore cannot be nil")
+	if conf.QueueStore == nil {
+		return nil, transport.NewInvalidOption("QueueConfig.QueuesStore cannot be nil")
 	}
 
 	q := &Queue{
@@ -101,15 +104,15 @@ func NewQueue(opts QueueOptions) (*Queue, error) {
 		queueRequestCh: make(chan *QueueRequest),
 		// Shutdowns require special handling in the sync loop
 		shutdownCh: make(chan *types.ShutdownRequest),
-		opts:       opts,
+		conf:       conf,
 	}
 
 	// These are request queues that queue requests from clients until the sync loop has
 	// time to process them. When they get processed, every request in the queue is handled
 	// in a batch.
-	q.reserveQueueCh = make(chan *types.ReserveRequest, opts.MaxClientsPerQueue/3)
-	q.produceQueueCh = make(chan *types.ProduceRequest, opts.MaxClientsPerQueue/3)
-	q.completeQueueCh = make(chan *types.CompleteRequest, opts.MaxClientsPerQueue/3)
+	q.reserveQueueCh = make(chan *types.ReserveRequest, conf.MaxClientsPerQueue/3)
+	q.produceQueueCh = make(chan *types.ProduceRequest, conf.MaxClientsPerQueue/3)
+	q.completeQueueCh = make(chan *types.CompleteRequest, conf.MaxClientsPerQueue/3)
 
 	q.wg.Add(1)
 	go q.synchronizationLoop()
@@ -144,9 +147,9 @@ func (q *Queue) Produce(ctx context.Context, req *types.ProduceRequest) error {
 		return transport.NewInvalidOption("items cannot be empty; at least one item is required")
 	}
 
-	if len(req.Items) > q.opts.MaxProduceBatchSize {
+	if len(req.Items) > q.conf.MaxProduceBatchSize {
 		return transport.NewInvalidOption("items is invalid; max_produce_batch_size is"+
-			" %d but received %d", q.opts.MaxProduceBatchSize, len(req.Items))
+			" %d but received %d", q.conf.MaxProduceBatchSize, len(req.Items))
 	}
 
 	req.RequestDeadline = time.Now().UTC().Add(req.RequestTimeout)
@@ -194,9 +197,9 @@ func (q *Queue) Reserve(ctx context.Context, req *types.ReserveRequest) error {
 		return transport.NewInvalidOption("invalid batch size; must be greater than zero")
 	}
 
-	if req.NumRequested > q.opts.MaxReserveBatchSize {
+	if req.NumRequested > q.conf.MaxReserveBatchSize {
 		return transport.NewInvalidOption("invalid batch size; max_reserve_batch_size is %d, "+
-			"but %d was requested", q.opts.MaxProduceBatchSize, req.NumRequested)
+			"but %d was requested", q.conf.MaxProduceBatchSize, req.NumRequested)
 	}
 
 	if req.RequestTimeout == time.Duration(0) {
@@ -242,9 +245,9 @@ func (q *Queue) Complete(ctx context.Context, req *types.CompleteRequest) error 
 		return transport.NewInvalidOption("ids is invalid; list of ids cannot be empty")
 	}
 
-	if len(req.Ids) > q.opts.MaxCompleteBatchSize {
+	if len(req.Ids) > q.conf.MaxCompleteBatchSize {
 		return transport.NewInvalidOption("ids is invalid; max_complete_batch_size is"+
-			" %d but received %d", q.opts.MaxCompleteBatchSize, len(req.Ids))
+			" %d but received %d", q.conf.MaxCompleteBatchSize, len(req.Ids))
 	}
 
 	if req.RequestTimeout > maxRequestTimeout {
@@ -465,7 +468,7 @@ CONTINUE1:
 		}
 		// Assign a DeadTimeout to each item
 		for _, item := range req.Items {
-			item.DeadDeadline = time.Now().UTC().Add(q.opts.DeadTimeout)
+			item.DeadDeadline = time.Now().UTC().Add(q.conf.DeadTimeout)
 		}
 		// The writeTimeout should be equal to the request with the least amount of request timeout left.
 		timeLeft := time.Now().UTC().Sub(req.RequestDeadline)
@@ -476,16 +479,16 @@ CONTINUE1:
 
 	// If we allow a calculated write timeout to be a few milliseconds, then the store.Add()
 	// is almost guaranteed to fail, so we ensure the write timeout is something reasonable.
-	if writeTimeout < q.opts.WriteTimeout {
+	if writeTimeout < q.conf.WriteTimeout {
 		// WriteTimeout comes from the storage implementation as the user who configured the
 		// storage option should know a reasonable timeout value for the configuration chosen.
-		writeTimeout = q.opts.WriteTimeout
+		writeTimeout = q.conf.WriteTimeout
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
-	if err := q.opts.QueueStore.Produce(ctx, state.Producers); err != nil {
-		q.opts.Logger.Error("while calling QueueStore.Produce()", "error", err,
-			"category", "queue", "queueName", q.opts.Name)
+	if err := q.conf.QueueStore.Produce(ctx, state.Producers); err != nil {
+		q.conf.Logger.Error("while calling QueueStore.Produce()", "error", err,
+			"category", "queue", "queueName", q.conf.Name)
 		cancel()
 		// Let clients that are timed out, know we are done with them.
 		for _, req := range state.Producers.Requests {
@@ -537,20 +540,20 @@ EMPTY:
 
 	// If we allow a calculated write timeout to be a few milliseconds, then the store.Add()
 	// is almost guaranteed to fail, so we ensure the write timeout is something reasonable.
-	if writeTimeout < q.opts.WriteTimeout {
+	if writeTimeout < q.conf.WriteTimeout {
 		// WriteTimeout comes from the storage implementation as the user who configured the
 		// storage option should know a reasonable timeout value for the configuration chosen.
-		writeTimeout = q.opts.WriteTimeout
+		writeTimeout = q.conf.WriteTimeout
 	}
 
 	// Send the batch that each request wants to the store. If there are items that can be reserved the
 	// store will assign items to each batch request.
 	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
-	if err := q.opts.QueueStore.Reserve(ctx, state.Reservations, store.ReserveOptions{
-		ReserveDeadline: time.Now().UTC().Add(q.opts.ReserveTimeout),
+	if err := q.conf.QueueStore.Reserve(ctx, state.Reservations, store.ReserveOptions{
+		ReserveDeadline: time.Now().UTC().Add(q.conf.ReserveTimeout),
 	}); err != nil {
-		q.opts.Logger.Error("while calling QueueStore.Reserve()", "error", err,
-			"category", "queue", "queueName", q.opts.Name)
+		q.conf.Logger.Error("while calling QueueStore.Reserve()", "error", err,
+			"category", "queue", "queueName", q.conf.Name)
 		cancel()
 		// We get here if there was an internal error with the data store
 		// TODO: If no new reserve requests come in, this may never try again. We need the maintenance
@@ -606,17 +609,17 @@ EMPTY:
 
 	// If we allow a calculated write timeout to be a few milliseconds, then the store.Add()
 	// is almost guaranteed to fail, so we ensure the write timeout is something reasonable.
-	if writeTimeout < q.opts.WriteTimeout {
+	if writeTimeout < q.conf.WriteTimeout {
 		// WriteTimeout comes from the storage implementation as the user who configured the
 		// storage option should know a reasonable timeout value for the configuration chosen.
-		writeTimeout = q.opts.WriteTimeout
+		writeTimeout = q.conf.WriteTimeout
 	}
 
 	var err error
 	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
-	if err = q.opts.QueueStore.Complete(ctx, state.Completes); err != nil {
-		q.opts.Logger.Error("while calling QueueStore.Complete()", "error", err,
-			"category", "queue", "queueName", q.opts.Name)
+	if err = q.conf.QueueStore.Complete(ctx, state.Completes); err != nil {
+		q.conf.Logger.Error("while calling QueueStore.Complete()", "error", err,
+			"category", "queue", "queueName", q.conf.Name)
 	}
 	cancel()
 
@@ -636,8 +639,8 @@ func (q *Queue) stateCleanUp(state *QueueState) {
 	fmt.Printf("stateCleanUp\n")
 	next := q.nextTimeout(&state.Reservations)
 	if next.Nanoseconds() != 0 {
-		q.opts.Logger.Debug("next maintenance window",
-			"duration", next.String(), "queue", q.opts.Name)
+		q.conf.Logger.Debug("next maintenance window",
+			"duration", next.String(), "queue", q.conf.Name)
 		state.NextMaintenanceCh = time.After(next)
 	}
 	state.Reservations.FilterNils()
@@ -702,7 +705,7 @@ func (q *Queue) handleQueueRequests(state *QueueState, req *QueueRequest) {
 		q.handleClear(state, req)
 	case MethodUpdateInfo:
 		info := req.Request.(types.QueueInfo)
-		q.opts.QueueInfo = info
+		q.conf.QueueInfo = info
 		close(req.ReadyCh)
 	default:
 		panic(fmt.Sprintf("unknown queue request method '%d'", req.Method))
@@ -716,7 +719,7 @@ func (q *Queue) handleClear(_ *QueueState, req *QueueRequest) {
 
 	if cr.Queue {
 		// Ask the store to clean up any items in the data store which are not currently out for reservation
-		if err := q.opts.QueueStore.Clear(req.Context, cr.Destructive); err != nil {
+		if err := q.conf.QueueStore.Clear(req.Context, cr.Destructive); err != nil {
 			req.Err = err
 		}
 	}
@@ -728,15 +731,15 @@ func (q *Queue) handleStorageRequests(req *QueueRequest) {
 	sr := req.Request.(StorageRequest)
 	switch req.Method {
 	case MethodStorageQueueList:
-		if err := q.opts.QueueStore.List(req.Context, sr.Items, sr.Options); err != nil {
+		if err := q.conf.QueueStore.List(req.Context, sr.Items, sr.Options); err != nil {
 			req.Err = err
 		}
 	case MethodStorageQueueAdd:
-		if err := q.opts.QueueStore.Add(req.Context, *sr.Items); err != nil {
+		if err := q.conf.QueueStore.Add(req.Context, *sr.Items); err != nil {
 			req.Err = err
 		}
 	case MethodStorageQueueDelete:
-		if err := q.opts.QueueStore.Delete(req.Context, sr.IDs); err != nil {
+		if err := q.conf.QueueStore.Delete(req.Context, sr.IDs); err != nil {
 			req.Err = err
 		}
 	default:
@@ -747,7 +750,7 @@ func (q *Queue) handleStorageRequests(req *QueueRequest) {
 
 func (q *Queue) handleStats(state *QueueState, r *QueueRequest) {
 	qs := r.Request.(*types.QueueStats)
-	if err := q.opts.QueueStore.Stats(r.Context, qs); err != nil {
+	if err := q.conf.QueueStore.Stats(r.Context, qs); err != nil {
 		r.Err = err
 	}
 	qs.ProduceWaiting = len(q.produceQueueCh)
@@ -774,8 +777,8 @@ func (q *Queue) handlePause(state *QueueState, r *QueueRequest) {
 	timeoutCh := time.NewTimer(pr.PauseDuration)
 	close(r.ReadyCh)
 
-	q.opts.Logger.Warn("queue paused", "queue", q.opts.Name)
-	defer q.opts.Logger.Warn("queue un-paused", "queue", q.opts.Name)
+	q.conf.Logger.Warn("queue paused", "queue", q.conf.Name)
+	defer q.conf.Logger.Warn("queue un-paused", "queue", q.conf.Name)
 	for {
 		fmt.Printf("handlePause.Loop\n")
 		select {
@@ -800,6 +803,7 @@ func (q *Queue) handlePause(state *QueueState, r *QueueRequest) {
 				fmt.Printf("handlePause.UnPause\n")
 				// Cancel the pause
 				close(req.ReadyCh)
+				// TODO: Resuming a pause should reload the data store interfaces
 				return
 			default:
 				q.handleQueueRequests(state, req)
@@ -846,7 +850,7 @@ func (q *Queue) handleShutdown(state *QueueState, req *types.ShutdownRequest) {
 	}
 
 	fmt.Printf("handleShutdown.Close() Store\n")
-	if err := q.opts.QueueStore.Close(req.Context); err != nil {
+	if err := q.conf.QueueStore.Close(req.Context); err != nil {
 		req.Err = err
 	}
 	close(req.ReadyCh)

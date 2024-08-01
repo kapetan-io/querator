@@ -19,32 +19,32 @@ const MsgServiceInShutdown = "service is shutting down"
 
 var ErrServiceShutdown = transport.NewRequestFailed(MsgServiceInShutdown)
 
-type QueuesManagerOptions struct {
-	Logger       duh.StandardLogger
-	Storage      store.Storage
-	QueueOptions QueueOptions
+type QueuesManagerConfig struct {
+	Logger      duh.StandardLogger
+	Storage     store.Storage
+	QueueConfig QueueConfig
 }
 
 // QueuesManager manages queues in use, and information about that queue.
 type QueuesManager struct {
 	queues     map[string]*Queue
-	opts       QueuesManagerOptions
+	conf       QueuesManagerConfig
 	store      store.QueuesStore
 	inShutdown atomic.Bool
 	mutex      sync.Mutex
 }
 
-func NewQueuesManager(opts QueuesManagerOptions) (*QueuesManager, error) {
-	set.Default(&opts.Logger, slog.Default())
+func NewQueuesManager(conf QueuesManagerConfig) (*QueuesManager, error) {
+	set.Default(&conf.Logger, slog.Default())
 
-	s, err := opts.Storage.NewQueuesStore(store.QueuesStoreOptions{})
+	s, err := conf.Storage.NewQueuesStore(store.QueuesStoreConfig{})
 	if err != nil {
 		return nil, err
 	}
 
 	return &QueuesManager{
 		queues: make(map[string]*Queue),
-		opts:   opts,
+		conf:   conf,
 		store:  s,
 	}, nil
 }
@@ -102,32 +102,32 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Que
 }
 
 func (qm *QueuesManager) startQueue(info types.QueueInfo) (*Queue, error) {
-	opts := QueueOptions{QueueInfo: info}
+	conf := QueueConfig{QueueInfo: info}
 
 	// Each queue has their own copy of these options to avoid race conditions with any
 	// reconfiguration the QueuesManager may preform during cluster operation. Additionally,
 	// each queue may independently change these options as they see fit.
 
-	// Assign all the server level configuration to QueueOptions.
-	set.Default(&opts.MaxProduceBatchSize, qm.opts.QueueOptions.MaxProduceBatchSize)
-	set.Default(&opts.MaxReserveBatchSize, qm.opts.QueueOptions.MaxReserveBatchSize)
-	set.Default(&opts.MaxCompleteBatchSize, qm.opts.QueueOptions.MaxCompleteBatchSize)
-	set.Default(&opts.WriteTimeout, qm.opts.QueueOptions.WriteTimeout)
-	set.Default(&opts.ReadTimeout, qm.opts.QueueOptions.ReadTimeout)
-	set.Default(&opts.Logger, qm.opts.Logger)
+	// Assign all the server level configuration to QueueConfig.
+	set.Default(&conf.MaxProduceBatchSize, qm.conf.QueueConfig.MaxProduceBatchSize)
+	set.Default(&conf.MaxReserveBatchSize, qm.conf.QueueConfig.MaxReserveBatchSize)
+	set.Default(&conf.MaxCompleteBatchSize, qm.conf.QueueConfig.MaxCompleteBatchSize)
+	set.Default(&conf.WriteTimeout, qm.conf.QueueConfig.WriteTimeout)
+	set.Default(&conf.ReadTimeout, qm.conf.QueueConfig.ReadTimeout)
+	set.Default(&conf.Logger, qm.conf.Logger)
 
 	var err error
-	opts.QueueStore, err = qm.opts.Storage.NewQueue(info)
+	conf.QueueStore, err = qm.conf.Storage.NewQueue(info)
 	if err != nil {
 		return nil, err
 	}
 
-	q, err := NewQueue(opts)
+	q, err := NewQueue(conf)
 	if err != nil {
 		return nil, err
 	}
 
-	qm.queues[opts.Name] = q
+	qm.queues[conf.Name] = q
 	return q, nil
 }
 
@@ -209,12 +209,12 @@ func (qm *QueuesManager) Shutdown(ctx context.Context) error {
 	wait := make(chan error)
 	go func() {
 		for _, q := range qm.queues {
-			fmt.Printf("QueuesManager.Shutdown() queue '%s'\n", q.opts.Name)
+			fmt.Printf("QueuesManager.Shutdown() queue '%s'\n", q.conf.Name)
 			if err := q.Shutdown(ctx); err != nil {
 				wait <- err
 				return
 			}
-			fmt.Printf("QueuesManager.Shutdown() queue '%s' - DONE\n", q.opts.Name)
+			fmt.Printf("QueuesManager.Shutdown() queue '%s' - DONE\n", q.conf.Name)
 		}
 		fmt.Printf("QueuesManager.Shutdown() store.Close()\n")
 		if err := qm.store.Close(ctx); err != nil {

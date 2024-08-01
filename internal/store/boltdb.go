@@ -21,7 +21,7 @@ import (
 
 var bucketName = []byte("queue")
 
-type BoltOptions struct {
+type BoltConfig struct {
 	// StorageDir is the directory where bolt will store its data
 	StorageDir string
 	// Logger is used to log warnings and errors
@@ -38,7 +38,7 @@ type BoltOptions struct {
 // ---------------------------------------------
 
 type BoltStorage struct {
-	opts BoltOptions
+	conf BoltConfig
 }
 
 var _ Storage = &BoltStorage{}
@@ -61,11 +61,11 @@ func (b *BoltStorage) Close(_ context.Context) error {
 	return nil
 }
 
-func NewBoltStorage(opts BoltOptions) *BoltStorage {
-	set.Default(&opts.Logger, slog.Default())
-	set.Default(&opts.StorageDir, ".")
+func NewBoltStorage(conf BoltConfig) *BoltStorage {
+	set.Default(&conf.Logger, slog.Default())
+	set.Default(&conf.StorageDir, ".")
 
-	return &BoltStorage{opts: opts}
+	return &BoltStorage{conf: conf}
 }
 
 // ---------------------------------------------
@@ -75,7 +75,7 @@ func NewBoltStorage(opts BoltOptions) *BoltStorage {
 func (b *BoltStorage) NewQueue(info types.QueueInfo) (Queue, error) {
 	f := errors.Fields{"category", "bolt", "func", "Storage.NewQueue"}
 
-	file := filepath.Join(b.opts.StorageDir, fmt.Sprintf("%s.db", info.Name))
+	file := filepath.Join(b.conf.StorageDir, fmt.Sprintf("%s.db", info.Name))
 
 	opts := &bolt.Options{
 		FreelistType: bolt.FreelistArrayType,
@@ -213,7 +213,7 @@ func (q *BoltQueue) Complete(_ context.Context, batch types.Batch[types.Complete
 	defer func() {
 		if !done {
 			if err := tx.Rollback(); err != nil {
-				q.parent.opts.Logger.Error("during Rollback()", "error", err)
+				q.parent.conf.Logger.Error("during Rollback()", "error", err)
 			}
 		}
 	}()
@@ -459,12 +459,12 @@ func (q *BoltQueue) Close(_ context.Context) error {
 // Queue Repository Implementation
 // ---------------------------------------------
 
-func (b *BoltStorage) NewQueuesStore(opts QueuesStoreOptions) (QueuesStore, error) {
+func (b *BoltStorage) NewQueuesStore(conf QueuesStoreConfig) (QueuesStore, error) {
 	f := errors.Fields{"category", "bolt", "func", "Storage.NewQueuesStore"}
 
 	// We store info about the queues in a single db file. We prefix it with `~` to make it
 	// impossible for someone to create a queue with the same name.
-	file := filepath.Join(b.opts.StorageDir, "~queue-storage.db")
+	file := filepath.Join(b.conf.StorageDir, "~queue-storage.db")
 	db, err := bolt.Open(file, 0600, bolt.DefaultOptions)
 	if err != nil {
 		return nil, f.Errorf("while opening db '%s': %w", file, err)
@@ -689,7 +689,7 @@ type BoltDBTesting struct {
 	Dir string
 }
 
-func (b *BoltDBTesting) Setup(opts BoltOptions) Storage {
+func (b *BoltDBTesting) Setup(conf BoltConfig) Storage {
 	if !dirExists(b.Dir) {
 		if err := os.Mkdir(b.Dir, 0777); err != nil {
 			panic(err)
@@ -699,8 +699,8 @@ func (b *BoltDBTesting) Setup(opts BoltOptions) Storage {
 	if err := os.Mkdir(b.Dir, 0777); err != nil {
 		panic(err)
 	}
-	opts.StorageDir = b.Dir
-	return NewBoltStorage(opts)
+	conf.StorageDir = b.Dir
+	return NewBoltStorage(conf)
 }
 
 func (b *BoltDBTesting) Teardown() {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/duh-rpc/duh-go"
 	que "github.com/kapetan-io/querator"
+	"github.com/kapetan-io/querator/daemon"
 	"github.com/kapetan-io/querator/internal/store"
 	pb "github.com/kapetan-io/querator/proto"
 	"github.com/kapetan-io/tackle/random"
@@ -35,7 +36,7 @@ func TestQueuesStorage(t *testing.T) {
 		{
 			Name: "BoltDB",
 			Setup: func() store.Storage {
-				return bdb.Setup(store.BoltOptions{})
+				return bdb.Setup(store.BoltConfig{})
 			},
 			TearDown: func() {
 				bdb.Teardown()
@@ -58,7 +59,7 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 	t.Run("CRUD", func(t *testing.T) {
 		_store := newStore()
 		defer tearDown()
-		d, c, ctx := newDaemon(t, _store, 10*time.Second)
+		d, c, ctx := newDaemon(t, 10*time.Second, daemon.Config{Storage: _store})
 		defer d.Shutdown(t)
 
 		t.Run("Create", func(t *testing.T) {
@@ -297,7 +298,7 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 	t.Run("List", func(t *testing.T) {
 		_store := newStore()
 		defer tearDown()
-		d, c, ctx := newDaemon(t, _store, 10*time.Second)
+		d, c, ctx := newDaemon(t, 10*time.Second, daemon.Config{Storage: _store})
 		defer d.Shutdown(t)
 
 		queues := createRandomQueues(t, ctx, c, 100)
@@ -369,7 +370,7 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 	t.Run("Errors", func(t *testing.T) {
 		_store := newStore()
 		defer tearDown()
-		d, c, ctx := newDaemon(t, _store, 10*time.Second)
+		d, c, ctx := newDaemon(t, 10*time.Second, daemon.Config{Storage: _store})
 		defer d.Shutdown(t)
 
 		var queueName = random.String("queue-", 10)

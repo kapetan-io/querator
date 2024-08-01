@@ -29,7 +29,7 @@ type ListOptions struct {
 	Limit int
 }
 
-type ClientOptions struct {
+type ClientConfig struct {
 	// Users can provide their own http client with TLS config if needed
 	Client *http.Client
 	// The address of endpoint in the format `<scheme>://<host>:<port>`
@@ -38,12 +38,12 @@ type ClientOptions struct {
 
 type Client struct {
 	client *duh.Client
-	opts   ClientOptions
+	conf   ClientConfig
 }
 
 // NewClient creates a new instance of the Gubernator user client
-func NewClient(opts ClientOptions) (*Client, error) {
-	set.Default(&opts.Client, &http.Client{
+func NewClient(conf ClientConfig) (*Client, error) {
+	set.Default(&conf.Client, &http.Client{
 		Transport: &http.Transport{
 			MaxConnsPerHost:     5_000,
 			MaxIdleConns:        5_000,
@@ -52,15 +52,15 @@ func NewClient(opts ClientOptions) (*Client, error) {
 		},
 	})
 
-	if len(opts.Endpoint) == 0 {
-		return nil, errors.New("opts.Endpoint is empty; must provide an http endpoint")
+	if len(conf.Endpoint) == 0 {
+		return nil, errors.New("conf.Endpoint is empty; must provide an http endpoint")
 	}
 
 	return &Client{
 		client: &duh.Client{
-			Client: opts.Client,
+			Client: conf.Client,
 		},
-		opts: opts,
+		conf: conf,
 	}, nil
 }
 
@@ -71,7 +71,7 @@ func (c *Client) QueueProduce(ctx context.Context, req *pb.QueueProduceRequest) 
 	}
 
 	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		fmt.Sprintf("%s%s", c.opts.Endpoint, transport.RPCQueueProduce), bytes.NewReader(payload))
+		fmt.Sprintf("%s%s", c.conf.Endpoint, transport.RPCQueueProduce), bytes.NewReader(payload))
 	if err != nil {
 		return duh.NewClientError("", err, nil)
 	}
@@ -88,7 +88,7 @@ func (c *Client) QueueReserve(ctx context.Context, req *pb.QueueReserveRequest, 
 	}
 
 	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		fmt.Sprintf("%s%s", c.opts.Endpoint, transport.RPCQueueReserve), bytes.NewReader(payload))
+		fmt.Sprintf("%s%s", c.conf.Endpoint, transport.RPCQueueReserve), bytes.NewReader(payload))
 	if err != nil {
 		return duh.NewClientError("", err, nil)
 	}
@@ -104,7 +104,7 @@ func (c *Client) QueueComplete(ctx context.Context, req *pb.QueueCompleteRequest
 	}
 
 	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		fmt.Sprintf("%s%s", c.opts.Endpoint, transport.RPCQueueComplete), bytes.NewReader(payload))
+		fmt.Sprintf("%s%s", c.conf.Endpoint, transport.RPCQueueComplete), bytes.NewReader(payload))
 	if err != nil {
 		return duh.NewClientError("", err, nil)
 	}
@@ -121,7 +121,7 @@ func (c *Client) QueueClear(ctx context.Context, req *pb.QueueClearRequest) erro
 	}
 
 	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		fmt.Sprintf("%s%s", c.opts.Endpoint, transport.RPCQueueClear), bytes.NewReader(payload))
+		fmt.Sprintf("%s%s", c.conf.Endpoint, transport.RPCQueueClear), bytes.NewReader(payload))
 	if err != nil {
 		return duh.NewClientError("", err, nil)
 	}
@@ -138,7 +138,7 @@ func (c *Client) QueuePause(ctx context.Context, req *pb.QueuePauseRequest) erro
 	}
 
 	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		fmt.Sprintf("%s%s", c.opts.Endpoint, transport.RPCQueuePause), bytes.NewReader(payload))
+		fmt.Sprintf("%s%s", c.conf.Endpoint, transport.RPCQueuePause), bytes.NewReader(payload))
 	if err != nil {
 		return duh.NewClientError("", err, nil)
 	}
@@ -159,7 +159,7 @@ func (c *Client) QueuesCreate(ctx context.Context, req *pb.QueueInfo) error {
 	}
 
 	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		fmt.Sprintf("%s%s", c.opts.Endpoint, transport.RPCQueuesCreate), bytes.NewReader(payload))
+		fmt.Sprintf("%s%s", c.conf.Endpoint, transport.RPCQueuesCreate), bytes.NewReader(payload))
 	if err != nil {
 		return duh.NewClientError("", err, nil)
 	}
@@ -182,7 +182,7 @@ func (c *Client) QueuesList(ctx context.Context, res *pb.QueuesListResponse, opt
 	}
 
 	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		fmt.Sprintf("%s%s", c.opts.Endpoint, transport.RPCQueuesList), bytes.NewReader(payload))
+		fmt.Sprintf("%s%s", c.conf.Endpoint, transport.RPCQueuesList), bytes.NewReader(payload))
 	if err != nil {
 		return duh.NewClientError("", err, nil)
 	}
@@ -198,7 +198,7 @@ func (c *Client) QueuesUpdate(ctx context.Context, req *pb.QueueInfo) error {
 	}
 
 	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		fmt.Sprintf("%s%s", c.opts.Endpoint, transport.RPCQueuesUpdate), bytes.NewReader(payload))
+		fmt.Sprintf("%s%s", c.conf.Endpoint, transport.RPCQueuesUpdate), bytes.NewReader(payload))
 	if err != nil {
 		return duh.NewClientError("", err, nil)
 	}
@@ -215,7 +215,7 @@ func (c *Client) QueuesDelete(ctx context.Context, req *pb.QueuesDeleteRequest) 
 	}
 
 	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		fmt.Sprintf("%s%s", c.opts.Endpoint, transport.RPCQueuesDelete), bytes.NewReader(payload))
+		fmt.Sprintf("%s%s", c.conf.Endpoint, transport.RPCQueuesDelete), bytes.NewReader(payload))
 	if err != nil {
 		return duh.NewClientError("", err, nil)
 	}
@@ -246,7 +246,7 @@ func (c *Client) StorageQueueList(ctx context.Context, name string, res *pb.Stor
 	}
 
 	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		fmt.Sprintf("%s%s", c.opts.Endpoint, transport.RPCStorageQueueList), bytes.NewReader(payload))
+		fmt.Sprintf("%s%s", c.conf.Endpoint, transport.RPCStorageQueueList), bytes.NewReader(payload))
 	if err != nil {
 		return duh.NewClientError("", err, nil)
 	}
@@ -264,7 +264,7 @@ func (c *Client) StorageQueueAdd(ctx context.Context, req *pb.StorageQueueAddReq
 	}
 
 	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		fmt.Sprintf("%s%s", c.opts.Endpoint, transport.RPCStorageQueueAdd), bytes.NewReader(payload))
+		fmt.Sprintf("%s%s", c.conf.Endpoint, transport.RPCStorageQueueAdd), bytes.NewReader(payload))
 	if err != nil {
 		return duh.NewClientError("", err, nil)
 	}
@@ -281,7 +281,7 @@ func (c *Client) StorageQueueDelete(ctx context.Context, req *pb.StorageQueueDel
 	}
 
 	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		fmt.Sprintf("%s%s", c.opts.Endpoint, transport.RPCStorageQueueDelete), bytes.NewReader(payload))
+		fmt.Sprintf("%s%s", c.conf.Endpoint, transport.RPCStorageQueueDelete), bytes.NewReader(payload))
 	if err != nil {
 		return duh.NewClientError("", err, nil)
 	}
@@ -300,7 +300,7 @@ func (c *Client) QueueStats(ctx context.Context, req *pb.QueueStatsRequest,
 	}
 
 	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		fmt.Sprintf("%s%s", c.opts.Endpoint, transport.RPCQueueStats), bytes.NewReader(payload))
+		fmt.Sprintf("%s%s", c.conf.Endpoint, transport.RPCQueueStats), bytes.NewReader(payload))
 	if err != nil {
 		return duh.NewClientError("", err, nil)
 	}
@@ -309,9 +309,9 @@ func (c *Client) QueueStats(ctx context.Context, req *pb.QueueStatsRequest,
 	return c.client.Do(r, res)
 }
 
-// WithNoTLS returns ClientOptions suitable for use with NON-TLS clients
-func WithNoTLS(address string) ClientOptions {
-	return ClientOptions{
+// WithNoTLS returns ClientConfig suitable for use with NON-TLS clients
+func WithNoTLS(address string) ClientConfig {
+	return ClientConfig{
 		Endpoint: fmt.Sprintf("http://%s", address),
 		Client: &http.Client{
 			Transport: &http.Transport{
@@ -324,9 +324,9 @@ func WithNoTLS(address string) ClientOptions {
 	}
 }
 
-// WithTLS returns ClientOptions suitable for use with TLS clients
-func WithTLS(tls *tls.Config, address string) ClientOptions {
-	return ClientOptions{
+// WithTLS returns ClientConfig suitable for use with TLS clients
+func WithTLS(tls *tls.Config, address string) ClientConfig {
+	return ClientConfig{
 		Endpoint: fmt.Sprintf("https://%s", address),
 		Client: &http.Client{
 			Transport: &http.Transport{

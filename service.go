@@ -27,46 +27,63 @@ import (
 	"github.com/kapetan-io/tackle/set"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"log/slog"
+	"time"
 )
 
 const (
 	DefaultListLimit = 1_000
 )
 
-// TODO: Document this and make it configurable via the daemon
-type ServiceOptions struct {
-	Logger              duh.StandardLogger
-	Storage             store.Storage
+type ServiceConfig struct {
+	// Logger is the logging implementation used by this Querator instance
+	Logger duh.StandardLogger
+	// Storage is the chosen storage engine
+	Storage store.Storage
+	// InstanceID is a unique id for this instance of Querator
+	InstanceID string
+	// WriteTimeout The time it should take for a single batched write to complete
+	WriteTimeout time.Duration
+	// ReadTimeout The time it should take for a single batched read to complete
+	ReadTimeout time.Duration
+	// MaxReserveBatchSize is the maximum number of items a client can request in a single reserve request
 	MaxReserveBatchSize int
+	// MaxProduceBatchSize is the maximum number of items a client can produce in a single produce request
 	MaxProduceBatchSize int
+	// MaxCompleteBatchSize is the maximum number of ids a client can mark complete in a single complete request
+	MaxCompleteBatchSize int
+	// MaxClientsPerQueue is the maximum number of client requests a queue can handle before it returns an
+	// queue overloaded message
+	MaxClientsPerQueue int
 }
 
 type Service struct {
 	queues *internal.QueuesManager
-	opts   ServiceOptions
+	conf   ServiceConfig
 }
 
-func NewService(opts ServiceOptions) (*Service, error) {
-	set.Default(&opts.Logger, slog.Default())
+func NewService(conf ServiceConfig) (*Service, error) {
+	set.Default(&conf.Logger, slog.Default())
 
-	if opts.Storage == nil {
+	if conf.Storage == nil {
 		return nil, errors.New("storage is required")
 	}
 
-	qm, err := internal.NewQueuesManager(internal.QueuesManagerOptions{
-		QueueOptions: internal.QueueOptions{
-			MaxReserveBatchSize: opts.MaxReserveBatchSize,
-			MaxProduceBatchSize: opts.MaxProduceBatchSize,
+	qm, err := internal.NewQueuesManager(internal.QueuesManagerConfig{
+		QueueConfig: internal.QueueConfig{
+			MaxReserveBatchSize:  conf.MaxReserveBatchSize,
+			MaxProduceBatchSize:  conf.MaxProduceBatchSize,
+			MaxCompleteBatchSize: conf.MaxCompleteBatchSize,
+			MaxClientsPerQueue:   conf.MaxClientsPerQueue,
 		},
-		Storage: opts.Storage,
-		Logger:  opts.Logger,
+		Storage: conf.Storage,
+		Logger:  conf.Logger,
 	})
 	if err != nil {
 		return nil, err
 	}
 
 	return &Service{
-		opts:   opts,
+		conf:   conf,
 		queues: qm,
 	}, nil
 }

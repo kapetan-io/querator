@@ -7,6 +7,7 @@ import (
 	"github.com/duh-rpc/duh-go"
 	"github.com/duh-rpc/duh-go/retry"
 	que "github.com/kapetan-io/querator"
+	"github.com/kapetan-io/querator/daemon"
 	"github.com/kapetan-io/querator/internal/store"
 	pb "github.com/kapetan-io/querator/proto"
 	"github.com/kapetan-io/tackle/random"
@@ -21,15 +22,15 @@ import (
 
 //func TestBrokenStorage(t *testing.T) {
 //	var queueName = random.String("queue-", 10)
-//	opts := &store.MockOptions{}
+//	conf := &store.MockConfig{}
 //	newStore := func() store.Storage {
-//		return store.NewMockStorage(opts)
+//		return store.NewMockStorage(conf)
 //	}
 //
 //	d, c, ctx := newDaemon(t, _store, 10*time.Second)
 //	defer d.Shutdown(t)
 //
-//	opts.Methods["Queue.Produce"] = func(args []any) error {
+//	conf.Methods["Queue.Produce"] = func(args []any) error {
 //		return errors.New("unknown storage error")
 //	}
 //
@@ -62,7 +63,7 @@ func TestQueue(t *testing.T) {
 		{
 			Name: "BoltDB",
 			Setup: func() store.Storage {
-				return bdb.Setup(store.BoltOptions{})
+				return bdb.Setup(store.BoltConfig{})
 			},
 			TearDown: func() {
 				bdb.Teardown()
@@ -87,7 +88,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		_store := setup()
 		defer tearDown()
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, _store, 10*time.Second)
+		d, c, ctx := newDaemon(t, 10*time.Second, daemon.Config{Storage: _store})
 		defer d.Shutdown(t)
 
 		// Create a queue
@@ -173,7 +174,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		_store := setup()
 		defer tearDown()
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, _store, 10*time.Second)
+		d, c, ctx := newDaemon(t, 10*time.Second, daemon.Config{Storage: _store})
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -351,7 +352,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		var queueName = random.String("queue-", 10)
 		clientID := random.String("client-", 10)
-		d, c, ctx := newDaemon(t, _store, 30*time.Second)
+		d, c, ctx := newDaemon(t, 30*time.Second, daemon.Config{Storage: _store})
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -559,7 +560,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer tearDown()
 		var queueName = random.String("queue-", 10)
 		clientID := random.String("client-", 10)
-		d, c, ctx := newDaemon(t, _store, 30*time.Second)
+		d, c, ctx := newDaemon(t, 30*time.Second, daemon.Config{Storage: _store})
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -644,7 +645,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer tearDown()
 		var queueName = random.String("queue-", 10)
 		clientID := random.String("client-", 10)
-		d, c, ctx := newDaemon(t, _store, 30*time.Second)
+		d, c, ctx := newDaemon(t, 30*time.Second, daemon.Config{Storage: _store})
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -683,7 +684,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer tearDown()
 
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, _store, 10*time.Second)
+		d, c, ctx := newDaemon(t, 10*time.Second, daemon.Config{Storage: _store})
 		defer d.Shutdown(t)
 
 		var reserved []*pb.StorageQueueItem
@@ -754,7 +755,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		t.Run("QueueProduce", func(t *testing.T) {
 			var queueName = random.String("queue-", 10)
-			d, c, ctx := newDaemon(t, _store, 5*time.Second)
+			d, c, ctx := newDaemon(t, 5*time.Second, daemon.Config{Storage: _store})
 			defer d.Shutdown(t)
 			maxItems := randomProduceItems(1_001)
 
@@ -878,7 +879,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		t.Run("QueueReserve", func(t *testing.T) {
 			var queueName = random.String("queue-", 10)
 			var clientID = random.String("client-", 10)
-			d, c, ctx := newDaemon(t, _store, 10*time.Second)
+			d, c, ctx := newDaemon(t, 10*time.Second, daemon.Config{Storage: _store})
 			defer d.Shutdown(t)
 
 			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -1038,7 +1039,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		})
 		t.Run("QueueComplete", func(t *testing.T) {
 			var queueName = random.String("queue-", 10)
-			d, c, ctx := newDaemon(t, _store, 5*time.Second)
+			d, c, ctx := newDaemon(t, 5*time.Second, daemon.Config{Storage: _store})
 			defer d.Shutdown(t)
 
 			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -1153,7 +1154,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		t.Run("Success", func(t *testing.T) {
 			var queueName = random.String("queue-", 10)
-			d, c, ctx := newDaemon(t, _store, 10*time.Second)
+			d, c, ctx := newDaemon(t, 10*time.Second, daemon.Config{Storage: _store})
 			defer d.Shutdown(t)
 
 			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -1189,7 +1190,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		t.Run("DuringShutdown", func(t *testing.T) {
 			var queueName = random.String("queue-", 10)
-			d, c, ctx := newDaemon(t, _store, 10*time.Second)
+			d, c, ctx := newDaemon(t, 10*time.Second, daemon.Config{Storage: _store})
 
 			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
 				ReserveTimeout: ReserveTimeout,
@@ -1252,11 +1253,11 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		})
 
 		//t.Run("OverloadRequests", func(t *testing.T) {
-		//  // TODO: <--- FINISH THIS NEXT, concurrency is too high for my laptop, we should make the MaxClient something
-		//  //  more reasonable like 90 MaxClients and then test. Fix DaemonConfig to allow this to be changed for this test.
+		//	// TODO: <--- FINISH THIS NEXT, concurrency is too high for my laptop, we should make the MaxClient something
+		//	//  more reasonable like 90 MaxClients and then test. Fix DaemonConfig to allow this to be changed for this test.
 		//	// TODO: Send a ton of requests while the queue is paused, in an attempt to overflow the request channel
 		//	var queueName = random.String("queue-", 10)
-		//	d, c, ctx := newDaemon(t, _store, 10*time.Second)
+		//	d, c, ctx := newDaemon(t, 10*time.Second, daemon.Config{Storage: _store})
 		//
 		//	require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
 		//		ReserveTimeout: ReserveTimeout,
@@ -1275,7 +1276,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		//	const maxClientCount = 1_001
 		//	var wg sync.WaitGroup
 		//
-		//	// Generate enough requests to overflow the queue limits set by QueueOptions.MaxClientsPerQueue
+		//	// Generate enough requests to overflow the queue limits set by QueueConfig.MaxClientsPerQueue
 		//	var produceOverFlow atomic.Bool
 		//	for i := 0; i < maxClientCount; i++ {
 		//		wg.Add(1)

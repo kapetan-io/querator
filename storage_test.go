@@ -10,6 +10,7 @@ import (
 	"github.com/kapetan-io/querator/internal/store"
 	pb "github.com/kapetan-io/querator/proto"
 	"github.com/kapetan-io/tackle/random"
+	"github.com/kapetan-io/tackle/set"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -40,7 +41,7 @@ func TestQueueStorage(t *testing.T) {
 		{
 			Name: "BoltDB",
 			Setup: func() store.Storage {
-				return bdb.Setup(store.BoltOptions{})
+				return bdb.Setup(store.BoltConfig{})
 			},
 			TearDown: func() {
 				bdb.Teardown()
@@ -65,7 +66,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 
 	t.Run("CRUDCompare", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, _store, 10*time.Second)
+		d, c, ctx := newDaemon(t, 10*time.Second, daemon.Config{Storage: _store})
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -130,7 +131,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 
 	t.Run("CRUD", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, _store, 10*time.Second)
+		d, c, ctx := newDaemon(t, 10*time.Second, daemon.Config{Storage: _store})
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -273,7 +274,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 
 	t.Run("StorageQueueDeleteErrors", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, _store, 5*time.Second)
+		d, c, ctx := newDaemon(t, 5*time.Second, daemon.Config{Storage: _store})
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -363,14 +364,13 @@ func (td *testDaemon) Context() context.Context {
 	return td.ctx
 }
 
-func newDaemon(t *testing.T, s store.Storage, duration time.Duration) (*testDaemon, *que.Client, context.Context) {
-	var err error
+func newDaemon(t *testing.T, duration time.Duration, conf daemon.Config) (*testDaemon, *que.Client, context.Context) {
+	set.Default(&conf.Logger, log)
 	td := &testDaemon{}
+	var err error
+
 	td.ctx, td.cancel = context.WithTimeout(context.Background(), duration)
-	td.d, err = daemon.NewDaemon(td.ctx, daemon.Config{
-		Logger: log,
-		Store:  s,
-	})
+	td.d, err = daemon.NewDaemon(td.ctx, conf)
 	require.NoError(t, err)
 	return td, td.d.MustClient(), td.ctx
 }

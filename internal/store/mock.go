@@ -7,26 +7,26 @@ import (
 	"github.com/kapetan-io/querator/internal/types"
 )
 
-type MockOptions struct {
+type MockConfig struct {
 	Methods map[string]func(args []any) error
 }
 
 type MockStorage struct {
-	opts *MockOptions
+	conf *MockConfig
 }
 
 var _ Storage = &MockStorage{}
 
-func NewMockStorage(opts *MockOptions) *MockStorage {
-	return &MockStorage{opts: opts}
+func NewMockStorage(conf *MockConfig) *MockStorage {
+	return &MockStorage{conf: conf}
 }
 
-func (m *MockStorage) NewQueuesStore(opts QueuesStoreOptions) (QueuesStore, error) {
+func (m *MockStorage) NewQueuesStore(conf QueuesStoreConfig) (QueuesStore, error) {
 	return &MockQueuesStore{}, nil
 }
 
-func (m *MockStorage) NewQueue(opts types.QueueInfo) (Queue, error) {
-	return &MockQueue{opts: opts, parent: m}, nil
+func (m *MockStorage) NewQueue(info types.QueueInfo) (Queue, error) {
+	return &MockQueue{info: info, parent: m}, nil
 }
 
 func (m *MockStorage) ParseID(parse types.ItemID, id *StorageID) error {
@@ -48,12 +48,12 @@ func (b *MockStorage) Close(_ context.Context) error {
 }
 
 type MockQueue struct {
-	opts   types.QueueInfo
+	info   types.QueueInfo
 	parent *MockStorage
 }
 
 func (m *MockQueue) Produce(ctx context.Context, batch types.Batch[types.ProduceRequest]) error {
-	f, ok := m.parent.opts.Methods["Queue.Produce"]
+	f, ok := m.parent.conf.Methods["Queue.Produce"]
 	if !ok {
 		panic("no mock for method \"Queue.Produce\" defined")
 	}

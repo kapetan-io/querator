@@ -45,9 +45,16 @@ type Daemon struct {
 func NewDaemon(ctx context.Context, conf Config) (*Daemon, error) {
 	set.Default(&conf.Logger, slog.Default())
 
-	s, err := querator.NewService(querator.ServiceOptions{
-		Logger:  conf.Logger,
-		Storage: conf.Store,
+	s, err := querator.NewService(querator.ServiceConfig{
+		Logger:               conf.Logger,
+		Storage:              conf.Storage,
+		InstanceID:           conf.InstanceID,
+		WriteTimeout:         conf.WriteTimeout,
+		ReadTimeout:          conf.ReadTimeout,
+		MaxReserveBatchSize:  conf.MaxReserveBatchSize,
+		MaxProduceBatchSize:  conf.MaxProduceBatchSize,
+		MaxCompleteBatchSize: conf.MaxCompleteBatchSize,
+		MaxClientsPerQueue:   conf.MaxClientsPerQueue,
 	})
 	if err != nil {
 		return nil, err

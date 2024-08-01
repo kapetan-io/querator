@@ -3,6 +3,7 @@ package bench_test
 import (
 	"context"
 	"fmt"
+	"github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/daemon"
 	"github.com/kapetan-io/querator/internal/store"
 	pb "github.com/kapetan-io/querator/proto"
@@ -32,7 +33,7 @@ func BenchmarkProduce(b *testing.B) {
 		{
 			Name: "BoltDB",
 			Setup: func() store.Storage {
-				return bdb.Setup(store.BoltOptions{})
+				return bdb.Setup(store.BoltConfig{})
 			},
 			TearDown: func() {
 				bdb.Teardown()
@@ -56,8 +57,10 @@ func BenchmarkProduce(b *testing.B) {
 			mask := len(items) - 1
 
 			d, err := daemon.NewDaemon(context.Background(), daemon.Config{
-				Store:  tc.Setup(),
-				Logger: log,
+				ServiceConfig: querator.ServiceConfig{
+					Storage: tc.Setup(),
+					Logger:  log,
+				},
 			})
 			require.NoError(b, err)
 			defer func() {
@@ -150,7 +153,7 @@ func BenchmarkQueuesCreate(b *testing.B) {
 		{
 			Name: "BoltDB",
 			Setup: func() store.Storage {
-				return bdb.Setup(store.BoltOptions{})
+				return bdb.Setup(store.BoltConfig{})
 			},
 			TearDown: func() {
 				bdb.Teardown()
@@ -173,8 +176,10 @@ func BenchmarkQueuesCreate(b *testing.B) {
 			//items := generateQueueInfo(100_000)
 
 			d, err := daemon.NewDaemon(context.Background(), daemon.Config{
-				Store:  tc.Setup(),
-				Logger: log,
+				ServiceConfig: querator.ServiceConfig{
+					Storage: tc.Setup(),
+					Logger:  log,
+				},
 			})
 			require.NoError(b, err)
 			defer func() {

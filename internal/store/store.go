@@ -29,7 +29,7 @@ type Storage interface {
 
 	// NewQueuesStore creates a new instance of the QueuesStore. A QueuesStore stores
 	// QueueInfo structs, which hold information about all the available queues.
-	NewQueuesStore(opts QueuesStoreOptions) (QueuesStore, error)
+	NewQueuesStore(conf QueuesStoreConfig) (QueuesStore, error)
 
 	ParseID(parse types.ItemID, id *StorageID) error
 	BuildStorageID(queue string, id []byte) types.ItemID
@@ -41,7 +41,7 @@ type ReserveOptions struct {
 	ReserveDeadline time.Time
 }
 
-type QueuesStoreOptions struct{}
+type QueuesStoreConfig struct{}
 
 // QueuesStore is storage for listing and storing information about queues
 type QueuesStore interface {
@@ -50,10 +50,10 @@ type QueuesStore interface {
 	Get(ctx context.Context, name string, queue *types.QueueInfo) error
 
 	// Add a queue in the store. if the queue already exists returns an error
-	Add(ctx context.Context, opts types.QueueInfo) error
+	Add(ctx context.Context, info types.QueueInfo) error
 
 	// Update a queue in the store if the queue already exists it updates the existing QueueInfo
-	Update(ctx context.Context, opts types.QueueInfo) error
+	Update(ctx context.Context, info types.QueueInfo) error
 
 	// List returns a list of queues
 	List(ctx context.Context, queues *[]types.QueueInfo, opts types.ListOptions) error

@@ -244,4 +244,6 @@ message QueueStatsResponse {
   int32 CompleteWaiting = 7 [json_name = "complete_waiting"];
   // ReserveBlocked is the number of reservations which are blocked waiting for new item to enter the queue.
   int32 ReserveBlocked = 8 [json_name = "reserve_blocked"];
+  // InFlight is the number of requests currently in flight
+  int32 InFlight = 9 [json_name = "in_flight"];
 }

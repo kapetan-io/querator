@@ -20,6 +20,8 @@ import (
 const (
 	MsgRequestTimeout    = internal.MsgRequestTimeout
 	MsgDuplicateClientID = internal.MsgDuplicateClientID
+	MsgServiceInShutdown = internal.MsgServiceInShutdown
+	MsgQueueInShutdown   = internal.MsgQueueInShutdown
 )
 
 type ListOptions struct {
@@ -43,9 +45,9 @@ type Client struct {
 func NewClient(opts ClientOptions) (*Client, error) {
 	set.Default(&opts.Client, &http.Client{
 		Transport: &http.Transport{
-			MaxConnsPerHost:     2_000,
-			MaxIdleConns:        2_000,
-			MaxIdleConnsPerHost: 2_000,
+			MaxConnsPerHost:     5_000,
+			MaxIdleConns:        5_000,
+			MaxIdleConnsPerHost: 5_000,
 			IdleConnTimeout:     60 * time.Second,
 		},
 	})

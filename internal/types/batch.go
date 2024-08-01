@@ -6,6 +6,9 @@ type Batch[T any] struct {
 }
 
 func (r *Batch[T]) Add(req *T) {
+	if req == nil {
+		return
+	}
 	r.Requests = append(r.Requests, req)
 }
 

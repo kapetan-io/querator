@@ -13,6 +13,7 @@ type Config struct {
 	Store         store.Storage
 	ListenAddress string
 	InstanceID    string
+	// TODO: Add Queue options here
 }
 
 func (d *Config) ClientTLS() *tls.Config {

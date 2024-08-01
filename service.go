@@ -29,7 +29,9 @@ import (
 	"log/slog"
 )
 
-const DefaultListLimit = 1_000
+const (
+	DefaultListLimit = 1_000
+)
 
 // TODO: Document this and make it configurable via the daemon
 type ServiceOptions struct {
@@ -335,9 +337,11 @@ func (s *Service) QueueStats(ctx context.Context, req *proto.QueueStatsRequest,
 	res.ReserveWaiting = int32(stats.ReserveWaiting)
 	res.CompleteWaiting = int32(stats.CompleteWaiting)
 	res.ReserveBlocked = int32(stats.ReserveBlocked)
+	res.InFlight = int32(stats.InFlight)
 	return nil
 }
 
 func (s *Service) Shutdown(ctx context.Context) error {
+	// See 0015-shutdown-errors.md for a discussion of shutdown operation
 	return s.queues.Shutdown(ctx)
 }

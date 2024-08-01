@@ -15,7 +15,9 @@ import (
 	"time"
 )
 
-var ErrServiceShutdown = transport.NewRequestFailed("service is shutting down")
+const MsgServiceInShutdown = "service is shutting down"
+
+var ErrServiceShutdown = transport.NewRequestFailed(MsgServiceInShutdown)
 
 type QueuesManagerOptions struct {
 	Logger       duh.StandardLogger
@@ -198,18 +200,23 @@ func (qm *QueuesManager) Shutdown(ctx context.Context) error {
 		return nil
 	}
 
+	fmt.Printf("QueuesManager.Shutdown()\n")
 	qm.inShutdown.Store(true)
 	defer qm.mutex.Unlock()
 	qm.mutex.Lock()
 
+	fmt.Printf("QueuesManager.Shutdown() queues len %d\n", len(qm.queues))
 	wait := make(chan error)
 	go func() {
 		for _, q := range qm.queues {
+			fmt.Printf("QueuesManager.Shutdown() queue '%s'\n", q.opts.Name)
 			if err := q.Shutdown(ctx); err != nil {
 				wait <- err
 				return
 			}
+			fmt.Printf("QueuesManager.Shutdown() queue '%s' - DONE\n", q.opts.Name)
 		}
+		fmt.Printf("QueuesManager.Shutdown() store.Close()\n")
 		if err := qm.store.Close(ctx); err != nil {
 			wait <- err
 			return
@@ -217,10 +224,13 @@ func (qm *QueuesManager) Shutdown(ctx context.Context) error {
 		close(wait)
 	}()
 
+	fmt.Printf("QueuesManager.Shutdown() wait\n")
 	select {
 	case <-ctx.Done():
+		fmt.Printf("QueuesManager.Shutdown() wait ctx cancel\n")
 		return ctx.Err()
 	case err := <-wait:
+		fmt.Printf("QueuesManager.Shutdown() wait done\n")
 		return err
 	}
 }

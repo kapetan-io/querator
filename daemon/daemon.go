@@ -82,12 +82,19 @@ func (d *Daemon) Start(ctx context.Context) error {
 }
 
 func (d *Daemon) Shutdown(ctx context.Context) error {
+	fmt.Printf("Daemon.Shutdown() - Service\n")
+
+	// See 0015-shutdown-errors.md for a discussion of shutdown operation
+	if err := d.service.Shutdown(ctx); err != nil {
+		return err
+	}
 	for _, srv := range d.servers {
 		d.conf.Logger.Info("Shutting down server", "address", srv.Addr)
+		fmt.Printf("Shutdown() - HTTP\n")
 		_ = srv.Shutdown(ctx)
 	}
 	d.servers = nil
-	return d.service.Shutdown(ctx)
+	return nil
 }
 
 func (d *Daemon) Service() *querator.Service {

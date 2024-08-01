@@ -116,4 +116,6 @@ type QueueStats struct {
 	CompleteWaiting int
 	// ReserveBlocked is the number of reservations which are blocked waiting for new item to enter the queue.
 	ReserveBlocked int
+	// InFlight is the number of requests currently in flight
+	InFlight int
 }

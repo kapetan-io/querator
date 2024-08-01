@@ -29,12 +29,12 @@ const (
 	DefaultMaxReserveBatchSize  = 1_000
 	DefaultMaxProduceBatchSize  = 1_000
 	DefaultMaxCompleteBatchSize = 1_000
-	DefaultMaxClientsPerQueue   = 3_000
+	DefaultMaxRequestsPerQueue  = 3_000
 
 	MsgRequestTimeout    = "request timeout; no items are in the queue, try again"
 	MsgDuplicateClientID = "duplicate client id; a client cannot make multiple reserve requests to the same queue"
 	MsgQueueInShutdown   = "queue is shutting down"
-	MsgQueueOverloaded   = "queue is overloaded; try again later"
+	MsgQueueOverLoaded   = "queue is overloaded; try again later"
 )
 
 var (
@@ -61,9 +61,9 @@ type QueueConfig struct {
 	MaxProduceBatchSize int
 	// MaxCompleteBatchSize is the maximum number of ids a client can mark complete in a single complete request
 	MaxCompleteBatchSize int
-	// MaxClientsPerQueue is the maximum number of client requests a queue can handle before it returns an
+	// MaxRequestsPerQueue is the maximum number of client requests a queue can handle before it returns an
 	// queue overloaded message
-	MaxClientsPerQueue int
+	MaxRequestsPerQueue int
 }
 
 // Queue manages job is to evenly distribute and consume items from a single queue. Ensuring consumers and
@@ -88,11 +88,11 @@ func NewQueue(conf QueueConfig) (*Queue, error) {
 	set.Default(&conf.MaxReserveBatchSize, DefaultMaxReserveBatchSize)
 	set.Default(&conf.MaxProduceBatchSize, DefaultMaxProduceBatchSize)
 	set.Default(&conf.MaxCompleteBatchSize, DefaultMaxCompleteBatchSize)
-	set.Default(&conf.MaxClientsPerQueue, DefaultMaxClientsPerQueue)
+	set.Default(&conf.MaxRequestsPerQueue, DefaultMaxRequestsPerQueue)
 
 	// TODO: Change this to a multiple of 4 once we implement /queue.defer
-	if conf.MaxClientsPerQueue%3 != 0 {
-		return nil, transport.NewRetryRequest("MaxClientsPerQueue must be a multiple of 3")
+	if conf.MaxRequestsPerQueue%3 != 0 {
+		return nil, transport.NewRetryRequest("MaxRequestsPerQueue must be a multiple of 3")
 	}
 
 	if conf.QueueStore == nil {
@@ -110,9 +110,10 @@ func NewQueue(conf QueueConfig) (*Queue, error) {
 	// These are request queues that queue requests from clients until the sync loop has
 	// time to process them. When they get processed, every request in the queue is handled
 	// in a batch.
-	q.reserveQueueCh = make(chan *types.ReserveRequest, conf.MaxClientsPerQueue/3)
-	q.produceQueueCh = make(chan *types.ProduceRequest, conf.MaxClientsPerQueue/3)
-	q.completeQueueCh = make(chan *types.CompleteRequest, conf.MaxClientsPerQueue/3)
+	fmt.Printf("NewQueue() - MaxRequestsPerQueue: %d\n", conf.MaxRequestsPerQueue/3)
+	q.reserveQueueCh = make(chan *types.ReserveRequest, conf.MaxRequestsPerQueue/3)
+	q.produceQueueCh = make(chan *types.ProduceRequest, conf.MaxRequestsPerQueue/3)
+	q.completeQueueCh = make(chan *types.CompleteRequest, conf.MaxRequestsPerQueue/3)
 
 	q.wg.Add(1)
 	go q.synchronizationLoop()
@@ -156,10 +157,11 @@ func (q *Queue) Produce(ctx context.Context, req *types.ProduceRequest) error {
 	req.ReadyCh = make(chan struct{})
 	req.Context = ctx
 
+	fmt.Printf("Produce Len: %d \n", len(q.produceQueueCh))
 	select {
 	case q.produceQueueCh <- req:
 	default:
-		return transport.NewRetryRequest(MsgQueueOverloaded)
+		return transport.NewRetryRequest(MsgQueueOverLoaded)
 	}
 
 	// Wait until the request has been processed
@@ -223,7 +225,7 @@ func (q *Queue) Reserve(ctx context.Context, req *types.ReserveRequest) error {
 	select {
 	case q.reserveQueueCh <- req:
 	default:
-		return transport.NewRetryRequest(MsgQueueOverloaded)
+		return transport.NewRetryRequest(MsgQueueOverLoaded)
 	}
 
 	// Wait until the request has been processed
@@ -266,7 +268,7 @@ func (q *Queue) Complete(ctx context.Context, req *types.CompleteRequest) error 
 	select {
 	case q.completeQueueCh <- req:
 	default:
-		return transport.NewRetryRequest(MsgQueueOverloaded)
+		return transport.NewRetryRequest(MsgQueueOverLoaded)
 	}
 
 	// Wait until the request has been processed

@@ -24,6 +24,7 @@ import (
 	pb "github.com/kapetan-io/querator/proto"
 	"github.com/prometheus/client_golang/prometheus"
 	"net/http"
+	"sync/atomic"
 )
 
 // TODO: Document pause in OpenAPI, "Pauses queue processing such that requests to produce, reserve,
@@ -94,6 +95,7 @@ type HTTPHandler struct {
 	duration *prometheus.SummaryVec
 	metrics  http.Handler
 	service  Service
+	InFlight atomic.Int32
 }
 
 func NewHTTPHandler(s Service, metrics http.Handler) *HTTPHandler {
@@ -112,6 +114,12 @@ func NewHTTPHandler(s Service, metrics http.Handler) *HTTPHandler {
 }
 
 func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.InFlight.Add(1)
+	fmt.Printf("HTTP [%d] Start %s \n", h.InFlight.Load(), r.URL.Path)
+	defer func() {
+		h.InFlight.Add(-1)
+		fmt.Printf("HTTP [%d] End %s \n", h.InFlight.Load(), r.URL.Path)
+	}()
 	defer prometheus.NewTimer(h.duration.WithLabelValues(r.URL.Path)).ObserveDuration()
 	ctx := r.Context()
 

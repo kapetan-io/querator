@@ -22,6 +22,7 @@ const (
 	MsgDuplicateClientID = internal.MsgDuplicateClientID
 	MsgServiceInShutdown = internal.MsgServiceInShutdown
 	MsgQueueInShutdown   = internal.MsgQueueInShutdown
+	MsgQueueOverLoaded   = internal.MsgQueueOverLoaded
 )
 
 type ListOptions struct {

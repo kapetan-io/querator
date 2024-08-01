@@ -102,19 +102,21 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Que
 }
 
 func (qm *QueuesManager) startQueue(info types.QueueInfo) (*Queue, error) {
-	conf := QueueConfig{QueueInfo: info}
 
 	// Each queue has their own copy of these options to avoid race conditions with any
 	// reconfiguration the QueuesManager may preform during cluster operation. Additionally,
 	// each queue may independently change these options as they see fit.
 
-	// Assign all the server level configuration to QueueConfig.
-	set.Default(&conf.MaxProduceBatchSize, qm.conf.QueueConfig.MaxProduceBatchSize)
-	set.Default(&conf.MaxReserveBatchSize, qm.conf.QueueConfig.MaxReserveBatchSize)
-	set.Default(&conf.MaxCompleteBatchSize, qm.conf.QueueConfig.MaxCompleteBatchSize)
-	set.Default(&conf.WriteTimeout, qm.conf.QueueConfig.WriteTimeout)
-	set.Default(&conf.ReadTimeout, qm.conf.QueueConfig.ReadTimeout)
-	set.Default(&conf.Logger, qm.conf.Logger)
+	conf := QueueConfig{
+		MaxProduceBatchSize:  qm.conf.QueueConfig.MaxProduceBatchSize,
+		MaxReserveBatchSize:  qm.conf.QueueConfig.MaxReserveBatchSize,
+		MaxCompleteBatchSize: qm.conf.QueueConfig.MaxCompleteBatchSize,
+		MaxRequestsPerQueue:  qm.conf.QueueConfig.MaxRequestsPerQueue,
+		WriteTimeout:         qm.conf.QueueConfig.WriteTimeout,
+		ReadTimeout:          qm.conf.QueueConfig.ReadTimeout,
+		Logger:               qm.conf.Logger,
+		QueueInfo:            info,
+	}
 
 	var err error
 	conf.QueueStore, err = qm.conf.Storage.NewQueue(info)

@@ -36,6 +36,7 @@ import (
 type Daemon struct {
 	service    *querator.Service
 	logAdaptor *duh.HttpLogAdaptor
+	client     *querator.Client
 	servers    []*http.Server
 	wg         sync.WaitGroup
 	Listener   net.Listener
@@ -54,7 +55,7 @@ func NewDaemon(ctx context.Context, conf Config) (*Daemon, error) {
 		MaxReserveBatchSize:  conf.MaxReserveBatchSize,
 		MaxProduceBatchSize:  conf.MaxProduceBatchSize,
 		MaxCompleteBatchSize: conf.MaxCompleteBatchSize,
-		MaxClientsPerQueue:   conf.MaxClientsPerQueue,
+		MaxRequestsPerQueue:  conf.MaxRequestsPerQueue,
 	})
 	if err != nil {
 		return nil, err
@@ -98,9 +99,12 @@ func (d *Daemon) Shutdown(ctx context.Context) error {
 	for _, srv := range d.servers {
 		d.conf.Logger.Info("Shutting down server", "address", srv.Addr)
 		fmt.Printf("Shutdown() - HTTP\n")
+		// TODO: <-- Shutdown is hanging for some reason, there must be another request hanging out somewhere?
 		_ = srv.Shutdown(ctx)
+		fmt.Printf("Shutdown() - HTTP DONE\n")
 	}
 	d.servers = nil
+	fmt.Printf("Daemon.Shutdown() - DONE\n")
 	return nil
 }
 
@@ -117,10 +121,17 @@ func (d *Daemon) MustClient() *querator.Client {
 }
 
 func (d *Daemon) Client() (*querator.Client, error) {
-	if d.conf.TLS != nil {
-		return querator.NewClient(querator.WithTLS(d.conf.ClientTLS(), d.Listener.Addr().String()))
+	var err error
+	if d.client != nil {
+		return d.client, nil
 	}
-	return querator.NewClient(querator.WithNoTLS(d.Listener.Addr().String()))
+
+	if d.conf.TLS != nil {
+		d.client, err = querator.NewClient(querator.WithTLS(d.conf.ClientTLS(), d.Listener.Addr().String()))
+		return d.client, err
+	}
+	d.client, err = querator.NewClient(querator.WithNoTLS(d.Listener.Addr().String()))
+	return d.client, err
 }
 
 func (d *Daemon) spawnHTTPS(ctx context.Context, mux http.Handler) error {

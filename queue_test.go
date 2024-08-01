@@ -7,7 +7,6 @@ import (
 	"github.com/duh-rpc/duh-go"
 	"github.com/duh-rpc/duh-go/retry"
 	que "github.com/kapetan-io/querator"
-	"github.com/kapetan-io/querator/daemon"
 	"github.com/kapetan-io/querator/internal/store"
 	pb "github.com/kapetan-io/querator/proto"
 	"github.com/kapetan-io/tackle/random"
@@ -16,6 +15,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"math/rand"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -88,7 +88,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		_store := setup()
 		defer tearDown()
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 10*time.Second, daemon.Config{Storage: _store})
+		d, c, ctx := newDaemon(t, 10*time.Second, que.ServiceConfig{Storage: _store})
 		defer d.Shutdown(t)
 
 		// Create a queue
@@ -174,7 +174,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		_store := setup()
 		defer tearDown()
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 10*time.Second, daemon.Config{Storage: _store})
+		d, c, ctx := newDaemon(t, 10*time.Second, que.ServiceConfig{Storage: _store})
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -352,7 +352,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		var queueName = random.String("queue-", 10)
 		clientID := random.String("client-", 10)
-		d, c, ctx := newDaemon(t, 30*time.Second, daemon.Config{Storage: _store})
+		d, c, ctx := newDaemon(t, 30*time.Second, que.ServiceConfig{Storage: _store})
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -560,7 +560,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer tearDown()
 		var queueName = random.String("queue-", 10)
 		clientID := random.String("client-", 10)
-		d, c, ctx := newDaemon(t, 30*time.Second, daemon.Config{Storage: _store})
+		d, c, ctx := newDaemon(t, 30*time.Second, que.ServiceConfig{Storage: _store})
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -645,7 +645,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer tearDown()
 		var queueName = random.String("queue-", 10)
 		clientID := random.String("client-", 10)
-		d, c, ctx := newDaemon(t, 30*time.Second, daemon.Config{Storage: _store})
+		d, c, ctx := newDaemon(t, 30*time.Second, que.ServiceConfig{Storage: _store})
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -684,7 +684,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer tearDown()
 
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 10*time.Second, daemon.Config{Storage: _store})
+		d, c, ctx := newDaemon(t, 10*time.Second, que.ServiceConfig{Storage: _store})
 		defer d.Shutdown(t)
 
 		var reserved []*pb.StorageQueueItem
@@ -755,7 +755,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		t.Run("QueueProduce", func(t *testing.T) {
 			var queueName = random.String("queue-", 10)
-			d, c, ctx := newDaemon(t, 5*time.Second, daemon.Config{Storage: _store})
+			d, c, ctx := newDaemon(t, 5*time.Second, que.ServiceConfig{Storage: _store})
 			defer d.Shutdown(t)
 			maxItems := randomProduceItems(1_001)
 
@@ -879,7 +879,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		t.Run("QueueReserve", func(t *testing.T) {
 			var queueName = random.String("queue-", 10)
 			var clientID = random.String("client-", 10)
-			d, c, ctx := newDaemon(t, 10*time.Second, daemon.Config{Storage: _store})
+			d, c, ctx := newDaemon(t, 10*time.Second, que.ServiceConfig{Storage: _store})
 			defer d.Shutdown(t)
 
 			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -1039,7 +1039,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		})
 		t.Run("QueueComplete", func(t *testing.T) {
 			var queueName = random.String("queue-", 10)
-			d, c, ctx := newDaemon(t, 5*time.Second, daemon.Config{Storage: _store})
+			d, c, ctx := newDaemon(t, 5*time.Second, que.ServiceConfig{Storage: _store})
 			defer d.Shutdown(t)
 
 			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -1154,7 +1154,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		t.Run("Success", func(t *testing.T) {
 			var queueName = random.String("queue-", 10)
-			d, c, ctx := newDaemon(t, 10*time.Second, daemon.Config{Storage: _store})
+			d, c, ctx := newDaemon(t, 10*time.Second, que.ServiceConfig{Storage: _store})
 			defer d.Shutdown(t)
 
 			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -1190,7 +1190,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		t.Run("DuringShutdown", func(t *testing.T) {
 			var queueName = random.String("queue-", 10)
-			d, c, ctx := newDaemon(t, 10*time.Second, daemon.Config{Storage: _store})
+			d, c, ctx := newDaemon(t, 10*time.Second, que.ServiceConfig{Storage: _store})
 
 			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
 				ReserveTimeout: ReserveTimeout,
@@ -1252,107 +1252,112 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			wg.Wait()
 		})
 
-		//t.Run("OverloadRequests", func(t *testing.T) {
-		//	// TODO: <--- FINISH THIS NEXT, concurrency is too high for my laptop, we should make the MaxClient something
-		//	//  more reasonable like 90 MaxClients and then test. Fix DaemonConfig to allow this to be changed for this test.
-		//	// TODO: Send a ton of requests while the queue is paused, in an attempt to overflow the request channel
-		//	var queueName = random.String("queue-", 10)
-		//	d, c, ctx := newDaemon(t, 10*time.Second, daemon.Config{Storage: _store})
-		//
-		//	require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
-		//		ReserveTimeout: ReserveTimeout,
-		//		DeadTimeout:    DeadTimeout,
-		//		QueueName:      queueName,
-		//	}))
-		//
-		//	// Pause processing of the queue
-		//	require.NoError(t, c.QueuePause(ctx, &pb.QueuePauseRequest{
-		//		QueueName:     queueName,
-		//		PauseDuration: "2m",
-		//		Pause:         true,
-		//	}))
-		//
-		//	items := randomProduceItems(1)
-		//	const maxClientCount = 1_001
-		//	var wg sync.WaitGroup
-		//
-		//	// Generate enough requests to overflow the queue limits set by QueueConfig.MaxClientsPerQueue
-		//	var produceOverFlow atomic.Bool
-		//	for i := 0; i < maxClientCount; i++ {
-		//		wg.Add(1)
-		//		go func() {
-		//			err := c.QueueProduce(ctx, &pb.QueueProduceRequest{
-		//				QueueName:      queueName,
-		//				RequestTimeout: "1m",
-		//				Items:          items,
-		//			})
-		//			if err != nil {
-		//				fmt.Printf("Err: %s\n", err)
-		//				produceOverFlow.Store(true)
-		//			}
-		//			wg.Done()
-		//		}()
-		//	}
-		//	var reserveOverFlow atomic.Bool
-		//	for i := 0; i < maxClientCount; i++ {
-		//		wg.Add(1)
-		//		go func() {
-		//			var resp pb.QueueReserveResponse
-		//			err := c.QueueReserve(ctx, &pb.QueueReserveRequest{
-		//				QueueName:      queueName,
-		//				RequestTimeout: "1m",
-		//				BatchSize:      1,
-		//			}, &resp)
-		//			if err != nil {
-		//				fmt.Printf("Err: %s\n", err)
-		//				reserveOverFlow.Store(true)
-		//			}
-		//			wg.Done()
-		//		}()
-		//	}
-		//	var completeOverFlow atomic.Bool
-		//	for i := 0; i < maxClientCount; i++ {
-		//		wg.Add(1)
-		//		go func() {
-		//			err := c.QueueComplete(ctx, &pb.QueueCompleteRequest{
-		//				Ids:            []string{"id1"},
-		//				QueueName:      queueName,
-		//				RequestTimeout: "1m",
-		//			})
-		//			if err != nil {
-		//				fmt.Printf("Err: %s\n", err)
-		//				completeOverFlow.Store(true)
-		//			}
-		//			wg.Done()
-		//		}()
-		//	}
-		//
-		//	_ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		//	defer cancel()
-		//	t.Helper()
-		//
-		//	// Wait until every request is waiting
-		//	require.NoError(t, retry.On(_ctx, RetryTenTimes, func(ctx context.Context, i int) error {
-		//		var resp pb.QueueStatsResponse
-		//		require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &resp))
-		//		if int(resp.ReserveWaiting) != maxClientCount {
-		//			return fmt.Errorf("ReserveWaiting never reached expected %d", maxClientCount)
-		//		}
-		//		if int(resp.CompleteWaiting) != maxClientCount {
-		//			return fmt.Errorf("CompleteWaiting never reached expected %d", maxClientCount)
-		//		}
-		//		if int(resp.ProduceWaiting) != maxClientCount {
-		//			return fmt.Errorf("ProduceWaiting never reached expected %d", maxClientCount)
-		//		}
-		//		return nil
-		//	}))
-		//
-		//	assert.True(t, produceOverFlow.Load())
-		//	assert.True(t, reserveOverFlow.Load())
-		//	assert.True(t, completeOverFlow.Load())
-		//	d.Shutdown(t)
-		//	wg.Wait()
-		//})
+		t.Run("OverloadRequests", func(t *testing.T) {
+			// TODO: <--- FINISH THIS NEXT, concurrency is too high for my laptop, we should make the MaxClient something
+			//  more reasonable like 90 MaxClients and then test. Fix DaemonConfig to allow this to be changed for this test.
+			// TODO: Send a ton of requests while the queue is paused, in an attempt to overflow the request channel
+			var queueName = random.String("queue-", 10)
+			d, c, ctx := newDaemon(t, 10*time.Second, que.ServiceConfig{Storage: _store, MaxRequestsPerQueue: 15})
+
+			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+				ReserveTimeout: ReserveTimeout,
+				DeadTimeout:    DeadTimeout,
+				QueueName:      queueName,
+			}))
+
+			// Pause processing of the queue
+			require.NoError(t, c.QueuePause(ctx, &pb.QueuePauseRequest{
+				QueueName:     queueName,
+				PauseDuration: "2m",
+				Pause:         true,
+			}))
+
+			expectedErrs := []string{
+				que.MsgQueueInShutdown,
+				que.MsgQueueOverLoaded,
+			}
+			items := randomProduceItems(1)
+			const maxRequestCount = 6
+			var wg sync.WaitGroup
+
+			// Generate enough requests to overflow the queue limits set by QueueConfig.MaxRequestsPerQueue
+			var produceOverFlow atomic.Bool
+			for i := 0; i < maxRequestCount; i++ {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					if expectErrMsg(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+						QueueName:      queueName,
+						RequestTimeout: "1m",
+						Items:          items,
+					}), expectedErrs...) {
+						produceOverFlow.Store(true)
+					}
+				}()
+			}
+			var reserveOverFlow atomic.Bool
+			for i := 0; i < maxRequestCount; i++ {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					var resp pb.QueueReserveResponse
+					if expectErrMsg(t, c.QueueReserve(ctx, &pb.QueueReserveRequest{
+						ClientId:       random.String("client-", 10),
+						QueueName:      queueName,
+						RequestTimeout: "1m",
+						BatchSize:      1,
+					}, &resp), expectedErrs...) {
+						reserveOverFlow.Store(true)
+					}
+				}()
+			}
+			var completeOverFlow atomic.Bool
+			for i := 0; i < maxRequestCount; i++ {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					if expectErrMsg(t, c.QueueComplete(ctx, &pb.QueueCompleteRequest{
+						Ids:            []string{"id1"},
+						QueueName:      queueName,
+						RequestTimeout: "1m",
+					}), expectedErrs...) {
+						completeOverFlow.Store(true)
+					}
+				}()
+			}
+
+			_ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			t.Helper()
+
+			// Wait until every request is waiting
+			require.NoError(t, retry.On(_ctx, RetryTenTimes, func(ctx context.Context, i int) error {
+				var resp pb.QueueStatsResponse
+				require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &resp))
+				fmt.Println(pb.PPStats(&resp))
+				if int(resp.ReserveWaiting) < maxRequestCount-1 {
+					return fmt.Errorf("ReserveWaiting never reached expected %d", maxRequestCount-1)
+				}
+				if int(resp.CompleteWaiting) < maxRequestCount-1 {
+					return fmt.Errorf("CompleteWaiting never reached expected %d", maxRequestCount-1)
+				}
+				if int(resp.ProduceWaiting) < maxRequestCount-1 {
+					return fmt.Errorf("ProduceWaiting never reached expected %d", maxRequestCount-1)
+				}
+				return nil
+			}))
+
+			assert.True(t, produceOverFlow.Load())
+			assert.True(t, reserveOverFlow.Load())
+			assert.True(t, completeOverFlow.Load())
+
+			// Each spawned request that didn't receive a que.MsgQueueOverLoaded
+			// should now return que.MsgQueueOverLoaded. Since this happens AFTER
+			// we check for the xxxOverFlow booleans, we assume the first error was
+			// a MsgQueueOverLoaded.
+			d.Shutdown(t)
+			wg.Wait()
+		})
 
 		t.Run("ResumeAfterTimeout", func(t *testing.T) {
 			// TODO: Need to teach golang how to travel through time

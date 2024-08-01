@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"github.com/duh-rpc/duh-go"
 	que "github.com/kapetan-io/querator"
-	"github.com/kapetan-io/querator/daemon"
 	"github.com/kapetan-io/querator/internal/store"
 	pb "github.com/kapetan-io/querator/proto"
 	"github.com/kapetan-io/tackle/random"
@@ -14,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"math"
 	"math/rand"
+	"strings"
 	"testing"
 	"time"
 )
@@ -59,7 +59,7 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 	t.Run("CRUD", func(t *testing.T) {
 		_store := newStore()
 		defer tearDown()
-		d, c, ctx := newDaemon(t, 10*time.Second, daemon.Config{Storage: _store})
+		d, c, ctx := newDaemon(t, 10*time.Second, que.ServiceConfig{Storage: _store})
 		defer d.Shutdown(t)
 
 		t.Run("Create", func(t *testing.T) {
@@ -298,7 +298,7 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 	t.Run("List", func(t *testing.T) {
 		_store := newStore()
 		defer tearDown()
-		d, c, ctx := newDaemon(t, 10*time.Second, daemon.Config{Storage: _store})
+		d, c, ctx := newDaemon(t, 10*time.Second, que.ServiceConfig{Storage: _store})
 		defer d.Shutdown(t)
 
 		queues := createRandomQueues(t, ctx, c, 100)
@@ -370,7 +370,7 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 	t.Run("Errors", func(t *testing.T) {
 		_store := newStore()
 		defer tearDown()
-		d, c, ctx := newDaemon(t, 10*time.Second, daemon.Config{Storage: _store})
+		d, c, ctx := newDaemon(t, 10*time.Second, que.ServiceConfig{Storage: _store})
 		defer d.Shutdown(t)
 
 		var queueName = random.String("queue-", 10)
@@ -820,4 +820,20 @@ func createRandomQueues(t *testing.T, ctx context.Context, c *que.Client, count 
 		require.NoError(t, c.QueuesCreate(ctx, &info))
 	}
 	return items
+}
+
+func expectErrMsg(t *testing.T, err error, messages ...string) bool {
+	if err != nil {
+		for _, msg := range messages {
+			if strings.Contains(err.Error(), msg) {
+				return true
+			}
+		}
+		t.Logf("Unexpected error '%s'\n", err)
+		t.Fail()
+		return false
+	}
+	t.Logf("Unexpected error but no error returned\n")
+	t.Fail()
+	return false
 }

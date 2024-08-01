@@ -66,7 +66,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 
 	t.Run("CRUDCompare", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 10*time.Second, daemon.Config{Storage: _store})
+		d, c, ctx := newDaemon(t, 10*time.Second, que.ServiceConfig{Storage: _store})
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -131,7 +131,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 
 	t.Run("CRUD", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 10*time.Second, daemon.Config{Storage: _store})
+		d, c, ctx := newDaemon(t, 10*time.Second, que.ServiceConfig{Storage: _store})
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -274,7 +274,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 
 	t.Run("StorageQueueDeleteErrors", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 5*time.Second, daemon.Config{Storage: _store})
+		d, c, ctx := newDaemon(t, 5*time.Second, que.ServiceConfig{Storage: _store})
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -352,6 +352,8 @@ type testDaemon struct {
 }
 
 func (td *testDaemon) Shutdown(t *testing.T) {
+	t.Helper()
+
 	require.NoError(t, td.d.Shutdown(td.ctx))
 	td.cancel()
 }
@@ -364,13 +366,17 @@ func (td *testDaemon) Context() context.Context {
 	return td.ctx
 }
 
-func newDaemon(t *testing.T, duration time.Duration, conf daemon.Config) (*testDaemon, *que.Client, context.Context) {
+func newDaemon(t *testing.T, duration time.Duration, conf que.ServiceConfig) (*testDaemon, *que.Client, context.Context) {
+	t.Helper()
+
 	set.Default(&conf.Logger, log)
 	td := &testDaemon{}
 	var err error
 
 	td.ctx, td.cancel = context.WithTimeout(context.Background(), duration)
-	td.d, err = daemon.NewDaemon(td.ctx, conf)
+	td.d, err = daemon.NewDaemon(td.ctx, daemon.Config{
+		ServiceConfig: conf,
+	})
 	require.NoError(t, err)
 	return td, td.d.MustClient(), td.ctx
 }

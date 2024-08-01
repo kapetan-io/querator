@@ -17,8 +17,6 @@ type Config struct {
 	TLS *duh.TLSConfig
 	// ListenAddress is the address:port that Querator will listen on for public HTTP requests
 	ListenAddress string
-	// Storage is the chosen storage engine
-	Storage store.Storage
 }
 
 func (c *Config) ClientTLS() *tls.Config {
@@ -43,7 +41,7 @@ func (c *Config) SetDefaults() error {
 	set.Default(&c.MaxReserveBatchSize, internal.DefaultMaxReserveBatchSize)
 	set.Default(&c.MaxProduceBatchSize, internal.DefaultMaxProduceBatchSize)
 	set.Default(&c.MaxCompleteBatchSize, internal.DefaultMaxCompleteBatchSize)
-	set.Default(&c.MaxClientsPerQueue, internal.DefaultMaxClientsPerQueue)
+	set.Default(&c.MaxRequestsPerQueue, internal.DefaultMaxRequestsPerQueue)
 	return nil
 }
 

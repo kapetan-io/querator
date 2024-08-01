@@ -51,9 +51,9 @@ type ServiceConfig struct {
 	MaxProduceBatchSize int
 	// MaxCompleteBatchSize is the maximum number of ids a client can mark complete in a single complete request
 	MaxCompleteBatchSize int
-	// MaxClientsPerQueue is the maximum number of client requests a queue can handle before it returns an
+	// MaxRequestsPerQueue is the maximum number of client requests a queue can handle before it returns an
 	// queue overloaded message
-	MaxClientsPerQueue int
+	MaxRequestsPerQueue int
 }
 
 type Service struct {
@@ -73,7 +73,7 @@ func NewService(conf ServiceConfig) (*Service, error) {
 			MaxReserveBatchSize:  conf.MaxReserveBatchSize,
 			MaxProduceBatchSize:  conf.MaxProduceBatchSize,
 			MaxCompleteBatchSize: conf.MaxCompleteBatchSize,
-			MaxClientsPerQueue:   conf.MaxClientsPerQueue,
+			MaxRequestsPerQueue:  conf.MaxRequestsPerQueue,
 		},
 		Storage: conf.Storage,
 		Logger:  conf.Logger,

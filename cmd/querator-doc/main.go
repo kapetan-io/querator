@@ -7,10 +7,10 @@ import (
 	"github.com/duh-rpc/duh-go"
 	v1 "github.com/duh-rpc/duh-go/proto/v1"
 	pb "github.com/kapetan-io/querator/proto"
+	"github.com/kapetan-io/tackle/clock"
 	jsonpb "google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
-	"time"
 )
 
 func toString(out *string, in proto.Message) error {
@@ -132,7 +132,7 @@ func Reserve() {
 				Reference:       "account-1234",
 				Id:              "queue-name~1234",
 				Attempts:        0,
-				ReserveDeadline: timestamppb.New(time.Now().UTC()),
+				ReserveDeadline: timestamppb.New(clock.Now().UTC()),
 				Bytes:           []byte("{\"key\":\"value\"}"),
 			},
 		},

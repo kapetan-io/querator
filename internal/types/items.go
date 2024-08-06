@@ -3,9 +3,9 @@ package types
 import (
 	"bytes"
 	pb "github.com/kapetan-io/querator/proto"
+	"github.com/kapetan-io/tackle/clock"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"strings"
-	"time"
 )
 
 // TODO: Consider using this instead of []byte for the Item ID
@@ -27,12 +27,12 @@ type Item struct {
 	IsReserved bool
 	// ReserveDeadline is the time in the future when the reservation is
 	// expired and can be reserved by another consumer
-	ReserveDeadline time.Time
+	ReserveDeadline clock.Time
 	// DeadDeadline is the time in the future the item must be consumed,
 	// before it is considered dead and moved to the dead letter queue if configured.
-	DeadDeadline time.Time
+	DeadDeadline clock.Time
 	// CreatedAt is the time stamp when this item was added to the database.
-	CreatedAt time.Time
+	CreatedAt clock.Time
 	// Attempts is how many attempts this item has seen
 	Attempts int
 	// MaxAttempts is the maximum number of times this message can be deferred by a consumer before it is
@@ -121,17 +121,17 @@ type QueueInfo struct {
 	Name string
 	// ReserveTimeout is how long the reservation is valid for.
 	// TODO: We must ensure the DeadTimeout is not less than the ReserveTimeout
-	ReserveTimeout time.Duration
+	ReserveTimeout clock.Duration
 	// DeadQueue is the name of the dead letter queue for this queue.
 	DeadQueue string
 	// DeadTimeout is the time an item can wait in the queue regardless of attempts before
 	// it is moved to the dead letter queue. This value is used if no DeadTimeout is provided
 	// by the queued item.
-	DeadTimeout time.Duration
+	DeadTimeout clock.Duration
 	// CreatedAt is the time this queue was created
-	CreatedAt time.Time
+	CreatedAt clock.Time
 	// UpdatedAt is the time this queue was last updated.
-	UpdatedAt time.Time
+	UpdatedAt clock.Time
 	// MaxAttempts is the maximum number of times this item can be retried
 	MaxAttempts int
 	// Reference is the user supplied field which could contain metadata or specify who owns this queue

@@ -4,7 +4,7 @@ import (
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/proto"
 	"github.com/kapetan-io/querator/transport"
-	"time"
+	"github.com/kapetan-io/tackle/clock"
 )
 
 const (
@@ -27,7 +27,7 @@ func (s *Service) validateQueueProduceProto(in *proto.QueueProduceRequest, out *
 	var err error
 
 	if in.RequestTimeout != "" {
-		out.RequestTimeout, err = time.ParseDuration(in.RequestTimeout)
+		out.RequestTimeout, err = clock.ParseDuration(in.RequestTimeout)
 		if err != nil {
 			return transport.NewInvalidOption("request timeout is invalid; %s - expected format: 900ms, 5m or 15m", err.Error())
 		}
@@ -53,7 +53,7 @@ func (s *Service) validateQueueReserveProto(in *proto.QueueReserveRequest, out *
 	var err error
 
 	if in.RequestTimeout != "" {
-		out.RequestTimeout, err = time.ParseDuration(in.RequestTimeout)
+		out.RequestTimeout, err = clock.ParseDuration(in.RequestTimeout)
 		if err != nil {
 			return transport.NewInvalidOption("request timeout is invalid; %s - expected format: 900ms, 5m or 15m", err.Error())
 		}
@@ -74,7 +74,7 @@ func (s *Service) validateQueueCompleteProto(in *proto.QueueCompleteRequest, out
 	//}
 
 	if in.RequestTimeout != "" {
-		out.RequestTimeout, err = time.ParseDuration(in.RequestTimeout)
+		out.RequestTimeout, err = clock.ParseDuration(in.RequestTimeout)
 		if err != nil {
 			return transport.NewInvalidOption("request timeout is invalid; %s - expected format: 900ms, 5m or 15m", err.Error())
 		}
@@ -99,14 +99,14 @@ func (s *Service) validateQueueOptionsProto(in *proto.QueueInfo, out *types.Queu
 	}
 
 	if in.DeadTimeout != "" {
-		out.DeadTimeout, err = time.ParseDuration(in.DeadTimeout)
+		out.DeadTimeout, err = clock.ParseDuration(in.DeadTimeout)
 		if err != nil {
 			return transport.NewInvalidOption("dead timeout is invalid; %s - expected format: 60m, 2h or 24h", err.Error())
 		}
 	}
 
 	if in.ReserveTimeout != "" {
-		out.ReserveTimeout, err = time.ParseDuration(in.ReserveTimeout)
+		out.ReserveTimeout, err = clock.ParseDuration(in.ReserveTimeout)
 		if err != nil {
 			return transport.NewInvalidOption("reserve timeout is invalid; %s -  expected format: 8m, 15m or 1h", err.Error())
 		}
@@ -123,7 +123,7 @@ func (s *Service) validateQueuePauseRequestProto(in *proto.QueuePauseRequest, ou
 	var err error
 
 	if in.PauseDuration != "" {
-		out.PauseDuration, err = time.ParseDuration(in.PauseDuration)
+		out.PauseDuration, err = clock.ParseDuration(in.PauseDuration)
 		if err != nil {
 			return transport.NewInvalidOption("pause duration is invalid; %s - expected format: 60m, 2h or 24h", err.Error())
 		}

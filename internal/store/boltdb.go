@@ -9,6 +9,7 @@ import (
 	"github.com/kapetan-io/errors"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/transport"
+	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/random"
 	"github.com/kapetan-io/tackle/set"
 	"github.com/segmentio/ksuid"
@@ -16,7 +17,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"time"
 )
 
 var bucketName = []byte("queue")
@@ -79,7 +79,7 @@ func (b *BoltStorage) NewQueue(info types.QueueInfo) (Queue, error) {
 
 	opts := &bolt.Options{
 		FreelistType: bolt.FreelistArrayType,
-		Timeout:      time.Second,
+		Timeout:      clock.Second,
 		NoGrowSync:   false,
 	}
 
@@ -127,7 +127,7 @@ func (q *BoltQueue) Produce(_ context.Context, batch types.Batch[types.ProduceRe
 			for _, item := range r.Items {
 				q.uid = q.uid.Next()
 				item.ID = []byte(q.uid.String())
-				item.CreatedAt = time.Now().UTC()
+				item.CreatedAt = clock.Now().UTC()
 
 				// TODO: Get buffers from memory pool
 				var buf bytes.Buffer
@@ -337,7 +337,7 @@ func (q *BoltQueue) Add(_ context.Context, items []*types.Item) error {
 		for _, item := range items {
 			q.uid = q.uid.Next()
 			item.ID = []byte(q.uid.String())
-			item.CreatedAt = time.Now().UTC()
+			item.CreatedAt = clock.Now().UTC()
 
 			// TODO: Get buffers from memory pool
 			var buf bytes.Buffer
@@ -417,7 +417,7 @@ func (q *BoltQueue) Clear(_ context.Context, destructive bool) error {
 
 func (q *BoltQueue) Stats(_ context.Context, stats *types.QueueStats) error {
 	f := errors.Fields{"category", "bunt-db", "func", "Queue.Stats"}
-	now := time.Now().UTC()
+	now := clock.Now().UTC()
 
 	return q.db.View(func(tx *bolt.Tx) error {
 
@@ -442,10 +442,10 @@ func (q *BoltQueue) Stats(_ context.Context, stats *types.QueueStats) error {
 			}
 		}
 		if stats.Total != 0 {
-			stats.AverageAge = time.Duration(int64(stats.AverageAge) / int64(stats.Total))
+			stats.AverageAge = clock.Duration(int64(stats.AverageAge) / int64(stats.Total))
 		}
 		if stats.TotalReserved != 0 {
-			stats.AverageReservedAge = time.Duration(int64(stats.AverageReservedAge) / int64(stats.TotalReserved))
+			stats.AverageReservedAge = clock.Duration(int64(stats.AverageReservedAge) / int64(stats.TotalReserved))
 		}
 		return nil
 	})

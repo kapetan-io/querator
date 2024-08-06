@@ -11,10 +11,10 @@ import (
 	"github.com/kapetan-io/querator/internal"
 	pb "github.com/kapetan-io/querator/proto"
 	"github.com/kapetan-io/querator/transport"
+	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/set"
 	"google.golang.org/protobuf/proto"
 	"net/http"
-	"time"
 )
 
 const (
@@ -49,7 +49,7 @@ func NewClient(conf ClientConfig) (*Client, error) {
 			MaxConnsPerHost:     5_000,
 			MaxIdleConns:        5_000,
 			MaxIdleConnsPerHost: 5_000,
-			IdleConnTimeout:     60 * time.Second,
+			IdleConnTimeout:     60 * clock.Second,
 		},
 	})
 
@@ -319,7 +319,7 @@ func WithNoTLS(address string) ClientConfig {
 				MaxConnsPerHost:     2_000,
 				MaxIdleConns:        2_000,
 				MaxIdleConnsPerHost: 2_000,
-				IdleConnTimeout:     60 * time.Second,
+				IdleConnTimeout:     60 * clock.Second,
 			},
 		},
 	}
@@ -335,7 +335,7 @@ func WithTLS(tls *tls.Config, address string) ClientConfig {
 				MaxConnsPerHost:     2_000,
 				MaxIdleConns:        2_000,
 				MaxIdleConnsPerHost: 2_000,
-				IdleConnTimeout:     60 * time.Second,
+				IdleConnTimeout:     60 * clock.Second,
 			},
 		},
 	}

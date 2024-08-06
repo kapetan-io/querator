@@ -3,7 +3,7 @@ package internal
 import (
 	"context"
 	"github.com/kapetan-io/querator/internal/types"
-	"time"
+	"github.com/kapetan-io/tackle/clock"
 )
 
 type QueueState struct {
@@ -11,7 +11,7 @@ type QueueState struct {
 	Producers    types.Batch[types.ProduceRequest]
 	Completes    types.Batch[types.CompleteRequest]
 
-	NextMaintenanceCh <-chan time.Time
+	NextMaintenanceCh <-chan clock.Time
 }
 
 type QueueRequest struct {

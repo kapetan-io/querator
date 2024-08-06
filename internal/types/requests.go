@@ -2,7 +2,7 @@ package types
 
 import (
 	"context"
-	"time"
+	"github.com/kapetan-io/tackle/clock"
 )
 
 // TODO(thrawn01): Consider creating a pool of Request structs and Item to avoid GC
@@ -12,7 +12,7 @@ type ReserveRequest struct {
 	NumRequested int // TODO: Rename the protobuf variable this maps too
 	// How long the caller expects Reserve() to block before returning
 	// if no items are available to be reserved. Max duration is 5 minutes.
-	RequestTimeout time.Duration
+	RequestTimeout clock.Duration
 	// The id of the client
 	ClientID string
 	// The context of the requesting client
@@ -20,7 +20,7 @@ type ReserveRequest struct {
 	// The result of the reservation
 	Items []*Item
 	// The RequestDeadline calculated from RequestTimeout
-	RequestDeadline time.Time
+	RequestDeadline clock.Time
 	// Used to wait for this request to complete
 	ReadyCh chan struct{}
 	// The error to be returned to the caller
@@ -29,13 +29,13 @@ type ReserveRequest struct {
 
 type ProduceRequest struct {
 	// How long the caller expects Produce() to block before returning
-	RequestTimeout time.Duration
+	RequestTimeout clock.Duration
 	// The context of the requesting client
 	Context context.Context
 	// The items to produce
 	Items []*Item
 	// The RequestDeadline calculated from RequestTimeout
-	RequestDeadline time.Time
+	RequestDeadline clock.Time
 	// Used to wait for this request to complete
 	ReadyCh chan struct{}
 	// The error to be returned to the caller
@@ -44,13 +44,13 @@ type ProduceRequest struct {
 
 type CompleteRequest struct {
 	// How long the caller expects Complete() to block before returning
-	RequestTimeout time.Duration
+	RequestTimeout clock.Duration
 	// The context of the requesting client
 	Context context.Context
 	// The ids to mark as complete
 	Ids [][]byte
 	// The RequestDeadline calculated from RequestTimeout
-	RequestDeadline time.Time
+	RequestDeadline clock.Time
 	// Used to wait for this request to complete
 	ReadyCh chan struct{}
 	// The error to be returned to the caller
@@ -79,7 +79,7 @@ type ClearRequest struct {
 }
 
 type PauseRequest struct {
-	PauseDuration time.Duration
+	PauseDuration clock.Duration
 	Pause         bool
 }
 
@@ -102,9 +102,9 @@ type QueueStats struct {
 	// TotalReserved is the number of items in the queue that are in reserved state
 	TotalReserved int
 	// AverageAge is the average age of all items in the queue
-	AverageAge time.Duration
+	AverageAge clock.Duration
 	// AverageReservedAge is the average age of reserved items in the queue
-	AverageReservedAge time.Duration
+	AverageReservedAge clock.Duration
 	// ProduceWaiting is the number of `/queue.produce` requests currently waiting
 	// to be processed by the sync loop
 	ProduceWaiting int

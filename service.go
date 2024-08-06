@@ -24,10 +24,10 @@ import (
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/proto"
+	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/set"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"log/slog"
-	"time"
 )
 
 const (
@@ -42,9 +42,9 @@ type ServiceConfig struct {
 	// InstanceID is a unique id for this instance of Querator
 	InstanceID string
 	// WriteTimeout The time it should take for a single batched write to complete
-	WriteTimeout time.Duration
+	WriteTimeout clock.Duration
 	// ReadTimeout The time it should take for a single batched read to complete
-	ReadTimeout time.Duration
+	ReadTimeout clock.Duration
 	// MaxReserveBatchSize is the maximum number of items a client can request in a single reserve request
 	MaxReserveBatchSize int
 	// MaxProduceBatchSize is the maximum number of items a client can produce in a single produce request
@@ -54,6 +54,9 @@ type ServiceConfig struct {
 	// MaxRequestsPerQueue is the maximum number of client requests a queue can handle before it returns an
 	// queue overloaded message
 	MaxRequestsPerQueue int
+	// Clock is a time provider used to preform time related calculations. It is configurable so that it can
+	// be overridden for testing.
+	Clock clock.Provider
 }
 
 type Service struct {

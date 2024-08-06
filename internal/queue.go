@@ -7,17 +7,17 @@ import (
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/transport"
+	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/set"
 	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 )
 
 const (
-	maxRequestTimeout      = 15 * time.Minute
-	minRequestTimeout      = 10 * time.Millisecond
+	maxRequestTimeout      = 15 * clock.Minute
+	minRequestTimeout      = 10 * clock.Millisecond
 	MethodStorageQueueList = iota
 	MethodStorageQueueAdd
 	MethodStorageQueueDelete
@@ -52,9 +52,9 @@ type QueueConfig struct {
 
 	// TODO: Make these configurable at the Service level
 	// WriteTimeout The time it should take for a single batched write to complete
-	WriteTimeout time.Duration
+	WriteTimeout clock.Duration
 	// ReadTimeout The time it should take for a single batched read to complete
-	ReadTimeout time.Duration
+	ReadTimeout clock.Duration
 	// MaxReserveBatchSize is the maximum number of items a client can request in a single reserve request
 	MaxReserveBatchSize int
 	// MaxProduceBatchSize is the maximum number of items a client can produce in a single produce request
@@ -68,7 +68,7 @@ type QueueConfig struct {
 
 // Queue manages job is to evenly distribute and consume items from a single queue. Ensuring consumers and
 // producers are handled fairly and efficiently. Since a Queue is the synchronization point for R/W
-// there can ONLY BE ONE instance of a Queue running anywhere in the cluster at any given time. All consume
+// there can ONLY BE ONE instance of a Queue running anywhere in the cluster at any given clock. All consume
 // and produce requests MUST go through this queue singleton.
 type Queue struct {
 	reserveQueueCh  chan *types.ReserveRequest
@@ -130,7 +130,7 @@ func (q *Queue) Produce(ctx context.Context, req *types.ProduceRequest) error {
 	q.inFlight.Add(1)
 	defer q.inFlight.Add(-1)
 
-	if req.RequestTimeout == time.Duration(0) {
+	if req.RequestTimeout == clock.Duration(0) {
 		return transport.NewInvalidOption("request timeout is required; '5m' is recommended, 15m is the maximum")
 	}
 
@@ -153,7 +153,7 @@ func (q *Queue) Produce(ctx context.Context, req *types.ProduceRequest) error {
 			" %d but received %d", q.conf.MaxProduceBatchSize, len(req.Items))
 	}
 
-	req.RequestDeadline = time.Now().UTC().Add(req.RequestTimeout)
+	req.RequestDeadline = clock.Now().UTC().Add(req.RequestTimeout)
 	req.ReadyCh = make(chan struct{})
 	req.Context = ctx
 
@@ -204,7 +204,7 @@ func (q *Queue) Reserve(ctx context.Context, req *types.ReserveRequest) error {
 			"but %d was requested", q.conf.MaxProduceBatchSize, req.NumRequested)
 	}
 
-	if req.RequestTimeout == time.Duration(0) {
+	if req.RequestTimeout == clock.Duration(0) {
 		return transport.NewInvalidOption("request timeout is required; '5m' is recommended, 15m is the maximum")
 	}
 
@@ -218,7 +218,7 @@ func (q *Queue) Reserve(ctx context.Context, req *types.ReserveRequest) error {
 			" '%s' was requested", req.RequestTimeout.String())
 	}
 
-	req.RequestDeadline = time.Now().UTC().Add(req.RequestTimeout)
+	req.RequestDeadline = clock.Now().UTC().Add(req.RequestTimeout)
 	req.ReadyCh = make(chan struct{})
 	req.Context = ctx
 
@@ -257,11 +257,11 @@ func (q *Queue) Complete(ctx context.Context, req *types.CompleteRequest) error 
 			"requested", req.RequestTimeout.String())
 	}
 
-	if req.RequestTimeout == time.Duration(0) {
+	if req.RequestTimeout == clock.Duration(0) {
 		return transport.NewInvalidOption("request timeout is required; '5m' is recommended, 15m is the maximum")
 	}
 
-	req.RequestDeadline = time.Now().UTC().Add(req.RequestTimeout)
+	req.RequestDeadline = clock.Now().UTC().Add(req.RequestTimeout)
 	req.ReadyCh = make(chan struct{})
 	req.Context = ctx
 
@@ -294,7 +294,7 @@ func (q *Queue) Pause(ctx context.Context, req *types.PauseRequest) error {
 			return transport.NewInvalidOption("pause_duration is invalid; cannot be empty")
 		}
 
-		if req.PauseDuration <= 100*time.Millisecond {
+		if req.PauseDuration <= 100*clock.Millisecond {
 			return transport.NewInvalidOption("pause_duration is invalid; cannot be less than 100ms")
 		}
 	}
@@ -462,7 +462,7 @@ CONTINUE1:
 	writeTimeout := maxRequestTimeout
 	for _, req := range state.Producers.Requests {
 		// Cancel any produce requests that have timed out
-		if time.Now().UTC().After(req.RequestDeadline) {
+		if clock.Now().UTC().After(req.RequestDeadline) {
 			req.Err = ErrRequestTimeout
 			state.Producers.Remove(req)
 			close(req.ReadyCh)
@@ -470,10 +470,10 @@ CONTINUE1:
 		}
 		// Assign a DeadTimeout to each item
 		for _, item := range req.Items {
-			item.DeadDeadline = time.Now().UTC().Add(q.conf.DeadTimeout)
+			item.DeadDeadline = clock.Now().UTC().Add(q.conf.DeadTimeout)
 		}
 		// The writeTimeout should be equal to the request with the least amount of request timeout left.
-		timeLeft := time.Now().UTC().Sub(req.RequestDeadline)
+		timeLeft := clock.Now().UTC().Sub(req.RequestDeadline)
 		if timeLeft < writeTimeout {
 			writeTimeout = timeLeft
 		}
@@ -494,7 +494,7 @@ CONTINUE1:
 		cancel()
 		// Let clients that are timed out, know we are done with them.
 		for _, req := range state.Producers.Requests {
-			if time.Now().UTC().After(req.RequestDeadline) {
+			if clock.Now().UTC().After(req.RequestDeadline) {
 				req.Err = ErrRequestTimeout
 				close(req.ReadyCh)
 				continue
@@ -552,7 +552,7 @@ EMPTY:
 	// store will assign items to each batch request.
 	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
 	if err := q.conf.QueueStore.Reserve(ctx, state.Reservations, store.ReserveOptions{
-		ReserveDeadline: time.Now().UTC().Add(q.conf.ReserveTimeout),
+		ReserveDeadline: clock.Now().UTC().Add(q.conf.ReserveTimeout),
 	}); err != nil {
 		q.conf.Logger.Error("while calling QueueStore.Reserve()", "error", err,
 			"category", "queue", "queueName", q.conf.Name)
@@ -596,14 +596,14 @@ EMPTY:
 	writeTimeout := maxRequestTimeout
 	for _, req := range state.Completes.Requests {
 		// Cancel any produce requests that have timed out
-		if time.Now().UTC().After(req.RequestDeadline) {
+		if clock.Now().UTC().After(req.RequestDeadline) {
 			req.Err = ErrRequestTimeout
 			state.Completes.Remove(req)
 			close(req.ReadyCh)
 			continue
 		}
 		// The writeTimeout should be equal to the request with the least amount of request timeout left.
-		timeLeft := time.Now().UTC().Sub(req.RequestDeadline)
+		timeLeft := clock.Now().UTC().Sub(req.RequestDeadline)
 		if timeLeft < writeTimeout {
 			writeTimeout = timeLeft
 		}
@@ -643,7 +643,7 @@ func (q *Queue) stateCleanUp(state *QueueState) {
 	if next.Nanoseconds() != 0 {
 		q.conf.Logger.Debug("next maintenance window",
 			"duration", next.String(), "queue", q.conf.Name)
-		state.NextMaintenanceCh = time.After(next)
+		state.NextMaintenanceCh = clock.After(next)
 	}
 	state.Reservations.FilterNils()
 }
@@ -776,7 +776,7 @@ func (q *Queue) handlePause(state *QueueState, r *QueueRequest) {
 		close(r.ReadyCh)
 		return
 	}
-	timeoutCh := time.NewTimer(pr.PauseDuration)
+	timeoutCh := clock.NewTimer(pr.PauseDuration)
 	close(r.ReadyCh)
 
 	q.conf.Logger.Warn("queue paused", "queue", q.conf.Name)
@@ -798,7 +798,7 @@ func (q *Queue) handlePause(state *QueueState, r *QueueRequest) {
 				// Update the pause timeout if we receive another request to pause
 				if pr.Pause {
 					fmt.Printf("handlePause.Pause\n")
-					timeoutCh = time.NewTimer(pr.PauseDuration)
+					timeoutCh = clock.NewTimer(pr.PauseDuration)
 					close(req.ReadyCh)
 					continue
 				}
@@ -810,7 +810,7 @@ func (q *Queue) handlePause(state *QueueState, r *QueueRequest) {
 			default:
 				q.handleQueueRequests(state, req)
 			}
-		case <-timeoutCh.C:
+		case <-timeoutCh.C():
 			// Cancel the pause
 			return
 		}
@@ -843,7 +843,7 @@ func (q *Queue) handleShutdown(state *QueueState, req *types.ShutdownRequest) {
 			fmt.Printf("handleShutdown.Reserve\n")
 			r.Err = ErrQueueShutdown
 			close(r.ReadyCh)
-		case <-time.After(100 * time.Millisecond):
+		case <-clock.After(100 * clock.Millisecond):
 			// all time for the closed requests handlers to exit
 		case <-req.Context.Done():
 			req.Err = req.Context.Err()
@@ -863,7 +863,7 @@ func (q *Queue) handleShutdown(state *QueueState, req *types.ShutdownRequest) {
 // -------------------------------------------------
 
 // TODO: I don't think we should pass by ref. We should use escape analysis to decide
-func (q *Queue) nextTimeout(r *types.ReserveBatch) time.Duration {
+func (q *Queue) nextTimeout(r *types.ReserveBatch) clock.Duration {
 	var soon *types.ReserveRequest
 
 	for i, req := range r.Requests {
@@ -872,7 +872,7 @@ func (q *Queue) nextTimeout(r *types.ReserveBatch) time.Duration {
 		}
 
 		// If request has already expired
-		if time.Now().UTC().After(req.RequestDeadline) {
+		if clock.Now().UTC().After(req.RequestDeadline) {
 			// Inform our waiting client
 			req.Err = ErrRequestTimeout
 			close(req.ReadyCh)
@@ -903,11 +903,11 @@ func (q *Queue) nextTimeout(r *types.ReserveBatch) time.Duration {
 
 	// No sooner than now =)
 	if soon == nil {
-		return time.Duration(0)
+		return clock.Duration(0)
 	}
 
 	// How soon is it? =)
-	return soon.RequestDeadline.Sub(time.Now().UTC())
+	return soon.RequestDeadline.Sub(clock.Now().UTC())
 }
 
 // addIfUnique adds a ReserveRequest to the batch. Returns false if the ReserveRequest.ClientID is a duplicate

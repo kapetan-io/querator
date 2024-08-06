@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/transport"
-	"time"
+	"github.com/kapetan-io/tackle/clock"
 )
 
 var ErrQueueNotExist = transport.NewRequestFailed("queue does not exist")
@@ -38,7 +38,7 @@ type Storage interface {
 
 type ReserveOptions struct {
 	// ReserveDeadline is a time in the future when the reservation should expire
-	ReserveDeadline time.Time
+	ReserveDeadline clock.Time
 }
 
 type QueuesStoreConfig struct{}

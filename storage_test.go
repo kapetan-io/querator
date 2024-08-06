@@ -9,6 +9,7 @@ import (
 	"github.com/kapetan-io/querator/daemon"
 	"github.com/kapetan-io/querator/internal/store"
 	pb "github.com/kapetan-io/querator/proto"
+	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/random"
 	"github.com/kapetan-io/tackle/set"
 	"github.com/stretchr/testify/assert"
@@ -17,7 +18,6 @@ import (
 	"io"
 	"log/slog"
 	"testing"
-	"time"
 )
 
 var log = slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -66,7 +66,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 
 	t.Run("CRUDCompare", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 10*time.Second, que.ServiceConfig{Storage: _store})
+		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{Storage: _store})
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -75,12 +75,12 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 			QueueName:      queueName,
 		}))
 
-		now := time.Now().UTC()
+		now := clock.Now().UTC()
 		var items []*pb.StorageQueueItem
 		items = append(items, &pb.StorageQueueItem{
 			IsReserved:      true,
-			DeadDeadline:    timestamppb.New(now.Add(100_000 * time.Minute)),
-			ReserveDeadline: timestamppb.New(now.Add(3_000 * time.Minute)),
+			DeadDeadline:    timestamppb.New(now.Add(100_000 * clock.Minute)),
+			ReserveDeadline: timestamppb.New(now.Add(3_000 * clock.Minute)),
 			Attempts:        5,
 			Reference:       "rainbow@dash.com",
 			Encoding:        "rainbows",
@@ -90,8 +90,8 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 		})
 		items = append(items, &pb.StorageQueueItem{
 			IsReserved:      false,
-			DeadDeadline:    timestamppb.New(now.Add(1_000_000 * time.Minute)),
-			ReserveDeadline: timestamppb.New(now.Add(3_000 * time.Minute)),
+			DeadDeadline:    timestamppb.New(now.Add(1_000_000 * clock.Minute)),
+			ReserveDeadline: timestamppb.New(now.Add(3_000 * clock.Minute)),
 			Attempts:        10_000,
 			Reference:       "rarity@dash.com",
 			Encoding:        "beauty",
@@ -131,7 +131,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 
 	t.Run("CRUD", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 10*time.Second, que.ServiceConfig{Storage: _store})
+		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{Storage: _store})
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -274,7 +274,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 
 	t.Run("StorageQueueDeleteErrors", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 5*time.Second, que.ServiceConfig{Storage: _store})
+		d, c, ctx := newDaemon(t, 5*clock.Second, que.ServiceConfig{Storage: _store})
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -366,7 +366,7 @@ func (td *testDaemon) Context() context.Context {
 	return td.ctx
 }
 
-func newDaemon(t *testing.T, duration time.Duration, conf que.ServiceConfig) (*testDaemon, *que.Client, context.Context) {
+func newDaemon(t *testing.T, duration clock.Duration, conf que.ServiceConfig) (*testDaemon, *que.Client, context.Context) {
 	t.Helper()
 
 	set.Default(&conf.Logger, log)

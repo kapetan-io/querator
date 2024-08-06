@@ -9,6 +9,7 @@ import (
 	que "github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/internal/store"
 	pb "github.com/kapetan-io/querator/proto"
+	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/random"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -17,7 +18,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 )
 
 //func TestBrokenStorage(t *testing.T) {
@@ -27,7 +27,7 @@ import (
 //		return store.NewMockStorage(conf)
 //	}
 //
-//	d, c, ctx := newDaemon(t, _store, 10*time.Second)
+//	d, c, ctx := newDaemon(t, _store, 10*clock.Second)
 //	defer d.Shutdown(t)
 //
 //	conf.Methods["Queue.Produce"] = func(args []any) error {
@@ -41,7 +41,7 @@ const (
 	ReserveTimeout = "1m0s"
 )
 
-var RetryTenTimes = retry.Policy{Interval: retry.Sleep(time.Second), Attempts: 10}
+var RetryTenTimes = retry.Policy{Interval: retry.Sleep(clock.Second), Attempts: 10}
 
 type NewStorageFunc func() store.Storage
 
@@ -88,7 +88,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		_store := setup()
 		defer tearDown()
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 10*time.Second, que.ServiceConfig{Storage: _store})
+		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{Storage: _store})
 		defer d.Shutdown(t)
 
 		// Create a queue
@@ -174,7 +174,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		_store := setup()
 		defer tearDown()
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 10*time.Second, que.ServiceConfig{Storage: _store})
+		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{Storage: _store})
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -186,7 +186,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		}))
 
 		t.Run("InheritsQueueInfo", func(t *testing.T) {
-			now := time.Now().UTC()
+			now := clock.Now().UTC()
 			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
 				QueueName:      queueName,
 				RequestTimeout: "1m",
@@ -204,7 +204,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 						Bytes:     []byte("It needs to be about 20% cooler"),
 					},
 				}}))
-			deadDeadline := time.Now().UTC().Add(20 * time.Hour)
+			deadDeadline := clock.Now().UTC().Add(20 * clock.Hour)
 
 			var list pb.StorageQueueListResponse
 			err := c.StorageQueueList(ctx, queueName, &list, &que.ListOptions{Limit: 20})
@@ -229,19 +229,19 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		})
 
 		t.Run("MaxAttempts", func(t *testing.T) {
-			// TODO: Reserve and defer one of the items multiple times until we exhaust the MaxAttempts,
+			// TODO: Reserve and defer one of the items multiple clocks until we exhaust the MaxAttempts,
 			//  then assert item was deleted.
 		})
 		t.Run("ReserveTimeout", func(t *testing.T) {})
 		t.Run("DeadTimeout", func(t *testing.T) {
-			// TODO: Fast Forward to the future, and ensure the item is removed after the dead timeout
+			// TODO: Fast Forward to the future, and ensure the item is removed after the dead clockout
 		})
 		t.Run("DeadQueue", func(t *testing.T) {
 			// TODO: Create a new queue with a dead queue. Ensure an item produced in this queue is moved to
 			//  the dead queue after all attempts are exhausted
 
 			t.Run("DeadTimeout", func(t *testing.T) {
-				// TODO: Fast forward to the future, and ensure the item is moved to the dead queue after dead timeout
+				// TODO: Fast forward to the future, and ensure the item is moved to the dead queue after dead clockout
 			})
 		})
 
@@ -262,13 +262,13 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				})
 			}
 
-			now := time.Now().UTC()
+			now := clock.Now().UTC()
 			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
 				QueueName:      queueName,
 				RequestTimeout: "1m",
 				Items:          items,
 			}))
-			deadDeadline := time.Now().UTC().Add(24 * time.Hour)
+			deadDeadline := clock.Now().UTC().Add(24 * clock.Hour)
 
 			// Ensure the items produced are in the data store
 			var list pb.StorageQueueListResponse
@@ -281,7 +281,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			for i := range produced {
 				assert.True(t, produced[i].CreatedAt.AsTime().After(now))
 
-				// DeadDeadline should be after we produced the item, but before the dead timeout
+				// DeadDeadline should be after we produced the item, but before the dead clockout
 				assert.True(t, produced[i].ReserveDeadline.AsTime().IsZero())
 				assert.False(t, produced[i].DeadDeadline.AsTime().IsZero())
 				assert.True(t, produced[i].DeadDeadline.AsTime().After(now))
@@ -308,13 +308,13 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				})
 			}
 
-			now := time.Now().UTC()
+			now := clock.Now().UTC()
 			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
 				QueueName:      queueName,
 				RequestTimeout: "1m",
 				Items:          items,
 			}))
-			deadDeadline := time.Now().UTC().Add(24 * time.Hour)
+			deadDeadline := clock.Now().UTC().Add(24 * clock.Hour)
 
 			// List all the items we just produced
 			var list pb.StorageQueueListResponse
@@ -330,7 +330,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			for i := range produced {
 				assert.True(t, produced[i].CreatedAt.AsTime().After(now))
 
-				// DeadDeadline should be after we produced the item, but before the dead timeout
+				// DeadDeadline should be after we produced the item, but before the dead clockout
 				assert.False(t, produced[i].DeadDeadline.AsTime().IsZero())
 				assert.True(t, produced[i].DeadDeadline.AsTime().After(now))
 				assert.True(t, produced[i].DeadDeadline.AsTime().Before(deadDeadline))
@@ -352,7 +352,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		var queueName = random.String("queue-", 10)
 		clientID := random.String("client-", 10)
-		d, c, ctx := newDaemon(t, 30*time.Second, que.ServiceConfig{Storage: _store})
+		d, c, ctx := newDaemon(t, 30*clock.Second, que.ServiceConfig{Storage: _store})
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -363,7 +363,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		items := writeRandomItems(t, ctx, c, queueName, 10_000)
 		require.Len(t, items, 10_000)
 
-		expire := time.Now().UTC().Add(2_000 * time.Minute)
+		expire := clock.Now().UTC().Add(2_000 * clock.Minute)
 		var reserved, secondReserve pb.QueueReserveResponse
 		var list pb.StorageQueueListResponse
 
@@ -375,10 +375,10 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				RequestTimeout: "1m",
 			}
 
-			now := time.Now().UTC()
+			now := clock.Now().UTC()
 			require.NoError(t, c.QueueReserve(ctx, &req, &reserved))
 			require.Equal(t, 10, len(reserved.Items))
-			reserveDeadline := time.Now().UTC().Add(2 * time.Minute)
+			reserveDeadline := clock.Now().UTC().Add(2 * clock.Minute)
 
 			// Ensure the items reserved are marked as reserved in the database
 			require.NoError(t, c.StorageQueueList(ctx, queueName, &list, &que.ListOptions{Limit: 10_000}))
@@ -387,7 +387,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				assert.Equal(t, list.Items[i].Id, reserved.Items[i].Id)
 				assert.Equal(t, true, list.Items[i].IsReserved)
 
-				// ReserveDeadline should be after we reserved the item, but before the reserve timeout
+				// ReserveDeadline should be after we reserved the item, but before the reserve clockout
 				assert.False(t, list.Items[i].ReserveDeadline.AsTime().IsZero())
 				assert.True(t, list.Items[i].ReserveDeadline.AsTime().After(now))
 				assert.True(t, list.Items[i].ReserveDeadline.AsTime().Before(reserveDeadline))
@@ -560,7 +560,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer tearDown()
 		var queueName = random.String("queue-", 10)
 		clientID := random.String("client-", 10)
-		d, c, ctx := newDaemon(t, 30*time.Second, que.ServiceConfig{Storage: _store})
+		d, c, ctx := newDaemon(t, 30*clock.Second, que.ServiceConfig{Storage: _store})
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -645,7 +645,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer tearDown()
 		var queueName = random.String("queue-", 10)
 		clientID := random.String("client-", 10)
-		d, c, ctx := newDaemon(t, 30*time.Second, que.ServiceConfig{Storage: _store})
+		d, c, ctx := newDaemon(t, 30*clock.Second, que.ServiceConfig{Storage: _store})
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -684,7 +684,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer tearDown()
 
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 10*time.Second, que.ServiceConfig{Storage: _store})
+		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{Storage: _store})
 		defer d.Shutdown(t)
 
 		var reserved []*pb.StorageQueueItem
@@ -701,7 +701,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		require.NoError(t, c.StorageQueueList(ctx, queueName, &list, nil))
 		assert.Equal(t, 500, len(list.Items))
 
-		expire := time.Now().UTC().Add(random.Duration(10*time.Second, time.Minute))
+		expire := clock.Now().UTC().Add(random.Duration(10*clock.Second, clock.Minute))
 		reserved = append(reserved, &pb.StorageQueueItem{
 			DeadDeadline:    timestamppb.New(expire),
 			ReserveDeadline: timestamppb.New(expire),
@@ -755,7 +755,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		t.Run("QueueProduce", func(t *testing.T) {
 			var queueName = random.String("queue-", 10)
-			d, c, ctx := newDaemon(t, 5*time.Second, que.ServiceConfig{Storage: _store})
+			d, c, ctx := newDaemon(t, 5*clock.Second, que.ServiceConfig{Storage: _store})
 			defer d.Shutdown(t)
 			maxItems := randomProduceItems(1_001)
 
@@ -879,7 +879,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		t.Run("QueueReserve", func(t *testing.T) {
 			var queueName = random.String("queue-", 10)
 			var clientID = random.String("client-", 10)
-			d, c, ctx := newDaemon(t, 10*time.Second, que.ServiceConfig{Storage: _store})
+			d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{Storage: _store})
 			defer d.Shutdown(t)
 
 			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -1039,7 +1039,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		})
 		t.Run("QueueComplete", func(t *testing.T) {
 			var queueName = random.String("queue-", 10)
-			d, c, ctx := newDaemon(t, 5*time.Second, que.ServiceConfig{Storage: _store})
+			d, c, ctx := newDaemon(t, 5*clock.Second, que.ServiceConfig{Storage: _store})
 			defer d.Shutdown(t)
 
 			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -1154,7 +1154,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		t.Run("Success", func(t *testing.T) {
 			var queueName = random.String("queue-", 10)
-			d, c, ctx := newDaemon(t, 10*time.Second, que.ServiceConfig{Storage: _store})
+			d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{Storage: _store})
 			defer d.Shutdown(t)
 
 			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -1190,7 +1190,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		t.Run("DuringShutdown", func(t *testing.T) {
 			var queueName = random.String("queue-", 10)
-			d, c, ctx := newDaemon(t, 10*time.Second, que.ServiceConfig{Storage: _store})
+			d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{Storage: _store})
 
 			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
 				ReserveTimeout: ReserveTimeout,
@@ -1257,7 +1257,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			//  more reasonable like 90 MaxClients and then test. Fix DaemonConfig to allow this to be changed for this test.
 			// TODO: Send a ton of requests while the queue is paused, in an attempt to overflow the request channel
 			var queueName = random.String("queue-", 10)
-			d, c, ctx := newDaemon(t, 10*time.Second, que.ServiceConfig{Storage: _store, MaxRequestsPerQueue: 15})
+			d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{Storage: _store, MaxRequestsPerQueue: 15})
 
 			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
 				ReserveTimeout: ReserveTimeout,
@@ -1326,7 +1326,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				}()
 			}
 
-			_ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_ctx, cancel := context.WithTimeout(context.Background(), 5*clock.Second)
 			defer cancel()
 			t.Helper()
 
@@ -1360,18 +1360,24 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		})
 
 		t.Run("ResumeAfterTimeout", func(t *testing.T) {
-			// TODO: Need to teach golang how to travel through time
+			// TODO: Pause
+			// TODO: Advance Time until unpause clockout is reached
+			// TODO: Ensure no longer paused.
 		})
 
 		t.Run("HandlesRequestTimeouts", func(t *testing.T) {
-			// TODO: Need to teach golang how to travel through time
+			// TODO: make a Reserve call
+			// TODO: Pause
+			// TODO: Advance Time until Reserve call clocks out
+			// TODO: Reserve call should return
+			// TODO: UnPause
 		})
 
 	})
 	// <---- TODO: NEXT, Test Shutdown during Pause and Pause False
 	// TODO: Test pause and unpause, ensure can produce and consume after un-paused and Ensure can shutdown
 	// TODO: Test pause false without pause true
-	// TODO: Implement clock style thingy so we can freeze time and advance time in order to test Deadlines and such.
+	// TODO: Implement clock style thingy so we can freeze clock and advance clock in order to test Deadlines and such.
 	// TODO: Test /queue.produce and all the possible incorrect way it could be called
 	// TODO: Test /queue.reserve and all the possible incorrect way it could be called
 	// TODO: Test /queue.complete and all the possible incorrect way it could be called
@@ -1394,7 +1400,7 @@ func writeRandomItems(t *testing.T, ctx context.Context, c *que.Client,
 	name string, count int) []*pb.StorageQueueItem {
 
 	t.Helper()
-	expire := time.Now().UTC().Add(random.Duration(10*time.Second, time.Minute))
+	expire := clock.Now().UTC().Add(random.Duration(10*clock.Second, clock.Minute))
 
 	var items []*pb.StorageQueueItem
 	for i := 0; i < count; i++ {
@@ -1452,7 +1458,7 @@ func pauseAndReserve(t *testing.T, ctx context.Context, c *que.Client, name stri
 		}()
 	}
 
-	_ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	_ctx, cancel := context.WithTimeout(context.Background(), clock.Second*10)
 	defer cancel()
 
 	// Wait until every request is waiting
@@ -1481,14 +1487,14 @@ func pauseAndReserve(t *testing.T, ctx context.Context, c *que.Client, name stri
 
 	select {
 	case <-done:
-	case <-time.After(10 * time.Second):
-		t.Fatalf("timed out waiting for distribution of requests")
+	case <-clock.After(10 * clock.Second):
+		t.Fatalf("clockd out waiting for distribution of requests")
 	}
 	return responses
 }
 
 func untilReserveClientBlocked(t *testing.T, c *que.Client, queueName string, numBlocked int) error {
-	_ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	_ctx, cancel := context.WithTimeout(context.Background(), 5*clock.Second)
 	defer cancel()
 	t.Helper()
 
@@ -1557,7 +1563,7 @@ func threeRequestsShouldPause(t *testing.T, ctx context.Context, c *que.Client, 
 	}()
 
 	// Wait for the requests to show in the wait queues
-	_ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	_ctx, cancel := context.WithTimeout(context.Background(), 5*clock.Second)
 	defer cancel()
 	t.Helper()
 

@@ -8,11 +8,11 @@ import (
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/transport"
+	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/set"
 	"log/slog"
 	"sync"
 	"sync/atomic"
-	"time"
 )
 
 const MsgServiceInShutdown = "service is shutting down"
@@ -81,11 +81,11 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Que
 	defer qm.mutex.Unlock()
 	qm.mutex.Lock()
 
-	//set.Default(&info.ReserveTimeout, time.Minute)
-	//set.Default(&info.DeadTimeout, 24*time.Hour)
+	//set.Default(&info.ReserveTimeout, clock.Minute)
+	//set.Default(&info.DeadTimeout, 24*clock.Hour)
 
-	info.CreatedAt = time.Now().UTC()
-	info.UpdatedAt = time.Now().UTC()
+	info.CreatedAt = clock.Now().UTC()
+	info.UpdatedAt = clock.Now().UTC()
 	if err := qm.store.Add(ctx, info); err != nil {
 		return nil, err
 	}
@@ -151,7 +151,7 @@ func (qm *QueuesManager) Update(ctx context.Context, info types.QueueInfo) error
 	qm.mutex.Lock()
 
 	// Update the queue info in the data store
-	info.UpdatedAt = time.Now().UTC()
+	info.UpdatedAt = clock.Now().UTC()
 	if err := qm.store.Update(ctx, info); err != nil {
 		return err
 	}

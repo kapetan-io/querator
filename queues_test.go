@@ -8,6 +8,7 @@ import (
 	que "github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/internal/store"
 	pb "github.com/kapetan-io/querator/proto"
+	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/random"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -15,7 +16,6 @@ import (
 	"math/rand"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestQueuesStorage(t *testing.T) {
@@ -59,12 +59,12 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 	t.Run("CRUD", func(t *testing.T) {
 		_store := newStore()
 		defer tearDown()
-		d, c, ctx := newDaemon(t, 10*time.Second, que.ServiceConfig{Storage: _store})
+		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{Storage: _store})
 		defer d.Shutdown(t)
 
 		t.Run("Create", func(t *testing.T) {
 			var queueName = random.String("queue-", 10)
-			now := time.Now().UTC()
+			now := clock.Now().UTC()
 			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
 				QueueName:      queueName,
 				DeadQueue:      queueName + "-dead",
@@ -91,7 +91,7 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 
 		// TODO: Test Create with Named DeadLetter queue
 
-		now := time.Now().UTC()
+		now := clock.Now().UTC()
 		queues := createRandomQueues(t, ctx, c, 200)
 
 		t.Run("Get", func(t *testing.T) {
@@ -133,7 +133,7 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 				assert.NotEmpty(t, r.CreatedAt)
 				assert.True(t, now.Before(r.CreatedAt.AsTime()))
 				assert.NotEmpty(t, r.UpdatedAt)
-				assert.True(t, time.Now().After(r.UpdatedAt.AsTime()))
+				assert.True(t, clock.Now().After(r.UpdatedAt.AsTime()))
 				assert.True(t, now.Before(r.UpdatedAt.AsTime()))
 				assert.True(t, r.CreatedAt.AsTime().Before(r.UpdatedAt.AsTime()))
 				assert.Equal(t, l.MaxAttempts+1, r.MaxAttempts)
@@ -146,9 +146,9 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 			t.Run("ReserveTimeout", func(t *testing.T) {
 				l := queues[51]
 
-				rt, err := time.ParseDuration(l.ReserveTimeout)
+				rt, err := clock.ParseDuration(l.ReserveTimeout)
 				require.NoError(t, err)
-				rt += 10 * time.Second
+				rt += 10 * clock.Second
 
 				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
 					QueueName:      l.QueueName,
@@ -165,7 +165,7 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 				assert.NotEmpty(t, r.CreatedAt)
 				assert.True(t, now.Before(r.CreatedAt.AsTime()))
 				assert.NotEmpty(t, r.UpdatedAt)
-				assert.True(t, time.Now().After(r.UpdatedAt.AsTime()))
+				assert.True(t, clock.Now().After(r.UpdatedAt.AsTime()))
 				assert.True(t, now.Before(r.UpdatedAt.AsTime()))
 				assert.True(t, r.CreatedAt.AsTime().Before(r.UpdatedAt.AsTime()))
 				assert.Equal(t, rt.String(), r.ReserveTimeout)
@@ -176,9 +176,9 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 			t.Run("DeadTimeout", func(t *testing.T) {
 				l := queues[52]
 
-				dt, err := time.ParseDuration(l.DeadTimeout)
+				dt, err := clock.ParseDuration(l.DeadTimeout)
 				require.NoError(t, err)
-				dt += 20 * time.Second
+				dt += 20 * clock.Second
 
 				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
 					QueueName:   l.QueueName,
@@ -195,7 +195,7 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 				assert.NotEmpty(t, r.CreatedAt)
 				assert.True(t, now.Before(r.CreatedAt.AsTime()))
 				assert.NotEmpty(t, r.UpdatedAt)
-				assert.True(t, time.Now().After(r.UpdatedAt.AsTime()))
+				assert.True(t, clock.Now().After(r.UpdatedAt.AsTime()))
 				assert.True(t, now.Before(r.UpdatedAt.AsTime()))
 				assert.True(t, r.CreatedAt.AsTime().Before(r.UpdatedAt.AsTime()))
 				assert.Equal(t, dt.String(), r.DeadTimeout)
@@ -221,7 +221,7 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 				assert.NotEmpty(t, r.CreatedAt)
 				assert.True(t, now.Before(r.CreatedAt.AsTime()))
 				assert.NotEmpty(t, r.UpdatedAt)
-				assert.True(t, time.Now().After(r.UpdatedAt.AsTime()))
+				assert.True(t, clock.Now().After(r.UpdatedAt.AsTime()))
 				assert.True(t, now.Before(r.UpdatedAt.AsTime()))
 				assert.True(t, r.CreatedAt.AsTime().Before(r.UpdatedAt.AsTime()))
 				assert.Equal(t, "SomethingElse", r.Reference)
@@ -230,13 +230,13 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 			t.Run("Everything", func(t *testing.T) {
 				l := queues[54]
 
-				dt, err := time.ParseDuration(l.DeadTimeout)
+				dt, err := clock.ParseDuration(l.DeadTimeout)
 				require.NoError(t, err)
-				dt += 35 * time.Second
+				dt += 35 * clock.Second
 
-				rt, err := time.ParseDuration(l.ReserveTimeout)
+				rt, err := clock.ParseDuration(l.ReserveTimeout)
 				require.NoError(t, err)
-				rt += 5 * time.Second
+				rt += 5 * clock.Second
 
 				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
 					QueueName:      l.QueueName,
@@ -257,7 +257,7 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 				assert.NotEmpty(t, r.CreatedAt)
 				assert.True(t, now.Before(r.CreatedAt.AsTime()))
 				assert.NotEmpty(t, r.UpdatedAt)
-				assert.True(t, time.Now().After(r.UpdatedAt.AsTime()))
+				assert.True(t, clock.Now().After(r.UpdatedAt.AsTime()))
 				assert.True(t, now.Before(r.UpdatedAt.AsTime()))
 				assert.True(t, r.CreatedAt.AsTime().Before(r.UpdatedAt.AsTime()))
 				assert.Equal(t, "FriendshipIsMagic", r.Reference)
@@ -298,7 +298,7 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 	t.Run("List", func(t *testing.T) {
 		_store := newStore()
 		defer tearDown()
-		d, c, ctx := newDaemon(t, 10*time.Second, que.ServiceConfig{Storage: _store})
+		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{Storage: _store})
 		defer d.Shutdown(t)
 
 		queues := createRandomQueues(t, ctx, c, 100)
@@ -370,7 +370,7 @@ func testQueuesStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 	t.Run("Errors", func(t *testing.T) {
 		_store := newStore()
 		defer tearDown()
-		d, c, ctx := newDaemon(t, 10*time.Second, que.ServiceConfig{Storage: _store})
+		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{Storage: _store})
 		defer d.Shutdown(t)
 
 		var queueName = random.String("queue-", 10)

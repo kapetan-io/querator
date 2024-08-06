@@ -7,6 +7,7 @@ import (
 	"github.com/kapetan-io/querator/daemon"
 	"github.com/kapetan-io/querator/internal/store"
 	pb "github.com/kapetan-io/querator/proto"
+	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/random"
 	"github.com/stretchr/testify/require"
 	"io"
@@ -14,7 +15,6 @@ import (
 	"math/rand"
 	"runtime"
 	"testing"
-	"time"
 )
 
 var log = slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -76,7 +76,7 @@ func BenchmarkProduce(b *testing.B) {
 			for _, p := range []int{1, 8, 24, 32} {
 				b.Run(fmt.Sprintf("Produce_%d", p), func(b *testing.B) {
 					runtime.GOMAXPROCS(p)
-					start := time.Now()
+					start := clock.Now()
 					b.ResetTimer()
 
 					b.RunParallel(func(p *testing.PB) {
@@ -95,7 +95,7 @@ func BenchmarkProduce(b *testing.B) {
 						}
 
 					})
-					opsPerSec := float64(b.N) / time.Since(start).Seconds()
+					opsPerSec := float64(b.N) / clock.Since(start).Seconds()
 					b.ReportMetric(opsPerSec, "ops/s")
 				})
 			}
@@ -189,7 +189,7 @@ func BenchmarkQueuesCreate(b *testing.B) {
 			s := d.Service()
 
 			b.Run("QueuesCreate", func(b *testing.B) {
-				start := time.Now()
+				start := clock.Now()
 				b.ResetTimer()
 
 				for n := 0; n < b.N; n++ {
@@ -211,7 +211,7 @@ func BenchmarkQueuesCreate(b *testing.B) {
 					}
 				}
 
-				opsPerSec := float64(b.N) / time.Since(start).Seconds()
+				opsPerSec := float64(b.N) / clock.Since(start).Seconds()
 				b.ReportMetric(opsPerSec, "ops/s")
 			})
 		})

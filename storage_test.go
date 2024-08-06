@@ -15,12 +15,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/timestamppb"
-	"io"
 	"log/slog"
+	"os"
 	"testing"
 )
 
-var log = slog.New(slog.NewTextHandler(io.Discard, nil))
+// var log = slog.New(slog.NewTextHandler(io.Discard, nil))
+var log = slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 // TestQueueStorage tests the /storage/queue.* endpoints
 func TestQueueStorage(t *testing.T) {
@@ -33,15 +34,15 @@ func TestQueueStorage(t *testing.T) {
 	}{
 		{
 			Name: "InMemory",
-			Setup: func() store.Storage {
-				return store.NewMemoryStorage()
+			Setup: func(cp *clock.Provider) store.Storage {
+				return store.NewMemoryStorage(store.MemoryStorageConfig{Clock: cp})
 			},
 			TearDown: func() {},
 		},
 		{
 			Name: "BoltDB",
-			Setup: func() store.Storage {
-				return bdb.Setup(store.BoltConfig{})
+			Setup: func(cp *clock.Provider) store.Storage {
+				return bdb.Setup(store.BoltConfig{Clock: cp})
 			},
 			TearDown: func() {
 				bdb.Teardown()
@@ -61,7 +62,7 @@ func TestQueueStorage(t *testing.T) {
 }
 
 func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
-	_store := newStore()
+	_store := newStore(clock.NewProvider())
 	defer tearDown()
 
 	t.Run("CRUDCompare", func(t *testing.T) {

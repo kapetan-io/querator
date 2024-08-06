@@ -5,7 +5,7 @@ go 1.22.3
 require (
 	github.com/duh-rpc/duh-go v0.7.0
 	github.com/kapetan-io/errors v0.2.0
-	github.com/kapetan-io/tackle v0.5.0
+	github.com/kapetan-io/tackle v0.6.0
 	github.com/prometheus/client_golang v1.19.1
 	github.com/segmentio/ksuid v1.0.4
 	github.com/stretchr/testify v1.9.0

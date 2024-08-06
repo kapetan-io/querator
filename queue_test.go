@@ -43,7 +43,7 @@ const (
 
 var RetryTenTimes = retry.Policy{Interval: retry.Sleep(clock.Second), Attempts: 10}
 
-type NewStorageFunc func() store.Storage
+type NewStorageFunc func(cp *clock.Provider) store.Storage
 
 func TestQueue(t *testing.T) {
 	bdb := store.BoltDBTesting{Dir: t.TempDir()}
@@ -55,15 +55,15 @@ func TestQueue(t *testing.T) {
 	}{
 		{
 			Name: "InMemory",
-			Setup: func() store.Storage {
-				return store.NewMemoryStorage()
+			Setup: func(cp *clock.Provider) store.Storage {
+				return store.NewMemoryStorage(store.MemoryStorageConfig{Clock: cp})
 			},
 			TearDown: func() {},
 		},
 		{
 			Name: "BoltDB",
-			Setup: func() store.Storage {
-				return bdb.Setup(store.BoltConfig{})
+			Setup: func(cp *clock.Provider) store.Storage {
+				return bdb.Setup(store.BoltConfig{Clock: cp})
 			},
 			TearDown: func() {
 				bdb.Teardown()
@@ -85,7 +85,7 @@ func TestQueue(t *testing.T) {
 func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 	t.Run("ProduceAndConsume", func(t *testing.T) {
-		_store := setup()
+		_store := setup(clock.NewProvider())
 		defer tearDown()
 		var queueName = random.String("queue-", 10)
 		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{Storage: _store})
@@ -171,7 +171,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	})
 
 	t.Run("Produce", func(t *testing.T) {
-		_store := setup()
+		_store := setup(clock.NewProvider())
 		defer tearDown()
 		var queueName = random.String("queue-", 10)
 		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{Storage: _store})
@@ -347,7 +347,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	})
 
 	t.Run("Reserve", func(t *testing.T) {
-		_store := setup()
+		_store := setup(clock.NewProvider())
 		defer tearDown()
 
 		var queueName = random.String("queue-", 10)
@@ -556,7 +556,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	})
 
 	t.Run("Complete", func(t *testing.T) {
-		_store := setup()
+		_store := setup(clock.NewProvider())
 		defer tearDown()
 		var queueName = random.String("queue-", 10)
 		clientID := random.String("client-", 10)
@@ -641,7 +641,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	})
 
 	t.Run("Stats", func(t *testing.T) {
-		_store := setup()
+		_store := setup(clock.NewProvider())
 		defer tearDown()
 		var queueName = random.String("queue-", 10)
 		clientID := random.String("client-", 10)
@@ -680,7 +680,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	})
 
 	t.Run("QueueClear", func(t *testing.T) {
-		_store := setup()
+		_store := setup(clock.NewProvider())
 		defer tearDown()
 
 		var queueName = random.String("queue-", 10)
@@ -750,7 +750,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 	})
 	t.Run("Errors", func(t *testing.T) {
-		_store := setup()
+		_store := setup(clock.NewProvider())
 		defer tearDown()
 
 		t.Run("QueueProduce", func(t *testing.T) {
@@ -1149,7 +1149,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	})
 
 	t.Run("Pause", func(t *testing.T) {
-		_store := setup()
+		_store := setup(clock.NewProvider())
 		defer tearDown()
 
 		t.Run("Success", func(t *testing.T) {

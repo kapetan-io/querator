@@ -56,7 +56,7 @@ type ServiceConfig struct {
 	MaxRequestsPerQueue int
 	// Clock is a time provider used to preform time related calculations. It is configurable so that it can
 	// be overridden for testing.
-	Clock clock.Provider
+	Clock *clock.Provider
 }
 
 type Service struct {

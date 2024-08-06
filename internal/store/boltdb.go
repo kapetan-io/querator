@@ -26,6 +26,9 @@ type BoltConfig struct {
 	StorageDir string
 	// Logger is used to log warnings and errors
 	Logger duh.StandardLogger
+	// Clock is a time provider used to preform time related calculations. It is configurable so that it can
+	// be overridden for testing.
+	Clock *clock.Provider
 }
 
 // TODO: Make BoltStorage non blocking, and obey the context provided. Perhaps we introduce a AsyncStorage
@@ -64,6 +67,7 @@ func (b *BoltStorage) Close(_ context.Context) error {
 func NewBoltStorage(conf BoltConfig) *BoltStorage {
 	set.Default(&conf.Logger, slog.Default())
 	set.Default(&conf.StorageDir, ".")
+	set.Default(&conf.Clock, clock.NewProvider())
 
 	return &BoltStorage{conf: conf}
 }
@@ -127,7 +131,7 @@ func (q *BoltQueue) Produce(_ context.Context, batch types.Batch[types.ProduceRe
 			for _, item := range r.Items {
 				q.uid = q.uid.Next()
 				item.ID = []byte(q.uid.String())
-				item.CreatedAt = clock.Now().UTC()
+				item.CreatedAt = q.parent.conf.Clock.Now().UTC()
 
 				// TODO: Get buffers from memory pool
 				var buf bytes.Buffer
@@ -337,7 +341,7 @@ func (q *BoltQueue) Add(_ context.Context, items []*types.Item) error {
 		for _, item := range items {
 			q.uid = q.uid.Next()
 			item.ID = []byte(q.uid.String())
-			item.CreatedAt = clock.Now().UTC()
+			item.CreatedAt = q.parent.conf.Clock.Now().UTC()
 
 			// TODO: Get buffers from memory pool
 			var buf bytes.Buffer
@@ -417,7 +421,7 @@ func (q *BoltQueue) Clear(_ context.Context, destructive bool) error {
 
 func (q *BoltQueue) Stats(_ context.Context, stats *types.QueueStats) error {
 	f := errors.Fields{"category", "bunt-db", "func", "Queue.Stats"}
-	now := clock.Now().UTC()
+	now := q.parent.conf.Clock.Now().UTC()
 
 	return q.db.View(func(tx *bolt.Tx) error {
 

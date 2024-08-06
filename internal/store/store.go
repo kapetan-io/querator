@@ -41,7 +41,9 @@ type ReserveOptions struct {
 	ReserveDeadline clock.Time
 }
 
-type QueuesStoreConfig struct{}
+// TODO: Not sure this should be here, its only used by memory.go
+type QueuesStoreConfig struct {
+}
 
 // QueuesStore is storage for listing and storing information about queues
 type QueuesStore interface {

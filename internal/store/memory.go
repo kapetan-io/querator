@@ -7,21 +7,32 @@ import (
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/transport"
 	"github.com/kapetan-io/tackle/clock"
+	"github.com/kapetan-io/tackle/set"
 	"github.com/segmentio/ksuid"
 	"strings"
 )
 
-type MemoryStorage struct{}
+type MemoryStorageConfig struct {
+	Clock *clock.Provider
+}
+
+type MemoryStorage struct {
+	conf MemoryStorageConfig
+}
 
 var _ Storage = &MemoryStorage{}
 
-func NewMemoryStorage() *MemoryStorage {
-	return &MemoryStorage{}
+func NewMemoryStorage(conf MemoryStorageConfig) *MemoryStorage {
+	set.Default(&conf.Clock, clock.NewProvider())
+	return &MemoryStorage{
+		conf: conf,
+	}
 }
 
 func (s *MemoryStorage) NewQueuesStore(conf QueuesStoreConfig) (QueuesStore, error) {
 	return &MemoryQueuesStore{
 		mem:    make([]types.QueueInfo, 0, 1_000),
+		conf:   conf,
 		parent: s,
 	}, nil
 }
@@ -65,7 +76,7 @@ func (q *MemoryQueue) Produce(_ context.Context, batch types.Batch[types.Produce
 		for _, item := range r.Items {
 			q.uid = q.uid.Next()
 			item.ID = []byte(q.uid.String())
-			item.CreatedAt = clock.Now().UTC()
+			item.CreatedAt = q.parent.conf.Clock.Now().UTC()
 
 			q.mem = append(q.mem, *item)
 			item.ID = q.parent.BuildStorageID(q.info.Name, item.ID)
@@ -161,7 +172,7 @@ func (q *MemoryQueue) Add(_ context.Context, items []*types.Item) error {
 	for _, item := range items {
 		q.uid = q.uid.Next()
 		item.ID = []byte(q.uid.String())
-		item.CreatedAt = clock.Now().UTC()
+		item.CreatedAt = q.parent.conf.Clock.Now().UTC()
 
 		q.mem = append(q.mem, *item)
 		item.ID = q.parent.BuildStorageID(q.info.Name, item.ID)
@@ -205,7 +216,7 @@ func (q *MemoryQueue) Clear(_ context.Context, destructive bool) error {
 }
 
 func (q *MemoryQueue) Stats(_ context.Context, stats *types.QueueStats) error {
-	now := clock.Now().UTC()
+	now := q.parent.conf.Clock.Now().UTC()
 	for _, item := range q.mem {
 		stats.Total++
 		stats.AverageAge += now.Sub(item.CreatedAt)
@@ -252,6 +263,7 @@ func (q *MemoryQueue) findID(id []byte) (int, bool) {
 type MemoryQueuesStore struct {
 	QueuesValidation
 	mem    []types.QueueInfo
+	conf   QueuesStoreConfig
 	parent *MemoryStorage
 }
 

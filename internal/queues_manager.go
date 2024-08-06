@@ -35,6 +35,7 @@ type QueuesManager struct {
 }
 
 func NewQueuesManager(conf QueuesManagerConfig) (*QueuesManager, error) {
+	set.Default(&conf.QueueConfig.Clock, clock.NewProvider())
 	set.Default(&conf.Logger, slog.Default())
 
 	s, err := conf.Storage.NewQueuesStore(store.QueuesStoreConfig{})
@@ -84,8 +85,8 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Que
 	//set.Default(&info.ReserveTimeout, clock.Minute)
 	//set.Default(&info.DeadTimeout, 24*clock.Hour)
 
-	info.CreatedAt = clock.Now().UTC()
-	info.UpdatedAt = clock.Now().UTC()
+	info.CreatedAt = qm.conf.QueueConfig.Clock.Now().UTC()
+	info.UpdatedAt = qm.conf.QueueConfig.Clock.Now().UTC()
 	if err := qm.store.Add(ctx, info); err != nil {
 		return nil, err
 	}
@@ -151,7 +152,7 @@ func (qm *QueuesManager) Update(ctx context.Context, info types.QueueInfo) error
 	qm.mutex.Lock()
 
 	// Update the queue info in the data store
-	info.UpdatedAt = clock.Now().UTC()
+	info.UpdatedAt = qm.conf.QueueConfig.Clock.Now().UTC()
 	if err := qm.store.Update(ctx, info); err != nil {
 		return err
 	}

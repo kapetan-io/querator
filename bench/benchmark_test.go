@@ -10,14 +10,15 @@ import (
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/random"
 	"github.com/stretchr/testify/require"
-	"io"
 	"log/slog"
 	"math/rand"
+	"os"
 	"runtime"
 	"testing"
 )
 
-var log = slog.New(slog.NewTextHandler(io.Discard, nil))
+// var log = slog.New(slog.NewTextHandler(io.Discard, nil))
+var log = slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 type NewStorageFunc func() store.Storage
 
@@ -42,7 +43,7 @@ func BenchmarkProduce(b *testing.B) {
 		{
 			Name: "InMemory",
 			Setup: func() store.Storage {
-				return store.NewMemoryStorage()
+				return store.NewMemoryStorage(store.MemoryStorageConfig{})
 			},
 			TearDown: func() {},
 		},
@@ -162,7 +163,7 @@ func BenchmarkQueuesCreate(b *testing.B) {
 		{
 			Name: "InMemory",
 			Setup: func() store.Storage {
-				return store.NewMemoryStorage()
+				return store.NewMemoryStorage(store.MemoryStorageConfig{})
 			},
 			TearDown: func() {},
 		},

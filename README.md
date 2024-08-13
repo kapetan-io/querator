@@ -16,6 +16,9 @@ solve several distributed problems.
 * Schedule cron style jobs to run at a specific time in the future and retry if failed
 * Retryable and reliable webhook delivery with external systems
 
+### Does it scale?
+YES! We scaled a closed source version of a reservation queue service at https://mailgun.com to multi-billions of messages a day in a very efficient and cost effective manner. It was a key component of our micro-service (domain based) system. The implementation was such a success I'm surprised to find no similar projects available in the open source community, so I'm building one!
+
 ### What is the Reservation Pattern?
 The reservation pattern is used to implement an “Almost Exactly Once Delivery” style queue by ensuring that 
 each item is processed “almost exactly” once and in the order it was received. I say, “almost” because 

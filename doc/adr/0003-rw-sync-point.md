@@ -37,7 +37,7 @@ the L3 cache when the CPU is engaged by avoiding HEAP objects that the synchroni
 While we can't avoid IO to the data store in the main loop, we can have producers and consumers
 'queue' as much work as possible so when the main loop is active, we get as much done as quickly as possible.
 
-If a single queue becomes a bottleneck for throughput, users should create more queues.
+If the single thread per queue becomes a bottleneck for throughput, users should create more queues, and thus utilize more threads.
 
 ##### The Write Path
 The best cast scenario is that each item will have 3 writes.

@@ -4,7 +4,7 @@ Date: 2024-07-16
 
 ## Status
 
-Accepted
+Superceded by [16. Queue Partitions](0016-queue-partitions.md)
 
 ## Context
 

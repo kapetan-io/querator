@@ -77,6 +77,7 @@ func NewService(conf ServiceConfig) (*Service, error) {
 			MaxProduceBatchSize:  conf.MaxProduceBatchSize,
 			MaxCompleteBatchSize: conf.MaxCompleteBatchSize,
 			MaxRequestsPerQueue:  conf.MaxRequestsPerQueue,
+			Clock:                conf.Clock,
 		},
 		Storage: conf.Storage,
 		Logger:  conf.Logger,

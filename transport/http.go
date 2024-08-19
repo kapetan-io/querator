@@ -41,10 +41,12 @@ const (
 	RPCQueueClear    = "/v1/queue.clear"
 	RPCQueuePause    = "/v1/queue.pause"
 
-	RPCQueuesList   = "/v1/queues.list"
-	RPCQueuesCreate = "/v1/queues.create"
-	RPCQueuesDelete = "/v1/queues.delete"
-	RPCQueuesUpdate = "/v1/queues.update"
+	RPCQueuesInfo      = "/v1/queues.info"
+	RPCQueuesRebalance = "/v1/queues.rebalance"
+	RPCQueuesList      = "/v1/queues.list"
+	RPCQueuesCreate    = "/v1/queues.create"
+	RPCQueuesDelete    = "/v1/queues.delete"
+	RPCQueuesUpdate    = "/v1/queues.update"
 
 	// TODO: Document the /storage/queue.list endpoint. The results include the pivot intentionally. Clients who
 	//  wish to iterate through all the items page by page should account for this. Also clients must check if the

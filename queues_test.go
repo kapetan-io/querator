@@ -14,7 +14,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"math"
 	"math/rand"
-	"strings"
 	"testing"
 )
 
@@ -820,20 +819,4 @@ func createRandomQueues(t *testing.T, ctx context.Context, c *que.Client, count 
 		require.NoError(t, c.QueuesCreate(ctx, &info))
 	}
 	return items
-}
-
-func expectErrMsg(t *testing.T, err error, messages ...string) bool {
-	if err != nil {
-		for _, msg := range messages {
-			if strings.Contains(err.Error(), msg) {
-				return true
-			}
-		}
-		t.Logf("Unexpected error '%s'\n", err)
-		t.Fail()
-		return false
-	}
-	t.Logf("Unexpected error but no error returned\n")
-	t.Fail()
-	return false
 }

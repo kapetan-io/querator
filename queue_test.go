@@ -16,7 +16,6 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"math/rand"
 	"sync"
-	"sync/atomic"
 	"testing"
 )
 
@@ -1148,236 +1147,6 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		})
 	})
 
-	t.Run("Pause", func(t *testing.T) {
-		_store := setup(clock.NewProvider())
-		defer tearDown()
-
-		t.Run("Success", func(t *testing.T) {
-			var queueName = random.String("queue-", 10)
-			d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{Storage: _store})
-			defer d.Shutdown(t)
-
-			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
-				ReserveTimeout: ReserveTimeout,
-				DeadTimeout:    DeadTimeout,
-				QueueName:      queueName,
-			}))
-
-			validIds := createCompletableIds(t, ctx, c, queueName, 1)
-
-			// Pause processing of the queue
-			require.NoError(t, c.QueuePause(ctx, &pb.QueuePauseRequest{
-				QueueName:     queueName,
-				PauseDuration: "2m",
-				Pause:         true,
-			}))
-
-			var wg sync.WaitGroup
-			resultCh := threeRequestsShouldPause(t, ctx, c, &wg, queueName, validIds)
-
-			// UnPause the queue
-			require.NoError(t, c.QueuePause(ctx, &pb.QueuePauseRequest{
-				QueueName: queueName,
-				Pause:     false,
-			}))
-
-			// Our three requests should now return success!
-			assert.NoError(t, <-resultCh)
-			assert.NoError(t, <-resultCh)
-			assert.NoError(t, <-resultCh)
-			wg.Wait()
-		})
-
-		t.Run("DuringShutdown", func(t *testing.T) {
-			var queueName = random.String("queue-", 10)
-			d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{Storage: _store})
-
-			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
-				ReserveTimeout: ReserveTimeout,
-				DeadTimeout:    DeadTimeout,
-				QueueName:      queueName,
-			}))
-
-			validIds := createCompletableIds(t, ctx, c, queueName, 1)
-
-			blockCh := make(chan error)
-			var wg sync.WaitGroup
-			wg.Add(1)
-
-			go func() {
-				var res pb.QueueReserveResponse
-				blockCh <- c.QueueReserve(ctx, &pb.QueueReserveRequest{
-					ClientId:       random.String("client-", 10),
-					QueueName:      queueName,
-					RequestTimeout: "1m",
-					BatchSize:      1,
-				}, &res)
-				wg.Done()
-			}()
-
-			// Wait until the client is blocked waiting for an item on the queue
-			require.NoError(t, untilReserveClientBlocked(t, c, queueName, 1))
-
-			// Now pause processing of the queue
-			require.NoError(t, c.QueuePause(ctx, &pb.QueuePauseRequest{
-				QueueName:     queueName,
-				PauseDuration: "2m",
-				Pause:         true,
-			}))
-
-			// Add 3 new requests; a Produce, Reserve and a Complete. Since the queue
-			// is paused, the requests are queued waiting to be processed.
-			resultCh := threeRequestsShouldPause(t, ctx, c, &wg, queueName, validIds)
-
-			// Shutdown the service while we are still paused
-			d.Shutdown(t)
-			fmt.Printf("Shutdown Done\n")
-
-			// All three requests should return shutdown errors
-			err := <-resultCh
-			assert.Error(t, err)
-			assert.Contains(t, err.Error(), que.MsgQueueInShutdown)
-
-			err = <-resultCh
-			assert.Error(t, err)
-			assert.Contains(t, err.Error(), que.MsgQueueInShutdown)
-
-			err = <-resultCh
-			assert.Error(t, err)
-			assert.Contains(t, err.Error(), que.MsgQueueInShutdown)
-
-			err = <-blockCh
-			assert.Error(t, err)
-			assert.Contains(t, err.Error(), que.MsgQueueInShutdown)
-			wg.Wait()
-		})
-
-		t.Run("OverloadRequests", func(t *testing.T) {
-			// TODO: <--- FINISH THIS NEXT, concurrency is too high for my laptop, we should make the MaxClient something
-			//  more reasonable like 90 MaxClients and then test. Fix DaemonConfig to allow this to be changed for this test.
-			// TODO: Send a ton of requests while the queue is paused, in an attempt to overflow the request channel
-			var queueName = random.String("queue-", 10)
-			d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{Storage: _store, MaxRequestsPerQueue: 15})
-
-			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
-				ReserveTimeout: ReserveTimeout,
-				DeadTimeout:    DeadTimeout,
-				QueueName:      queueName,
-			}))
-
-			// Pause processing of the queue
-			require.NoError(t, c.QueuePause(ctx, &pb.QueuePauseRequest{
-				QueueName:     queueName,
-				PauseDuration: "2m",
-				Pause:         true,
-			}))
-
-			expectedErrs := []string{
-				que.MsgQueueInShutdown,
-				que.MsgQueueOverLoaded,
-			}
-			items := randomProduceItems(1)
-			const maxRequestCount = 6
-			var wg sync.WaitGroup
-
-			// Generate enough requests to overflow the queue limits set by QueueConfig.MaxRequestsPerQueue
-			var produceOverFlow atomic.Bool
-			for i := 0; i < maxRequestCount; i++ {
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					if expectErrMsg(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
-						QueueName:      queueName,
-						RequestTimeout: "1m",
-						Items:          items,
-					}), expectedErrs...) {
-						produceOverFlow.Store(true)
-					}
-				}()
-			}
-			var reserveOverFlow atomic.Bool
-			for i := 0; i < maxRequestCount; i++ {
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					var resp pb.QueueReserveResponse
-					if expectErrMsg(t, c.QueueReserve(ctx, &pb.QueueReserveRequest{
-						ClientId:       random.String("client-", 10),
-						QueueName:      queueName,
-						RequestTimeout: "1m",
-						BatchSize:      1,
-					}, &resp), expectedErrs...) {
-						reserveOverFlow.Store(true)
-					}
-				}()
-			}
-			var completeOverFlow atomic.Bool
-			for i := 0; i < maxRequestCount; i++ {
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					if expectErrMsg(t, c.QueueComplete(ctx, &pb.QueueCompleteRequest{
-						Ids:            []string{"id1"},
-						QueueName:      queueName,
-						RequestTimeout: "1m",
-					}), expectedErrs...) {
-						completeOverFlow.Store(true)
-					}
-				}()
-			}
-
-			_ctx, cancel := context.WithTimeout(context.Background(), 5*clock.Second)
-			defer cancel()
-			t.Helper()
-
-			// Wait until every request is waiting
-			require.NoError(t, retry.On(_ctx, RetryTenTimes, func(ctx context.Context, i int) error {
-				var resp pb.QueueStatsResponse
-				require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &resp))
-				fmt.Println(pb.PPStats(&resp))
-				if int(resp.ReserveWaiting) < maxRequestCount-1 {
-					return fmt.Errorf("ReserveWaiting never reached expected %d", maxRequestCount-1)
-				}
-				if int(resp.CompleteWaiting) < maxRequestCount-1 {
-					return fmt.Errorf("CompleteWaiting never reached expected %d", maxRequestCount-1)
-				}
-				if int(resp.ProduceWaiting) < maxRequestCount-1 {
-					return fmt.Errorf("ProduceWaiting never reached expected %d", maxRequestCount-1)
-				}
-				return nil
-			}))
-
-			assert.True(t, produceOverFlow.Load())
-			assert.True(t, reserveOverFlow.Load())
-			assert.True(t, completeOverFlow.Load())
-
-			// Each spawned request that didn't receive a que.MsgQueueOverLoaded
-			// should now return que.MsgQueueOverLoaded. Since this happens AFTER
-			// we check for the xxxOverFlow booleans, we assume the first error was
-			// a MsgQueueOverLoaded.
-			d.Shutdown(t)
-			wg.Wait()
-		})
-
-		t.Run("ResumeAfterTimeout", func(t *testing.T) {
-			// TODO: Pause
-			// TODO: Advance Time until unpause clockout is reached
-			// TODO: Ensure no longer paused.
-		})
-
-		t.Run("HandlesRequestTimeouts", func(t *testing.T) {
-			// TODO: make a Reserve call
-			// TODO: Pause
-			// TODO: Advance Time until Reserve call clocks out
-			// TODO: Reserve call should return
-			// TODO: UnPause
-		})
-
-	})
-	// <---- TODO: NEXT, Test Shutdown during Pause and Pause False
-	// TODO: Test pause and unpause, ensure can produce and consume after un-paused and Ensure can shutdown
-	// TODO: Test pause false without pause true
-	// TODO: Implement clock style thingy so we can freeze clock and advance clock in order to test Deadlines and such.
 	// TODO: Test /queue.produce and all the possible incorrect way it could be called
 	// TODO: Test /queue.reserve and all the possible incorrect way it could be called
 	// TODO: Test /queue.complete and all the possible incorrect way it could be called
@@ -1509,79 +1278,23 @@ func untilReserveClientBlocked(t *testing.T, c *que.Client, queueName string, nu
 	})
 }
 
-func createCompletableIds(t *testing.T, ctx context.Context, c *que.Client, queueName string, count int) []string {
-	var result []string
-	require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
-		Items:          randomProduceItems(count),
-		QueueName:      queueName,
-		RequestTimeout: "3s",
-	}))
-	var resp pb.QueueReserveResponse
-	require.NoError(t, c.QueueReserve(ctx, &pb.QueueReserveRequest{
-		ClientId:       random.String("client-", 10),
-		BatchSize:      int32(count),
-		QueueName:      queueName,
-		RequestTimeout: "3s",
-	}, &resp))
-	for _, item := range resp.Items {
-		result = append(result, item.Id)
-	}
-	return result
-}
-
-func threeRequestsShouldPause(t *testing.T, ctx context.Context, c *que.Client, wg *sync.WaitGroup, queueName string, validIds []string) chan error {
-	resultCh := make(chan error)
-
-	fmt.Printf("threeRequestsShouldPause %s\n", queueName)
-	defer fmt.Printf("threeRequestsShouldPause %s - done\n", queueName)
-	wg.Add(3)
-	go func() {
-		var res pb.QueueReserveResponse
-		resultCh <- c.QueueReserve(ctx, &pb.QueueReserveRequest{
-			ClientId:       random.String("client-", 10),
-			QueueName:      queueName,
-			RequestTimeout: "1m",
-			BatchSize:      1,
-		}, &res)
-		wg.Done()
-	}()
-	go func() {
-		resultCh <- c.QueueProduce(ctx, &pb.QueueProduceRequest{
-			Items:          randomProduceItems(1),
-			QueueName:      queueName,
-			RequestTimeout: "1m",
-		})
-		wg.Done()
-	}()
-	go func() {
-		resultCh <- c.QueueComplete(ctx, &pb.QueueCompleteRequest{
-			Ids:            validIds,
-			QueueName:      queueName,
-			RequestTimeout: "1m",
-		})
-		wg.Done()
-	}()
-
-	// Wait for the requests to show in the wait queues
-	_ctx, cancel := context.WithTimeout(context.Background(), 5*clock.Second)
-	defer cancel()
-	t.Helper()
-
-	// Wait until every request is waiting
-	err := retry.On(_ctx, RetryTenTimes, func(ctx context.Context, i int) error {
-		var resp pb.QueueStatsResponse
-		require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &resp))
-		if int(resp.ReserveWaiting) != 1 {
-			return fmt.Errorf("ReserveWaiting never reached expected '1'")
-		}
-		if int(resp.ProduceWaiting) != 1 {
-			return fmt.Errorf("ProduceWaiting never reached expected '1'")
-		}
-		if int(resp.CompleteWaiting) != 1 {
-			return fmt.Errorf("CompleteWaiting never reached expected '1'")
-		}
-		return nil
-	})
-	require.NoError(t, err)
-	return resultCh
-}
+// TODO: Remove
+//func createCompletableIds(t *testing.T, ctx context.Context, c *que.Client, queueName string, count int) []string {
+//	var result []string
+//	require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+//		Items:          randomProduceItems(count),
+//		QueueName:      queueName,
+//		RequestTimeout: "3s",
+//	}))
+//	var resp pb.QueueReserveResponse
+//	require.NoError(t, c.QueueReserve(ctx, &pb.QueueReserveRequest{
+//		ClientId:       random.String("client-", 10),
+//		BatchSize:      int32(count),
+//		QueueName:      queueName,
+//		RequestTimeout: "3s",
+//	}, &resp))
+//	for _, item := range resp.Items {
+//		result = append(result, item.Id)
+//	}
+//	return result
+//}

@@ -6,6 +6,8 @@ Date: 2024-07-04
 
 Proposal
 
+Superceded by [16. Queue Partitions](0016-queue-partitions.md)
+
 ## Context
 
 A queue is a single synchronization R/W point for producers and consumers. As such, eventually throughput will suffer

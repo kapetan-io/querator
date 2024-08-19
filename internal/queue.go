@@ -29,7 +29,7 @@ const (
 	DefaultMaxReserveBatchSize  = 1_000
 	DefaultMaxProduceBatchSize  = 1_000
 	DefaultMaxCompleteBatchSize = 1_000
-	DefaultMaxRequestsPerQueue  = 3_000
+	DefaultMaxRequestsPerQueue  = 500
 
 	MsgRequestTimeout    = "request timeout; no items are in the queue, try again"
 	MsgDuplicateClientID = "duplicate client id; a client cannot make multiple reserve requests to the same queue"
@@ -93,11 +93,6 @@ func NewQueue(conf QueueConfig) (*Queue, error) {
 	set.Default(&conf.MaxRequestsPerQueue, DefaultMaxRequestsPerQueue)
 	set.Default(&conf.Clock, clock.NewProvider())
 
-	// TODO: Change this to a multiple of 4 once we implement /queue.defer
-	if conf.MaxRequestsPerQueue%3 != 0 {
-		return nil, transport.NewRetryRequest("MaxRequestsPerQueue must be a multiple of 3")
-	}
-
 	if conf.QueueStore == nil {
 		return nil, transport.NewInvalidOption("QueueConfig.QueuesStore cannot be nil")
 	}
@@ -113,10 +108,10 @@ func NewQueue(conf QueueConfig) (*Queue, error) {
 	// These are request queues that queue requests from clients until the sync loop has
 	// time to process them. When they get processed, every request in the queue is handled
 	// in a batch.
-	fmt.Printf("NewQueue() - MaxRequestsPerQueue: %d\n", conf.MaxRequestsPerQueue/3)
-	q.reserveQueueCh = make(chan *types.ReserveRequest, conf.MaxRequestsPerQueue/3)
-	q.produceQueueCh = make(chan *types.ProduceRequest, conf.MaxRequestsPerQueue/3)
-	q.completeQueueCh = make(chan *types.CompleteRequest, conf.MaxRequestsPerQueue/3)
+	fmt.Printf("NewQueue() - MaxRequestsPerQueue: %d\n", conf.MaxRequestsPerQueue)
+	q.reserveQueueCh = make(chan *types.ReserveRequest, conf.MaxRequestsPerQueue)
+	q.produceQueueCh = make(chan *types.ProduceRequest, conf.MaxRequestsPerQueue)
+	q.completeQueueCh = make(chan *types.CompleteRequest, conf.MaxRequestsPerQueue)
 
 	q.wg.Add(1)
 	go q.synchronizationLoop()
@@ -434,7 +429,7 @@ func (q *Queue) synchronizationLoop() {
 func (q *Queue) handleProduceRequests(state *QueueState, req *types.ProduceRequest) {
 	// Consume all requests in the channel, so we can process them in a batch
 	state.Producers.Add(req)
-CONTINUE1:
+EMPTY:
 	for {
 		select {
 		case req := <-q.produceQueueCh:
@@ -447,7 +442,7 @@ CONTINUE1:
 			//  into state.Producers, and handle requests if this channel is full.
 			state.Producers.Add(req)
 		default:
-			break CONTINUE1
+			break EMPTY
 		}
 	}
 

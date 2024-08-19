@@ -39,7 +39,6 @@ const (
 	RPCQueueComplete = "/v1/queue.complete"
 	RPCQueueStats    = "/v1/queue.stats"
 	RPCQueueClear    = "/v1/queue.clear"
-	RPCQueuePause    = "/v1/queue.pause"
 
 	RPCQueuesInfo      = "/v1/queues.info"
 	RPCQueuesRebalance = "/v1/queues.rebalance"
@@ -80,7 +79,6 @@ type Service interface {
 	QueueReserve(context.Context, *pb.QueueReserveRequest, *pb.QueueReserveResponse) error
 	QueueComplete(context.Context, *pb.QueueCompleteRequest) error
 	QueueStats(context.Context, *pb.QueueStatsRequest, *pb.QueueStatsResponse) error
-	QueuePause(context.Context, *pb.QueuePauseRequest) error
 	QueueClear(context.Context, *pb.QueueClearRequest) error
 
 	QueuesCreate(context.Context, *pb.QueueInfo) error
@@ -155,9 +153,6 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	case RPCQueueClear:
 		h.QueueClear(ctx, w, r)
-		return
-	case RPCQueuePause:
-		h.QueuePause(ctx, w, r)
 		return
 	case RPCQueuesCreate:
 		h.QueuesCreate(ctx, w, r)
@@ -312,20 +307,6 @@ func (h *HTTPHandler) QueueClear(ctx context.Context, w http.ResponseWriter, r *
 	}
 
 	if err := h.service.QueueClear(ctx, &req); err != nil {
-		duh.ReplyError(w, r, err)
-		return
-	}
-	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
-}
-
-func (h *HTTPHandler) QueuePause(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-	var req pb.QueuePauseRequest
-	if err := duh.ReadRequest(r, &req); err != nil {
-		duh.ReplyError(w, r, err)
-		return
-	}
-
-	if err := h.service.QueuePause(ctx, &req); err != nil {
 		duh.ReplyError(w, r, err)
 		return
 	}

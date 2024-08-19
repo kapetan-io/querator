@@ -283,20 +283,10 @@ func (q *Queue) QueueStats(ctx context.Context, stats *types.QueueStats) error {
 	return q.queueRequest(ctx, &r)
 }
 
-// Pause pauses processing of produce, reserve, complete and defer operations until the pause duration
-// is reached or the queue is un-paused by calling Pause() with types.PauseRequest.Pause = false
+// Pause pauses processing of produce, reserve, complete and defer operations until the pause is cancelled.
+// It is only used for testing and not exposed to the user via API, as such it is not considered apart of
+// the public API.
 func (q *Queue) Pause(ctx context.Context, req *types.PauseRequest) error {
-	if req.Pause {
-		// TODO: Add tests for these cases
-		if req.PauseDuration.Nanoseconds() == 0 {
-			return transport.NewInvalidOption("pause_duration is invalid; cannot be empty")
-		}
-
-		if req.PauseDuration <= 100*clock.Millisecond {
-			return transport.NewInvalidOption("pause_duration is invalid; cannot be less than 100ms")
-		}
-	}
-
 	r := QueueRequest{
 		Method:  MethodQueuePause,
 		Request: req,
@@ -761,56 +751,34 @@ func (q *Queue) handleStats(state *QueueState, r *QueueRequest) {
 	close(r.ReadyCh)
 }
 
-// handlePause places Queue into a special loop where operations are limited and none of the
-// produce, reserve, complete, defer operations will be processed until we leave the loop.
+// handlePause places Queue into a special loop where operations none of the // produce,
+// reserve, complete, defer operations will be processed until we leave the loop.
 func (q *Queue) handlePause(state *QueueState, r *QueueRequest) {
 	pr := r.Request.(*types.PauseRequest)
 
-	// NOTE: Since we are not currently paused, and yet we get an un-pause request likely the user
-	// wants us to sync any cached state and reload from the data store if necessary.
-	// As of this current version (V0), there is no cached data to sync, but this will likely
-	// change in the future.
 	if !pr.Pause {
 		close(r.ReadyCh)
 		return
 	}
-	timeoutCh := q.conf.Clock.NewTimer(pr.PauseDuration)
 	close(r.ReadyCh)
 
 	q.conf.Logger.Warn("queue paused", "queue", q.conf.Name)
 	defer q.conf.Logger.Warn("queue un-paused", "queue", q.conf.Name)
-	for {
-		fmt.Printf("handlePause.Loop\n")
-		select {
-		// TODO: Need to handle request timeouts by reading every item in the channels
-		// and evaluating each. When we un-pause we push all those items back into the
-		// channel in the same order.
-		case req := <-q.shutdownCh:
-			fmt.Printf("handlePause.Shutdown\n")
-			q.handleShutdown(state, req)
-			return
-		case req := <-q.queueRequestCh:
-			switch req.Method {
-			case MethodQueuePause:
-				pr := req.Request.(*types.PauseRequest)
-				// Update the pause timeout if we receive another request to pause
-				if pr.Pause {
-					fmt.Printf("handlePause.Pause\n")
-					timeoutCh = q.conf.Clock.NewTimer(pr.PauseDuration)
-					close(req.ReadyCh)
-					continue
-				}
-				fmt.Printf("handlePause.UnPause\n")
-				// Cancel the pause
+
+	for req := range q.queueRequestCh {
+		switch req.Method {
+		case MethodQueuePause:
+			pr := req.Request.(*types.PauseRequest)
+			if pr.Pause {
+				// Already paused, ignore this request
 				close(req.ReadyCh)
-				// TODO: Resuming a pause should reload the data store interfaces
-				return
-			default:
-				q.handleQueueRequests(state, req)
+				continue
 			}
-		case <-timeoutCh.C():
 			// Cancel the pause
+			close(req.ReadyCh)
 			return
+		default:
+			q.handleQueueRequests(state, req)
 		}
 	}
 }

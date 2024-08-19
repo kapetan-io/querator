@@ -444,7 +444,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					RequestTimeout: "1m",
 				},
 			}
-			responses := pauseAndReserve(t, ctx, c, queueName, requests)
+			responses := pauseAndReserve(t, ctx, d.Service(), c, queueName, requests)
 
 			assert.Equal(t, int32(5), requests[0].BatchSize)
 			assert.Equal(t, 5, len(responses[0].Items))
@@ -503,7 +503,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					RequestTimeout: "1m",
 				},
 			}
-			responses := pauseAndReserve(t, ctx, c, queueName, requests)
+			responses := pauseAndReserve(t, ctx, d.Service(), c, queueName, requests)
 
 			// Reserve() should fairly distribute items across all requests
 			assert.Equal(t, int32(20), requests[0].BatchSize)
@@ -542,7 +542,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					RequestTimeout: "3s",
 				},
 			}
-			responses := pauseAndReserve(t, ctx, c, queueName, requests)
+			responses := pauseAndReserve(t, ctx, d.Service(), c, queueName, requests)
 
 			// Reserve() should return no items, and
 			assert.Equal(t, int32(20), requests[0].BatchSize)
@@ -1197,16 +1197,12 @@ func randomSliceStrings(count int) []string {
 	return result
 }
 
-func pauseAndReserve(t *testing.T, ctx context.Context, c *que.Client, name string,
+func pauseAndReserve(t *testing.T, ctx context.Context, s *que.Service, c *que.Client, name string,
 	requests []*pb.QueueReserveRequest) []*pb.QueueReserveResponse {
 	t.Helper()
 
-	// Pause processing of the queue
-	require.NoError(t, c.QueuePause(ctx, &pb.QueuePauseRequest{
-		QueueName:     name,
-		PauseDuration: "2m",
-		Pause:         true,
-	}))
+	// Pause processing of the queue for testing
+	require.NoError(t, s.PauseQueue(ctx, name, true))
 
 	responses := []*pb.QueueReserveResponse{{}, {}, {}}
 	var wg sync.WaitGroup
@@ -1245,7 +1241,8 @@ func pauseAndReserve(t *testing.T, ctx context.Context, c *que.Client, name stri
 	}
 
 	// Unpause processing of the queue to allow the reservations to be filled.
-	require.NoError(t, c.QueuePause(ctx, &pb.QueuePauseRequest{QueueName: name, Pause: false}))
+	require.NoError(t, s.PauseQueue(ctx, name, false))
+
 	// Wait for each request to complete
 	done := make(chan struct{})
 

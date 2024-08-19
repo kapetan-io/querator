@@ -79,8 +79,7 @@ type ClearRequest struct {
 }
 
 type PauseRequest struct {
-	PauseDuration clock.Duration
-	Pause         bool
+	Pause bool
 }
 
 type ShutdownRequest struct {

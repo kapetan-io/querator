@@ -367,6 +367,10 @@ func (td *testDaemon) Context() context.Context {
 	return td.ctx
 }
 
+func (td *testDaemon) Service() *que.Service {
+	return td.d.Service()
+}
+
 func newDaemon(t *testing.T, duration clock.Duration, conf que.ServiceConfig) (*testDaemon, *que.Client, context.Context) {
 	t.Helper()
 

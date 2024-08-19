@@ -183,19 +183,15 @@ func (s *Service) QueueClear(ctx context.Context, req *proto.QueueClearRequest) 
 	return nil
 }
 
-func (s *Service) QueuePause(ctx context.Context, req *proto.QueuePauseRequest) error {
-	var r types.PauseRequest
-
-	if err := s.validateQueuePauseRequestProto(req, &r); err != nil {
-		return err
-	}
-
-	queue, err := s.queues.Get(ctx, req.QueueName)
+// PauseQueue is used to temporarily pause processing of queue requests to simulate various high contention scenarios
+// in testing; it is not exposed to the users via API calls.
+func (s *Service) PauseQueue(ctx context.Context, queueName string, pause bool) error {
+	queue, err := s.queues.Get(ctx, queueName)
 	if err != nil {
 		return err
 	}
 
-	if err := queue.Pause(ctx, &r); err != nil {
+	if err := queue.Pause(ctx, &types.PauseRequest{Pause: pause}); err != nil {
 		return err
 	}
 

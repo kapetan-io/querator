@@ -132,23 +132,6 @@ func (c *Client) QueueClear(ctx context.Context, req *pb.QueueClearRequest) erro
 	return c.client.Do(r, &res)
 }
 
-func (c *Client) QueuePause(ctx context.Context, req *pb.QueuePauseRequest) error {
-	payload, err := proto.Marshal(req)
-	if err != nil {
-		return duh.NewClientError("while marshaling request payload: %w", err, nil)
-	}
-
-	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		fmt.Sprintf("%s%s", c.conf.Endpoint, transport.RPCQueuePause), bytes.NewReader(payload))
-	if err != nil {
-		return duh.NewClientError("", err, nil)
-	}
-
-	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
-	var res v1.Reply
-	return c.client.Do(r, &res)
-}
-
 // -------------------------------------------------
 // API to manage lists of queues
 // -------------------------------------------------

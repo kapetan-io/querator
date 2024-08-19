@@ -187,16 +187,6 @@ message QueueInfo {
   int32  maxAttempts = 8 [json_name = "max_attempts"];
 }
 
-message QueuePauseRequest {
-  // The name of the queue
-  string queueName = 1  [json_name = "queue_name"];
-  // The duration of the pause, after which the queue will automatically resume
-  string pauseDuration = 2 [json_name = "pause_duration"];
-  // Indicate if the queue should be paused or un-paused. If true the queue will be paused for 'pause_duration'
-  // or until another request is received with pause = false
-  bool pause = 3;
-}
-
 message QueueClearRequest {
   // The name of the queue
   string queueName = 1  [json_name = "queue_name"];

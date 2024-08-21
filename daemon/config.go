@@ -17,6 +17,12 @@ type Config struct {
 	TLS *duh.TLSConfig
 	// ListenAddress is the address:port that Querator will listen on for public HTTP requests
 	ListenAddress string
+
+	// MaxProducePayloadSize is the maximum size in bytes Querator will read from a client
+	// during the `/queue.produce` request. The Maximum size includes the entire payload for a
+	// single `/queue.produce` request including the size of all fields in the marshalled protobuf.
+	// The default size is 1MB.
+	MaxProducePayloadSize int64
 }
 
 func (c *Config) ClientTLS() *tls.Config {

@@ -68,11 +68,18 @@ type QueueConfig struct {
 	Clock *clock.Provider
 }
 
-// Queue manages job is to evenly distribute and consume items from a single queue. Ensuring consumers and
-// producers are handled fairly and efficiently. Since a Queue is the synchronization point for R/W
-// there can ONLY BE ONE instance of a Queue running anywhere in the cluster at any given clock. All consume
-// and produce requests MUST go through this queue singleton.
-type Queue struct {
+// A Queue is made up of many Logical and each Logical is made up of many partitions
+// TODO: Modify the Logical to Handle many partitions
+// TODO: Implement a round robin strategy which assigns reserves to each partition until the reservation is full or
+//  partitions are exhausted.
+// TODO: The number of partitions this Logical is assigned can change at any time.
+// TODO: Create a new Queue which holds a set of Logical instances
+
+// Logical produces and consumes items from the many partitions ensuring consumers and producers are handled fairly
+// and efficiently. Since a Logical is the synchronization point for R/W there can ONLY BE ONE instance of a
+// Logical running anywhere in the cluster at any given time. All consume and produce requests for the partitions
+// assigned to this Logical instance MUST go through this singleton.
+type Logical struct {
 	reserveQueueCh  chan *types.ReserveRequest
 	produceQueueCh  chan *types.ProduceRequest
 	completeQueueCh chan *types.CompleteRequest
@@ -85,7 +92,7 @@ type Queue struct {
 	inShutdown     atomic.Bool
 }
 
-func NewQueue(conf QueueConfig) (*Queue, error) {
+func NewQueue(conf QueueConfig) (*Logical, error) {
 	set.Default(&conf.Logger, slog.Default())
 	set.Default(&conf.MaxReserveBatchSize, DefaultMaxReserveBatchSize)
 	set.Default(&conf.MaxProduceBatchSize, DefaultMaxProduceBatchSize)
@@ -97,8 +104,8 @@ func NewQueue(conf QueueConfig) (*Queue, error) {
 		return nil, transport.NewInvalidOption("QueueConfig.QueuesStore cannot be nil")
 	}
 
-	q := &Queue{
-		// Queue requests are any request that doesn't require special batch processing
+	q := &Logical{
+		// Logical requests are any request that doesn't require special batch processing
 		queueRequestCh: make(chan *QueueRequest),
 		// Shutdowns require special handling in the sync loop
 		shutdownCh: make(chan *types.ShutdownRequest),
@@ -119,9 +126,9 @@ func NewQueue(conf QueueConfig) (*Queue, error) {
 }
 
 // Produce is called by clients who wish to produce an item to the queue. This
-// call will block until the item has been written to the queue or until the request
+// call will block until the item has been written to a partition or until the request
 // is cancelled via the passed context or RequestTimeout is reached.
-func (q *Queue) Produce(ctx context.Context, req *types.ProduceRequest) error {
+func (q *Logical) Produce(ctx context.Context, req *types.ProduceRequest) error {
 	if q.inShutdown.Load() {
 		return ErrQueueShutdown
 	}
@@ -174,7 +181,7 @@ func (q *Queue) Produce(ctx context.Context, req *types.ProduceRequest) error {
 // # Context Cancellation
 // IT IS NOT recommend to cancel wit context.WithTimeout() or context.WithDeadline() on Reserve() since
 // Reserve() will block until the duration provided via ReserveRequest.RequestTimeout has been reached.
-// Callers SHOULD cancel the context if the client has gone away, in this case Queue will abort the reservation
+// Callers SHOULD cancel the context if the client has gone away, in this case Logical will abort the reservation
 // request. If the context is cancelled after reservation has been written to the data store
 // then those reservations will remain reserved until they can be offered to another client after the
 // ReserveDeadline has been reached. See doc/adr/0009-client-timeouts.md
@@ -182,7 +189,7 @@ func (q *Queue) Produce(ctx context.Context, req *types.ProduceRequest) error {
 // # Unique Requests
 // ClientID must NOT be empty and each request must be unique, Non-unique requests will be rejected with
 // MsgDuplicateClientID. See doc/adr/0007-encourage-simple-clients.md for an explanation.
-func (q *Queue) Reserve(ctx context.Context, req *types.ReserveRequest) error {
+func (q *Logical) Reserve(ctx context.Context, req *types.ReserveRequest) error {
 	if q.inShutdown.Load() {
 		return ErrQueueShutdown
 	}
@@ -234,7 +241,7 @@ func (q *Queue) Reserve(ctx context.Context, req *types.ReserveRequest) error {
 // Complete is called by clients who wish to mark an item as complete. The call will block
 // until the item has been marked as complete or until the request is cancelled via the passed
 // context or RequestTimeout is reached.
-func (q *Queue) Complete(ctx context.Context, req *types.CompleteRequest) error {
+func (q *Logical) Complete(ctx context.Context, req *types.CompleteRequest) error {
 	if q.inShutdown.Load() {
 		return ErrQueueShutdown
 	}
@@ -275,7 +282,7 @@ func (q *Queue) Complete(ctx context.Context, req *types.CompleteRequest) error 
 }
 
 // QueueStats retrieves stats about the queue and items in storage
-func (q *Queue) QueueStats(ctx context.Context, stats *types.QueueStats) error {
+func (q *Logical) QueueStats(ctx context.Context, stats *types.QueueStats) error {
 	r := QueueRequest{
 		Method:  MethodQueueStats,
 		Request: stats,
@@ -286,7 +293,7 @@ func (q *Queue) QueueStats(ctx context.Context, stats *types.QueueStats) error {
 // Pause pauses processing of produce, reserve, complete and defer operations until the pause is cancelled.
 // It is only used for testing and not exposed to the user via API, as such it is not considered apart of
 // the public API.
-func (q *Queue) Pause(ctx context.Context, req *types.PauseRequest) error {
+func (q *Logical) Pause(ctx context.Context, req *types.PauseRequest) error {
 	r := QueueRequest{
 		Method:  MethodQueuePause,
 		Request: req,
@@ -295,7 +302,7 @@ func (q *Queue) Pause(ctx context.Context, req *types.PauseRequest) error {
 }
 
 // Clear clears enqueued items from the queue
-func (q *Queue) Clear(ctx context.Context, req *types.ClearRequest) error {
+func (q *Logical) Clear(ctx context.Context, req *types.ClearRequest) error {
 	if !req.Queue && !req.Defer && !req.Scheduled {
 		return transport.NewInvalidOption("invalid clear request; one of 'queue', 'defer'," +
 			" 'scheduled' must be true")
@@ -308,7 +315,7 @@ func (q *Queue) Clear(ctx context.Context, req *types.ClearRequest) error {
 	return q.queueRequest(ctx, &r)
 }
 
-func (q *Queue) UpdateInfo(ctx context.Context, info types.QueueInfo) error {
+func (q *Logical) UpdateInfo(ctx context.Context, info types.QueueInfo) error {
 	r := QueueRequest{
 		Method:  MethodUpdateInfo,
 		Request: info,
@@ -320,7 +327,7 @@ func (q *Queue) UpdateInfo(ctx context.Context, info types.QueueInfo) error {
 // Methods to manage queue storage
 // -------------------------------------------------
 
-func (q *Queue) StorageQueueList(ctx context.Context, items *[]*types.Item, opts types.ListOptions) error {
+func (q *Logical) StorageQueueList(ctx context.Context, items *[]*types.Item, opts types.ListOptions) error {
 	req := StorageRequest{
 		Items:   items,
 		Options: opts,
@@ -335,7 +342,7 @@ func (q *Queue) StorageQueueList(ctx context.Context, items *[]*types.Item, opts
 	return q.queueRequest(ctx, &r)
 }
 
-func (q *Queue) StorageQueueAdd(ctx context.Context, items *[]*types.Item) error {
+func (q *Logical) StorageQueueAdd(ctx context.Context, items *[]*types.Item) error {
 	// TODO: Test for empty list
 	r := QueueRequest{
 		Method: MethodStorageQueueAdd,
@@ -346,7 +353,7 @@ func (q *Queue) StorageQueueAdd(ctx context.Context, items *[]*types.Item) error
 	return q.queueRequest(ctx, &r)
 }
 
-func (q *Queue) StorageQueueDelete(ctx context.Context, ids []types.ItemID) error {
+func (q *Logical) StorageQueueDelete(ctx context.Context, ids []types.ItemID) error {
 	if len(ids) == 0 {
 		return transport.NewInvalidOption("ids is invalid; cannot be empty")
 	}
@@ -366,7 +373,7 @@ func (q *Queue) StorageQueueDelete(ctx context.Context, ids []types.ItemID) erro
 // -------------------------------------------------
 
 // TODO: Break up this loop into smaller handlers to reduce the size of this method.
-func (q *Queue) synchronizationLoop() {
+func (q *Logical) synchronizationLoop() {
 	defer q.wg.Done()
 
 	state := QueueState{
@@ -416,7 +423,7 @@ func (q *Queue) synchronizationLoop() {
 	}
 }
 
-func (q *Queue) handleProduceRequests(state *QueueState, req *types.ProduceRequest) {
+func (q *Logical) handleProduceRequests(state *QueueState, req *types.ProduceRequest) {
 	// Consume all requests in the channel, so we can process them in a batch
 	state.Producers.Add(req)
 EMPTY:
@@ -508,7 +515,7 @@ EMPTY:
 	}
 }
 
-func (q *Queue) handleReserveRequests(state *QueueState, req *types.ReserveRequest) {
+func (q *Logical) handleReserveRequests(state *QueueState, req *types.ReserveRequest) {
 	// TODO(thrawn01): Ensure we don't go beyond our max number of state.Reservations, return
 	//  an error to the client
 
@@ -565,7 +572,7 @@ EMPTY:
 	q.stateCleanUp(state)
 }
 
-func (q *Queue) handleCompleteRequests(state *QueueState, req *types.CompleteRequest) {
+func (q *Logical) handleCompleteRequests(state *QueueState, req *types.CompleteRequest) {
 	// TODO(thrawn01): Ensure we don't go beyond our max number of state.Completes, return
 	//  an error to the client
 
@@ -625,7 +632,7 @@ EMPTY:
 
 // stateCleanUp is responsible for cleaning the QueueState by removing clients that have timed out,
 // and finding the next reserve request that will time out and wetting the wakeup timer.
-func (q *Queue) stateCleanUp(state *QueueState) {
+func (q *Logical) stateCleanUp(state *QueueState) {
 	fmt.Printf("stateCleanUp\n")
 	next := q.nextTimeout(&state.Reservations)
 	if next.Nanoseconds() != 0 {
@@ -636,7 +643,7 @@ func (q *Queue) stateCleanUp(state *QueueState) {
 	state.Reservations.FilterNils()
 }
 
-func (q *Queue) Shutdown(ctx context.Context) error {
+func (q *Logical) Shutdown(ctx context.Context) error {
 	if q.inShutdown.Swap(true) {
 		return nil
 	}
@@ -657,7 +664,7 @@ func (q *Queue) Shutdown(ctx context.Context) error {
 	}
 }
 
-func (q *Queue) queueRequest(ctx context.Context, r *QueueRequest) error {
+func (q *Logical) queueRequest(ctx context.Context, r *QueueRequest) error {
 	if q.inShutdown.Load() {
 		return ErrQueueShutdown
 	}
@@ -683,7 +690,7 @@ func (q *Queue) queueRequest(ctx context.Context, r *QueueRequest) error {
 // Handlers for the main and pause loops
 // -------------------------------------------------
 
-func (q *Queue) handleQueueRequests(state *QueueState, req *QueueRequest) {
+func (q *Logical) handleQueueRequests(state *QueueState, req *QueueRequest) {
 	switch req.Method {
 	case MethodStorageQueueList, MethodStorageQueueAdd, MethodStorageQueueDelete:
 		q.handleStorageRequests(req)
@@ -702,7 +709,7 @@ func (q *Queue) handleQueueRequests(state *QueueState, req *QueueRequest) {
 	}
 }
 
-func (q *Queue) handleClear(_ *QueueState, req *QueueRequest) {
+func (q *Logical) handleClear(_ *QueueState, req *QueueRequest) {
 	// NOTE: When clearing a queue, ensure we flush any cached items. As of this current
 	// version (V0), there is no cached data to sync, but this will likely change in the future.
 	cr := req.Request.(*types.ClearRequest)
@@ -717,7 +724,7 @@ func (q *Queue) handleClear(_ *QueueState, req *QueueRequest) {
 	close(req.ReadyCh)
 }
 
-func (q *Queue) handleStorageRequests(req *QueueRequest) {
+func (q *Logical) handleStorageRequests(req *QueueRequest) {
 	sr := req.Request.(StorageRequest)
 	switch req.Method {
 	case MethodStorageQueueList:
@@ -738,7 +745,7 @@ func (q *Queue) handleStorageRequests(req *QueueRequest) {
 	close(req.ReadyCh)
 }
 
-func (q *Queue) handleStats(state *QueueState, r *QueueRequest) {
+func (q *Logical) handleStats(state *QueueState, r *QueueRequest) {
 	qs := r.Request.(*types.QueueStats)
 	if err := q.conf.QueueStore.Stats(r.Context, qs); err != nil {
 		r.Err = err
@@ -751,9 +758,9 @@ func (q *Queue) handleStats(state *QueueState, r *QueueRequest) {
 	close(r.ReadyCh)
 }
 
-// handlePause places Queue into a special loop where operations none of the // produce,
+// handlePause places Logical into a special loop where operations none of the // produce,
 // reserve, complete, defer operations will be processed until we leave the loop.
-func (q *Queue) handlePause(state *QueueState, r *QueueRequest) {
+func (q *Logical) handlePause(state *QueueState, r *QueueRequest) {
 	pr := r.Request.(*types.PauseRequest)
 
 	if !pr.Pause {
@@ -783,7 +790,7 @@ func (q *Queue) handlePause(state *QueueState, r *QueueRequest) {
 	}
 }
 
-func (q *Queue) handleShutdown(state *QueueState, req *types.ShutdownRequest) {
+func (q *Logical) handleShutdown(state *QueueState, req *types.ShutdownRequest) {
 	fmt.Printf("handleShutdown\n")
 	q.stateCleanUp(state)
 
@@ -829,7 +836,7 @@ func (q *Queue) handleShutdown(state *QueueState, req *types.ShutdownRequest) {
 // -------------------------------------------------
 
 // TODO: I don't think we should pass by ref. We should use escape analysis to decide
-func (q *Queue) nextTimeout(r *types.ReserveBatch) clock.Duration {
+func (q *Logical) nextTimeout(r *types.ReserveBatch) clock.Duration {
 	var soon *types.ReserveRequest
 
 	for i, req := range r.Requests {

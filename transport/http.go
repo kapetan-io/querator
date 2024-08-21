@@ -22,9 +22,9 @@ import (
 	"github.com/duh-rpc/duh-go"
 	v1 "github.com/duh-rpc/duh-go/proto/v1"
 	pb "github.com/kapetan-io/querator/proto"
+	"github.com/kapetan-io/tackle/set"
 	"github.com/prometheus/client_golang/prometheus"
 	"net/http"
-	"sync/atomic"
 )
 
 // TODO: Document pause in OpenAPI, "Pauses queue processing such that requests to produce, reserve,
@@ -92,13 +92,15 @@ type Service interface {
 }
 
 type HTTPHandler struct {
-	duration *prometheus.SummaryVec
-	metrics  http.Handler
-	service  Service
-	InFlight atomic.Int32
+	duration       *prometheus.SummaryVec
+	metrics        http.Handler
+	service        Service
+	maxProduceSize int64
 }
 
-func NewHTTPHandler(s Service, metrics http.Handler) *HTTPHandler {
+func NewHTTPHandler(s Service, metrics http.Handler, maxProduceSize int64) *HTTPHandler {
+	set.Default(&maxProduceSize, int64(duh.MegaByte))
+
 	return &HTTPHandler{
 		duration: prometheus.NewSummaryVec(prometheus.SummaryOpts{
 			Name: "http_handler_duration",
@@ -108,18 +110,13 @@ func NewHTTPHandler(s Service, metrics http.Handler) *HTTPHandler {
 				0.99: 0.001,
 			},
 		}, []string{"path"}),
-		metrics: metrics,
-		service: s,
+		maxProduceSize: maxProduceSize,
+		metrics:        metrics,
+		service:        s,
 	}
 }
 
 func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	h.InFlight.Add(1)
-	fmt.Printf("HTTP [%d] Start %s \n", h.InFlight.Load(), r.URL.Path)
-	defer func() {
-		h.InFlight.Add(-1)
-		fmt.Printf("HTTP [%d] End %s \n", h.InFlight.Load(), r.URL.Path)
-	}()
 	defer prometheus.NewTimer(h.duration.WithLabelValues(r.URL.Path)).ObserveDuration()
 	ctx := r.Context()
 
@@ -181,7 +178,7 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (h *HTTPHandler) QueueProduce(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req pb.QueueProduceRequest
-	if err := duh.ReadRequest(r, &req); err != nil {
+	if err := duh.ReadRequest(r, &req, h.maxProduceSize); err != nil {
 		duh.ReplyError(w, r, err)
 		return
 	}
@@ -195,7 +192,7 @@ func (h *HTTPHandler) QueueProduce(ctx context.Context, w http.ResponseWriter, r
 
 func (h *HTTPHandler) QueueReserve(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req pb.QueueReserveRequest
-	if err := duh.ReadRequest(r, &req); err != nil {
+	if err := duh.ReadRequest(r, &req, 512*duh.Bytes); err != nil {
 		duh.ReplyError(w, r, err)
 		return
 	}
@@ -210,7 +207,7 @@ func (h *HTTPHandler) QueueReserve(ctx context.Context, w http.ResponseWriter, r
 
 func (h *HTTPHandler) QueueComplete(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req pb.QueueCompleteRequest
-	if err := duh.ReadRequest(r, &req); err != nil {
+	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
 		duh.ReplyError(w, r, err)
 		return
 	}
@@ -228,7 +225,7 @@ func (h *HTTPHandler) QueueComplete(ctx context.Context, w http.ResponseWriter, 
 
 func (h *HTTPHandler) QueuesCreate(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req pb.QueueInfo
-	if err := duh.ReadRequest(r, &req); err != nil {
+	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
 		duh.ReplyError(w, r, err)
 		return
 	}
@@ -242,7 +239,7 @@ func (h *HTTPHandler) QueuesCreate(ctx context.Context, w http.ResponseWriter, r
 
 func (h *HTTPHandler) QueuesList(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req pb.QueuesListRequest
-	if err := duh.ReadRequest(r, &req); err != nil {
+	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
 		duh.ReplyError(w, r, err)
 		return
 	}
@@ -258,7 +255,7 @@ func (h *HTTPHandler) QueuesList(ctx context.Context, w http.ResponseWriter, r *
 
 func (h *HTTPHandler) QueuesUpdate(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req pb.QueueInfo
-	if err := duh.ReadRequest(r, &req); err != nil {
+	if err := duh.ReadRequest(r, &req, 512*duh.Kilobyte); err != nil {
 		duh.ReplyError(w, r, err)
 		return
 	}
@@ -272,7 +269,7 @@ func (h *HTTPHandler) QueuesUpdate(ctx context.Context, w http.ResponseWriter, r
 
 func (h *HTTPHandler) QueuesDelete(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req pb.QueuesDeleteRequest
-	if err := duh.ReadRequest(r, &req); err != nil {
+	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
 		duh.ReplyError(w, r, err)
 		return
 	}
@@ -286,7 +283,7 @@ func (h *HTTPHandler) QueuesDelete(ctx context.Context, w http.ResponseWriter, r
 
 func (h *HTTPHandler) QueueStats(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req pb.QueueStatsRequest
-	if err := duh.ReadRequest(r, &req); err != nil {
+	if err := duh.ReadRequest(r, &req, 512*duh.Bytes); err != nil {
 		duh.ReplyError(w, r, err)
 		return
 	}
@@ -301,7 +298,7 @@ func (h *HTTPHandler) QueueStats(ctx context.Context, w http.ResponseWriter, r *
 
 func (h *HTTPHandler) QueueClear(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req pb.QueueClearRequest
-	if err := duh.ReadRequest(r, &req); err != nil {
+	if err := duh.ReadRequest(r, &req, 512*duh.Bytes); err != nil {
 		duh.ReplyError(w, r, err)
 		return
 	}
@@ -315,7 +312,7 @@ func (h *HTTPHandler) QueueClear(ctx context.Context, w http.ResponseWriter, r *
 
 func (h *HTTPHandler) StorageQueueList(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req pb.StorageQueueListRequest
-	if err := duh.ReadRequest(r, &req); err != nil {
+	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
 		duh.ReplyError(w, r, err)
 		return
 	}
@@ -330,7 +327,7 @@ func (h *HTTPHandler) StorageQueueList(ctx context.Context, w http.ResponseWrite
 
 func (h *HTTPHandler) StorageQueueAdd(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req pb.StorageQueueAddRequest
-	if err := duh.ReadRequest(r, &req); err != nil {
+	if err := duh.ReadRequest(r, &req, 64*duh.MegaByte); err != nil {
 		duh.ReplyError(w, r, err)
 		return
 	}
@@ -345,7 +342,7 @@ func (h *HTTPHandler) StorageQueueAdd(ctx context.Context, w http.ResponseWriter
 
 func (h *HTTPHandler) StorageQueueDelete(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req pb.StorageQueueDeleteRequest
-	if err := duh.ReadRequest(r, &req); err != nil {
+	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
 		duh.ReplyError(w, r, err)
 		return
 	}

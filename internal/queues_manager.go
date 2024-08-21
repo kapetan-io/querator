@@ -27,7 +27,7 @@ type QueuesManagerConfig struct {
 
 // QueuesManager manages queues in use, and information about that queue.
 type QueuesManager struct {
-	queues     map[string]*Queue
+	queues     map[string]*Logical
 	conf       QueuesManagerConfig
 	store      store.QueuesStore
 	inShutdown atomic.Bool
@@ -44,13 +44,13 @@ func NewQueuesManager(conf QueuesManagerConfig) (*QueuesManager, error) {
 	}
 
 	return &QueuesManager{
-		queues: make(map[string]*Queue),
+		queues: make(map[string]*Logical),
 		conf:   conf,
 		store:  s,
 	}, nil
 }
 
-func (qm *QueuesManager) Get(ctx context.Context, name string) (*Queue, error) {
+func (qm *QueuesManager) Get(ctx context.Context, name string) (*Logical, error) {
 	if qm.inShutdown.Load() {
 		return nil, ErrServiceShutdown
 	}
@@ -75,7 +75,7 @@ func (qm *QueuesManager) Get(ctx context.Context, name string) (*Queue, error) {
 	return qm.startQueue(queue)
 }
 
-func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Queue, error) {
+func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Logical, error) {
 	if qm.inShutdown.Load() {
 		return nil, ErrServiceShutdown
 	}
@@ -102,7 +102,7 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Que
 	return qm.startQueue(info)
 }
 
-func (qm *QueuesManager) startQueue(info types.QueueInfo) (*Queue, error) {
+func (qm *QueuesManager) startQueue(info types.QueueInfo) (*Logical, error) {
 
 	// Each queue has their own copy of these options to avoid race conditions with any
 	// reconfiguration the QueuesManager may preform during cluster operation. Additionally,

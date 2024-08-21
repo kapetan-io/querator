@@ -75,7 +75,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 
 	handler := transport.NewHTTPHandler(d.service, promhttp.InstrumentMetricHandler(
 		registry, promhttp.HandlerFor(registry, promhttp.HandlerOpts{}),
-	))
+	), d.conf.MaxProducePayloadSize)
 	registry.MustRegister(handler)
 
 	if d.conf.ServerTLS() != nil {

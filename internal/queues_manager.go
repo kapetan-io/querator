@@ -22,7 +22,7 @@ var ErrServiceShutdown = transport.NewRequestFailed(MsgServiceInShutdown)
 type QueuesManagerConfig struct {
 	Logger      duh.StandardLogger
 	Storage     store.Storage
-	QueueConfig QueueConfig
+	QueueConfig LogicalConfig
 }
 
 // QueuesManager manages queues in use, and information about that queue.
@@ -82,13 +82,20 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Log
 	defer qm.mutex.Unlock()
 	qm.mutex.Lock()
 
-	//set.Default(&info.ReserveTimeout, clock.Minute)
-	//set.Default(&info.DeadTimeout, 24*clock.Hour)
+	// When creating a new Queue, info.Partitions should have no details, but should
+	// include the number of partitions requested. The manager will decide where to
+	// place the partitions depending on the storage backend configurations. As such
+	// any details included by the caller will be ignored.
 
 	info.CreatedAt = qm.conf.QueueConfig.Clock.Now().UTC()
 	info.UpdatedAt = qm.conf.QueueConfig.Clock.Now().UTC()
 	if err := qm.store.Add(ctx, info); err != nil {
 		return nil, err
+	}
+
+	// TODO: Spread the partitions across the appropriate storage backends.
+	for i := range info.Partitions {
+		info.Partitions[i].Queue = info
 	}
 
 	// Assertion that we are not crazy
@@ -104,11 +111,11 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Log
 
 func (qm *QueuesManager) startQueue(info types.QueueInfo) (*Logical, error) {
 
-	// Each queue has their own copy of these options to avoid race conditions with any
+	// Each logical queue has their own copy of these options to avoid race conditions with any
 	// reconfiguration the QueuesManager may preform during cluster operation. Additionally,
-	// each queue may independently change these options as they see fit.
+	// each logical queue may independently change these options as they see fit.
 
-	conf := QueueConfig{
+	conf := LogicalConfig{
 		MaxProduceBatchSize:  qm.conf.QueueConfig.MaxProduceBatchSize,
 		MaxReserveBatchSize:  qm.conf.QueueConfig.MaxReserveBatchSize,
 		MaxCompleteBatchSize: qm.conf.QueueConfig.MaxCompleteBatchSize,
@@ -120,16 +127,25 @@ func (qm *QueuesManager) startQueue(info types.QueueInfo) (*Logical, error) {
 	}
 
 	var err error
-	conf.QueueStore, err = qm.conf.Storage.NewQueue(info)
+	// TODO: Each Partition could have a different storage backend <-- FIGURE THIS OUT NEXT
+
+	// TODO: Should eventually have more than one partition.
+	conf.PartitionStore, err = qm.conf.Storage.NewPartition(info.Partitions[0])
 	if err != nil {
 		return nil, err
 	}
 
-	q, err := NewQueue(conf)
+	// TODO: Maybe have several Logical Queues for this queue.
+	q, err := NewLogicalQueue(conf)
 	if err != nil {
 		return nil, err
 	}
 
+	// TODO: This should become a list of queues which hold logical queues
+	// TODO: Ask the queue for the appropriate logical for this client.
+	// TODO: If there is only one client, and multiple Logical Queues, then we
+	//  should reduce the number of Logical Queues automatically. We need to
+	//  figure out how clients register themselves as consumers before allowing reservation calls.
 	qm.queues[conf.Name] = q
 	return q, nil
 }

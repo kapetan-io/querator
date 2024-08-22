@@ -72,7 +72,7 @@ func NewService(conf ServiceConfig) (*Service, error) {
 	}
 
 	qm, err := internal.NewQueuesManager(internal.QueuesManagerConfig{
-		QueueConfig: internal.QueueConfig{
+		QueueConfig: internal.LogicalConfig{
 			MaxReserveBatchSize:  conf.MaxReserveBatchSize,
 			MaxProduceBatchSize:  conf.MaxProduceBatchSize,
 			MaxCompleteBatchSize: conf.MaxCompleteBatchSize,

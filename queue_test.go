@@ -29,7 +29,7 @@ import (
 //	d, c, ctx := newDaemon(t, _store, 10*clock.Second)
 //	defer d.Shutdown(t)
 //
-//	conf.Methods["Queue.Produce"] = func(args []any) error {
+//	conf.Methods["Partition.Produce"] = func(args []any) error {
 //		return errors.New("unknown storage error")
 //	}
 //
@@ -133,7 +133,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		assert.Equal(t, int32(0), item.Attempts)
 		assert.Equal(t, payload, item.Bytes)
 
-		// Queue storage should have only one item
+		// Partition storage should have only one item
 		var list pb.StorageQueueListResponse
 		require.NoError(t, c.StorageQueueList(ctx, queueName, &list, &que.ListOptions{Limit: 10}))
 		require.Equal(t, 1, len(list.Items))
@@ -155,7 +155,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			},
 		}))
 
-		// Queue storage should be empty
+		// Partition storage should be empty
 		require.NoError(t, c.StorageQueueList(ctx, queueName, &list, &que.ListOptions{Limit: 10}))
 		assert.Equal(t, 0, len(list.Items))
 

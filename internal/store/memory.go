@@ -37,11 +37,11 @@ func (s *MemoryStorage) NewQueuesStore(conf QueuesStoreConfig) (QueuesStore, err
 	}, nil
 }
 
-func (s *MemoryStorage) NewQueue(info types.QueueInfo) (Queue, error) {
+func (s *MemoryStorage) NewPartition(info types.PartitionInfo) (Partition, error) {
 	return &MemoryQueue{
 		mem:    make([]types.Item, 0, 1_000),
 		uid:    ksuid.New(),
-		info:   info,
+		info:   info.Queue,
 		parent: s,
 	}, nil
 }
@@ -257,7 +257,7 @@ func (q *MemoryQueue) findID(id []byte) (int, bool) {
 }
 
 // ---------------------------------------------
-// Queue Repository Implementation
+// Partition Repository Implementation
 // ---------------------------------------------
 
 type MemoryQueuesStore struct {

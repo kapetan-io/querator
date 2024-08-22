@@ -22,10 +22,10 @@ func (id StorageID) String() string {
 
 // Storage is the primary storage interface
 type Storage interface {
-	// NewQueue creates a store.Queue instance. The Queue is used to load and store
-	// items in a singular queue, which is typically backed by a single table where
-	// items for this queue are stored.
-	NewQueue(info types.QueueInfo) (Queue, error)
+	// NewPartition instantiates a store.Partition instance. The Partition is used to load and store
+	// items in the underlying storage, which is typically backed by a single table where
+	// items for this partition are stored.
+	NewPartition(info types.PartitionInfo) (Partition, error)
 
 	// NewQueuesStore creates a new instance of the QueuesStore. A QueuesStore stores
 	// QueueInfo structs, which hold information about all the available queues.
@@ -47,7 +47,7 @@ type QueuesStoreConfig struct {
 
 // QueuesStore is storage for listing and storing information about queues
 type QueuesStore interface {
-	// Get returns a store.Queue from storage ready to be used. Returns ErrQueueNotExist if the
+	// Get returns a store.Partition from storage ready to be used. Returns ErrQueueNotExist if the
 	// queue requested does not exist
 	Get(ctx context.Context, name string, queue *types.QueueInfo) error
 
@@ -67,9 +67,9 @@ type QueuesStore interface {
 	Close(ctx context.Context) error
 }
 
-// Queue represents storage for a single queue. An instance of Queue should not be considered thread safe,
-// it is intended to be used from within the internal.Queue only!
-type Queue interface {
+// Partition represents storage for a single partition. An instance of Partition should not be considered
+// thread safe as it is intended to be used by a Logical Queue only.
+type Partition interface {
 	// Produce writes the items for each batch to the data store, assigning an error for each
 	// batch that fails.
 	Produce(ctx context.Context, batch types.Batch[types.ProduceRequest]) error

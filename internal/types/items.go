@@ -115,6 +115,18 @@ func (i *Item) FromProto(in *pb.StorageQueueItem) *Item {
 	return i
 }
 
+// PartitionInfo is information about partition
+type PartitionInfo struct {
+	// Info about the Queue the partition is part of
+	Queue QueueInfo
+	// Which Storage Instance this partition belong too
+	StorageName string
+	// If the partition is marked as read only
+	ReadOnly bool
+	// The partition number
+	Partition int
+}
+
 // QueueInfo is information about a queue
 type QueueInfo struct {
 	// The name of the queue
@@ -136,6 +148,8 @@ type QueueInfo struct {
 	MaxAttempts int
 	// Reference is the user supplied field which could contain metadata or specify who owns this queue
 	Reference string
+	// Partitions is a list partitions
+	Partitions []PartitionInfo
 }
 
 func (i *QueueInfo) ToProto(in *pb.QueueInfo) *pb.QueueInfo {

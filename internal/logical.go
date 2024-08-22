@@ -43,12 +43,12 @@ var (
 	ErrInternalRetry  = transport.NewRetryRequest("internal error, try your request again")
 )
 
-type QueueConfig struct {
+type LogicalConfig struct {
 	types.QueueInfo
 	// If defined, is the logger used by the queue
 	Logger duh.StandardLogger
-	// QueueStore is the store interface used to persist items for this specific queue
-	QueueStore store.Queue
+	// PartitionStore is the store interface used to persist items for this specific queue
+	PartitionStore store.Partition // TODO: This should be a list of PartitionStores
 
 	// TODO: Make these configurable at the Service level
 	// WriteTimeout The time it should take for a single batched write to complete
@@ -68,12 +68,12 @@ type QueueConfig struct {
 	Clock *clock.Provider
 }
 
-// A Queue is made up of many Logical and each Logical is made up of many partitions
+// A Partition is made up of many Logical and each Logical is made up of many partitions
 // TODO: Modify the Logical to Handle many partitions
 // TODO: Implement a round robin strategy which assigns reserves to each partition until the reservation is full or
 //  partitions are exhausted.
 // TODO: The number of partitions this Logical is assigned can change at any time.
-// TODO: Create a new Queue which holds a set of Logical instances
+// TODO: Create a new Partition which holds a set of Logical instances
 
 // Logical produces and consumes items from the many partitions ensuring consumers and producers are handled fairly
 // and efficiently. Since a Logical is the synchronization point for R/W there can ONLY BE ONE instance of a
@@ -87,12 +87,12 @@ type Logical struct {
 	shutdownCh     chan *types.ShutdownRequest
 	queueRequestCh chan *QueueRequest
 	wg             sync.WaitGroup
-	conf           QueueConfig
+	conf           LogicalConfig
 	inFlight       atomic.Int32
 	inShutdown     atomic.Bool
 }
 
-func NewQueue(conf QueueConfig) (*Logical, error) {
+func NewLogicalQueue(conf LogicalConfig) (*Logical, error) {
 	set.Default(&conf.Logger, slog.Default())
 	set.Default(&conf.MaxReserveBatchSize, DefaultMaxReserveBatchSize)
 	set.Default(&conf.MaxProduceBatchSize, DefaultMaxProduceBatchSize)
@@ -100,8 +100,8 @@ func NewQueue(conf QueueConfig) (*Logical, error) {
 	set.Default(&conf.MaxRequestsPerQueue, DefaultMaxRequestsPerQueue)
 	set.Default(&conf.Clock, clock.NewProvider())
 
-	if conf.QueueStore == nil {
-		return nil, transport.NewInvalidOption("QueueConfig.QueuesStore cannot be nil")
+	if conf.PartitionStore == nil {
+		return nil, transport.NewInvalidOption("LogicalConfig.QueuesStore cannot be nil")
 	}
 
 	q := &Logical{
@@ -115,7 +115,7 @@ func NewQueue(conf QueueConfig) (*Logical, error) {
 	// These are request queues that queue requests from clients until the sync loop has
 	// time to process them. When they get processed, every request in the queue is handled
 	// in a batch.
-	fmt.Printf("NewQueue() - MaxRequestsPerQueue: %d\n", conf.MaxRequestsPerQueue)
+	fmt.Printf("NewPartition() - MaxRequestsPerQueue: %d\n", conf.MaxRequestsPerQueue)
 	q.reserveQueueCh = make(chan *types.ReserveRequest, conf.MaxRequestsPerQueue)
 	q.produceQueueCh = make(chan *types.ProduceRequest, conf.MaxRequestsPerQueue)
 	q.completeQueueCh = make(chan *types.CompleteRequest, conf.MaxRequestsPerQueue)
@@ -483,8 +483,8 @@ EMPTY:
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
-	if err := q.conf.QueueStore.Produce(ctx, state.Producers); err != nil {
-		q.conf.Logger.Error("while calling QueueStore.Produce()", "error", err,
+	if err := q.conf.PartitionStore.Produce(ctx, state.Producers); err != nil {
+		q.conf.Logger.Error("while calling PartitionStore.Produce()", "error", err,
 			"category", "queue", "queueName", q.conf.Name)
 		cancel()
 		// Let clients that are timed out, know we are done with them.
@@ -546,10 +546,10 @@ EMPTY:
 	// Send the batch that each request wants to the store. If there are items that can be reserved the
 	// store will assign items to each batch request.
 	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
-	if err := q.conf.QueueStore.Reserve(ctx, state.Reservations, store.ReserveOptions{
+	if err := q.conf.PartitionStore.Reserve(ctx, state.Reservations, store.ReserveOptions{
 		ReserveDeadline: q.conf.Clock.Now().UTC().Add(q.conf.ReserveTimeout),
 	}); err != nil {
-		q.conf.Logger.Error("while calling QueueStore.Reserve()", "error", err,
+		q.conf.Logger.Error("while calling PartitionStore.Reserve()", "error", err,
 			"category", "queue", "queueName", q.conf.Name)
 		cancel()
 		// We get here if there was an internal error with the data store
@@ -614,8 +614,8 @@ EMPTY:
 
 	var err error
 	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
-	if err = q.conf.QueueStore.Complete(ctx, state.Completes); err != nil {
-		q.conf.Logger.Error("while calling QueueStore.Complete()", "error", err,
+	if err = q.conf.PartitionStore.Complete(ctx, state.Completes); err != nil {
+		q.conf.Logger.Error("while calling PartitionStore.Complete()", "error", err,
 			"category", "queue", "queueName", q.conf.Name)
 	}
 	cancel()
@@ -716,7 +716,7 @@ func (q *Logical) handleClear(_ *QueueState, req *QueueRequest) {
 
 	if cr.Queue {
 		// Ask the store to clean up any items in the data store which are not currently out for reservation
-		if err := q.conf.QueueStore.Clear(req.Context, cr.Destructive); err != nil {
+		if err := q.conf.PartitionStore.Clear(req.Context, cr.Destructive); err != nil {
 			req.Err = err
 		}
 	}
@@ -728,15 +728,15 @@ func (q *Logical) handleStorageRequests(req *QueueRequest) {
 	sr := req.Request.(StorageRequest)
 	switch req.Method {
 	case MethodStorageQueueList:
-		if err := q.conf.QueueStore.List(req.Context, sr.Items, sr.Options); err != nil {
+		if err := q.conf.PartitionStore.List(req.Context, sr.Items, sr.Options); err != nil {
 			req.Err = err
 		}
 	case MethodStorageQueueAdd:
-		if err := q.conf.QueueStore.Add(req.Context, *sr.Items); err != nil {
+		if err := q.conf.PartitionStore.Add(req.Context, *sr.Items); err != nil {
 			req.Err = err
 		}
 	case MethodStorageQueueDelete:
-		if err := q.conf.QueueStore.Delete(req.Context, sr.IDs); err != nil {
+		if err := q.conf.PartitionStore.Delete(req.Context, sr.IDs); err != nil {
 			req.Err = err
 		}
 	default:
@@ -747,7 +747,7 @@ func (q *Logical) handleStorageRequests(req *QueueRequest) {
 
 func (q *Logical) handleStats(state *QueueState, r *QueueRequest) {
 	qs := r.Request.(*types.QueueStats)
-	if err := q.conf.QueueStore.Stats(r.Context, qs); err != nil {
+	if err := q.conf.PartitionStore.Stats(r.Context, qs); err != nil {
 		r.Err = err
 	}
 	qs.ProduceWaiting = len(q.produceQueueCh)
@@ -825,7 +825,7 @@ func (q *Logical) handleShutdown(state *QueueState, req *types.ShutdownRequest) 
 	}
 
 	fmt.Printf("handleShutdown.Close() Store\n")
-	if err := q.conf.QueueStore.Close(req.Context); err != nil {
+	if err := q.conf.PartitionStore.Close(req.Context); err != nil {
 		req.Err = err
 	}
 	close(req.ReadyCh)

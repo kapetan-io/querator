@@ -280,7 +280,7 @@ func testQueuesStorage(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			// Attempt to delete
 			require.NoError(t, c.QueuesDelete(ctx, &pb.QueuesDeleteRequest{QueueName: l.QueueName}))
 
-			// Queue should no longer exist
+			// Partition should no longer exist
 			require.NoError(t, c.QueuesList(ctx, &list, &que.ListOptions{
 				Pivot: l.QueueName,
 				Limit: 1,

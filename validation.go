@@ -112,6 +112,11 @@ func (s *Service) validateQueueOptionsProto(in *proto.QueueInfo, out *types.Queu
 		}
 	}
 
+	// TODO: Include the number of partitions requested and generate all the partition info entries
+	if len(out.Partitions) == 0 {
+		out.Partitions = append(out.Partitions, types.PartitionInfo{Partition: 0})
+	}
+
 	out.MaxAttempts = int(in.MaxAttempts)
 	out.DeadQueue = in.DeadQueue
 	out.Reference = in.Reference

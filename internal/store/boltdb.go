@@ -56,6 +56,7 @@ func (b *BoltStorage) ParseID(parse types.ItemID, id *StorageID) error {
 	return nil
 }
 
+// TODO: Remove this, no need to include the queue name in the id anymore.
 func (b *BoltStorage) BuildStorageID(queue string, id []byte) types.ItemID {
 	return append([]byte(queue+"~"), id...)
 }
@@ -73,13 +74,13 @@ func NewBoltStorage(conf BoltConfig) *BoltStorage {
 }
 
 // ---------------------------------------------
-// Queue Implementation
+// Partition Implementation
 // ---------------------------------------------
 
-func (b *BoltStorage) NewQueue(info types.QueueInfo) (Queue, error) {
-	f := errors.Fields{"category", "bolt", "func", "Storage.NewQueue"}
+func (b *BoltStorage) NewPartition(info types.PartitionInfo) (Partition, error) {
+	f := errors.Fields{"category", "bolt", "func", "Storage.NewPartition"}
 
-	file := filepath.Join(b.conf.StorageDir, fmt.Sprintf("%s.db", info.Name))
+	file := filepath.Join(b.conf.StorageDir, fmt.Sprintf("%s-%06d.db", info.Queue.Name, info.Partition))
 
 	opts := &bolt.Options{
 		FreelistType: bolt.FreelistArrayType,
@@ -92,6 +93,7 @@ func (b *BoltStorage) NewQueue(info types.QueueInfo) (Queue, error) {
 		return nil, f.Errorf("while opening db '%s': %w", file, err)
 	}
 
+	// TODO: Test opening an existing partition.
 	err = db.Update(func(tx *bolt.Tx) error {
 		_, err := tx.CreateBucket(bucketName)
 		if err != nil {
@@ -103,23 +105,23 @@ func (b *BoltStorage) NewQueue(info types.QueueInfo) (Queue, error) {
 		return nil, f.Errorf("while creating bucket '%s': %w", file, err)
 	}
 
-	return &BoltQueue{
+	return &BoltPartition{
 		uid:    ksuid.New(),
-		info:   info,
+		info:   info.Queue,
 		db:     db,
 		parent: b,
 	}, nil
 }
 
-type BoltQueue struct {
+type BoltPartition struct {
 	info   types.QueueInfo
 	parent *BoltStorage
 	uid    ksuid.KSUID
 	db     *bolt.DB
 }
 
-func (q *BoltQueue) Produce(_ context.Context, batch types.Batch[types.ProduceRequest]) error {
-	f := errors.Fields{"category", "bolt", "func", "Queue.Produce"}
+func (q *BoltPartition) Produce(_ context.Context, batch types.Batch[types.ProduceRequest]) error {
+	f := errors.Fields{"category", "bolt", "func", "Partition.Produce"}
 
 	return q.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(bucketName)
@@ -150,8 +152,8 @@ func (q *BoltQueue) Produce(_ context.Context, batch types.Batch[types.ProduceRe
 	})
 }
 
-func (q *BoltQueue) Reserve(_ context.Context, batch types.ReserveBatch, opts ReserveOptions) error {
-	f := errors.Fields{"category", "bolt", "func", "Queue.Reserve"}
+func (q *BoltPartition) Reserve(_ context.Context, batch types.ReserveBatch, opts ReserveOptions) error {
+	f := errors.Fields{"category", "bolt", "func", "Partition.Reserve"}
 	return q.db.Update(func(tx *bolt.Tx) error {
 
 		b := tx.Bucket(bucketName)
@@ -205,8 +207,8 @@ func (q *BoltQueue) Reserve(_ context.Context, batch types.ReserveBatch, opts Re
 	})
 }
 
-func (q *BoltQueue) Complete(_ context.Context, batch types.Batch[types.CompleteRequest]) error {
-	f := errors.Fields{"category", "bolt", "func", "Queue.Complete"}
+func (q *BoltPartition) Complete(_ context.Context, batch types.Batch[types.CompleteRequest]) error {
+	f := errors.Fields{"category", "bolt", "func", "Partition.Complete"}
 	var done bool
 
 	tx, err := q.db.Begin(true)
@@ -269,8 +271,8 @@ nextBatch:
 	return nil
 }
 
-func (q *BoltQueue) List(_ context.Context, items *[]*types.Item, opts types.ListOptions) error {
-	f := errors.Fields{"category", "bolt", "func", "Queue.List"}
+func (q *BoltPartition) List(_ context.Context, items *[]*types.Item, opts types.ListOptions) error {
+	f := errors.Fields{"category", "bolt", "func", "Partition.List"}
 
 	var sid StorageID
 	if opts.Pivot != nil {
@@ -329,8 +331,8 @@ func (q *BoltQueue) List(_ context.Context, items *[]*types.Item, opts types.Lis
 	})
 }
 
-func (q *BoltQueue) Add(_ context.Context, items []*types.Item) error {
-	f := errors.Fields{"category", "bolt", "func", "Queue.Add"}
+func (q *BoltPartition) Add(_ context.Context, items []*types.Item) error {
+	f := errors.Fields{"category", "bolt", "func", "Partition.Add"}
 
 	return q.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(bucketName)
@@ -359,8 +361,8 @@ func (q *BoltQueue) Add(_ context.Context, items []*types.Item) error {
 	})
 }
 
-func (q *BoltQueue) Delete(_ context.Context, ids []types.ItemID) error {
-	f := errors.Fields{"category", "bolt", "func", "Queue.Delete"}
+func (q *BoltPartition) Delete(_ context.Context, ids []types.ItemID) error {
+	f := errors.Fields{"category", "bolt", "func", "Partition.Delete"}
 
 	return q.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(bucketName)
@@ -381,8 +383,8 @@ func (q *BoltQueue) Delete(_ context.Context, ids []types.ItemID) error {
 	})
 }
 
-func (q *BoltQueue) Clear(_ context.Context, destructive bool) error {
-	f := errors.Fields{"category", "bolt", "func", "Queue.Delete"}
+func (q *BoltPartition) Clear(_ context.Context, destructive bool) error {
+	f := errors.Fields{"category", "bolt", "func", "Partition.Delete"}
 
 	return q.db.Update(func(tx *bolt.Tx) error {
 		if destructive {
@@ -419,8 +421,8 @@ func (q *BoltQueue) Clear(_ context.Context, destructive bool) error {
 	})
 }
 
-func (q *BoltQueue) Stats(_ context.Context, stats *types.QueueStats) error {
-	f := errors.Fields{"category", "bunt-db", "func", "Queue.Stats"}
+func (q *BoltPartition) Stats(_ context.Context, stats *types.QueueStats) error {
+	f := errors.Fields{"category", "bunt-db", "func", "Partition.Stats"}
 	now := q.parent.conf.Clock.Now().UTC()
 
 	return q.db.View(func(tx *bolt.Tx) error {
@@ -455,12 +457,12 @@ func (q *BoltQueue) Stats(_ context.Context, stats *types.QueueStats) error {
 	})
 }
 
-func (q *BoltQueue) Close(_ context.Context) error {
+func (q *BoltPartition) Close(_ context.Context) error {
 	return q.db.Close()
 }
 
 // ---------------------------------------------
-// Queue Repository Implementation
+// Partition Repository Implementation
 // ---------------------------------------------
 
 func (b *BoltStorage) NewQueuesStore(conf QueuesStoreConfig) (QueuesStore, error) {

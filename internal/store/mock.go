@@ -25,8 +25,8 @@ func (m *MockStorage) NewQueuesStore(conf QueuesStoreConfig) (QueuesStore, error
 	return &MockQueuesStore{}, nil
 }
 
-func (m *MockStorage) NewQueue(info types.QueueInfo) (Queue, error) {
-	return &MockQueue{info: info, parent: m}, nil
+func (m *MockStorage) NewPartition(info types.PartitionInfo) (Partition, error) {
+	return &MockPartition{info: info.Queue, parent: m}, nil
 }
 
 func (m *MockStorage) ParseID(parse types.ItemID, id *StorageID) error {
@@ -43,65 +43,65 @@ func (m *MockStorage) BuildStorageID(queue string, id []byte) types.ItemID {
 	return append([]byte(queue+"~"), id...)
 }
 
-func (b *MockStorage) Close(_ context.Context) error {
+func (m *MockStorage) Close(_ context.Context) error {
 	return nil
 }
 
-type MockQueue struct {
+type MockPartition struct {
 	info   types.QueueInfo
 	parent *MockStorage
 }
 
-func (m *MockQueue) Produce(ctx context.Context, batch types.Batch[types.ProduceRequest]) error {
-	f, ok := m.parent.conf.Methods["Queue.Produce"]
+func (m *MockPartition) Produce(ctx context.Context, batch types.Batch[types.ProduceRequest]) error {
+	f, ok := m.parent.conf.Methods["Partition.Produce"]
 	if !ok {
-		panic("no mock for method \"Queue.Produce\" defined")
+		panic("no mock for method \"Partition.Produce\" defined")
 	}
 	return f([]any{ctx, batch})
 }
 
-func (m *MockQueue) Reserve(ctx context.Context, batch types.ReserveBatch, opts ReserveOptions) error {
+func (m *MockPartition) Reserve(ctx context.Context, batch types.ReserveBatch, opts ReserveOptions) error {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (m *MockQueue) Complete(ctx context.Context, batch types.Batch[types.CompleteRequest]) error {
+func (m *MockPartition) Complete(ctx context.Context, batch types.Batch[types.CompleteRequest]) error {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (m *MockQueue) List(ctx context.Context, items *[]*types.Item, opts types.ListOptions) error {
+func (m *MockPartition) List(ctx context.Context, items *[]*types.Item, opts types.ListOptions) error {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (m *MockQueue) Add(ctx context.Context, items []*types.Item) error {
+func (m *MockPartition) Add(ctx context.Context, items []*types.Item) error {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (m *MockQueue) Delete(ctx context.Context, ids []types.ItemID) error {
+func (m *MockPartition) Delete(ctx context.Context, ids []types.ItemID) error {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (m *MockQueue) Clear(ctx context.Context, d bool) error {
+func (m *MockPartition) Clear(ctx context.Context, d bool) error {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (m *MockQueue) Stats(ctx context.Context, stats *types.QueueStats) error {
+func (m *MockPartition) Stats(ctx context.Context, stats *types.QueueStats) error {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (m *MockQueue) Close(ctx context.Context) error {
+func (m *MockPartition) Close(ctx context.Context) error {
 	//TODO implement me
 	panic("implement me")
 }
 
 // ---------------------------------------------
-// Queue Repository Implementation
+// Partition Repository Implementation
 // ---------------------------------------------
 
 type MockQueuesStore struct{}

@@ -31,7 +31,7 @@ type BoltConfig struct {
 	Clock *clock.Provider
 }
 
-// TODO: Make BoltStorage non blocking, and obey the context provided. Perhaps we introduce a AsyncStorage
+// TODO: Make BoltBackend non blocking, and obey the context provided. Perhaps we introduce a AsyncStorage
 //   struct which takes a normal storage implementation and makes each call async and cancellable, making
 //   a new call when the previous call failed, should be an error, a new call cannot be made until the
 //   previous call completes.
@@ -40,13 +40,13 @@ type BoltConfig struct {
 // Storage Implementation
 // ---------------------------------------------
 
-type BoltStorage struct {
+type BoltBackend struct {
 	conf BoltConfig
 }
 
-var _ Storage = &BoltStorage{}
+var _ Backend = &BoltBackend{}
 
-func (b *BoltStorage) ParseID(parse types.ItemID, id *StorageID) error {
+func (b *BoltBackend) ParseID(parse types.ItemID, id *StorageID) error {
 	parts := bytes.Split(parse, []byte("~"))
 	if len(parts) != 2 {
 		return errors.New("expected format <queue_name>~<storage_id>")
@@ -57,27 +57,27 @@ func (b *BoltStorage) ParseID(parse types.ItemID, id *StorageID) error {
 }
 
 // TODO: Remove this, no need to include the queue name in the id anymore.
-func (b *BoltStorage) BuildStorageID(queue string, id []byte) types.ItemID {
+func (b *BoltBackend) BuildStorageID(queue string, id []byte) types.ItemID {
 	return append([]byte(queue+"~"), id...)
 }
 
-func (b *BoltStorage) Close(_ context.Context) error {
+func (b *BoltBackend) Close(_ context.Context) error {
 	return nil
 }
 
-func NewBoltStorage(conf BoltConfig) *BoltStorage {
+func NewBoltBackend(conf BoltConfig) *BoltBackend {
 	set.Default(&conf.Logger, slog.Default())
 	set.Default(&conf.StorageDir, ".")
 	set.Default(&conf.Clock, clock.NewProvider())
 
-	return &BoltStorage{conf: conf}
+	return &BoltBackend{conf: conf}
 }
 
 // ---------------------------------------------
 // Partition Implementation
 // ---------------------------------------------
 
-func (b *BoltStorage) NewPartition(info types.PartitionInfo) (Partition, error) {
+func (b *BoltBackend) GetPartition(info types.PartitionInfo) (Partition, error) {
 	f := errors.Fields{"category", "bolt", "func", "Storage.NewPartition"}
 
 	file := filepath.Join(b.conf.StorageDir, fmt.Sprintf("%s-%06d.db", info.Queue.Name, info.Partition))
@@ -115,7 +115,7 @@ func (b *BoltStorage) NewPartition(info types.PartitionInfo) (Partition, error) 
 
 type BoltPartition struct {
 	info   types.QueueInfo
-	parent *BoltStorage
+	parent *BoltBackend
 	uid    ksuid.KSUID
 	db     *bolt.DB
 }
@@ -465,8 +465,8 @@ func (q *BoltPartition) Close(_ context.Context) error {
 // Partition Repository Implementation
 // ---------------------------------------------
 
-func (b *BoltStorage) NewQueuesStore(conf QueuesStoreConfig) (QueuesStore, error) {
-	f := errors.Fields{"category", "bolt", "func", "Storage.NewQueuesStore"}
+func (b *BoltBackend) GetQueueStore() (QueueStore, error) {
+	f := errors.Fields{"category", "bolt", "func", "Storage.QueueStore"}
 
 	// We store info about the queues in a single db file. We prefix it with `~` to make it
 	// impossible for someone to create a queue with the same name.
@@ -489,20 +489,20 @@ func (b *BoltStorage) NewQueuesStore(conf QueuesStoreConfig) (QueuesStore, error
 		return nil, f.Errorf("while creating bucket '%s': %w", file, err)
 	}
 
-	return &BoltQueuesStore{
+	return &BoltQueueStore{
 		db: db,
 	}, nil
 }
 
-type BoltQueuesStore struct {
+type BoltQueueStore struct {
 	QueuesValidation
 	db *bolt.DB
 }
 
-var _ QueuesStore = &BoltQueuesStore{}
+var _ QueueStore = &BoltQueueStore{}
 
-func (s BoltQueuesStore) Get(_ context.Context, name string, queue *types.QueueInfo) error {
-	f := errors.Fields{"category", "bolt", "func", "QueuesStore.Get"}
+func (s BoltQueueStore) Get(_ context.Context, name string, queue *types.QueueInfo) error {
+	f := errors.Fields{"category", "bolt", "func", "QueueStore.Get"}
 
 	if err := s.validateGet(name); err != nil {
 		return err
@@ -526,8 +526,8 @@ func (s BoltQueuesStore) Get(_ context.Context, name string, queue *types.QueueI
 	})
 }
 
-func (s BoltQueuesStore) Add(_ context.Context, info types.QueueInfo) error {
-	f := errors.Fields{"category", "bolt", "func", "QueuesStore.Add"}
+func (s BoltQueueStore) Add(_ context.Context, info types.QueueInfo) error {
+	f := errors.Fields{"category", "bolt", "func", "QueueStore.Add"}
 
 	if err := s.validateAdd(info); err != nil {
 		return err
@@ -556,8 +556,8 @@ func (s BoltQueuesStore) Add(_ context.Context, info types.QueueInfo) error {
 	})
 }
 
-func (s BoltQueuesStore) Update(_ context.Context, info types.QueueInfo) error {
-	f := errors.Fields{"category", "bolt", "func", "QueuesStore.Update"}
+func (s BoltQueueStore) Update(_ context.Context, info types.QueueInfo) error {
+	f := errors.Fields{"category", "bolt", "func", "QueueStore.Update"}
 
 	if err := s.validateUpdate(info); err != nil {
 		return err
@@ -598,8 +598,8 @@ func (s BoltQueuesStore) Update(_ context.Context, info types.QueueInfo) error {
 	})
 }
 
-func (s BoltQueuesStore) List(_ context.Context, queues *[]types.QueueInfo, opts types.ListOptions) error {
-	f := errors.Fields{"category", "bolt", "func", "QueuesStore.List"}
+func (s BoltQueueStore) List(_ context.Context, queues *[]types.QueueInfo, opts types.ListOptions) error {
+	f := errors.Fields{"category", "bolt", "func", "QueueStore.List"}
 
 	if err := s.validateList(opts); err != nil {
 		return err
@@ -652,8 +652,8 @@ func (s BoltQueuesStore) List(_ context.Context, queues *[]types.QueueInfo, opts
 	})
 }
 
-func (s BoltQueuesStore) Delete(_ context.Context, name string) error {
-	f := errors.Fields{"category", "bolt", "func", "QueuesStore.Delete"}
+func (s BoltQueueStore) Delete(_ context.Context, name string) error {
+	f := errors.Fields{"category", "bolt", "func", "QueueStore.Delete"}
 
 	if err := s.validateDelete(name); err != nil {
 		return err
@@ -672,7 +672,7 @@ func (s BoltQueuesStore) Delete(_ context.Context, name string) error {
 	})
 }
 
-func (s BoltQueuesStore) Close(_ context.Context) error {
+func (s BoltQueueStore) Close(_ context.Context) error {
 	return s.db.Close()
 }
 
@@ -695,7 +695,7 @@ type BoltDBTesting struct {
 	Dir string
 }
 
-func (b *BoltDBTesting) Setup(conf BoltConfig) Storage {
+func (b *BoltDBTesting) Setup(conf BoltConfig) (*Storage, error) {
 	if !dirExists(b.Dir) {
 		if err := os.Mkdir(b.Dir, 0777); err != nil {
 			panic(err)
@@ -706,7 +706,17 @@ func (b *BoltDBTesting) Setup(conf BoltConfig) Storage {
 		panic(err)
 	}
 	conf.StorageDir = b.Dir
-	return NewBoltStorage(conf)
+
+	backend := NewBoltBackend(conf)
+	return NewStorage(StorageConfig{
+		QueueBackend: backend,
+		PartitionBackends: []PartitionBackend{
+			{
+				Name:    "bolt-0",
+				Backend: backend,
+			},
+		},
+	})
 }
 
 func (b *BoltDBTesting) Teardown() {

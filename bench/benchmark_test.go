@@ -43,7 +43,7 @@ func BenchmarkProduce(b *testing.B) {
 		{
 			Name: "InMemory",
 			Setup: func() store.Storage {
-				return store.NewMemoryStorage(store.MemoryStorageConfig{})
+				return store.NewMemoryBackend(store.MemoryBackendConfig{})
 			},
 			TearDown: func() {},
 		},
@@ -163,7 +163,7 @@ func BenchmarkQueuesCreate(b *testing.B) {
 		{
 			Name: "InMemory",
 			Setup: func() store.Storage {
-				return store.NewMemoryStorage(store.MemoryStorageConfig{})
+				return store.NewMemoryBackend(store.MemoryBackendConfig{})
 			},
 			TearDown: func() {},
 		},

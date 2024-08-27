@@ -35,7 +35,7 @@ func TestQueueStorage(t *testing.T) {
 		{
 			Name: "InMemory",
 			Setup: func(cp *clock.Provider) store.Storage {
-				return store.NewMemoryStorage(store.MemoryStorageConfig{Clock: cp})
+				return store.NewMemoryBackend(store.MemoryBackendConfig{Clock: cp})
 			},
 			TearDown: func() {},
 		},

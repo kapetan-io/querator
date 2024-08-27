@@ -20,8 +20,8 @@ const MsgServiceInShutdown = "service is shutting down"
 var ErrServiceShutdown = transport.NewRequestFailed(MsgServiceInShutdown)
 
 type QueuesManagerConfig struct {
+	Storage     *store.Storage
 	Logger      duh.StandardLogger
-	Storage     store.Storage
 	QueueConfig LogicalConfig
 }
 
@@ -29,7 +29,7 @@ type QueuesManagerConfig struct {
 type QueuesManager struct {
 	queues     map[string]*Logical
 	conf       QueuesManagerConfig
-	store      store.QueuesStore
+	store      store.QueueStore
 	inShutdown atomic.Bool
 	mutex      sync.Mutex
 }
@@ -38,7 +38,7 @@ func NewQueuesManager(conf QueuesManagerConfig) (*QueuesManager, error) {
 	set.Default(&conf.QueueConfig.Clock, clock.NewProvider())
 	set.Default(&conf.Logger, slog.Default())
 
-	s, err := conf.Storage.NewQueuesStore(store.QueuesStoreConfig{})
+	s, err := conf.Storage.QueueStore()
 	if err != nil {
 		return nil, err
 	}
@@ -72,7 +72,7 @@ func (qm *QueuesManager) Get(ctx context.Context, name string) (*Logical, error)
 		return nil, err
 	}
 
-	return qm.startQueue(queue)
+	return qm.startNewQueue(queue)
 }
 
 func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Logical, error) {
@@ -106,16 +106,34 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Log
 		panic(fmt.Sprintf("queue '%s' does not exist in data store, but is running!", info.Name))
 	}
 
-	return qm.startQueue(info)
+	return qm.startNewQueue(info)
 }
 
-func (qm *QueuesManager) startQueue(info types.QueueInfo) (*Logical, error) {
+func (qm *QueuesManager) rebalanceLogical(info types.QueueInfo) error {
+	// TODO: See adr/0017-cluster-operation.md
+	return nil
+}
+
+// startNewQueue is called when a new queue is created for the first time.
+func (qm *QueuesManager) startNewQueue(info types.QueueInfo) (*Logical, error) {
 
 	// Each logical queue has their own copy of these options to avoid race conditions with any
 	// reconfiguration the QueuesManager may preform during cluster operation. Additionally,
 	// each logical queue may independently change these options as they see fit.
 
-	conf := LogicalConfig{
+	// TODO: The queue store should have all the information needed to get the partitions
+	// TODO: The queue store should also be able to choose best how partitions should be rebalanced
+	// TODO: The queue store should also know if the config provided is valid, IE: does every partition
+	//  storage name exist in the config? If not, then it's a bad config and Querator should not start.
+	//
+
+	// TODO: Should eventually support more than one partition.
+	partitions, err := qm.conf.Storage.Partitions(info, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	q, err := NewLogicalQueue(LogicalConfig{
 		MaxProduceBatchSize:  qm.conf.QueueConfig.MaxProduceBatchSize,
 		MaxReserveBatchSize:  qm.conf.QueueConfig.MaxReserveBatchSize,
 		MaxCompleteBatchSize: qm.conf.QueueConfig.MaxCompleteBatchSize,
@@ -123,30 +141,20 @@ func (qm *QueuesManager) startQueue(info types.QueueInfo) (*Logical, error) {
 		WriteTimeout:         qm.conf.QueueConfig.WriteTimeout,
 		ReadTimeout:          qm.conf.QueueConfig.ReadTimeout,
 		Logger:               qm.conf.Logger,
+		Partitions:           partitions, // <-- TODO: Do this next
 		QueueInfo:            info,
-	}
-
-	var err error
-	// TODO: Each Partition could have a different storage backend <-- FIGURE THIS OUT NEXT
-
-	// TODO: Should eventually have more than one partition.
-	conf.PartitionStore, err = qm.conf.Storage.NewPartition(info.Partitions[0])
-	if err != nil {
-		return nil, err
-	}
-
-	// TODO: Maybe have several Logical Queues for this queue.
-	q, err := NewLogicalQueue(conf)
+	})
 	if err != nil {
 		return nil, err
 	}
 
 	// TODO: This should become a list of queues which hold logical queues
 	// TODO: Ask the queue for the appropriate logical for this client.
+
 	// TODO: If there is only one client, and multiple Logical Queues, then we
 	//  should reduce the number of Logical Queues automatically. We need to
 	//  figure out how clients register themselves as consumers before allowing reservation calls.
-	qm.queues[conf.Name] = q
+	qm.queues[info.Name] = q
 	return q, nil
 }
 

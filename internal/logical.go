@@ -101,7 +101,7 @@ func NewLogicalQueue(conf LogicalConfig) (*Logical, error) {
 	set.Default(&conf.Clock, clock.NewProvider())
 
 	if conf.PartitionStore == nil {
-		return nil, transport.NewInvalidOption("LogicalConfig.QueuesStore cannot be nil")
+		return nil, transport.NewInvalidOption("LogicalConfig.QueueStore cannot be nil")
 	}
 
 	q := &Logical{

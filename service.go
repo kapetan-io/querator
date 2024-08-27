@@ -37,8 +37,8 @@ const (
 type ServiceConfig struct {
 	// Logger is the logging implementation used by this Querator instance
 	Logger duh.StandardLogger
-	// Storage is the chosen storage engine
-	Storage store.Storage
+	// Storage is a map of configured storage engines
+	Storage *store.Storage
 	// InstanceID is a unique id for this instance of Querator
 	InstanceID string
 	// WriteTimeout The time it should take for a single batched write to complete

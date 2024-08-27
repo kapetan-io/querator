@@ -41,7 +41,7 @@ func (c *Config) ServerTLS() *tls.Config {
 
 func (c *Config) SetDefaults() error {
 	if c.Storage == nil {
-		c.Storage = store.NewBoltStorage(store.BoltConfig{})
+		c.Storage = store.NewBoltBackend(store.BoltConfig{})
 	}
 	set.Default(&c.Logger, slog.Default())
 	set.Default(&c.MaxReserveBatchSize, internal.DefaultMaxReserveBatchSize)

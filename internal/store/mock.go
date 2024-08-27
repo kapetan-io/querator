@@ -11,25 +11,25 @@ type MockConfig struct {
 	Methods map[string]func(args []any) error
 }
 
-type MockStorage struct {
+type MockBackend struct {
 	conf *MockConfig
 }
 
-var _ Storage = &MockStorage{}
+var _ Backend = &MockBackend{}
 
-func NewMockStorage(conf *MockConfig) *MockStorage {
-	return &MockStorage{conf: conf}
+func NewMockStorage(conf *MockConfig) *MockBackend {
+	return &MockBackend{conf: conf}
 }
 
-func (m *MockStorage) NewQueuesStore(conf QueuesStoreConfig) (QueuesStore, error) {
+func (m *MockBackend) GetQueueStore() (QueueStore, error) {
 	return &MockQueuesStore{}, nil
 }
 
-func (m *MockStorage) NewPartition(info types.PartitionInfo) (Partition, error) {
+func (m *MockBackend) GetPartition(info types.PartitionInfo) (Partition, error) {
 	return &MockPartition{info: info.Queue, parent: m}, nil
 }
 
-func (m *MockStorage) ParseID(parse types.ItemID, id *StorageID) error {
+func (m *MockBackend) ParseID(parse types.ItemID, id *StorageID) error {
 	parts := bytes.Split(parse, []byte("~"))
 	if len(parts) != 2 {
 		return errors.New("expected format <queue_name>~<storage_id>")
@@ -39,17 +39,17 @@ func (m *MockStorage) ParseID(parse types.ItemID, id *StorageID) error {
 	return nil
 }
 
-func (m *MockStorage) BuildStorageID(queue string, id []byte) types.ItemID {
+func (m *MockBackend) BuildStorageID(queue string, id []byte) types.ItemID {
 	return append([]byte(queue+"~"), id...)
 }
 
-func (m *MockStorage) Close(_ context.Context) error {
+func (m *MockBackend) Close(_ context.Context) error {
 	return nil
 }
 
 type MockPartition struct {
 	info   types.QueueInfo
-	parent *MockStorage
+	parent *MockBackend
 }
 
 func (m *MockPartition) Produce(ctx context.Context, batch types.Batch[types.ProduceRequest]) error {
@@ -106,7 +106,7 @@ func (m *MockPartition) Close(ctx context.Context) error {
 
 type MockQueuesStore struct{}
 
-var _ QueuesStore = &MockQueuesStore{}
+var _ QueueStore = &MockQueuesStore{}
 
 func (r MockQueuesStore) Get(ctx context.Context, name string, queue *types.QueueInfo) error {
 	//TODO implement me

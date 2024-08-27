@@ -12,32 +12,31 @@ import (
 	"strings"
 )
 
-type MemoryStorageConfig struct {
+type MemoryBackendConfig struct {
 	Clock *clock.Provider
 }
 
-type MemoryStorage struct {
-	conf MemoryStorageConfig
+type MemoryBackend struct {
+	conf MemoryBackendConfig
 }
 
-var _ Storage = &MemoryStorage{}
+var _ Backend = &MemoryBackend{}
 
-func NewMemoryStorage(conf MemoryStorageConfig) *MemoryStorage {
+func NewMemoryBackend(conf MemoryBackendConfig) *MemoryBackend {
 	set.Default(&conf.Clock, clock.NewProvider())
-	return &MemoryStorage{
+	return &MemoryBackend{
 		conf: conf,
 	}
 }
 
-func (s *MemoryStorage) NewQueuesStore(conf QueuesStoreConfig) (QueuesStore, error) {
+func (s *MemoryBackend) GetQueueStore() (QueueStore, error) {
 	return &MemoryQueuesStore{
 		mem:    make([]types.QueueInfo, 0, 1_000),
-		conf:   conf,
 		parent: s,
 	}, nil
 }
 
-func (s *MemoryStorage) NewPartition(info types.PartitionInfo) (Partition, error) {
+func (s *MemoryBackend) GetPartition(info types.PartitionInfo) (Partition, error) {
 	return &MemoryQueue{
 		mem:    make([]types.Item, 0, 1_000),
 		uid:    ksuid.New(),
@@ -46,7 +45,7 @@ func (s *MemoryStorage) NewPartition(info types.PartitionInfo) (Partition, error
 	}, nil
 }
 
-func (s *MemoryStorage) ParseID(parse types.ItemID, id *StorageID) error {
+func (s *MemoryBackend) ParseID(parse types.ItemID, id *StorageID) error {
 	parts := bytes.Split(parse, []byte("~"))
 	if len(parts) != 2 {
 		return errors.New("expected format <queue_name>~<storage_id>")
@@ -56,17 +55,17 @@ func (s *MemoryStorage) ParseID(parse types.ItemID, id *StorageID) error {
 	return nil
 }
 
-func (s *MemoryStorage) BuildStorageID(queue string, id []byte) types.ItemID {
+func (s *MemoryBackend) BuildStorageID(queue string, id []byte) types.ItemID {
 	return append([]byte(queue+"~"), id...)
 }
 
-func (s *MemoryStorage) Close(_ context.Context) error {
+func (s *MemoryBackend) Close(_ context.Context) error {
 	return nil
 }
 
 type MemoryQueue struct {
 	info   types.QueueInfo
-	parent *MemoryStorage
+	parent *MemoryBackend
 	mem    []types.Item
 	uid    ksuid.KSUID
 }
@@ -263,11 +262,10 @@ func (q *MemoryQueue) findID(id []byte) (int, bool) {
 type MemoryQueuesStore struct {
 	QueuesValidation
 	mem    []types.QueueInfo
-	conf   QueuesStoreConfig
-	parent *MemoryStorage
+	parent *MemoryBackend
 }
 
-var _ QueuesStore = &MemoryQueuesStore{}
+var _ QueueStore = &MemoryQueuesStore{}
 
 func (s *MemoryQueuesStore) Get(_ context.Context, name string, queue *types.QueueInfo) error {
 	if err := s.validateGet(name); err != nil {

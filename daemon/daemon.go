@@ -46,6 +46,8 @@ type Daemon struct {
 func NewDaemon(ctx context.Context, conf Config) (*Daemon, error) {
 	set.Default(&conf.Logger, slog.Default())
 
+	// TODO: Load from config file
+
 	s, err := querator.NewService(querator.ServiceConfig{
 		MaxCompleteBatchSize: conf.MaxCompleteBatchSize,
 		MaxReserveBatchSize:  conf.MaxReserveBatchSize,
@@ -91,7 +93,6 @@ func (d *Daemon) Start(ctx context.Context) error {
 }
 
 func (d *Daemon) Shutdown(ctx context.Context) error {
-	fmt.Printf("Daemon.Shutdown() - Service\n")
 
 	// See 0015-shutdown-errors.md for a discussion of shutdown operation
 	if err := d.service.Shutdown(ctx); err != nil {
@@ -99,13 +100,9 @@ func (d *Daemon) Shutdown(ctx context.Context) error {
 	}
 	for _, srv := range d.servers {
 		d.conf.Logger.Info("Shutting down server", "address", srv.Addr)
-		fmt.Printf("Shutdown() - HTTP\n")
-		// TODO: <-- Shutdown is hanging for some reason, there must be another request hanging out somewhere?
 		_ = srv.Shutdown(ctx)
-		fmt.Printf("Shutdown() - HTTP DONE\n")
 	}
 	d.servers = nil
-	fmt.Printf("Daemon.Shutdown() - DONE\n")
 	return nil
 }
 

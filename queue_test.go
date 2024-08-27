@@ -42,7 +42,7 @@ const (
 
 var RetryTenTimes = retry.Policy{Interval: retry.Sleep(clock.Second), Attempts: 10}
 
-type NewStorageFunc func(cp *clock.Provider) store.Storage
+type NewStorageFunc func(cp *clock.Provider) *store.Storage
 
 func TestQueue(t *testing.T) {
 	bdb := store.BoltDBTesting{Dir: t.TempDir()}
@@ -54,15 +54,32 @@ func TestQueue(t *testing.T) {
 	}{
 		{
 			Name: "InMemory",
-			Setup: func(cp *clock.Provider) store.Storage {
-				return store.NewMemoryStorage(store.MemoryStorageConfig{Clock: cp})
+			Setup: func(cp *clock.Provider) *store.Storage {
+				mem := store.NewMemoryBackend(store.MemoryBackendConfig{Clock: cp})
+				s, err := store.NewStorage(store.StorageConfig{
+					QueueBackend: mem,
+					PartitionBackends: []store.PartitionBackend{
+						{
+							Name:    "memory-0",
+							Backend: mem,
+						},
+					},
+				})
+				if err != nil {
+					panic(err)
+				}
+				return s
 			},
 			TearDown: func() {},
 		},
 		{
 			Name: "BoltDB",
-			Setup: func(cp *clock.Provider) store.Storage {
-				return bdb.Setup(store.BoltConfig{Clock: cp})
+			Setup: func(cp *clock.Provider) *store.Storage {
+				s, err := bdb.Setup(store.BoltConfig{Clock: cp})
+				if err != nil {
+					panic(err)
+				}
+				return s
 			},
 			TearDown: func() {
 				bdb.Teardown()

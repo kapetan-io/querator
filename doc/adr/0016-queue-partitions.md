@@ -154,7 +154,7 @@ to what we had at Mailgun, except that migration of partitions was a manual labo
 Having Querator handle this process makes the code more complex, but reduces operational burden.
 
 ### Preserving Item Order
-Although a queue is typically implemented as a First-In-First-Out (FIFO) structure, the system's 
+Although a queue is implemented as a First-In-First-Out (FIFO) structure, the system's 
 order cannot be maintained if there is more than one consumer accessing the queue.
 
 Consider a scenario with two consumers accessing a FIFO queue:

@@ -45,7 +45,9 @@ func BenchmarkProduce(b *testing.B) {
 			Setup: func() store.Storage {
 				return store.NewMemoryBackend(store.MemoryBackendConfig{})
 			},
-			TearDown: func() {},
+			TearDown: func() {
+
+			},
 		},
 		//{
 		//	Name: "PostgresSQL",

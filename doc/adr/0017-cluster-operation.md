@@ -9,7 +9,7 @@ Proposal
 ## Context
 
 Querator needs to distribute logical queues and partitions across multiple instances within a cluster.
-This distribution enables Querator to spread read and write workloads across the infrastructure,
+This distribution enables Querator to spread read and write workloads across infrastructure nodes,
 thereby reducing single points of failure, increasing throughput, and optimizing hardware utilization.
 
 ## Decision
@@ -36,7 +36,25 @@ Querator instances.
 ###### Split Brain
 The leader may become isolated from the rest of the cluster during disruptive events (e.g., redeployment),
 potentially rendering many partitions unavailable until a new leader is elected and the cluster
-stabilizes. 
+stabilizes. This isolation can potentially render many partitions unavailable until a new leader
+is elected and the cluster stabilizes. To prevent network partitions from creating multiple logical
+queues and thus multiple read/write points, Querator will introduce a quorum configuration option.
+
+This quorum option will specify the minimum number of instances required to constitute a quorum.
+A leader will only be elected if this minimum number of instances is present. If a leader is not
+elected within a configurable time frame, access to the partitions will be denied.
+
+By configuring the minimum number of instances needed to form a quorum, Querator operators can
+indicate their preferences for balancing partition tolerance and availability:
+
+- If an operator can accept higher partition risk in exchange for increased availability,
+they should choose a smaller number of nodes to form a quorum.
+- If lower partition risk is required at the cost of reduced availability, a higher quorum
+number should be selected.
+
+This configuration allows operators to fine-tune the system based on their specific requirements
+for partition tolerance and system availability.
+
 
 ###### Slow Leader
 The leader may become overwhelmed and unable to fulfill its responsibilities efficiently. Implement

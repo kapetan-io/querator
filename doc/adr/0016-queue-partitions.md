@@ -64,10 +64,11 @@ or via configuration increase the number of Logical Queue instances. Adding more
 instances allows Querator to distribute the available partitions and clients across many instances,
 thus avoiding synchronization contention and greater scale.
 
-Querator will manage the distribution of partitions across Logical Queue instances. To handle the 
-management and distribution of partitions across data storage, I propose adding a
-`/queue.rebalance` API. This API would allow users to increase or decrease the number of partitions
-and re-balance them across all configured data storage instances.
+Querator will manage the distribution of partitions across Logical Queue instances. Distribution of
+partitions to Logical Queues should happen automatically and should react to current operational
+conditions
+
+See [Querator Logical Queue Diagram](../Querator%20Logical%20Queue%20Diagram.png)
 
 ### Notes
 The introduction of a Logical Queue creates a synchronization point that must exist on a Querator
@@ -83,6 +84,12 @@ Logical partitions make calls to each partition, attempting to fulfill reserve r
 either full, or wait for next produce. Since logical partitions are the point of sync, we can
 still preform some optimizations on producing and consuming as the LQ knows how many items are
 in each partition.
+
+### Partition Backend Storage Assignment
+Separate from partition assignment to Logical Queues is the assignment of partitions to backend data
+storage systems. To handle the management and distribution of partitions across backend data storage,
+I propose adding a `/queue.rebalance` API. This API would allow users to increase or decrease the
+number of partitions and re-balance them across all configured backend data storage instances.
 
 ## Scenarios
 The implementation of the proposal in this ADR allows the possible operational scenarios
@@ -146,3 +153,27 @@ This proposal both complicates and in some ways simplifies the design. This desi
 to what we had at Mailgun, except that migration of partitions was a manual labor-intensive process.
 Having Querator handle this process makes the code more complex, but reduces operational burden.
 
+### Preserving Item Order
+Although a queue is typically implemented as a First-In-First-Out (FIFO) structure, the system's 
+order cannot be maintained if there is more than one consumer accessing the queue.
+
+Consider a scenario with two consumers accessing a FIFO queue:
+
+- Consumer 1 retrieves an item.
+- Consumer 2 retrieves an item.
+- Consumer 2 finishes processing their item.
+- Consumer 1 finishes processing their item.
+
+In this situation, the system -— which includes the entire setup of producers, Querator, and
+consumers -— cannot reliably maintain the order of item processing when multiple consumers are
+involved. To ensure ordered processing, items which require preservation of order should be placed
+in the same queue, and that queue must have only one partition.
+
+Even though Querator queues are designed to deliver items in the order they were produced (FIFO), 
+this order is disrupted if multiple consumers process items out of sequence. This potential
+confusion for users should be clearly documented.
+
+The introduction of partitions helps users familiar with streaming systems like Kafka understand
+this design more easily. In Kafka, to achieve a FIFO stream, a user can create a topic with a
+single partition. Similarly, in Querator, if a user desires a FIFO queue, they can create a queue
+with only one partition and ensure that only one consumer accesses it.

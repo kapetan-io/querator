@@ -69,7 +69,6 @@ func NewBoltBackend(conf BoltConfig) *BoltBackend {
 	set.Default(&conf.Logger, slog.Default())
 	set.Default(&conf.StorageDir, ".")
 	set.Default(&conf.Clock, clock.NewProvider())
-
 	return &BoltBackend{conf: conf}
 }
 
@@ -695,7 +694,7 @@ type BoltDBTesting struct {
 	Dir string
 }
 
-func (b *BoltDBTesting) Setup(conf BoltConfig) (*Storage, error) {
+func (b *BoltDBTesting) TestSetup(conf BoltConfig) *Storage {
 	if !dirExists(b.Dir) {
 		if err := os.Mkdir(b.Dir, 0777); err != nil {
 			panic(err)
@@ -708,8 +707,8 @@ func (b *BoltDBTesting) Setup(conf BoltConfig) (*Storage, error) {
 	conf.StorageDir = b.Dir
 
 	backend := NewBoltBackend(conf)
-	return NewStorage(StorageConfig{
-		QueueBackend: backend,
+	s, err := NewStorage(StorageConfig{
+		QueueStore: backend,
 		PartitionBackends: []PartitionBackend{
 			{
 				Name:    "bolt-0",
@@ -717,6 +716,10 @@ func (b *BoltDBTesting) Setup(conf BoltConfig) (*Storage, error) {
 			},
 		},
 	})
+	if err != nil {
+		panic(err)
+	}
+	return s
 }
 
 func (b *BoltDBTesting) Teardown() {

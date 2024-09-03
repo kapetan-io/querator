@@ -117,8 +117,7 @@ func (i *Item) FromProto(in *pb.StorageQueueItem) *Item {
 
 // PartitionInfo is information about partition
 type PartitionInfo struct {
-	// Info about the Queue the partition is part of
-	Queue QueueInfo
+	QueueName string
 	// Which Storage Instance this partition belong too
 	StorageName string
 	// If the partition is marked as read only
@@ -132,7 +131,6 @@ type QueueInfo struct {
 	// The name of the queue
 	Name string
 	// ReserveTimeout is how long the reservation is valid for.
-	// TODO: We must ensure the DeadTimeout is not less than the ReserveTimeout
 	ReserveTimeout clock.Duration
 	// DeadQueue is the name of the dead letter queue for this queue.
 	DeadQueue string
@@ -148,8 +146,10 @@ type QueueInfo struct {
 	MaxAttempts int
 	// Reference is the user supplied field which could contain metadata or specify who owns this queue
 	Reference string
-	// Partitions is a list partitions
-	Partitions []PartitionInfo
+	// Partitions is the number of partitions this queue expects
+	Partitions int
+	// PartitionInfo is a list current partition details
+	PartitionInfo []PartitionInfo
 }
 
 func (i *QueueInfo) ToProto(in *pb.QueueInfo) *pb.QueueInfo {

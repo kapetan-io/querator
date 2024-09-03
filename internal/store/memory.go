@@ -375,3 +375,20 @@ func (s *MemoryQueuesStore) findQueue(name string) (int, bool) {
 	}
 	return nearestIdx, false
 }
+
+func TestSetupMemory(conf MemoryBackendConfig) *Storage {
+	mem := NewMemoryBackend(conf)
+	s, err := NewStorage(StorageConfig{
+		QueueStore: mem,
+		PartitionBackends: []PartitionBackend{
+			{
+				Name:    "memory-0",
+				Backend: mem,
+			},
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+	return s
+}

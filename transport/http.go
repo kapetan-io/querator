@@ -18,6 +18,7 @@ package transport
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/duh-rpc/duh-go"
 	v1 "github.com/duh-rpc/duh-go/proto/v1"
@@ -93,12 +94,13 @@ type Service interface {
 
 type HTTPHandler struct {
 	duration       *prometheus.SummaryVec
+	log            duh.StandardLogger
 	metrics        http.Handler
 	service        Service
 	maxProduceSize int64
 }
 
-func NewHTTPHandler(s Service, metrics http.Handler, maxProduceSize int64) *HTTPHandler {
+func NewHTTPHandler(s Service, metrics http.Handler, maxProduceSize int64, log duh.StandardLogger) *HTTPHandler {
 	set.Default(&maxProduceSize, int64(duh.MegaByte))
 
 	return &HTTPHandler{
@@ -112,6 +114,7 @@ func NewHTTPHandler(s Service, metrics http.Handler, maxProduceSize int64) *HTTP
 		}, []string{"path"}),
 		maxProduceSize: maxProduceSize,
 		metrics:        metrics,
+		log:            log,
 		service:        s,
 	}
 }
@@ -179,12 +182,12 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *HTTPHandler) QueueProduce(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req pb.QueueProduceRequest
 	if err := duh.ReadRequest(r, &req, h.maxProduceSize); err != nil {
-		duh.ReplyError(w, r, err)
+		h.ReplyError(w, r, err)
 		return
 	}
 
 	if err := h.service.QueueProduce(ctx, &req); err != nil {
-		duh.ReplyError(w, r, err)
+		h.ReplyError(w, r, err)
 		return
 	}
 	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
@@ -193,13 +196,13 @@ func (h *HTTPHandler) QueueProduce(ctx context.Context, w http.ResponseWriter, r
 func (h *HTTPHandler) QueueReserve(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req pb.QueueReserveRequest
 	if err := duh.ReadRequest(r, &req, 512*duh.Bytes); err != nil {
-		duh.ReplyError(w, r, err)
+		h.ReplyError(w, r, err)
 		return
 	}
 
 	var resp pb.QueueReserveResponse
 	if err := h.service.QueueReserve(ctx, &req, &resp); err != nil {
-		duh.ReplyError(w, r, err)
+		h.ReplyError(w, r, err)
 		return
 	}
 	duh.Reply(w, r, duh.CodeOK, &resp)
@@ -208,12 +211,12 @@ func (h *HTTPHandler) QueueReserve(ctx context.Context, w http.ResponseWriter, r
 func (h *HTTPHandler) QueueComplete(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req pb.QueueCompleteRequest
 	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
-		duh.ReplyError(w, r, err)
+		h.ReplyError(w, r, err)
 		return
 	}
 
 	if err := h.service.QueueComplete(ctx, &req); err != nil {
-		duh.ReplyError(w, r, err)
+		h.ReplyError(w, r, err)
 		return
 	}
 	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
@@ -226,12 +229,12 @@ func (h *HTTPHandler) QueueComplete(ctx context.Context, w http.ResponseWriter, 
 func (h *HTTPHandler) QueuesCreate(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req pb.QueueInfo
 	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
-		duh.ReplyError(w, r, err)
+		h.ReplyError(w, r, err)
 		return
 	}
 
 	if err := h.service.QueuesCreate(ctx, &req); err != nil {
-		duh.ReplyError(w, r, err)
+		h.ReplyError(w, r, err)
 		return
 	}
 	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
@@ -240,13 +243,13 @@ func (h *HTTPHandler) QueuesCreate(ctx context.Context, w http.ResponseWriter, r
 func (h *HTTPHandler) QueuesList(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req pb.QueuesListRequest
 	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
-		duh.ReplyError(w, r, err)
+		h.ReplyError(w, r, err)
 		return
 	}
 
 	var resp pb.QueuesListResponse
 	if err := h.service.QueuesList(ctx, &req, &resp); err != nil {
-		duh.ReplyError(w, r, err)
+		h.ReplyError(w, r, err)
 		return
 	}
 
@@ -256,12 +259,12 @@ func (h *HTTPHandler) QueuesList(ctx context.Context, w http.ResponseWriter, r *
 func (h *HTTPHandler) QueuesUpdate(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req pb.QueueInfo
 	if err := duh.ReadRequest(r, &req, 512*duh.Kilobyte); err != nil {
-		duh.ReplyError(w, r, err)
+		h.ReplyError(w, r, err)
 		return
 	}
 
 	if err := h.service.QueuesUpdate(ctx, &req); err != nil {
-		duh.ReplyError(w, r, err)
+		h.ReplyError(w, r, err)
 		return
 	}
 	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
@@ -270,12 +273,12 @@ func (h *HTTPHandler) QueuesUpdate(ctx context.Context, w http.ResponseWriter, r
 func (h *HTTPHandler) QueuesDelete(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req pb.QueuesDeleteRequest
 	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
-		duh.ReplyError(w, r, err)
+		h.ReplyError(w, r, err)
 		return
 	}
 
 	if err := h.service.QueuesDelete(ctx, &req); err != nil {
-		duh.ReplyError(w, r, err)
+		h.ReplyError(w, r, err)
 		return
 	}
 	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
@@ -284,13 +287,13 @@ func (h *HTTPHandler) QueuesDelete(ctx context.Context, w http.ResponseWriter, r
 func (h *HTTPHandler) QueueStats(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req pb.QueueStatsRequest
 	if err := duh.ReadRequest(r, &req, 512*duh.Bytes); err != nil {
-		duh.ReplyError(w, r, err)
+		h.ReplyError(w, r, err)
 		return
 	}
 
 	var resp pb.QueueStatsResponse
 	if err := h.service.QueueStats(ctx, &req, &resp); err != nil {
-		duh.ReplyError(w, r, err)
+		h.ReplyError(w, r, err)
 		return
 	}
 	duh.Reply(w, r, duh.CodeOK, &resp)
@@ -299,12 +302,12 @@ func (h *HTTPHandler) QueueStats(ctx context.Context, w http.ResponseWriter, r *
 func (h *HTTPHandler) QueueClear(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req pb.QueueClearRequest
 	if err := duh.ReadRequest(r, &req, 512*duh.Bytes); err != nil {
-		duh.ReplyError(w, r, err)
+		h.ReplyError(w, r, err)
 		return
 	}
 
 	if err := h.service.QueueClear(ctx, &req); err != nil {
-		duh.ReplyError(w, r, err)
+		h.ReplyError(w, r, err)
 		return
 	}
 	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
@@ -313,13 +316,13 @@ func (h *HTTPHandler) QueueClear(ctx context.Context, w http.ResponseWriter, r *
 func (h *HTTPHandler) StorageQueueList(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req pb.StorageQueueListRequest
 	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
-		duh.ReplyError(w, r, err)
+		h.ReplyError(w, r, err)
 		return
 	}
 
 	var resp pb.StorageQueueListResponse
 	if err := h.service.StorageQueueList(ctx, &req, &resp); err != nil {
-		duh.ReplyError(w, r, err)
+		h.ReplyError(w, r, err)
 		return
 	}
 	duh.Reply(w, r, duh.CodeOK, &resp)
@@ -328,13 +331,13 @@ func (h *HTTPHandler) StorageQueueList(ctx context.Context, w http.ResponseWrite
 func (h *HTTPHandler) StorageQueueAdd(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req pb.StorageQueueAddRequest
 	if err := duh.ReadRequest(r, &req, 64*duh.MegaByte); err != nil {
-		duh.ReplyError(w, r, err)
+		h.ReplyError(w, r, err)
 		return
 	}
 
 	var resp pb.StorageQueueAddResponse
 	if err := h.service.StorageQueueAdd(ctx, &req, &resp); err != nil {
-		duh.ReplyError(w, r, err)
+		h.ReplyError(w, r, err)
 		return
 	}
 	duh.Reply(w, r, duh.CodeOK, &resp)
@@ -343,12 +346,12 @@ func (h *HTTPHandler) StorageQueueAdd(ctx context.Context, w http.ResponseWriter
 func (h *HTTPHandler) StorageQueueDelete(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req pb.StorageQueueDeleteRequest
 	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
-		duh.ReplyError(w, r, err)
+		h.ReplyError(w, r, err)
 		return
 	}
 
 	if err := h.service.StorageQueueDelete(ctx, &req); err != nil {
-		duh.ReplyError(w, r, err)
+		h.ReplyError(w, r, err)
 		return
 	}
 	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
@@ -362,4 +365,20 @@ func (h *HTTPHandler) Describe(ch chan<- *prometheus.Desc) {
 // Collect fetches metrics from the server for use by prometheus
 func (h *HTTPHandler) Collect(ch chan<- prometheus.Metric) {
 	h.duration.Collect(ch)
+}
+
+func (h *HTTPHandler) ReplyError(w http.ResponseWriter, r *http.Request, err error) {
+	var re duh.Error
+	if errors.As(err, &re) {
+		duh.Reply(w, r, re.Code(), re.ProtoMessage())
+		return
+	}
+	h.log.Error(err.Error(),
+		"category", "http",
+		"http.request.status", duh.CodeInternalError,
+		"http.request.url", r.URL.String(),
+		"http.request.headers", r.Header,
+		"http.request.useragent", r.Header.Get("user-agent"),
+	)
+	duh.ReplyWithCode(w, r, duh.CodeInternalError, nil, "Internal Error")
 }

@@ -34,15 +34,15 @@ func TestQueueStorage(t *testing.T) {
 	}{
 		{
 			Name: "InMemory",
-			Setup: func(cp *clock.Provider) store.Storage {
-				return store.NewMemoryBackend(store.MemoryBackendConfig{Clock: cp})
+			Setup: func(cp *clock.Provider) *store.Storage {
+				return store.TestSetupMemory(store.MemoryBackendConfig{Clock: cp})
 			},
 			TearDown: func() {},
 		},
 		{
 			Name: "BoltDB",
-			Setup: func(cp *clock.Provider) store.Storage {
-				return bdb.Setup(store.BoltConfig{Clock: cp})
+			Setup: func(cp *clock.Provider) *store.Storage {
+				return bdb.TestSetup(store.BoltConfig{Clock: cp})
 			},
 			TearDown: func() {
 				bdb.Teardown()

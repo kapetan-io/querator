@@ -25,6 +25,7 @@ const (
 	MethodQueuePause
 	MethodQueueClear
 	MethodUpdateInfo
+	MethodUpdatePartitions
 
 	DefaultMaxReserveBatchSize  = 1_000
 	DefaultMaxProduceBatchSize  = 1_000
@@ -44,12 +45,8 @@ var (
 )
 
 type LogicalConfig struct {
-	types.QueueInfo
 	// If defined, is the logger used by the queue
 	Logger duh.StandardLogger
-	// PartitionStore is the store interface used to persist items for this specific queue
-	PartitionStore store.Partition // TODO: This should be a list of PartitionStores
-
 	// TODO: Make these configurable at the Service level
 	// WriteTimeout The time it should take for a single batched write to complete
 	WriteTimeout clock.Duration
@@ -68,7 +65,6 @@ type LogicalConfig struct {
 	Clock *clock.Provider
 }
 
-// A Partition is made up of many Logical and each Logical is made up of many partitions
 // TODO: Modify the Logical to Handle many partitions
 // TODO: Implement a round robin strategy which assigns reserves to each partition until the reservation is full or
 //  partitions are exhausted.
@@ -88,11 +84,13 @@ type Logical struct {
 	queueRequestCh chan *QueueRequest
 	wg             sync.WaitGroup
 	conf           LogicalConfig
+	info           types.QueueInfo
+	partitions     []store.Partition
 	inFlight       atomic.Int32
 	inShutdown     atomic.Bool
 }
 
-func NewLogicalQueue(conf LogicalConfig) (*Logical, error) {
+func SpawnLogicalQueue(conf LogicalConfig) (*Logical, error) {
 	set.Default(&conf.Logger, slog.Default())
 	set.Default(&conf.MaxReserveBatchSize, DefaultMaxReserveBatchSize)
 	set.Default(&conf.MaxProduceBatchSize, DefaultMaxProduceBatchSize)
@@ -100,11 +98,7 @@ func NewLogicalQueue(conf LogicalConfig) (*Logical, error) {
 	set.Default(&conf.MaxRequestsPerQueue, DefaultMaxRequestsPerQueue)
 	set.Default(&conf.Clock, clock.NewProvider())
 
-	if conf.PartitionStore == nil {
-		return nil, transport.NewInvalidOption("LogicalConfig.QueueStore cannot be nil")
-	}
-
-	q := &Logical{
+	l := &Logical{
 		// Logical requests are any request that doesn't require special batch processing
 		queueRequestCh: make(chan *QueueRequest),
 		// Shutdowns require special handling in the sync loop
@@ -115,25 +109,24 @@ func NewLogicalQueue(conf LogicalConfig) (*Logical, error) {
 	// These are request queues that queue requests from clients until the sync loop has
 	// time to process them. When they get processed, every request in the queue is handled
 	// in a batch.
-	fmt.Printf("NewPartition() - MaxRequestsPerQueue: %d\n", conf.MaxRequestsPerQueue)
-	q.reserveQueueCh = make(chan *types.ReserveRequest, conf.MaxRequestsPerQueue)
-	q.produceQueueCh = make(chan *types.ProduceRequest, conf.MaxRequestsPerQueue)
-	q.completeQueueCh = make(chan *types.CompleteRequest, conf.MaxRequestsPerQueue)
+	l.reserveQueueCh = make(chan *types.ReserveRequest, conf.MaxRequestsPerQueue)
+	l.produceQueueCh = make(chan *types.ProduceRequest, conf.MaxRequestsPerQueue)
+	l.completeQueueCh = make(chan *types.CompleteRequest, conf.MaxRequestsPerQueue)
 
-	q.wg.Add(1)
-	go q.synchronizationLoop()
-	return q, nil
+	l.wg.Add(1)
+	go l.synchronizationLoop()
+	return l, nil
 }
 
 // Produce is called by clients who wish to produce an item to the queue. This
 // call will block until the item has been written to a partition or until the request
 // is cancelled via the passed context or RequestTimeout is reached.
-func (q *Logical) Produce(ctx context.Context, req *types.ProduceRequest) error {
-	if q.inShutdown.Load() {
+func (l *Logical) Produce(ctx context.Context, req *types.ProduceRequest) error {
+	if l.inShutdown.Load() {
 		return ErrQueueShutdown
 	}
-	q.inFlight.Add(1)
-	defer q.inFlight.Add(-1)
+	l.inFlight.Add(1)
+	defer l.inFlight.Add(-1)
 
 	if req.RequestTimeout == clock.Duration(0) {
 		return transport.NewInvalidOption("request timeout is required; '5m' is recommended, 15m is the maximum")
@@ -153,18 +146,18 @@ func (q *Logical) Produce(ctx context.Context, req *types.ProduceRequest) error 
 		return transport.NewInvalidOption("items cannot be empty; at least one item is required")
 	}
 
-	if len(req.Items) > q.conf.MaxProduceBatchSize {
+	if len(req.Items) > l.conf.MaxProduceBatchSize {
 		return transport.NewInvalidOption("items is invalid; max_produce_batch_size is"+
-			" %d but received %d", q.conf.MaxProduceBatchSize, len(req.Items))
+			" %d but received %d", l.conf.MaxProduceBatchSize, len(req.Items))
 	}
 
-	req.RequestDeadline = q.conf.Clock.Now().UTC().Add(req.RequestTimeout)
+	req.RequestDeadline = l.conf.Clock.Now().UTC().Add(req.RequestTimeout)
 	req.ReadyCh = make(chan struct{})
 	req.Context = ctx
 
-	fmt.Printf("Produce Len: %d \n", len(q.produceQueueCh))
+	fmt.Printf("Produce Len: %d \n", len(l.produceQueueCh))
 	select {
-	case q.produceQueueCh <- req:
+	case l.produceQueueCh <- req:
 	default:
 		return transport.NewRetryRequest(MsgQueueOverLoaded)
 	}
@@ -189,12 +182,12 @@ func (q *Logical) Produce(ctx context.Context, req *types.ProduceRequest) error 
 // # Unique Requests
 // ClientID must NOT be empty and each request must be unique, Non-unique requests will be rejected with
 // MsgDuplicateClientID. See doc/adr/0007-encourage-simple-clients.md for an explanation.
-func (q *Logical) Reserve(ctx context.Context, req *types.ReserveRequest) error {
-	if q.inShutdown.Load() {
+func (l *Logical) Reserve(ctx context.Context, req *types.ReserveRequest) error {
+	if l.inShutdown.Load() {
 		return ErrQueueShutdown
 	}
-	q.inFlight.Add(1)
-	defer q.inFlight.Add(-1)
+	l.inFlight.Add(1)
+	defer l.inFlight.Add(-1)
 
 	if strings.TrimSpace(req.ClientID) == "" {
 		return transport.NewInvalidOption("invalid client id; cannot be empty")
@@ -204,9 +197,9 @@ func (q *Logical) Reserve(ctx context.Context, req *types.ReserveRequest) error 
 		return transport.NewInvalidOption("invalid batch size; must be greater than zero")
 	}
 
-	if req.NumRequested > q.conf.MaxReserveBatchSize {
+	if req.NumRequested > l.conf.MaxReserveBatchSize {
 		return transport.NewInvalidOption("invalid batch size; max_reserve_batch_size is %d, "+
-			"but %d was requested", q.conf.MaxProduceBatchSize, req.NumRequested)
+			"but %d was requested", l.conf.MaxProduceBatchSize, req.NumRequested)
 	}
 
 	if req.RequestTimeout == clock.Duration(0) {
@@ -223,12 +216,12 @@ func (q *Logical) Reserve(ctx context.Context, req *types.ReserveRequest) error 
 			" '%s' was requested", req.RequestTimeout.String())
 	}
 
-	req.RequestDeadline = q.conf.Clock.Now().UTC().Add(req.RequestTimeout)
+	req.RequestDeadline = l.conf.Clock.Now().UTC().Add(req.RequestTimeout)
 	req.ReadyCh = make(chan struct{})
 	req.Context = ctx
 
 	select {
-	case q.reserveQueueCh <- req:
+	case l.reserveQueueCh <- req:
 	default:
 		return transport.NewRetryRequest(MsgQueueOverLoaded)
 	}
@@ -241,20 +234,20 @@ func (q *Logical) Reserve(ctx context.Context, req *types.ReserveRequest) error 
 // Complete is called by clients who wish to mark an item as complete. The call will block
 // until the item has been marked as complete or until the request is cancelled via the passed
 // context or RequestTimeout is reached.
-func (q *Logical) Complete(ctx context.Context, req *types.CompleteRequest) error {
-	if q.inShutdown.Load() {
+func (l *Logical) Complete(ctx context.Context, req *types.CompleteRequest) error {
+	if l.inShutdown.Load() {
 		return ErrQueueShutdown
 	}
-	q.inFlight.Add(1)
-	defer q.inFlight.Add(-1)
+	l.inFlight.Add(1)
+	defer l.inFlight.Add(-1)
 
 	if len(req.Ids) == 0 {
 		return transport.NewInvalidOption("ids is invalid; list of ids cannot be empty")
 	}
 
-	if len(req.Ids) > q.conf.MaxCompleteBatchSize {
+	if len(req.Ids) > l.conf.MaxCompleteBatchSize {
 		return transport.NewInvalidOption("ids is invalid; max_complete_batch_size is"+
-			" %d but received %d", q.conf.MaxCompleteBatchSize, len(req.Ids))
+			" %d but received %d", l.conf.MaxCompleteBatchSize, len(req.Ids))
 	}
 
 	if req.RequestTimeout > maxRequestTimeout {
@@ -266,12 +259,12 @@ func (q *Logical) Complete(ctx context.Context, req *types.CompleteRequest) erro
 		return transport.NewInvalidOption("request timeout is required; '5m' is recommended, 15m is the maximum")
 	}
 
-	req.RequestDeadline = q.conf.Clock.Now().UTC().Add(req.RequestTimeout)
+	req.RequestDeadline = l.conf.Clock.Now().UTC().Add(req.RequestTimeout)
 	req.ReadyCh = make(chan struct{})
 	req.Context = ctx
 
 	select {
-	case q.completeQueueCh <- req:
+	case l.completeQueueCh <- req:
 	default:
 		return transport.NewRetryRequest(MsgQueueOverLoaded)
 	}
@@ -282,27 +275,27 @@ func (q *Logical) Complete(ctx context.Context, req *types.CompleteRequest) erro
 }
 
 // QueueStats retrieves stats about the queue and items in storage
-func (q *Logical) QueueStats(ctx context.Context, stats *types.QueueStats) error {
+func (l *Logical) QueueStats(ctx context.Context, stats *types.QueueStats) error {
 	r := QueueRequest{
 		Method:  MethodQueueStats,
 		Request: stats,
 	}
-	return q.queueRequest(ctx, &r)
+	return l.queueRequest(ctx, &r)
 }
 
 // Pause pauses processing of produce, reserve, complete and defer operations until the pause is cancelled.
 // It is only used for testing and not exposed to the user via API, as such it is not considered apart of
 // the public API.
-func (q *Logical) Pause(ctx context.Context, req *types.PauseRequest) error {
+func (l *Logical) Pause(ctx context.Context, req *types.PauseRequest) error {
 	r := QueueRequest{
 		Method:  MethodQueuePause,
 		Request: req,
 	}
-	return q.queueRequest(ctx, &r)
+	return l.queueRequest(ctx, &r)
 }
 
 // Clear clears enqueued items from the queue
-func (q *Logical) Clear(ctx context.Context, req *types.ClearRequest) error {
+func (l *Logical) Clear(ctx context.Context, req *types.ClearRequest) error {
 	if !req.Queue && !req.Defer && !req.Scheduled {
 		return transport.NewInvalidOption("invalid clear request; one of 'queue', 'defer'," +
 			" 'scheduled' must be true")
@@ -312,22 +305,35 @@ func (q *Logical) Clear(ctx context.Context, req *types.ClearRequest) error {
 		Method:  MethodQueueClear,
 		Request: req,
 	}
-	return q.queueRequest(ctx, &r)
+	return l.queueRequest(ctx, &r)
 }
 
-func (q *Logical) UpdateInfo(ctx context.Context, info types.QueueInfo) error {
+// UpdateInfo is called whenever QueueInfo changes. It is called during initialization of Logical struct and
+// is intended to be called whenever queue configuration changes.
+func (l *Logical) UpdateInfo(ctx context.Context, info types.QueueInfo) error {
 	r := QueueRequest{
 		Method:  MethodUpdateInfo,
 		Request: info,
 	}
-	return q.queueRequest(ctx, &r)
+	return l.queueRequest(ctx, &r)
+}
+
+// UpdatePartitions is called whenever the list of partitions this Logical Queue is responsible for changes.
+// It is called during initialization of Logical struct and is intended to be called whenever the QueueManager
+// rebalances partitions
+func (l *Logical) UpdatePartitions(ctx context.Context, p []store.Partition) error {
+	r := QueueRequest{
+		Method:  MethodUpdatePartitions,
+		Request: p,
+	}
+	return l.queueRequest(ctx, &r)
 }
 
 // -------------------------------------------------
 // Methods to manage queue storage
 // -------------------------------------------------
 
-func (q *Logical) StorageQueueList(ctx context.Context, items *[]*types.Item, opts types.ListOptions) error {
+func (l *Logical) StorageQueueList(ctx context.Context, items *[]*types.Item, opts types.ListOptions) error {
 	req := StorageRequest{
 		Items:   items,
 		Options: opts,
@@ -339,10 +345,10 @@ func (q *Logical) StorageQueueList(ctx context.Context, items *[]*types.Item, op
 		Method:  MethodStorageQueueList,
 		Request: req,
 	}
-	return q.queueRequest(ctx, &r)
+	return l.queueRequest(ctx, &r)
 }
 
-func (q *Logical) StorageQueueAdd(ctx context.Context, items *[]*types.Item) error {
+func (l *Logical) StorageQueueAdd(ctx context.Context, items *[]*types.Item) error {
 	// TODO: Test for empty list
 	r := QueueRequest{
 		Method: MethodStorageQueueAdd,
@@ -350,10 +356,10 @@ func (q *Logical) StorageQueueAdd(ctx context.Context, items *[]*types.Item) err
 			Items: items,
 		},
 	}
-	return q.queueRequest(ctx, &r)
+	return l.queueRequest(ctx, &r)
 }
 
-func (q *Logical) StorageQueueDelete(ctx context.Context, ids []types.ItemID) error {
+func (l *Logical) StorageQueueDelete(ctx context.Context, ids []types.ItemID) error {
 	if len(ids) == 0 {
 		return transport.NewInvalidOption("ids is invalid; cannot be empty")
 	}
@@ -364,7 +370,7 @@ func (q *Logical) StorageQueueDelete(ctx context.Context, ids []types.ItemID) er
 			IDs: ids,
 		},
 	}
-	return q.queueRequest(ctx, &r)
+	return l.queueRequest(ctx, &r)
 }
 
 // -------------------------------------------------
@@ -373,8 +379,8 @@ func (q *Logical) StorageQueueDelete(ctx context.Context, ids []types.ItemID) er
 // -------------------------------------------------
 
 // TODO: Break up this loop into smaller handlers to reduce the size of this method.
-func (q *Logical) synchronizationLoop() {
-	defer q.wg.Done()
+func (l *Logical) synchronizationLoop() {
+	defer l.wg.Done()
 
 	state := QueueState{
 		Reservations: types.ReserveBatch{
@@ -392,30 +398,30 @@ func (q *Logical) synchronizationLoop() {
 	for {
 		fmt.Printf("sync.loop\n")
 		select {
-		case req := <-q.produceQueueCh:
-			q.handleProduceRequests(&state, req)
+		case req := <-l.produceQueueCh:
+			l.handleProduceRequests(&state, req)
 
-		case req := <-q.reserveQueueCh:
-			q.handleReserveRequests(&state, req)
+		case req := <-l.reserveQueueCh:
+			l.handleReserveRequests(&state, req)
 
-		case req := <-q.completeQueueCh:
-			q.handleCompleteRequests(&state, req)
+		case req := <-l.completeQueueCh:
+			l.handleCompleteRequests(&state, req)
 
-		case req := <-q.queueRequestCh:
-			q.handleQueueRequests(&state, req)
+		case req := <-l.queueRequestCh:
+			l.handleQueueRequests(&state, req)
 			// If we shut down during a pause, exit immediately
-			if q.inShutdown.Load() {
+			if l.inShutdown.Load() {
 				fmt.Printf("sync.InShutdown\n")
 				return
 			}
-			q.stateCleanUp(&state)
+			l.stateCleanUp(&state)
 
-		case req := <-q.shutdownCh:
-			q.handleShutdown(&state, req)
+		case req := <-l.shutdownCh:
+			l.handleShutdown(&state, req)
 			return
 
 		case <-state.NextMaintenanceCh:
-			q.stateCleanUp(&state)
+			l.stateCleanUp(&state)
 
 			// TODO: Preform queue maintenance, cleaning up reserved items that have not been completed and
 			//  moving items into the dead letter queue.
@@ -423,13 +429,13 @@ func (q *Logical) synchronizationLoop() {
 	}
 }
 
-func (q *Logical) handleProduceRequests(state *QueueState, req *types.ProduceRequest) {
+func (l *Logical) handleProduceRequests(state *QueueState, req *types.ProduceRequest) {
 	// Consume all requests in the channel, so we can process them in a batch
 	state.Producers.Add(req)
 EMPTY:
 	for {
 		select {
-		case req := <-q.produceQueueCh:
+		case req := <-l.produceQueueCh:
 			// TODO(thrawn01): Ensure we don't go beyond our max number of state.Producers, if we do,
 			//  then we must inform the client that we are overloaded, and they must try again. We
 			//  cannot hold on to a request and let it sit in the channel, else we break the
@@ -457,7 +463,7 @@ EMPTY:
 	writeTimeout := maxRequestTimeout
 	for _, req := range state.Producers.Requests {
 		// Cancel any produce requests that have timed out
-		if q.conf.Clock.Now().UTC().After(req.RequestDeadline) {
+		if l.conf.Clock.Now().UTC().After(req.RequestDeadline) {
 			req.Err = ErrRequestTimeout
 			state.Producers.Remove(req)
 			close(req.ReadyCh)
@@ -465,10 +471,10 @@ EMPTY:
 		}
 		// Assign a DeadTimeout to each item
 		for _, item := range req.Items {
-			item.DeadDeadline = q.conf.Clock.Now().UTC().Add(q.conf.DeadTimeout)
+			item.DeadDeadline = l.conf.Clock.Now().UTC().Add(l.info.DeadTimeout)
 		}
 		// The writeTimeout should be equal to the request with the least amount of request timeout left.
-		timeLeft := q.conf.Clock.Now().UTC().Sub(req.RequestDeadline)
+		timeLeft := l.conf.Clock.Now().UTC().Sub(req.RequestDeadline)
 		if timeLeft < writeTimeout {
 			writeTimeout = timeLeft
 		}
@@ -476,20 +482,20 @@ EMPTY:
 
 	// If we allow a calculated write timeout to be a few milliseconds, then the store.Add()
 	// is almost guaranteed to fail, so we ensure the write timeout is something reasonable.
-	if writeTimeout < q.conf.WriteTimeout {
+	if writeTimeout < l.conf.WriteTimeout {
 		// WriteTimeout comes from the storage implementation as the user who configured the
 		// storage option should know a reasonable timeout value for the configuration chosen.
-		writeTimeout = q.conf.WriteTimeout
+		writeTimeout = l.conf.WriteTimeout
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
-	if err := q.conf.PartitionStore.Produce(ctx, state.Producers); err != nil {
-		q.conf.Logger.Error("while calling PartitionStore.Produce()", "error", err,
-			"category", "queue", "queueName", q.conf.Name)
+	if err := l.partitions[0].Produce(ctx, state.Producers); err != nil {
+		l.conf.Logger.Error("while calling Partition.Produce()", "error", err,
+			"category", "queue", "queueName", l.info.Name)
 		cancel()
 		// Let clients that are timed out, know we are done with them.
 		for _, req := range state.Producers.Requests {
-			if q.conf.Clock.Now().UTC().After(req.RequestDeadline) {
+			if l.conf.Clock.Now().UTC().After(req.RequestDeadline) {
 				req.Err = ErrRequestTimeout
 				close(req.ReadyCh)
 				continue
@@ -511,11 +517,11 @@ EMPTY:
 	// If there are reservations waiting, then process reservations allowing them pick up the
 	// items just placed into the queue.
 	if state.Reservations.Total != 0 {
-		q.handleReserveRequests(state, nil)
+		l.handleReserveRequests(state, nil)
 	}
 }
 
-func (q *Logical) handleReserveRequests(state *QueueState, req *types.ReserveRequest) {
+func (l *Logical) handleReserveRequests(state *QueueState, req *types.ReserveRequest) {
 	// TODO(thrawn01): Ensure we don't go beyond our max number of state.Reservations, return
 	//  an error to the client
 
@@ -524,7 +530,7 @@ func (q *Logical) handleReserveRequests(state *QueueState, req *types.ReserveReq
 EMPTY:
 	for {
 		select {
-		case req := <-q.reserveQueueCh:
+		case req := <-l.reserveQueueCh:
 			addIfUnique(&state.Reservations, req)
 		default:
 			break EMPTY
@@ -533,24 +539,24 @@ EMPTY:
 
 	// Remove any clients that have timed out and find the next request to timeout, which will
 	// become our write timeout.
-	writeTimeout := q.nextTimeout(&state.Reservations)
+	writeTimeout := l.nextTimeout(&state.Reservations)
 
 	// If we allow a calculated write timeout to be a few milliseconds, then the store.Add()
 	// is almost guaranteed to fail, so we ensure the write timeout is something reasonable.
-	if writeTimeout < q.conf.WriteTimeout {
+	if writeTimeout < l.conf.WriteTimeout {
 		// WriteTimeout comes from the storage implementation as the user who configured the
 		// storage option should know a reasonable timeout value for the configuration chosen.
-		writeTimeout = q.conf.WriteTimeout
+		writeTimeout = l.conf.WriteTimeout
 	}
 
 	// Send the batch that each request wants to the store. If there are items that can be reserved the
 	// store will assign items to each batch request.
 	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
-	if err := q.conf.PartitionStore.Reserve(ctx, state.Reservations, store.ReserveOptions{
-		ReserveDeadline: q.conf.Clock.Now().UTC().Add(q.conf.ReserveTimeout),
+	if err := l.partitions[0].Reserve(ctx, state.Reservations, store.ReserveOptions{
+		ReserveDeadline: l.conf.Clock.Now().UTC().Add(l.info.ReserveTimeout),
 	}); err != nil {
-		q.conf.Logger.Error("while calling PartitionStore.Reserve()", "error", err,
-			"category", "queue", "queueName", q.conf.Name)
+		l.conf.Logger.Error("while calling Partition.Reserve()", "error", err,
+			"category", "queue", "queueName", l.info.Name)
 		cancel()
 		// We get here if there was an internal error with the data store
 		// TODO: If no new reserve requests come in, this may never try again. We need the maintenance
@@ -569,10 +575,10 @@ EMPTY:
 			close(req.ReadyCh)
 		}
 	}
-	q.stateCleanUp(state)
+	l.stateCleanUp(state)
 }
 
-func (q *Logical) handleCompleteRequests(state *QueueState, req *types.CompleteRequest) {
+func (l *Logical) handleCompleteRequests(state *QueueState, req *types.CompleteRequest) {
 	// TODO(thrawn01): Ensure we don't go beyond our max number of state.Completes, return
 	//  an error to the client
 
@@ -581,7 +587,7 @@ func (q *Logical) handleCompleteRequests(state *QueueState, req *types.CompleteR
 EMPTY:
 	for {
 		select {
-		case req := <-q.completeQueueCh:
+		case req := <-l.completeQueueCh:
 			state.Completes.Add(req)
 		default:
 			break EMPTY
@@ -591,14 +597,14 @@ EMPTY:
 	writeTimeout := maxRequestTimeout
 	for _, req := range state.Completes.Requests {
 		// Cancel any produce requests that have timed out
-		if q.conf.Clock.Now().UTC().After(req.RequestDeadline) {
+		if l.conf.Clock.Now().UTC().After(req.RequestDeadline) {
 			req.Err = ErrRequestTimeout
 			state.Completes.Remove(req)
 			close(req.ReadyCh)
 			continue
 		}
 		// The writeTimeout should be equal to the request with the least amount of request timeout left.
-		timeLeft := q.conf.Clock.Now().UTC().Sub(req.RequestDeadline)
+		timeLeft := l.conf.Clock.Now().UTC().Sub(req.RequestDeadline)
 		if timeLeft < writeTimeout {
 			writeTimeout = timeLeft
 		}
@@ -606,17 +612,17 @@ EMPTY:
 
 	// If we allow a calculated write timeout to be a few milliseconds, then the store.Add()
 	// is almost guaranteed to fail, so we ensure the write timeout is something reasonable.
-	if writeTimeout < q.conf.WriteTimeout {
+	if writeTimeout < l.conf.WriteTimeout {
 		// WriteTimeout comes from the storage implementation as the user who configured the
 		// storage option should know a reasonable timeout value for the configuration chosen.
-		writeTimeout = q.conf.WriteTimeout
+		writeTimeout = l.conf.WriteTimeout
 	}
 
 	var err error
 	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
-	if err = q.conf.PartitionStore.Complete(ctx, state.Completes); err != nil {
-		q.conf.Logger.Error("while calling PartitionStore.Complete()", "error", err,
-			"category", "queue", "queueName", q.conf.Name)
+	if err = l.partitions[0].Complete(ctx, state.Completes); err != nil {
+		l.conf.Logger.Error("while calling Partition.Complete()", "error", err,
+			"category", "queue", "queueName", l.info.Name)
 	}
 	cancel()
 
@@ -632,19 +638,19 @@ EMPTY:
 
 // stateCleanUp is responsible for cleaning the QueueState by removing clients that have timed out,
 // and finding the next reserve request that will time out and wetting the wakeup timer.
-func (q *Logical) stateCleanUp(state *QueueState) {
+func (l *Logical) stateCleanUp(state *QueueState) {
 	fmt.Printf("stateCleanUp\n")
-	next := q.nextTimeout(&state.Reservations)
+	next := l.nextTimeout(&state.Reservations)
 	if next.Nanoseconds() != 0 {
-		q.conf.Logger.Debug("next maintenance window",
-			"duration", next.String(), "queue", q.conf.Name)
-		state.NextMaintenanceCh = q.conf.Clock.After(next)
+		l.conf.Logger.Debug("next maintenance window",
+			"duration", next.String(), "queue", l.info.Name)
+		state.NextMaintenanceCh = l.conf.Clock.After(next)
 	}
 	state.Reservations.FilterNils()
 }
 
-func (q *Logical) Shutdown(ctx context.Context) error {
-	if q.inShutdown.Swap(true) {
+func (l *Logical) Shutdown(ctx context.Context) error {
+	if l.inShutdown.Swap(true) {
 		return nil
 	}
 
@@ -653,19 +659,19 @@ func (q *Logical) Shutdown(ctx context.Context) error {
 		Context: ctx,
 	}
 
-	// Wait until q.synchronizationLoop() shutdown is complete or until
+	// Wait until l.synchronizationLoop() shutdown is complete or until
 	// our context is cancelled.
 	select {
-	case q.shutdownCh <- req:
-		q.wg.Wait()
+	case l.shutdownCh <- req:
+		l.wg.Wait()
 		return req.Err
 	case <-ctx.Done():
 		return ctx.Err()
 	}
 }
 
-func (q *Logical) queueRequest(ctx context.Context, r *QueueRequest) error {
-	if q.inShutdown.Load() {
+func (l *Logical) queueRequest(ctx context.Context, r *QueueRequest) error {
+	if l.inShutdown.Load() {
 		return ErrQueueShutdown
 	}
 
@@ -673,7 +679,7 @@ func (q *Logical) queueRequest(ctx context.Context, r *QueueRequest) error {
 	r.Context = ctx
 
 	select {
-	case q.queueRequestCh <- r:
+	case l.queueRequestCh <- r:
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -690,33 +696,37 @@ func (q *Logical) queueRequest(ctx context.Context, r *QueueRequest) error {
 // Handlers for the main and pause loops
 // -------------------------------------------------
 
-func (q *Logical) handleQueueRequests(state *QueueState, req *QueueRequest) {
+func (l *Logical) handleQueueRequests(state *QueueState, req *QueueRequest) {
 	switch req.Method {
 	case MethodStorageQueueList, MethodStorageQueueAdd, MethodStorageQueueDelete:
-		q.handleStorageRequests(req)
+		l.handleStorageRequests(req)
 	case MethodQueueStats:
-		q.handleStats(state, req)
+		l.handleStats(state, req)
 	case MethodQueuePause:
-		q.handlePause(state, req)
+		l.handlePause(state, req)
 	case MethodQueueClear:
-		q.handleClear(state, req)
+		l.handleClear(state, req)
 	case MethodUpdateInfo:
 		info := req.Request.(types.QueueInfo)
-		q.conf.QueueInfo = info
+		l.info = info
+		close(req.ReadyCh)
+	case MethodUpdatePartitions:
+		p := req.Request.([]store.Partition)
+		l.partitions = p
 		close(req.ReadyCh)
 	default:
 		panic(fmt.Sprintf("unknown queue request method '%d'", req.Method))
 	}
 }
 
-func (q *Logical) handleClear(_ *QueueState, req *QueueRequest) {
+func (l *Logical) handleClear(_ *QueueState, req *QueueRequest) {
 	// NOTE: When clearing a queue, ensure we flush any cached items. As of this current
 	// version (V0), there is no cached data to sync, but this will likely change in the future.
 	cr := req.Request.(*types.ClearRequest)
 
 	if cr.Queue {
 		// Ask the store to clean up any items in the data store which are not currently out for reservation
-		if err := q.conf.PartitionStore.Clear(req.Context, cr.Destructive); err != nil {
+		if err := l.partitions[0].Clear(req.Context, cr.Destructive); err != nil {
 			req.Err = err
 		}
 	}
@@ -724,19 +734,20 @@ func (q *Logical) handleClear(_ *QueueState, req *QueueRequest) {
 	close(req.ReadyCh)
 }
 
-func (q *Logical) handleStorageRequests(req *QueueRequest) {
+func (l *Logical) handleStorageRequests(req *QueueRequest) {
 	sr := req.Request.(StorageRequest)
+	// TODO: This endpoint should list all items for all partitions this logical is handling
 	switch req.Method {
 	case MethodStorageQueueList:
-		if err := q.conf.PartitionStore.List(req.Context, sr.Items, sr.Options); err != nil {
+		if err := l.partitions[0].List(req.Context, sr.Items, sr.Options); err != nil {
 			req.Err = err
 		}
 	case MethodStorageQueueAdd:
-		if err := q.conf.PartitionStore.Add(req.Context, *sr.Items); err != nil {
+		if err := l.partitions[0].Add(req.Context, *sr.Items); err != nil {
 			req.Err = err
 		}
 	case MethodStorageQueueDelete:
-		if err := q.conf.PartitionStore.Delete(req.Context, sr.IDs); err != nil {
+		if err := l.partitions[0].Delete(req.Context, sr.IDs); err != nil {
 			req.Err = err
 		}
 	default:
@@ -745,22 +756,23 @@ func (q *Logical) handleStorageRequests(req *QueueRequest) {
 	close(req.ReadyCh)
 }
 
-func (q *Logical) handleStats(state *QueueState, r *QueueRequest) {
+func (l *Logical) handleStats(state *QueueState, r *QueueRequest) {
 	qs := r.Request.(*types.QueueStats)
-	if err := q.conf.PartitionStore.Stats(r.Context, qs); err != nil {
+	// TODO: return all Partition stats
+	if err := l.partitions[0].Stats(r.Context, qs); err != nil {
 		r.Err = err
 	}
-	qs.ProduceWaiting = len(q.produceQueueCh)
-	qs.ReserveWaiting = len(q.reserveQueueCh)
-	qs.CompleteWaiting = len(q.completeQueueCh)
+	qs.ProduceWaiting = len(l.produceQueueCh)
+	qs.ReserveWaiting = len(l.reserveQueueCh)
+	qs.CompleteWaiting = len(l.completeQueueCh)
 	qs.ReserveBlocked = len(state.Reservations.Requests)
-	qs.InFlight = int(q.inFlight.Load())
+	qs.InFlight = int(l.inFlight.Load())
 	close(r.ReadyCh)
 }
 
 // handlePause places Logical into a special loop where operations none of the // produce,
 // reserve, complete, defer operations will be processed until we leave the loop.
-func (q *Logical) handlePause(state *QueueState, r *QueueRequest) {
+func (l *Logical) handlePause(state *QueueState, r *QueueRequest) {
 	pr := r.Request.(*types.PauseRequest)
 
 	if !pr.Pause {
@@ -769,10 +781,10 @@ func (q *Logical) handlePause(state *QueueState, r *QueueRequest) {
 	}
 	close(r.ReadyCh)
 
-	q.conf.Logger.Warn("queue paused", "queue", q.conf.Name)
-	defer q.conf.Logger.Warn("queue un-paused", "queue", q.conf.Name)
+	l.conf.Logger.Warn("queue paused", "queue", l.info.Name)
+	defer l.conf.Logger.Warn("queue un-paused", "queue", l.info.Name)
 
-	for req := range q.queueRequestCh {
+	for req := range l.queueRequestCh {
 		switch req.Method {
 		case MethodQueuePause:
 			pr := req.Request.(*types.PauseRequest)
@@ -785,14 +797,14 @@ func (q *Logical) handlePause(state *QueueState, r *QueueRequest) {
 			close(req.ReadyCh)
 			return
 		default:
-			q.handleQueueRequests(state, req)
+			l.handleQueueRequests(state, req)
 		}
 	}
 }
 
-func (q *Logical) handleShutdown(state *QueueState, req *types.ShutdownRequest) {
+func (l *Logical) handleShutdown(state *QueueState, req *types.ShutdownRequest) {
 	fmt.Printf("handleShutdown\n")
-	q.stateCleanUp(state)
+	l.stateCleanUp(state)
 
 	// Cancel any open reservations
 	for _, r := range state.Reservations.Requests {
@@ -801,22 +813,22 @@ func (q *Logical) handleShutdown(state *QueueState, req *types.ShutdownRequest) 
 	}
 
 	// Consume all requests currently in flight
-	for q.inFlight.Load() != 0 {
-		fmt.Printf("handleShutdown.QueueInFlight: %d\n", q.inFlight.Load())
+	for l.inFlight.Load() != 0 {
+		fmt.Printf("handleShutdown.QueueInFlight: %d\n", l.inFlight.Load())
 		select {
-		case r := <-q.produceQueueCh:
+		case r := <-l.produceQueueCh:
 			fmt.Printf("handleShutdown.Produce\n")
 			r.Err = ErrQueueShutdown
 			close(r.ReadyCh)
-		case r := <-q.reserveQueueCh:
+		case r := <-l.reserveQueueCh:
 			fmt.Printf("handleShutdown.Reserve\n")
 			r.Err = ErrQueueShutdown
 			close(r.ReadyCh)
-		case r := <-q.completeQueueCh:
+		case r := <-l.completeQueueCh:
 			fmt.Printf("handleShutdown.Reserve\n")
 			r.Err = ErrQueueShutdown
 			close(r.ReadyCh)
-		case <-q.conf.Clock.After(100 * clock.Millisecond):
+		case <-l.conf.Clock.After(100 * clock.Millisecond):
 			// all time for the closed requests handlers to exit
 		case <-req.Context.Done():
 			req.Err = req.Context.Err()
@@ -825,7 +837,9 @@ func (q *Logical) handleShutdown(state *QueueState, req *types.ShutdownRequest) 
 	}
 
 	fmt.Printf("handleShutdown.Close() Store\n")
-	if err := q.conf.PartitionStore.Close(req.Context); err != nil {
+
+	// TODO: Shutdown all partitions
+	if err := l.partitions[0].Close(req.Context); err != nil {
 		req.Err = err
 	}
 	close(req.ReadyCh)
@@ -836,7 +850,7 @@ func (q *Logical) handleShutdown(state *QueueState, req *types.ShutdownRequest) 
 // -------------------------------------------------
 
 // TODO: I don't think we should pass by ref. We should use escape analysis to decide
-func (q *Logical) nextTimeout(r *types.ReserveBatch) clock.Duration {
+func (l *Logical) nextTimeout(r *types.ReserveBatch) clock.Duration {
 	var soon *types.ReserveRequest
 
 	for i, req := range r.Requests {
@@ -845,7 +859,7 @@ func (q *Logical) nextTimeout(r *types.ReserveBatch) clock.Duration {
 		}
 
 		// If request has already expired
-		if q.conf.Clock.Now().UTC().After(req.RequestDeadline) {
+		if l.conf.Clock.Now().UTC().After(req.RequestDeadline) {
 			// Inform our waiting client
 			req.Err = ErrRequestTimeout
 			close(req.ReadyCh)
@@ -880,7 +894,7 @@ func (q *Logical) nextTimeout(r *types.ReserveBatch) clock.Duration {
 	}
 
 	// How soon is it? =)
-	return soon.RequestDeadline.Sub(q.conf.Clock.Now().UTC())
+	return soon.RequestDeadline.Sub(l.conf.Clock.Now().UTC())
 }
 
 // addIfUnique adds a ReserveRequest to the batch. Returns false if the ReserveRequest.ClientID is a duplicate

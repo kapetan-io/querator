@@ -40,15 +40,26 @@ func (c *Config) ServerTLS() *tls.Config {
 }
 
 func (c *Config) SetDefaults() error {
+	var err error
 	if c.Storage == nil {
-		c.Storage = store.NewBoltBackend(store.BoltConfig{})
+		backend := store.NewBoltBackend(store.BoltConfig{})
+		c.Storage, err = store.NewStorage(store.StorageConfig{
+			QueueStore: backend,
+			PartitionBackends: []store.PartitionBackend{
+				{
+					Name:    "bolt-0",
+					Backend: backend,
+				},
+			},
+		})
+
 	}
 	set.Default(&c.Logger, slog.Default())
 	set.Default(&c.MaxReserveBatchSize, internal.DefaultMaxReserveBatchSize)
 	set.Default(&c.MaxProduceBatchSize, internal.DefaultMaxProduceBatchSize)
 	set.Default(&c.MaxCompleteBatchSize, internal.DefaultMaxCompleteBatchSize)
 	set.Default(&c.MaxRequestsPerQueue, internal.DefaultMaxRequestsPerQueue)
-	return nil
+	return err
 }
 
 // TODO: Load from config system

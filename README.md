@@ -95,21 +95,40 @@ Even though Querator queues are designed to deliver items in the order they were
 disrupted if multiple consumers process items out of sequence. If a user desires a strictly ordered and processed 
 FIFO queue, they must create a queue with only one partition and ensure that only one consumer processes that queue.
 
+### Storage Backends
+- [ ] TODO - Storage backend benchmarks
+
+##### InMemory
+This backend stores all queues and items into RAM memory. This is useful when testing and creating a baseline for 
+benchmarking Querator operation. It can also be used in ephemeral environments where speed is valued over durability.
+
+##### BoltDB
+This backend uses the ETCD flavor of BoltDB and is intended to be used for embedded or in limited resource environments
+where High Availability is not a concern, and where networking is limited or access to a remote storage system is not
+possible. 
+- [ ] TODO - replace this is badgerDB.
+
+### Embedded Querator
+Querator is designed as a library which exposes all API functionality via `Service` method calls. Users can use
+the `daemon` package or invoke `querator.NewService()` directly to get a new instance of `Service` to interact with.
+
 ### API
 See [Querator OSS API Reference](https://thrawn01-llc.stoplight.io/docs/querator-oss/924788fc33955-querator-oss-api)
 for and idea of what the API looks like.
+
+- [ ] TODO - update this with the latest OpenAPI schema
 
 ### Design
 See our [Architecture Decision Docs](doc/adr) for details on our current implementation design.
 
 ### TODOs
-* Implementate PostgreSQL backend with SKIP LOCK, Partitions, Truncate.
-* Implementate Partitioning as a core function. (See The ADR).
-* Experiment with [Badger](https://github.com/dgraph-io/badger) as a replacement for boltDB. Bolt turned out to be much
+- [ ] Implement PostgreSQL backend with SKIP LOCK, Partitions, Truncate.
+- [ ] Experiment with [Badger](https://github.com/dgraph-io/badger) as a replacement for boltDB. Bolt turned out to be much
   slower than I expected due to the lack of an LSM.
-* Finish Testing existing functionality
-* Implement Scheduled and Defer
-* Consider allowing a produced item to specify the ReserveTimeout
+- [ ] Implement Scheduled and Defer
+- [ ] Consider allowing a produced item to specify the ReserveTimeout
+
+See the [Querator Trello Board](https://trello.com/b/cey2cB3i/querator) for work status and progress
 
 ### Similar Projects
 * https://engineering.fb.com/2021/02/22/production-engineering/foqs-scaling-a-distributed-priority-queue/

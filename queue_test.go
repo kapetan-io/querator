@@ -55,31 +55,15 @@ func TestQueue(t *testing.T) {
 		{
 			Name: "InMemory",
 			Setup: func(cp *clock.Provider) *store.Storage {
-				mem := store.NewMemoryBackend(store.MemoryBackendConfig{Clock: cp})
-				s, err := store.NewStorage(store.StorageConfig{
-					QueueBackend: mem,
-					PartitionBackends: []store.PartitionBackend{
-						{
-							Name:    "memory-0",
-							Backend: mem,
-						},
-					},
-				})
-				if err != nil {
-					panic(err)
-				}
-				return s
+				// TODO: Move this into the test package
+				return store.TestSetupMemory(store.MemoryBackendConfig{Clock: cp})
 			},
 			TearDown: func() {},
 		},
 		{
 			Name: "BoltDB",
 			Setup: func(cp *clock.Provider) *store.Storage {
-				s, err := bdb.Setup(store.BoltConfig{Clock: cp})
-				if err != nil {
-					panic(err)
-				}
-				return s
+				return bdb.TestSetup(store.BoltConfig{Clock: cp})
 			},
 			TearDown: func() {
 				bdb.Teardown()
@@ -112,6 +96,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			ReserveTimeout: ReserveTimeout,
 			DeadTimeout:    DeadTimeout,
 			QueueName:      queueName,
+			Partitions:     1,
 		}))
 
 		// Produce a single message

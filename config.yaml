@@ -1,0 +1,66 @@
+# I'm using this file to model out how the configuration model looks. This model might exist in full or in
+# part in a data store a config yaml file. Not sure yet.
+
+# In any case, I'm reasonably sure that Querator should be able to hot reload any config changes on the fly
+# and make use of them immediately provided the config is valid.
+
+
+queues: # is of type 'QueueInfo'
+  - name: queue-1
+    reserve-timeout: 10m
+    dead-queue: queue-1-dead
+    max-attempts: 10
+    partitions:
+      - partition: 0
+        read-only: false
+        storage-name: postgres-01
+      # This is a partition which has moved from bolt-00 to postgres-01 but still has items in it
+      - partition: 0
+        read-only: true
+        storage-name: bolt-00
+      - partition: 1
+        read-only: false
+        storage-name: postgres-01
+      - partition: 2
+        read-only: false
+        storage-name: mongodb-01
+
+
+backends: # is of type 'BackendInfo'
+  - name: bolt-00
+    driver: BoltDB
+    affinity: 0
+
+    # config is of type map[string]string
+    config:
+      file: /var/bolt00
+
+  - name: postgres-01
+    driver: Postgres
+    affinity: 1
+
+    # config is of type map[string]string
+    config:
+      host: localhost
+      port: 5432
+      user: foo
+      pass: bar
+      database: querator
+      ca-file: /path/to/ca
+      client-cert: /path/to/client/cert
+      client-key: /path/to/client/key
+
+  - name: mongodb-01
+    driver: MongoDB
+    affinity: 1
+
+    # config is of type map[string]string
+    config:
+      host: localhost
+      port: 27017
+      user: foo
+      pass: bar
+      database: querator
+      ca-file: /path/to/ca
+      client-cert: /path/to/client/cert
+      client-key: /path/to/client/key

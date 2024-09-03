@@ -20,33 +20,9 @@ func (id StorageID) String() string {
 	return fmt.Sprintf("%s~%s", id.Queue, id.ID)
 }
 
-// Storage is the primary storage interface
-//type Storage interface {
-//	// Partitions returns a list of store.Partition instances using the available partition info
-//	// provided by types.QueueInfo. If a partition has more than one configuration, both configurations
-//	// will be returned. It is therefore possible the list of partitions returned is greater than the
-//	// list of requested partitions.
-//	Partitions(info types.QueueInfo, partitions ...int) ([]Partition, error)
-//
-//	// QueueStore returns an instance of the QueueStore. A QueueStore stores
-//	// QueueInfo structs, which hold information about all the available queues and partitions.
-//	QueueStore(conf QueueStoreConfig) (QueueStore, error)
-//
-//	// TODO: Remove this, the StorageID should be owned by the storage implementation
-//	ParseID(parse types.ItemID, id *StorageID) error
-//	BuildStorageID(queue string, id []byte) types.ItemID
-//
-//	// Close closes all storage connections and open files
-//	Close(ctx context.Context) error
-//}
-
 type ReserveOptions struct {
 	// ReserveDeadline is a time in the future when the reservation should expire
 	ReserveDeadline clock.Time
-}
-
-// TODO: Not sure this should be here, its only used by memory.go
-type QueueStoreConfig struct {
 }
 
 // QueueStore is storage for listing and storing information about queues
@@ -105,76 +81,35 @@ type Partition interface {
 	Close(ctx context.Context) error
 }
 
-// TODO: ScheduledStorage interface {} - A place to store scheduled items to be queued. (Defer)
-
-type PartitionBackend struct {
-	Name    string
-	Backend Backend
-}
-
-// Backend is the thing that a store implements which returns QueueStore and Partition
-// instances.
-type Backend interface {
-	GetQueueStore() (QueueStore, error)
-	GetPartition(info types.PartitionInfo) (Partition, error)
-}
-
+// StorageConfig is the configuration accepted by QueueManager to manage storage of queues, scheduled items,
+// and partitions.
 type StorageConfig struct {
-	QueueBackend      Backend
-	PartitionBackends []PartitionBackend
+	// How Queues are stored can be separate from PartitionInfo and Scheduled stores
+	QueueStore QueueStore
+	Backends   []Backend
 }
 
-func (c StorageConfig) ValidateConfig() error {
-	return nil
+// Backend is the interface that a store implements which returns QueueStore and Partition
+// instances.
+type Backend struct {
+	// TODO: Implement PartitionStore <---- DO THIS NEXT
+	PartitionStore PartitionStore
+	ScheduledStore ScheduledStore
+	Affinity       float64
+	Name           string
 }
 
-func (c StorageConfig) GetPartition(info types.PartitionInfo) Partition {
-	return nil
+// PartitionStore manages the partitions
+type PartitionStore interface {
+	Create(types.PartitionInfo) error
+	Get(types.PartitionInfo) Partition
 }
 
-type Storage struct {
-	conf StorageConfig
+// ScheduledStore manages scheduled and deferred items
+type ScheduledStore interface {
+	Create(types.PartitionInfo) error
+	Get(types.PartitionInfo) Scheduled
 }
 
-func NewStorage(conf StorageConfig) (*Storage, error) {
-	// Compares the partitions in the queue store to the provided
-	// partition backends.
-	if err := conf.ValidateConfig(); err != nil {
-		panic(err)
-	}
-
-	// Get the queue store from the configured QueueBackend
-	queueStore, err := conf.QueueBackend.GetQueueStore()
-	if err != nil {
-		panic(err)
-	}
-
-	var info types.QueueInfo
-	_ = queueStore.Get(context.Background(), "my-queue", &info)
-
-	// Get partitions from the configured PartitionBackend
-	//_ = Storage.GetPartition(info.Partitions[0])
-
-	return nil, nil
+type Scheduled interface {
 }
-
-func (s *Storage) Partitions(queue types.QueueInfo, partitions ...int) ([]Partition, error) {
-	// TODO: Call GetPartition() on each partition backend until
-
-	//for _, p := range partitions {
-	//	for _, info := range queue.Partitions {
-	//		if info.Partition == p {
-	//			// Get the partition
-	//			partition := s.conf.GetPartition(info)
-	//		}
-	//	}
-	//}
-	return nil, nil
-}
-
-func (s *Storage) QueueStore() (QueueStore, error) {
-	return s.conf.QueueBackend.GetQueueStore()
-}
-
-// TODO: I don't think we need this
-func (s *Storage) Close(ctx context.Context) error { return nil }

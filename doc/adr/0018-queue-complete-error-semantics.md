@@ -19,10 +19,6 @@ with individual clients as much as possible. When marking items as `/queue.compl
 reduces the effort required to locate logical queues where each partition resides to confirm item
 completion.
 
-#### Logical Queue Organization
-As a side note, maintaining an array of logical queues organized by partition ID can help ensure
-that Logical Queue operations appear efficient.
-
 #### Complexity Introduced by Partitions
 Introducing partitions as full-class citizens adds complexity to the `/queue.complete` request.
 Although we aim to lump partitions together when a client reserves items from a queue, it is possible

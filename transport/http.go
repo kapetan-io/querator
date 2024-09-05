@@ -20,12 +20,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/pprof"
+	rpprof "runtime/pprof"
+	"strings"
+
 	"github.com/duh-rpc/duh-go"
 	v1 "github.com/duh-rpc/duh-go/proto/v1"
 	pb "github.com/kapetan-io/querator/proto"
 	"github.com/kapetan-io/tackle/set"
 	"github.com/prometheus/client_golang/prometheus"
-	"net/http"
 )
 
 // TODO: Document pause in OpenAPI, "Pauses queue processing such that requests to produce, reserve,
@@ -125,6 +129,16 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if r.URL.Path == "/metrics" && r.Method == http.MethodGet {
 		h.metrics.ServeHTTP(w, r)
+		return
+	}
+
+	if strings.HasPrefix(r.URL.Path, "/pprof/") && r.Method == http.MethodGet {
+		uri, _ := strings.CutPrefix(r.URL.Path, "/pprof/")
+		if p := rpprof.Lookup(uri); p == nil {
+			duh.ReplyWithCode(w, r, duh.CodeNotFound, nil, fmt.Sprintf("invalid profile name: %q", uri))
+			return
+		}
+		pprof.Handler(uri).ServeHTTP(w, r)
 		return
 	}
 

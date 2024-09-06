@@ -189,11 +189,16 @@ func (q *BadgerQueue) Complete(_ context.Context, batch types.Batch[types.Comple
 
 	defer func() {
 		if !done {
+			// TODO: The /queue.complete request should not roll back item IDs that have been successfully marked as
+			//  completed if a subset of item IDs fail.
+			//  https://github.com/kapetan-io/querator/blob/main/doc/adr/0018-queue-complete-error-semantics.md
 			txn.Discard()
 		}
 	}()
 
 nextBatch:
+	// TODO: if any of the provided item IDs cannot be completed, the entire /queue.complete call should return an error
+	//  https://github.com/kapetan-io/querator/blob/main/doc/adr/0018-queue-complete-error-semantics.md
 	for i := range batch.Requests {
 		for _, id := range batch.Requests[i].Ids {
 			var sid StorageID

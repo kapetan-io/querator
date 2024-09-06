@@ -130,7 +130,7 @@ func (q *BadgerQueue) Reserve(_ context.Context, batch types.ReserveBatch, opts 
 		batchIter := batch.Iterator()
 		var count int
 
-		err := q.db.View(func(txn *badger.Txn) error {
+		err := q.db.Update(func(txn *badger.Txn) error {
 			iter := txn.NewIterator(badger.DefaultIteratorOptions)
 			defer iter.Close()
 			for iter.Rewind(); iter.Valid(); iter.Next() {
@@ -259,7 +259,7 @@ func (q *BadgerQueue) List(_ context.Context, items *[]*types.Item, opts types.L
 
 		if sid.ID != nil {
 			iter.Seek(sid.ID)
-			if !iter.ValidForPrefix(sid.ID) {
+			if !iter.Valid() {
 				return transport.NewInvalidOption("invalid pivot; '%s' does not exist", sid.String())
 			}
 		} else {
@@ -479,12 +479,9 @@ func (s BadgerQueuesStore) Add(_ context.Context, info types.QueueInfo) error {
 	return s.db.Update(func(txn *badger.Txn) error {
 
 		// If the queue already exists in the store
-		_, err := txn.Get([]byte(info.Name))
-		if err != nil {
-			if errors2.Is(err, badger.ErrKeyNotFound) {
-				return transport.NewInvalidOption("invalid queue; '%s' already exists", info.Name)
-			}
-			return transport.NewInvalidOption("invalid queue; '%s'", info.Name)
+		kvItem, _ := txn.Get([]byte(info.Name))
+		if kvItem != nil {
+			return transport.NewInvalidOption("invalid queue; '%s' already exists", info.Name)
 		}
 
 		var buf bytes.Buffer // TODO: memory pool
@@ -561,7 +558,7 @@ func (s BadgerQueuesStore) List(_ context.Context, queues *[]types.QueueInfo, op
 
 		if opts.Pivot != nil {
 			iter.Seek(opts.Pivot)
-			if !iter.ValidForPrefix(opts.Pivot) {
+			if !iter.Valid() {
 				return transport.NewInvalidOption("invalid pivot; '%s' does not exist", opts.Pivot)
 			}
 		} else {

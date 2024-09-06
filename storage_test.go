@@ -26,6 +26,7 @@ var log = slog.New(slog.NewTextHandler(os.Stdout, nil))
 // TestQueueStorage tests the /storage/queue.* endpoints
 func TestQueueStorage(t *testing.T) {
 	bdb := store.BoltDBTesting{Dir: t.TempDir()}
+	badger := store.BadgerDBTesting{Dir: t.TempDir()}
 
 	for _, tc := range []struct {
 		Setup    NewStorageFunc
@@ -46,6 +47,15 @@ func TestQueueStorage(t *testing.T) {
 			},
 			TearDown: func() {
 				bdb.Teardown()
+			},
+		},
+		{
+			Name: "BadgerDB",
+			Setup: func(cp *clock.Provider) store.Storage {
+				return badger.Setup(store.BadgerConfig{Clock: cp})
+			},
+			TearDown: func() {
+				badger.Teardown()
 			},
 		},
 		//{

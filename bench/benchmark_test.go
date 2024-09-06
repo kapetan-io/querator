@@ -25,6 +25,7 @@ type NewStorageFunc func() store.Storage
 func BenchmarkProduce(b *testing.B) {
 	fmt.Printf("Current Operating System has '%d' CPUs\n", runtime.NumCPU())
 	bdb := store.BoltDBTesting{Dir: b.TempDir()}
+	badger := store.BadgerDBTesting{Dir: b.TempDir()}
 
 	testCases := []struct {
 		Setup    NewStorageFunc
@@ -46,6 +47,15 @@ func BenchmarkProduce(b *testing.B) {
 				return store.NewMemoryStorage(store.MemoryStorageConfig{})
 			},
 			TearDown: func() {},
+		},
+		{
+			Name: "BadgerDB",
+			Setup: func() store.Storage {
+				return badger.Setup(store.BadgerConfig{})
+			},
+			TearDown: func() {
+				badger.Teardown()
+			},
 		},
 		//{
 		//	Name: "PostgresSQL",
@@ -144,6 +154,7 @@ func generateProduceItems(size int) []*pb.QueueProduceItem {
 func BenchmarkQueuesCreate(b *testing.B) {
 	fmt.Printf("Current Operating System has '%d' CPUs\n", runtime.NumCPU())
 	bdb := store.BoltDBTesting{Dir: b.TempDir()}
+	badger := store.BadgerDBTesting{Dir: b.TempDir()}
 	//bdb := store.BoltDBTesting{Dir: "/tmp/querator"}
 
 	testCases := []struct {
@@ -166,6 +177,15 @@ func BenchmarkQueuesCreate(b *testing.B) {
 				return store.NewMemoryStorage(store.MemoryStorageConfig{})
 			},
 			TearDown: func() {},
+		},
+		{
+			Name: "BadgerDB",
+			Setup: func() store.Storage {
+				return badger.Setup(store.BadgerConfig{})
+			},
+			TearDown: func() {
+				badger.Teardown()
+			},
 		},
 		//{
 		//	Name: "PostgresSQL",

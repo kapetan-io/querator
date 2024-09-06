@@ -162,7 +162,7 @@ func (q *Logical) Produce(ctx context.Context, req *types.ProduceRequest) error 
 	req.ReadyCh = make(chan struct{})
 	req.Context = ctx
 
-	//fmt.Printf("Produce Len: %d \n", len(q.produceQueueCh))
+	fmt.Printf("Produce Len: %d \n", len(q.produceQueueCh))
 	select {
 	case q.produceQueueCh <- req:
 	default:
@@ -390,7 +390,7 @@ func (q *Logical) synchronizationLoop() {
 	}
 
 	for {
-		//fmt.Printf("sync.loop\n")
+		fmt.Printf("sync.loop\n")
 		select {
 		case req := <-q.produceQueueCh:
 			q.handleProduceRequests(&state, req)

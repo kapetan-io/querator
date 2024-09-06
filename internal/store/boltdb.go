@@ -11,10 +11,8 @@ import (
 	"github.com/kapetan-io/querator/transport"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/random"
-	"github.com/kapetan-io/tackle/set"
 	"github.com/segmentio/ksuid"
 	bolt "go.etcd.io/bbolt"
-	"log/slog"
 	"os"
 	"path/filepath"
 )
@@ -36,103 +34,95 @@ type BoltConfig struct {
 //   a new call when the previous call failed, should be an error, a new call cannot be made until the
 //   previous call completes.
 
+//type BoltBackend struct {
+//	conf BoltConfig
+//}
+//
+//var _ Backend = &BoltBackend{}
+//
+//func (b *BoltBackend) ParseID(parse types.ItemID, id *StorageID) error {
+//	parts := bytes.Split(parse, []byte("~"))
+//	if len(parts) != 2 {
+//		return errors.New("expected format <queue_name>~<storage_id>")
+//	}
+//	id.Queue = string(parts[0])
+//	id.ID = parts[1]
+//	return nil
+//}
+//
+//// TODO: Remove this, no need to include the queue name in the id anymore.
+//func (b *BoltBackend) BuildStorageID(queue string, id []byte) types.ItemID {
+//	return append([]byte(queue+"~"), id...)
+//}
+//
+//func (b *BoltBackend) Close(_ context.Context) error {
+//	return nil
+//}
+//
+//func NewBoltBackend(conf BoltConfig) *BoltBackend {
+//	set.Default(&conf.Logger, slog.Default())
+//	set.Default(&conf.StorageDir, ".")
+//	set.Default(&conf.Clock, clock.NewProvider())
+//	return &BoltBackend{conf: conf}
+//}
+
 // ---------------------------------------------
-// Storage Implementation
+// PartitionStore Implementation
 // ---------------------------------------------
 
-type BoltBackend struct {
+type BoltPartitionStore struct {
 	conf BoltConfig
 }
 
-var _ Backend = &BoltBackend{}
+var _ PartitionStore = &BoltPartitionStore{}
 
-func (b *BoltBackend) ParseID(parse types.ItemID, id *StorageID) error {
-	parts := bytes.Split(parse, []byte("~"))
-	if len(parts) != 2 {
-		return errors.New("expected format <queue_name>~<storage_id>")
+func NewBoltPartitionStore(conf BoltConfig) *BoltPartitionStore {
+	return &BoltPartitionStore{conf: conf}
+}
+
+func (b BoltPartitionStore) Create(info types.PartitionInfo) error {
+	// Does nothing as memory has nothing to create. Calls to Get() create the partition
+	// when requested.
+	return nil
+}
+
+func (b BoltPartitionStore) Get(info types.PartitionInfo) Partition {
+	return &BoltPartition{
+		uid:  ksuid.New(),
+		conf: b.conf,
+		info: info,
 	}
-	id.Queue = string(parts[0])
-	id.ID = parts[1]
-	return nil
-}
-
-// TODO: Remove this, no need to include the queue name in the id anymore.
-func (b *BoltBackend) BuildStorageID(queue string, id []byte) types.ItemID {
-	return append([]byte(queue+"~"), id...)
-}
-
-func (b *BoltBackend) Close(_ context.Context) error {
-	return nil
-}
-
-func NewBoltBackend(conf BoltConfig) *BoltBackend {
-	set.Default(&conf.Logger, slog.Default())
-	set.Default(&conf.StorageDir, ".")
-	set.Default(&conf.Clock, clock.NewProvider())
-	return &BoltBackend{conf: conf}
 }
 
 // ---------------------------------------------
 // Partition Implementation
 // ---------------------------------------------
 
-func (b *BoltBackend) GetPartition(info types.PartitionInfo) (Partition, error) {
-	f := errors.Fields{"category", "bolt", "func", "Storage.NewPartition"}
-
-	file := filepath.Join(b.conf.StorageDir, fmt.Sprintf("%s-%06d.db", info.Queue.Name, info.Partition))
-
-	opts := &bolt.Options{
-		FreelistType: bolt.FreelistArrayType,
-		Timeout:      clock.Second,
-		NoGrowSync:   false,
-	}
-
-	db, err := bolt.Open(file, 0600, opts)
-	if err != nil {
-		return nil, f.Errorf("while opening db '%s': %w", file, err)
-	}
-
-	// TODO: Test opening an existing partition.
-	err = db.Update(func(tx *bolt.Tx) error {
-		_, err := tx.CreateBucket(bucketName)
-		if err != nil {
-			return err
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, f.Errorf("while creating bucket '%s': %w", file, err)
-	}
-
-	return &BoltPartition{
-		uid:    ksuid.New(),
-		info:   info.Queue,
-		db:     db,
-		parent: b,
-	}, nil
-}
-
 type BoltPartition struct {
-	info   types.QueueInfo
-	parent *BoltBackend
-	uid    ksuid.KSUID
-	db     *bolt.DB
+	info types.PartitionInfo
+	conf BoltConfig
+	uid  ksuid.KSUID
+	db   *bolt.DB
 }
 
-func (q *BoltPartition) Produce(_ context.Context, batch types.Batch[types.ProduceRequest]) error {
+func (b *BoltPartition) Produce(_ context.Context, batch types.Batch[types.ProduceRequest]) error {
 	f := errors.Fields{"category", "bolt", "func", "Partition.Produce"}
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
 
-	return q.db.Update(func(tx *bolt.Tx) error {
-		b := tx.Bucket(bucketName)
-		if b == nil {
+	return db.Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket(bucketName)
+		if bucket == nil {
 			return f.Error("bucket does not exist in data file")
 		}
 
 		for _, r := range batch.Requests {
 			for _, item := range r.Items {
-				q.uid = q.uid.Next()
-				item.ID = []byte(q.uid.String())
-				item.CreatedAt = q.parent.conf.Clock.Now().UTC()
+				b.uid = b.uid.Next()
+				item.ID = []byte(b.uid.String())
+				item.CreatedAt = b.conf.Clock.Now().UTC()
 
 				// TODO: Get buffers from memory pool
 				var buf bytes.Buffer
@@ -140,20 +130,24 @@ func (q *BoltPartition) Produce(_ context.Context, batch types.Batch[types.Produ
 					return f.Errorf("during gob.Encode(): %w", err)
 				}
 
-				if err := b.Put(item.ID, buf.Bytes()); err != nil {
+				if err := bucket.Put(item.ID, buf.Bytes()); err != nil {
 					return f.Errorf("during Put(): %w", err)
 				}
-
-				item.ID = q.parent.BuildStorageID(q.info.Name, item.ID)
 			}
 		}
 		return nil
 	})
 }
 
-func (q *BoltPartition) Reserve(_ context.Context, batch types.ReserveBatch, opts ReserveOptions) error {
+func (b *BoltPartition) Reserve(_ context.Context, batch types.ReserveBatch, opts ReserveOptions) error {
 	f := errors.Fields{"category", "bolt", "func", "Partition.Reserve"}
-	return q.db.Update(func(tx *bolt.Tx) error {
+
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.Update(func(tx *bolt.Tx) error {
 
 		b := tx.Bucket(bucketName)
 		if b == nil {
@@ -197,7 +191,6 @@ func (q *BoltPartition) Reserve(_ context.Context, batch types.ReserveBatch, opt
 				if err := b.Put(item.ID, buf.Bytes()); err != nil {
 					return f.Errorf("during Put(): %w", err)
 				}
-				item.ID = q.parent.BuildStorageID(q.info.Name, item.ID)
 				continue
 			}
 			break
@@ -206,11 +199,16 @@ func (q *BoltPartition) Reserve(_ context.Context, batch types.ReserveBatch, opt
 	})
 }
 
-func (q *BoltPartition) Complete(_ context.Context, batch types.Batch[types.CompleteRequest]) error {
+func (b *BoltPartition) Complete(_ context.Context, batch types.Batch[types.CompleteRequest]) error {
 	f := errors.Fields{"category", "bolt", "func", "Partition.Complete"}
 	var done bool
 
-	tx, err := q.db.Begin(true)
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	tx, err := db.Begin(true)
 	if err != nil {
 		return f.Errorf("during Begin(): %w", err)
 	}
@@ -218,27 +216,26 @@ func (q *BoltPartition) Complete(_ context.Context, batch types.Batch[types.Comp
 	defer func() {
 		if !done {
 			if err := tx.Rollback(); err != nil {
-				q.parent.conf.Logger.Error("during Rollback()", "error", err)
+				b.conf.Logger.Error("during Rollback()", "error", err)
 			}
 		}
 	}()
 
-	b := tx.Bucket(bucketName)
-	if b == nil {
+	bucket := tx.Bucket(bucketName)
+	if bucket == nil {
 		return f.Error("bucket does not exist in data file")
 	}
 
 nextBatch:
 	for i := range batch.Requests {
 		for _, id := range batch.Requests[i].Ids {
-			var sid StorageID
-			if err = q.parent.ParseID(id, &sid); err != nil {
+			if err = b.validateID(id); err != nil {
 				batch.Requests[i].Err = transport.NewInvalidOption("invalid storage id; '%s': %s", id, err)
 				continue nextBatch
 			}
 
 			// TODO: Test complete with id's that do not exist in the database
-			value := b.Get(sid.ID)
+			value := bucket.Get(id)
 			if value == nil {
 				batch.Requests[i].Err = transport.NewInvalidOption("invalid storage id; '%s' does not exist", id)
 				continue nextBatch
@@ -251,12 +248,12 @@ nextBatch:
 
 			if !item.IsReserved {
 				batch.Requests[i].Err = transport.NewConflict("item(s) cannot be completed; '%s' is not "+
-					"marked as reserved", sid.ID)
+					"marked as reserved", id)
 				continue nextBatch
 			}
 
-			if err = b.Delete(sid.ID); err != nil {
-				return f.Errorf("during Delete(%s): %w", sid.ID, err)
+			if err = bucket.Delete(id); err != nil {
+				return f.Errorf("during Delete(%s): %w", id, err)
 			}
 		}
 	}
@@ -270,17 +267,21 @@ nextBatch:
 	return nil
 }
 
-func (q *BoltPartition) List(_ context.Context, items *[]*types.Item, opts types.ListOptions) error {
+func (b *BoltPartition) List(_ context.Context, items *[]*types.Item, opts types.ListOptions) error {
 	f := errors.Fields{"category", "bolt", "func", "Partition.List"}
 
-	var sid StorageID
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
 	if opts.Pivot != nil {
-		if err := q.parent.ParseID(opts.Pivot, &sid); err != nil {
+		if err := b.validateID(opts.Pivot); err != nil {
 			return transport.NewInvalidOption("invalid storage id; '%s': %s", opts.Pivot, err)
 		}
 	}
 
-	return q.db.View(func(tx *bolt.Tx) error {
+	return db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket(bucketName)
 		if b == nil {
 			return f.Error("bucket does not exist in data file")
@@ -289,10 +290,10 @@ func (q *BoltPartition) List(_ context.Context, items *[]*types.Item, opts types
 		c := b.Cursor()
 		var count int
 		var k, v []byte
-		if sid.ID != nil {
-			k, v = c.Seek(sid.ID)
+		if opts.Pivot != nil {
+			k, v = c.Seek(opts.Pivot)
 			if k == nil {
-				return transport.NewInvalidOption("invalid pivot; '%s' does not exist", sid.String())
+				return transport.NewInvalidOption("invalid pivot; '%s' does not exist", opts.Pivot)
 			}
 		} else {
 			k, v = c.First()
@@ -308,7 +309,6 @@ func (q *BoltPartition) List(_ context.Context, items *[]*types.Item, opts types
 			return f.Errorf("during Decode(): %w", err)
 		}
 
-		item.ID = q.parent.BuildStorageID(q.info.Name, item.ID)
 		*items = append(*items, item)
 		count++
 
@@ -322,7 +322,6 @@ func (q *BoltPartition) List(_ context.Context, items *[]*types.Item, opts types
 				return f.Errorf("during Decode(): %w", err)
 			}
 
-			item.ID = q.parent.BuildStorageID(q.info.Name, item.ID)
 			*items = append(*items, item)
 			count++
 		}
@@ -330,19 +329,24 @@ func (q *BoltPartition) List(_ context.Context, items *[]*types.Item, opts types
 	})
 }
 
-func (q *BoltPartition) Add(_ context.Context, items []*types.Item) error {
+func (b *BoltPartition) Add(_ context.Context, items []*types.Item) error {
 	f := errors.Fields{"category", "bolt", "func", "Partition.Add"}
 
-	return q.db.Update(func(tx *bolt.Tx) error {
-		b := tx.Bucket(bucketName)
-		if b == nil {
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket(bucketName)
+		if bucket == nil {
 			return f.Error("bucket does not exist in data file")
 		}
 
 		for _, item := range items {
-			q.uid = q.uid.Next()
-			item.ID = []byte(q.uid.String())
-			item.CreatedAt = q.parent.conf.Clock.Now().UTC()
+			b.uid = b.uid.Next()
+			item.ID = []byte(b.uid.String())
+			item.CreatedAt = b.conf.Clock.Now().UTC()
 
 			// TODO: Get buffers from memory pool
 			var buf bytes.Buffer
@@ -350,31 +354,33 @@ func (q *BoltPartition) Add(_ context.Context, items []*types.Item) error {
 				return f.Errorf("during gob.Encode(): %w", err)
 			}
 
-			if err := b.Put(item.ID, buf.Bytes()); err != nil {
+			if err := bucket.Put(item.ID, buf.Bytes()); err != nil {
 				return f.Errorf("during Put(): %w", err)
 			}
-
-			item.ID = q.parent.BuildStorageID(q.info.Name, item.ID)
 		}
 		return nil
 	})
 }
 
-func (q *BoltPartition) Delete(_ context.Context, ids []types.ItemID) error {
+func (b *BoltPartition) Delete(_ context.Context, ids []types.ItemID) error {
 	f := errors.Fields{"category", "bolt", "func", "Partition.Delete"}
 
-	return q.db.Update(func(tx *bolt.Tx) error {
-		b := tx.Bucket(bucketName)
-		if b == nil {
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket(bucketName)
+		if bucket == nil {
 			return f.Error("bucket does not exist in data file")
 		}
 
 		for _, id := range ids {
-			var sid StorageID
-			if err := q.parent.ParseID(id, &sid); err != nil {
+			if err := b.validateID(id); err != nil {
 				return transport.NewInvalidOption("invalid storage id; '%s': %s", id, err)
 			}
-			if err := b.Delete(sid.ID); err != nil {
+			if err := bucket.Delete(id); err != nil {
 				return fmt.Errorf("during delete: %w", err)
 			}
 		}
@@ -382,10 +388,15 @@ func (q *BoltPartition) Delete(_ context.Context, ids []types.ItemID) error {
 	})
 }
 
-func (q *BoltPartition) Clear(_ context.Context, destructive bool) error {
+func (b *BoltPartition) Clear(_ context.Context, destructive bool) error {
 	f := errors.Fields{"category", "bolt", "func", "Partition.Delete"}
 
-	return q.db.Update(func(tx *bolt.Tx) error {
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.Update(func(tx *bolt.Tx) error {
 		if destructive {
 			if err := tx.DeleteBucket(bucketName); err != nil {
 				return f.Errorf("during destructive DeleteBucket(): %w", err)
@@ -396,11 +407,11 @@ func (q *BoltPartition) Clear(_ context.Context, destructive bool) error {
 			return nil
 		}
 
-		b := tx.Bucket(bucketName)
-		if b == nil {
+		bucket := tx.Bucket(bucketName)
+		if bucket == nil {
 			return f.Error("bucket does not exist in data file")
 		}
-		c := b.Cursor()
+		c := bucket.Cursor()
 		for k, v := c.First(); k != nil; k, v = c.Next() {
 			item := new(types.Item) // TODO: memory pool
 			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(item); err != nil {
@@ -412,7 +423,7 @@ func (q *BoltPartition) Clear(_ context.Context, destructive bool) error {
 				continue
 			}
 
-			if err := b.Delete(k); err != nil {
+			if err := bucket.Delete(k); err != nil {
 				return f.Errorf("during Delete(): %w", err)
 			}
 		}
@@ -420,11 +431,16 @@ func (q *BoltPartition) Clear(_ context.Context, destructive bool) error {
 	})
 }
 
-func (q *BoltPartition) Stats(_ context.Context, stats *types.QueueStats) error {
+func (b *BoltPartition) Stats(_ context.Context, stats *types.QueueStats) error {
 	f := errors.Fields{"category", "bunt-db", "func", "Partition.Stats"}
-	now := q.parent.conf.Clock.Now().UTC()
+	now := b.conf.Clock.Now().UTC()
 
-	return q.db.View(func(tx *bolt.Tx) error {
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.View(func(tx *bolt.Tx) error {
 
 		b := tx.Bucket(bucketName)
 		if b == nil {
@@ -456,17 +472,80 @@ func (q *BoltPartition) Stats(_ context.Context, stats *types.QueueStats) error 
 	})
 }
 
-func (q *BoltPartition) Close(_ context.Context) error {
-	return q.db.Close()
+func (b *BoltPartition) Close(_ context.Context) error {
+	if b.db != nil {
+		return b.db.Close()
+	}
+	return nil
+}
+
+func (b *BoltPartition) validateID(id []byte) error {
+	_, err := ksuid.FromBytes(id)
+	if err != nil {
+		return errors.New("invalid storage id")
+	}
+	return nil
+}
+
+func (b *BoltPartition) getDB() (*bolt.DB, error) {
+	if b.db != nil {
+		return b.db, nil
+	}
+
+	f := errors.Fields{"category", "bolt", "func", "BoltPartition.getDB"}
+	file := filepath.Join(b.conf.StorageDir, fmt.Sprintf("%s-%06d.db", b.info.QueueName, b.info.Partition))
+
+	opts := &bolt.Options{
+		FreelistType: bolt.FreelistArrayType,
+		Timeout:      clock.Second,
+		NoGrowSync:   false,
+	}
+
+	db, err := bolt.Open(file, 0600, opts)
+	if err != nil {
+		return nil, f.Errorf("while opening db '%s': %w", file, err)
+	}
+
+	// TODO: Test opening an existing partition.
+	err = db.Update(func(tx *bolt.Tx) error {
+		// TODO: This should open an bucket, not create one
+		_, err := tx.CreateBucket(bucketName)
+		if err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, f.Errorf("while creating bucket '%s': %w", file, err)
+	}
+	b.db = db
+	return db, nil
+}
+
+func NewBoltQueueStore(conf BoltConfig) QueueStore {
+	return &BoltQueueStore{
+		db: db,
+	}, nil
 }
 
 // ---------------------------------------------
-// Partition Repository Implementation
+// QueueStore Implementation
 // ---------------------------------------------
 
-func (b *BoltBackend) GetQueueStore() (QueueStore, error) {
-	f := errors.Fields{"category", "bolt", "func", "Storage.QueueStore"}
+type BoltQueueStore struct {
+	QueuesValidation
+	db   *bolt.DB
+	conf BoltConfig
+}
 
+var _ QueueStore = &BoltQueueStore{}
+
+func (b BoltQueueStore) getDB() (*bolt.DB, error) {
+	if b.db != nil {
+		return b.db, nil
+	}
+
+	f := errors.Fields{"category", "bolt", "func", "Storage.QueueStore"}
 	// We store info about the queues in a single db file. We prefix it with `~` to make it
 	// impossible for someone to create a queue with the same name.
 	file := filepath.Join(b.conf.StorageDir, "~queue-storage.db")
@@ -487,27 +566,23 @@ func (b *BoltBackend) GetQueueStore() (QueueStore, error) {
 	if err != nil {
 		return nil, f.Errorf("while creating bucket '%s': %w", file, err)
 	}
-
-	return &BoltQueueStore{
-		db: db,
-	}, nil
+	b.db = db
+	return db, nil
 }
 
-type BoltQueueStore struct {
-	QueuesValidation
-	db *bolt.DB
-}
-
-var _ QueueStore = &BoltQueueStore{}
-
-func (s BoltQueueStore) Get(_ context.Context, name string, queue *types.QueueInfo) error {
+func (b BoltQueueStore) Get(_ context.Context, name string, queue *types.QueueInfo) error {
 	f := errors.Fields{"category", "bolt", "func", "QueueStore.Get"}
 
-	if err := s.validateGet(name); err != nil {
+	if err := b.validateGet(name); err != nil {
 		return err
 	}
 
-	return s.db.View(func(tx *bolt.Tx) error {
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket(bucketName)
 		if b == nil {
 			return f.Error("bucket does not exist in data file")
@@ -525,22 +600,27 @@ func (s BoltQueueStore) Get(_ context.Context, name string, queue *types.QueueIn
 	})
 }
 
-func (s BoltQueueStore) Add(_ context.Context, info types.QueueInfo) error {
+func (b BoltQueueStore) Add(_ context.Context, info types.QueueInfo) error {
 	f := errors.Fields{"category", "bolt", "func", "QueueStore.Add"}
 
-	if err := s.validateAdd(info); err != nil {
+	if err := b.validateAdd(info); err != nil {
 		return err
 	}
 
-	return s.db.Update(func(tx *bolt.Tx) error {
-		b := tx.Bucket(bucketName)
-		if b == nil {
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket(bucketName)
+		if bucket == nil {
 			return f.Error("bucket does not exist in data file")
 		}
 
 		// If the queue already exists in the store
-		if b.Get([]byte(info.Name)) != nil {
-			return transport.NewInvalidOption("invalid queue; '%s' already exists", info.Name)
+		if bucket.Get([]byte(info.Name)) != nil {
+			return transport.NewInvalidOption("invalid queue; '%b' already exists", info.Name)
 		}
 
 		var buf bytes.Buffer // TODO: memory pool
@@ -548,27 +628,32 @@ func (s BoltQueueStore) Add(_ context.Context, info types.QueueInfo) error {
 			return f.Errorf("during gob.Encode(): %w", err)
 		}
 
-		if err := b.Put([]byte(info.Name), buf.Bytes()); err != nil {
+		if err := bucket.Put([]byte(info.Name), buf.Bytes()); err != nil {
 			return f.Errorf("during Put(): %w", err)
 		}
 		return nil
 	})
 }
 
-func (s BoltQueueStore) Update(_ context.Context, info types.QueueInfo) error {
+func (b BoltQueueStore) Update(_ context.Context, info types.QueueInfo) error {
 	f := errors.Fields{"category", "bolt", "func", "QueueStore.Update"}
 
-	if err := s.validateUpdate(info); err != nil {
+	if err := b.validateUpdate(info); err != nil {
 		return err
 	}
 
-	return s.db.Update(func(tx *bolt.Tx) error {
-		b := tx.Bucket(bucketName)
-		if b == nil {
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket(bucketName)
+		if bucket == nil {
 			return f.Error("bucket does not exist in data file")
 		}
 
-		v := b.Get([]byte(info.Name))
+		v := bucket.Get([]byte(info.Name))
 		if v == nil {
 			return ErrQueueNotExist
 		}
@@ -581,8 +666,8 @@ func (s BoltQueueStore) Update(_ context.Context, info types.QueueInfo) error {
 		found.Update(info)
 
 		if found.ReserveTimeout > found.DeadTimeout {
-			return transport.NewInvalidOption("reserve timeout is too long; %s cannot be greater than the "+
-				"dead timeout %s", info.ReserveTimeout.String(), found.DeadTimeout.String())
+			return transport.NewInvalidOption("reserve timeout is too long; %b cannot be greater than the "+
+				"dead timeout %b", info.ReserveTimeout.String(), found.DeadTimeout.String())
 		}
 
 		var buf bytes.Buffer
@@ -590,33 +675,38 @@ func (s BoltQueueStore) Update(_ context.Context, info types.QueueInfo) error {
 			return f.Errorf("during gob.Encode(): %w", err)
 		}
 
-		if err := b.Put([]byte(info.Name), buf.Bytes()); err != nil {
+		if err := bucket.Put([]byte(info.Name), buf.Bytes()); err != nil {
 			return f.Errorf("during Put(): %w", err)
 		}
 		return nil
 	})
 }
 
-func (s BoltQueueStore) List(_ context.Context, queues *[]types.QueueInfo, opts types.ListOptions) error {
+func (b BoltQueueStore) List(_ context.Context, queues *[]types.QueueInfo, opts types.ListOptions) error {
 	f := errors.Fields{"category", "bolt", "func", "QueueStore.List"}
 
-	if err := s.validateList(opts); err != nil {
+	if err := b.validateList(opts); err != nil {
 		return err
 	}
 
-	return s.db.View(func(tx *bolt.Tx) error {
-		b := tx.Bucket(bucketName)
-		if b == nil {
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket(bucketName)
+		if bucket == nil {
 			return f.Error("bucket does not exist in data file")
 		}
 
-		c := b.Cursor()
+		c := bucket.Cursor()
 		var count int
 		var k, v []byte
 		if opts.Pivot != nil {
 			k, v = c.Seek(opts.Pivot)
 			if k == nil {
-				return transport.NewInvalidOption("invalid pivot; '%s' does not exist", opts.Pivot)
+				return transport.NewInvalidOption("invalid pivot; '%b' does not exist", opts.Pivot)
 			}
 
 		} else {
@@ -651,28 +741,33 @@ func (s BoltQueueStore) List(_ context.Context, queues *[]types.QueueInfo, opts 
 	})
 }
 
-func (s BoltQueueStore) Delete(_ context.Context, name string) error {
+func (b BoltQueueStore) Delete(_ context.Context, name string) error {
 	f := errors.Fields{"category", "bolt", "func", "QueueStore.Delete"}
 
-	if err := s.validateDelete(name); err != nil {
+	if err := b.validateDelete(name); err != nil {
 		return err
 	}
 
-	return s.db.Update(func(tx *bolt.Tx) error {
-		b := tx.Bucket(bucketName)
-		if b == nil {
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket(bucketName)
+		if bucket == nil {
 			return f.Error("bucket does not exist in data file")
 		}
 
-		if err := b.Delete([]byte(name)); err != nil {
-			return f.Errorf("during Delete(%s): %w", name, err)
+		if err := bucket.Delete([]byte(name)); err != nil {
+			return f.Errorf("during Delete(%b): %w", name, err)
 		}
 		return nil
 	})
 }
 
-func (s BoltQueueStore) Close(_ context.Context) error {
-	return s.db.Close()
+func (b BoltQueueStore) Close(_ context.Context) error {
+	return b.db.Close()
 }
 
 // ---------------------------------------------
@@ -694,7 +789,7 @@ type BoltDBTesting struct {
 	Dir string
 }
 
-func (b *BoltDBTesting) TestSetup(conf BoltConfig) *Storage {
+func (b *BoltDBTesting) TestSetup(conf BoltConfig) *StorageConfig {
 	if !dirExists(b.Dir) {
 		if err := os.Mkdir(b.Dir, 0777); err != nil {
 			panic(err)
@@ -706,20 +801,20 @@ func (b *BoltDBTesting) TestSetup(conf BoltConfig) *Storage {
 	}
 	conf.StorageDir = b.Dir
 
-	backend := NewBoltBackend(conf)
-	s, err := NewStorage(StorageConfig{
-		QueueStore: backend,
-		PartitionBackends: []PartitionBackend{
-			{
-				Name:    "bolt-0",
-				Backend: backend,
-			},
-		},
-	})
-	if err != nil {
-		panic(err)
-	}
-	return s
+	//backend := NewBoltBackend(conf)
+	//s, err := NewStorage(StorageConfig{
+	//	QueueStore: backend,
+	//	PartitionBackends: []PartitionBackend{
+	//		{
+	//			Name:    "bolt-0",
+	//			Backend: backend,
+	//		},
+	//	},
+	//})
+	//if err != nil {
+	//	panic(err)
+	//}
+	//return s
 }
 
 func (b *BoltDBTesting) Teardown() {

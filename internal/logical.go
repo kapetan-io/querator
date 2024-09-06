@@ -45,6 +45,8 @@ var (
 )
 
 type LogicalConfig struct {
+	types.QueueInfo
+
 	// If defined, is the logger used by the queue
 	Logger duh.StandardLogger
 	// TODO: Make these configurable at the Service level
@@ -63,6 +65,8 @@ type LogicalConfig struct {
 	MaxRequestsPerQueue int
 	// Clock is the clock provider used to calculate the current time
 	Clock *clock.Provider
+	// The initial partitions provided to the LogicalQueue at initialization.
+	Partitions []store.Partition
 }
 
 // TODO: Modify the Logical to Handle many partitions
@@ -84,8 +88,6 @@ type Logical struct {
 	queueRequestCh chan *QueueRequest
 	wg             sync.WaitGroup
 	conf           LogicalConfig
-	info           types.QueueInfo
-	partitions     []store.Partition
 	inFlight       atomic.Int32
 	inShutdown     atomic.Bool
 }
@@ -471,7 +473,7 @@ EMPTY:
 		}
 		// Assign a DeadTimeout to each item
 		for _, item := range req.Items {
-			item.DeadDeadline = l.conf.Clock.Now().UTC().Add(l.info.DeadTimeout)
+			item.DeadDeadline = l.conf.Clock.Now().UTC().Add(l.conf.DeadTimeout)
 		}
 		// The writeTimeout should be equal to the request with the least amount of request timeout left.
 		timeLeft := l.conf.Clock.Now().UTC().Sub(req.RequestDeadline)
@@ -489,9 +491,9 @@ EMPTY:
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
-	if err := l.partitions[0].Produce(ctx, state.Producers); err != nil {
+	if err := l.conf.Partitions[0].Produce(ctx, state.Producers); err != nil {
 		l.conf.Logger.Error("while calling Partition.Produce()", "error", err,
-			"category", "queue", "queueName", l.info.Name)
+			"category", "queue", "queueName", l.conf.Name)
 		cancel()
 		// Let clients that are timed out, know we are done with them.
 		for _, req := range state.Producers.Requests {
@@ -552,11 +554,11 @@ EMPTY:
 	// Send the batch that each request wants to the store. If there are items that can be reserved the
 	// store will assign items to each batch request.
 	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
-	if err := l.partitions[0].Reserve(ctx, state.Reservations, store.ReserveOptions{
-		ReserveDeadline: l.conf.Clock.Now().UTC().Add(l.info.ReserveTimeout),
+	if err := l.conf.Partitions[0].Reserve(ctx, state.Reservations, store.ReserveOptions{
+		ReserveDeadline: l.conf.Clock.Now().UTC().Add(l.conf.ReserveTimeout),
 	}); err != nil {
 		l.conf.Logger.Error("while calling Partition.Reserve()", "error", err,
-			"category", "queue", "queueName", l.info.Name)
+			"category", "queue", "queueName", l.conf.Name)
 		cancel()
 		// We get here if there was an internal error with the data store
 		// TODO: If no new reserve requests come in, this may never try again. We need the maintenance
@@ -620,9 +622,9 @@ EMPTY:
 
 	var err error
 	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
-	if err = l.partitions[0].Complete(ctx, state.Completes); err != nil {
+	if err = l.conf.Partitions[0].Complete(ctx, state.Completes); err != nil {
 		l.conf.Logger.Error("while calling Partition.Complete()", "error", err,
-			"category", "queue", "queueName", l.info.Name)
+			"category", "queue", "queueName", l.conf.Name)
 	}
 	cancel()
 
@@ -643,7 +645,7 @@ func (l *Logical) stateCleanUp(state *QueueState) {
 	next := l.nextTimeout(&state.Reservations)
 	if next.Nanoseconds() != 0 {
 		l.conf.Logger.Debug("next maintenance window",
-			"duration", next.String(), "queue", l.info.Name)
+			"duration", next.String(), "queue", l.conf.Name)
 		state.NextMaintenanceCh = l.conf.Clock.After(next)
 	}
 	state.Reservations.FilterNils()
@@ -708,11 +710,11 @@ func (l *Logical) handleQueueRequests(state *QueueState, req *QueueRequest) {
 		l.handleClear(state, req)
 	case MethodUpdateInfo:
 		info := req.Request.(types.QueueInfo)
-		l.info = info
+		l.conf.QueueInfo = info
 		close(req.ReadyCh)
 	case MethodUpdatePartitions:
 		p := req.Request.([]store.Partition)
-		l.partitions = p
+		l.conf.Partitions = p
 		close(req.ReadyCh)
 	default:
 		panic(fmt.Sprintf("unknown queue request method '%d'", req.Method))
@@ -726,7 +728,7 @@ func (l *Logical) handleClear(_ *QueueState, req *QueueRequest) {
 
 	if cr.Queue {
 		// Ask the store to clean up any items in the data store which are not currently out for reservation
-		if err := l.partitions[0].Clear(req.Context, cr.Destructive); err != nil {
+		if err := l.conf.Partitions[0].Clear(req.Context, cr.Destructive); err != nil {
 			req.Err = err
 		}
 	}
@@ -739,15 +741,15 @@ func (l *Logical) handleStorageRequests(req *QueueRequest) {
 	// TODO: This endpoint should list all items for all partitions this logical is handling
 	switch req.Method {
 	case MethodStorageQueueList:
-		if err := l.partitions[0].List(req.Context, sr.Items, sr.Options); err != nil {
+		if err := l.conf.Partitions[0].List(req.Context, sr.Items, sr.Options); err != nil {
 			req.Err = err
 		}
 	case MethodStorageQueueAdd:
-		if err := l.partitions[0].Add(req.Context, *sr.Items); err != nil {
+		if err := l.conf.Partitions[0].Add(req.Context, *sr.Items); err != nil {
 			req.Err = err
 		}
 	case MethodStorageQueueDelete:
-		if err := l.partitions[0].Delete(req.Context, sr.IDs); err != nil {
+		if err := l.conf.Partitions[0].Delete(req.Context, sr.IDs); err != nil {
 			req.Err = err
 		}
 	default:
@@ -759,7 +761,7 @@ func (l *Logical) handleStorageRequests(req *QueueRequest) {
 func (l *Logical) handleStats(state *QueueState, r *QueueRequest) {
 	qs := r.Request.(*types.QueueStats)
 	// TODO: return all Partition stats
-	if err := l.partitions[0].Stats(r.Context, qs); err != nil {
+	if err := l.conf.Partitions[0].Stats(r.Context, qs); err != nil {
 		r.Err = err
 	}
 	qs.ProduceWaiting = len(l.produceQueueCh)
@@ -781,8 +783,8 @@ func (l *Logical) handlePause(state *QueueState, r *QueueRequest) {
 	}
 	close(r.ReadyCh)
 
-	l.conf.Logger.Warn("queue paused", "queue", l.info.Name)
-	defer l.conf.Logger.Warn("queue un-paused", "queue", l.info.Name)
+	l.conf.Logger.Warn("queue paused", "queue", l.conf.Name)
+	defer l.conf.Logger.Warn("queue un-paused", "queue", l.conf.Name)
 
 	for req := range l.queueRequestCh {
 		switch req.Method {
@@ -839,7 +841,7 @@ func (l *Logical) handleShutdown(state *QueueState, req *types.ShutdownRequest) 
 	fmt.Printf("handleShutdown.Close() Store\n")
 
 	// TODO: Shutdown all partitions
-	if err := l.partitions[0].Close(req.Context); err != nil {
+	if err := l.conf.Partitions[0].Close(req.Context); err != nil {
 		req.Err = err
 	}
 	close(req.ReadyCh)

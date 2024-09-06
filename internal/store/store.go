@@ -10,6 +10,7 @@ import (
 
 var ErrQueueNotExist = transport.NewRequestFailed("queue does not exist")
 
+// TODO: Remove
 // StorageID is the decoded storage StorageID
 type StorageID struct {
 	ID    types.ItemID
@@ -81,18 +82,20 @@ type Partition interface {
 	Close(ctx context.Context) error
 }
 
+// TODO: Rename this to `store.Config` if possible
 // StorageConfig is the configuration accepted by QueueManager to manage storage of queues, scheduled items,
 // and partitions.
 type StorageConfig struct {
 	// How Queues are stored can be separate from PartitionInfo and Scheduled stores
 	QueueStore QueueStore
-	Backends   []Backend
+	// The Backends configured for partitions to utilize
+	Backends []Backend
+	// Clock is the clock provider the backend implementation should use
+	Clock *clock.Provider
 }
 
-// Backend is the interface that a store implements which returns QueueStore and Partition
-// instances.
+// Backend is the struct which holds the configured partition backend interfaces
 type Backend struct {
-	// TODO: Implement PartitionStore <---- DO THIS NEXT
 	PartitionStore PartitionStore
 	ScheduledStore ScheduledStore
 	Affinity       float64
@@ -101,9 +104,18 @@ type Backend struct {
 
 // PartitionStore manages the partitions
 type PartitionStore interface {
+	// Create assumes the partition does not exist. Returns an error if the partition exists
 	Create(types.PartitionInfo) error
+	// Get assumes the partition exists and returns a new Partition instance for the requested partition.
+	// returns an error if the partition requested does not exist.
 	Get(types.PartitionInfo) Partition
 }
+
+// TODO: A scheduled store should probably be located or managed by a partition store, possibly in the same table
+//  or a separate table on the same data storage as the partition table. Queued schedule items should be distributed
+//  across partitions as to avoid a throughput bottle neck, and should be queued into whatever partition the logical
+//  queue has access to when the scheduled item deadline is reached. This avoids complication
+//
 
 // ScheduledStore manages scheduled and deferred items
 type ScheduledStore interface {
@@ -111,5 +123,6 @@ type ScheduledStore interface {
 	Get(types.PartitionInfo) Scheduled
 }
 
+// TODO: Design the Scheduled interface
 type Scheduled interface {
 }

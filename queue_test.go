@@ -42,10 +42,10 @@ const (
 
 var RetryTenTimes = retry.Policy{Interval: retry.Sleep(clock.Second), Attempts: 10}
 
-type NewStorageFunc func(cp *clock.Provider) *store.Storage
+type NewStorageFunc func(cp *clock.Provider) store.StorageConfig
 
 func TestQueue(t *testing.T) {
-	bdb := store.BoltDBTesting{Dir: t.TempDir()}
+	//bdb := store.BoltDBTesting{Dir: t.TempDir()}
 
 	for _, tc := range []struct {
 		Setup    NewStorageFunc
@@ -54,21 +54,20 @@ func TestQueue(t *testing.T) {
 	}{
 		{
 			Name: "InMemory",
-			Setup: func(cp *clock.Provider) *store.Storage {
-				// TODO: Move this into the test package
-				return store.TestSetupMemory(store.MemoryBackendConfig{Clock: cp})
+			Setup: func(cp *clock.Provider) store.StorageConfig {
+				return setupMemoryStorage(store.StorageConfig{Clock: cp})
 			},
 			TearDown: func() {},
 		},
-		{
-			Name: "BoltDB",
-			Setup: func(cp *clock.Provider) *store.Storage {
-				return bdb.TestSetup(store.BoltConfig{Clock: cp})
-			},
-			TearDown: func() {
-				bdb.Teardown()
-			},
-		},
+		//{
+		//	Name: "BoltDB",
+		//	Setup: func(cp *clock.Provider) store.StorageConfig {
+		//		return bdb.TestSetup(store.BoltConfig{Clock: cp})
+		//	},
+		//	TearDown: func() {
+		//		bdb.Teardown()
+		//	},
+		//},
 		//{
 		//	Name: "SurrealDB",
 		//},

@@ -141,19 +141,6 @@ func (qm *QueuesManager) startLogicalQueue(ctx context.Context, info types.Queue
 	// TODO: Should eventually support more than one partition depending on the current number
 	//  of consumers.
 
-	l, err := SpawnLogicalQueue(LogicalConfig{
-		MaxProduceBatchSize:  qm.conf.LogicalConfig.MaxProduceBatchSize,
-		MaxReserveBatchSize:  qm.conf.LogicalConfig.MaxReserveBatchSize,
-		MaxCompleteBatchSize: qm.conf.LogicalConfig.MaxCompleteBatchSize,
-		MaxRequestsPerQueue:  qm.conf.LogicalConfig.MaxRequestsPerQueue,
-		WriteTimeout:         qm.conf.LogicalConfig.WriteTimeout,
-		ReadTimeout:          qm.conf.LogicalConfig.ReadTimeout,
-		Logger:               qm.conf.Logger,
-	})
-	if err != nil {
-		return nil, err
-	}
-
 	// TODO: If there is only one client, and multiple Logical Queues, then we
 	//  should reduce the number of Logical Queues automatically. We need to
 	//  figure out how clients register themselves as consumers before allowing reservation calls.
@@ -161,13 +148,19 @@ func (qm *QueuesManager) startLogicalQueue(ctx context.Context, info types.Queue
 	// Get all the partitions we want associated with this logical queue instance
 	p := qm.conf.StorageConfig.Backends[0].PartitionStore.Get(info.PartitionInfo[0])
 
-	// TODO: Consider merging UpdateInfo() and UpdatePartitions() if we don't need them to be separate operations
-	if err := l.UpdatePartitions(ctx, []store.Partition{p}); err != nil {
-		return nil, l.Shutdown(ctx) // UpdatePartitions() only returns a context error so this doesn't clobber err
-	}
-
-	if err := l.UpdateInfo(ctx, info); err != nil {
-		return nil, l.Shutdown(ctx) // UpdateInfo() only returns a context error so this doesn't clobber err
+	l, err := SpawnLogicalQueue(LogicalConfig{
+		MaxProduceBatchSize:  qm.conf.LogicalConfig.MaxProduceBatchSize,
+		MaxReserveBatchSize:  qm.conf.LogicalConfig.MaxReserveBatchSize,
+		MaxCompleteBatchSize: qm.conf.LogicalConfig.MaxCompleteBatchSize,
+		MaxRequestsPerQueue:  qm.conf.LogicalConfig.MaxRequestsPerQueue,
+		WriteTimeout:         qm.conf.LogicalConfig.WriteTimeout,
+		ReadTimeout:          qm.conf.LogicalConfig.ReadTimeout,
+		Partitions:           []store.Partition{p},
+		Logger:               qm.conf.Logger,
+		QueueInfo:            info,
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	// TODO: This should become a list of queues which hold logical queues

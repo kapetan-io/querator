@@ -411,3 +411,15 @@ func compareStorageItem(t *testing.T, l *pb.StorageQueueItem, r *pb.StorageQueue
 	require.Equal(t, l.Kind, r.Kind)
 	require.Equal(t, l.Payload, r.Payload)
 }
+
+func setupMemoryStorage(conf store.StorageConfig) store.StorageConfig {
+	conf.QueueStore = store.NewMemoryQueueStore()
+	conf.Backends = []store.Backend{
+		{
+			PartitionStore: store.NewMemoryPartitionStore(conf),
+			Name:           "memory-0",
+			Affinity:       1,
+		},
+	}
+	return conf
+}

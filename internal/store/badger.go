@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/gob"
-	errors2 "errors"
 	"fmt"
 	"github.com/dgraph-io/badger/v4"
 	"github.com/duh-rpc/duh-go"
@@ -459,7 +458,10 @@ func (s BadgerQueuesStore) Get(_ context.Context, name string, queue *types.Queu
 
 		kvItem, err := txn.Get([]byte(name))
 		if err != nil {
-			return ErrQueueNotExist
+			if errors.Is(err, badger.ErrKeyNotFound) {
+				return ErrQueueNotExist
+			}
+			return f.Errorf("during Get(): %w", err)
 		}
 
 		var v []byte
@@ -484,8 +486,8 @@ func (s BadgerQueuesStore) Add(_ context.Context, info types.QueueInfo) error {
 	return s.db.Update(func(txn *badger.Txn) error {
 
 		// If the queue already exists in the store
-		kvItem, _ := txn.Get([]byte(info.Name))
-		if kvItem != nil {
+		_, err := txn.Get([]byte(info.Name))
+		if err == nil {
 			return transport.NewInvalidOption("invalid queue; '%s' already exists", info.Name)
 		}
 
@@ -512,7 +514,7 @@ func (s BadgerQueuesStore) Update(_ context.Context, info types.QueueInfo) error
 
 		kvItem, err := txn.Get([]byte(info.Name))
 		if err != nil {
-			if errors2.Is(err, badger.ErrKeyNotFound) {
+			if errors.Is(err, badger.ErrKeyNotFound) {
 				return ErrQueueNotExist
 			}
 			return f.Errorf("during Get(): %w", err)

@@ -56,7 +56,7 @@ func NewDaemon(ctx context.Context, conf Config) (*Daemon, error) {
 		WriteTimeout:         conf.WriteTimeout,
 		ReadTimeout:          conf.ReadTimeout,
 		InstanceID:           conf.InstanceID,
-		Storage:              conf.Storage,
+		StorageConfig:        conf.StorageConfig,
 		Logger:               conf.Logger,
 		Clock:                conf.Clock,
 	})

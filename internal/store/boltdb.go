@@ -10,10 +10,8 @@ import (
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/transport"
 	"github.com/kapetan-io/tackle/clock"
-	"github.com/kapetan-io/tackle/random"
 	"github.com/segmentio/ksuid"
 	bolt "go.etcd.io/bbolt"
-	"os"
 	"path/filepath"
 )
 
@@ -81,12 +79,12 @@ func NewBoltPartitionStore(conf BoltConfig) *BoltPartitionStore {
 }
 
 func (b BoltPartitionStore) Create(info types.PartitionInfo) error {
-	// Does nothing as memory has nothing to create. Calls to Get() create the partition
-	// when requested.
+	// TODO: Implement
 	return nil
 }
 
 func (b BoltPartitionStore) Get(info types.PartitionInfo) Partition {
+	// TODO: Implement
 	return &BoltPartition{
 		uid:  ksuid.New(),
 		conf: b.conf,
@@ -522,15 +520,15 @@ func (b *BoltPartition) getDB() (*bolt.DB, error) {
 	return db, nil
 }
 
-func NewBoltQueueStore(conf BoltConfig) QueueStore {
-	return &BoltQueueStore{
-		db: db,
-	}, nil
-}
-
 // ---------------------------------------------
 // QueueStore Implementation
 // ---------------------------------------------
+
+func NewBoltQueueStore(conf BoltConfig) QueueStore {
+	return &BoltQueueStore{
+		conf: conf,
+	}
+}
 
 type BoltQueueStore struct {
 	QueuesValidation
@@ -545,7 +543,7 @@ func (b BoltQueueStore) getDB() (*bolt.DB, error) {
 		return b.db, nil
 	}
 
-	f := errors.Fields{"category", "bolt", "func", "Storage.QueueStore"}
+	f := errors.Fields{"category", "bolt", "func", "StorageConfig.QueueStore"}
 	// We store info about the queues in a single db file. We prefix it with `~` to make it
 	// impossible for someone to create a queue with the same name.
 	file := filepath.Join(b.conf.StorageDir, "~queue-storage.db")
@@ -620,7 +618,7 @@ func (b BoltQueueStore) Add(_ context.Context, info types.QueueInfo) error {
 
 		// If the queue already exists in the store
 		if bucket.Get([]byte(info.Name)) != nil {
-			return transport.NewInvalidOption("invalid queue; '%b' already exists", info.Name)
+			return transport.NewInvalidOption("invalid queue; '%s' already exists", info.Name)
 		}
 
 		var buf bytes.Buffer // TODO: memory pool
@@ -666,8 +664,8 @@ func (b BoltQueueStore) Update(_ context.Context, info types.QueueInfo) error {
 		found.Update(info)
 
 		if found.ReserveTimeout > found.DeadTimeout {
-			return transport.NewInvalidOption("reserve timeout is too long; %b cannot be greater than the "+
-				"dead timeout %b", info.ReserveTimeout.String(), found.DeadTimeout.String())
+			return transport.NewInvalidOption("reserve timeout is too long; %s cannot be greater than the "+
+				"dead timeout %s", info.ReserveTimeout.String(), found.DeadTimeout.String())
 		}
 
 		var buf bytes.Buffer
@@ -706,7 +704,7 @@ func (b BoltQueueStore) List(_ context.Context, queues *[]types.QueueInfo, opts 
 		if opts.Pivot != nil {
 			k, v = c.Seek(opts.Pivot)
 			if k == nil {
-				return transport.NewInvalidOption("invalid pivot; '%b' does not exist", opts.Pivot)
+				return transport.NewInvalidOption("invalid pivot; '%s' does not exist", opts.Pivot)
 			}
 
 		} else {
@@ -760,7 +758,7 @@ func (b BoltQueueStore) Delete(_ context.Context, name string) error {
 		}
 
 		if err := bucket.Delete([]byte(name)); err != nil {
-			return f.Errorf("during Delete(%b): %w", name, err)
+			return f.Errorf("during Delete(%s): %w", name, err)
 		}
 		return nil
 	})
@@ -768,57 +766,4 @@ func (b BoltQueueStore) Delete(_ context.Context, name string) error {
 
 func (b BoltQueueStore) Close(_ context.Context) error {
 	return b.db.Close()
-}
-
-// ---------------------------------------------
-// Test Helper
-// ---------------------------------------------
-
-func dirExists(path string) bool {
-	info, err := os.Stat(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return false
-		}
-		return false
-	}
-	return info.IsDir()
-}
-
-type BoltDBTesting struct {
-	Dir string
-}
-
-func (b *BoltDBTesting) TestSetup(conf BoltConfig) *StorageConfig {
-	if !dirExists(b.Dir) {
-		if err := os.Mkdir(b.Dir, 0777); err != nil {
-			panic(err)
-		}
-	}
-	b.Dir = filepath.Join(b.Dir, random.String("test-data-", 10))
-	if err := os.Mkdir(b.Dir, 0777); err != nil {
-		panic(err)
-	}
-	conf.StorageDir = b.Dir
-
-	//backend := NewBoltBackend(conf)
-	//s, err := NewStorage(StorageConfig{
-	//	QueueStore: backend,
-	//	PartitionBackends: []PartitionBackend{
-	//		{
-	//			Name:    "bolt-0",
-	//			Backend: backend,
-	//		},
-	//	},
-	//})
-	//if err != nil {
-	//	panic(err)
-	//}
-	//return s
-}
-
-func (b *BoltDBTesting) Teardown() {
-	if err := os.RemoveAll(b.Dir); err != nil {
-		panic(err)
-	}
 }

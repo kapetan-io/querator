@@ -1,9 +1,7 @@
 package store
 
 import (
-	"bytes"
 	"context"
-	"errors"
 	"github.com/kapetan-io/querator/internal/types"
 )
 
@@ -13,38 +11,6 @@ type MockConfig struct {
 
 type MockBackend struct {
 	conf *MockConfig
-}
-
-var _ Backend = &MockBackend{}
-
-func NewMockStorage(conf *MockConfig) *MockBackend {
-	return &MockBackend{conf: conf}
-}
-
-func (m *MockBackend) GetQueueStore() (QueueStore, error) {
-	return &MockQueuesStore{}, nil
-}
-
-func (m *MockBackend) GetPartition(info types.PartitionInfo) (Partition, error) {
-	return &MockPartition{info: info.Queue, parent: m}, nil
-}
-
-func (m *MockBackend) ParseID(parse types.ItemID, id *StorageID) error {
-	parts := bytes.Split(parse, []byte("~"))
-	if len(parts) != 2 {
-		return errors.New("expected format <queue_name>~<storage_id>")
-	}
-	id.Queue = string(parts[0])
-	id.ID = parts[1]
-	return nil
-}
-
-func (m *MockBackend) BuildStorageID(queue string, id []byte) types.ItemID {
-	return append([]byte(queue+"~"), id...)
-}
-
-func (m *MockBackend) Close(_ context.Context) error {
-	return nil
 }
 
 type MockPartition struct {

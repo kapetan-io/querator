@@ -6,6 +6,7 @@ import (
 	"github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/internal"
 	"github.com/kapetan-io/querator/internal/store"
+	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/set"
 	"log/slog"
 )
@@ -41,24 +42,20 @@ func (c *Config) ServerTLS() *tls.Config {
 
 func (c *Config) SetDefaults() error {
 	var err error
-	if c.Storage == nil {
-		backend := store.NewBoltBackend(store.BoltConfig{})
-		c.Storage, err = store.NewStorage(store.StorageConfig{
-			QueueStore: backend,
-			PartitionBackends: []store.PartitionBackend{
-				{
-					Name:    "bolt-0",
-					Backend: backend,
-				},
-			},
-		})
-
-	}
+	set.Default(&c.Clock, clock.NewProvider())
 	set.Default(&c.Logger, slog.Default())
 	set.Default(&c.MaxReserveBatchSize, internal.DefaultMaxReserveBatchSize)
 	set.Default(&c.MaxProduceBatchSize, internal.DefaultMaxProduceBatchSize)
 	set.Default(&c.MaxCompleteBatchSize, internal.DefaultMaxCompleteBatchSize)
 	set.Default(&c.MaxRequestsPerQueue, internal.DefaultMaxRequestsPerQueue)
+	set.Default(&c.StorageConfig.QueueStore, store.NewMemoryQueueStore())
+	set.Default(&c.StorageConfig.Backends, []store.Backend{
+		{
+			PartitionStore: store.NewMemoryPartitionStore(c.StorageConfig),
+			Name:           "mem-0",
+			Affinity:       1,
+		},
+	})
 	return err
 }
 

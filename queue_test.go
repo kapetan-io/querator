@@ -22,7 +22,7 @@ import (
 //func TestBrokenStorage(t *testing.T) {
 //	var queueName = random.String("queue-", 10)
 //	conf := &store.MockConfig{}
-//	newStore := func() store.Storage {
+//	newStore := func() store.StorageConfig {
 //		return store.NewMockStorage(conf)
 //	}
 //
@@ -45,7 +45,7 @@ var RetryTenTimes = retry.Policy{Interval: retry.Sleep(clock.Second), Attempts: 
 type NewStorageFunc func(cp *clock.Provider) store.StorageConfig
 
 func TestQueue(t *testing.T) {
-	//bdb := store.BoltDBTesting{Dir: t.TempDir()}
+	bdb := boltTestSetup{Dir: t.TempDir()}
 
 	for _, tc := range []struct {
 		Setup    NewStorageFunc
@@ -59,15 +59,15 @@ func TestQueue(t *testing.T) {
 			},
 			TearDown: func() {},
 		},
-		//{
-		//	Name: "BoltDB",
-		//	Setup: func(cp *clock.Provider) store.StorageConfig {
-		//		return bdb.TestSetup(store.BoltConfig{Clock: cp})
-		//	},
-		//	TearDown: func() {
-		//		bdb.Teardown()
-		//	},
-		//},
+		{
+			Name: "BoltDB",
+			Setup: func(cp *clock.Provider) store.StorageConfig {
+				return bdb.Setup(store.BoltConfig{Clock: cp})
+			},
+			TearDown: func() {
+				bdb.Teardown()
+			},
+		},
 		//{
 		//	Name: "SurrealDB",
 		//},
@@ -87,7 +87,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		_store := setup(clock.NewProvider())
 		defer tearDown()
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{Storage: _store})
+		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: _store})
 		defer d.Shutdown(t)
 
 		// Create a queue
@@ -174,7 +174,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		_store := setup(clock.NewProvider())
 		defer tearDown()
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{Storage: _store})
+		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: _store})
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -352,7 +352,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		var queueName = random.String("queue-", 10)
 		clientID := random.String("client-", 10)
-		d, c, ctx := newDaemon(t, 30*clock.Second, que.ServiceConfig{Storage: _store})
+		d, c, ctx := newDaemon(t, 30*clock.Second, que.ServiceConfig{StorageConfig: _store})
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -560,7 +560,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer tearDown()
 		var queueName = random.String("queue-", 10)
 		clientID := random.String("client-", 10)
-		d, c, ctx := newDaemon(t, 30*clock.Second, que.ServiceConfig{Storage: _store})
+		d, c, ctx := newDaemon(t, 30*clock.Second, que.ServiceConfig{StorageConfig: _store})
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -645,7 +645,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer tearDown()
 		var queueName = random.String("queue-", 10)
 		clientID := random.String("client-", 10)
-		d, c, ctx := newDaemon(t, 30*clock.Second, que.ServiceConfig{Storage: _store})
+		d, c, ctx := newDaemon(t, 30*clock.Second, que.ServiceConfig{StorageConfig: _store})
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -684,7 +684,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer tearDown()
 
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{Storage: _store})
+		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: _store})
 		defer d.Shutdown(t)
 
 		var reserved []*pb.StorageQueueItem
@@ -755,7 +755,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		t.Run("QueueProduce", func(t *testing.T) {
 			var queueName = random.String("queue-", 10)
-			d, c, ctx := newDaemon(t, 5*clock.Second, que.ServiceConfig{Storage: _store})
+			d, c, ctx := newDaemon(t, 5*clock.Second, que.ServiceConfig{StorageConfig: _store})
 			defer d.Shutdown(t)
 			maxItems := randomProduceItems(1_001)
 
@@ -879,7 +879,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		t.Run("QueueReserve", func(t *testing.T) {
 			var queueName = random.String("queue-", 10)
 			var clientID = random.String("client-", 10)
-			d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{Storage: _store})
+			d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: _store})
 			defer d.Shutdown(t)
 
 			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -1039,7 +1039,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		})
 		t.Run("QueueComplete", func(t *testing.T) {
 			var queueName = random.String("queue-", 10)
-			d, c, ctx := newDaemon(t, 5*clock.Second, que.ServiceConfig{Storage: _store})
+			d, c, ctx := newDaemon(t, 5*clock.Second, que.ServiceConfig{StorageConfig: _store})
 			defer d.Shutdown(t)
 
 			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{

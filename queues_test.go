@@ -18,7 +18,7 @@ import (
 )
 
 func TestQueuesStorage(t *testing.T) {
-	bdb := store.BoltDBTesting{Dir: t.TempDir()}
+	bdb := boltTestSetup{Dir: t.TempDir()}
 
 	for _, tc := range []struct {
 		Setup    NewStorageFunc
@@ -27,15 +27,15 @@ func TestQueuesStorage(t *testing.T) {
 	}{
 		{
 			Name: "InMemory",
-			Setup: func(cp *clock.Provider) *store.Storage {
-				return store.TestSetupMemory(store.MemoryBackendConfig{Clock: cp})
+			Setup: func(cp *clock.Provider) store.StorageConfig {
+				return setupMemoryStorage(store.StorageConfig{Clock: cp})
 			},
 			TearDown: func() {},
 		},
 		{
 			Name: "BoltDB",
-			Setup: func(cp *clock.Provider) *store.Storage {
-				return bdb.TestSetup(store.BoltConfig{Clock: cp})
+			Setup: func(cp *clock.Provider) store.StorageConfig {
+				return bdb.Setup(store.BoltConfig{Clock: cp})
 			},
 			TearDown: func() {
 				bdb.Teardown()
@@ -49,16 +49,16 @@ func TestQueuesStorage(t *testing.T) {
 		//},
 	} {
 		t.Run(tc.Name, func(t *testing.T) {
-			testQueuesStorage(t, tc.Setup, tc.TearDown)
+			testQueues(t, tc.Setup, tc.TearDown)
 		})
 	}
 }
 
-func testQueuesStorage(t *testing.T, setup NewStorageFunc, tearDown func()) {
+func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	t.Run("CRUD", func(t *testing.T) {
 		_store := setup(clock.NewProvider())
 		defer tearDown()
-		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{Storage: _store})
+		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: _store})
 		defer d.Shutdown(t)
 
 		t.Run("Create", func(t *testing.T) {
@@ -297,7 +297,7 @@ func testQueuesStorage(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	t.Run("List", func(t *testing.T) {
 		_store := setup(clock.NewProvider())
 		defer tearDown()
-		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{Storage: _store})
+		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: _store})
 		defer d.Shutdown(t)
 
 		queues := createRandomQueues(t, ctx, c, 100)
@@ -369,7 +369,7 @@ func testQueuesStorage(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	t.Run("Errors", func(t *testing.T) {
 		_store := setup(clock.NewProvider())
 		defer tearDown()
-		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{Storage: _store})
+		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: _store})
 		defer d.Shutdown(t)
 
 		var queueName = random.String("queue-", 10)

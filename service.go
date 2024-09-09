@@ -18,7 +18,6 @@ package querator
 
 import (
 	"context"
-	"errors"
 	"github.com/duh-rpc/duh-go"
 	"github.com/kapetan-io/querator/internal"
 	"github.com/kapetan-io/querator/internal/store"
@@ -37,8 +36,8 @@ const (
 type ServiceConfig struct {
 	// Logger is the logging implementation used by this Querator instance
 	Logger duh.StandardLogger
-	// Storage is a map of configured storage engines
-	Storage *store.Storage
+	// StorageConfig is the configured storage backends
+	StorageConfig store.StorageConfig
 	// InstanceID is a unique id for this instance of Querator
 	InstanceID string
 	// WriteTimeout The time it should take for a single batched write to complete
@@ -67,10 +66,6 @@ type Service struct {
 func NewService(conf ServiceConfig) (*Service, error) {
 	set.Default(&conf.Logger, slog.Default())
 
-	if conf.Storage == nil {
-		return nil, errors.New("storage is required")
-	}
-
 	qm, err := internal.NewQueuesManager(internal.QueuesManagerConfig{
 		LogicalConfig: internal.LogicalConfig{
 			MaxReserveBatchSize:  conf.MaxReserveBatchSize,
@@ -79,8 +74,8 @@ func NewService(conf ServiceConfig) (*Service, error) {
 			MaxRequestsPerQueue:  conf.MaxRequestsPerQueue,
 			Clock:                conf.Clock,
 		},
-		Storage: conf.Storage,
-		Logger:  conf.Logger,
+		StorageConfig: conf.StorageConfig,
+		Logger:        conf.Logger,
 	})
 	if err != nil {
 		return nil, err

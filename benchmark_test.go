@@ -1,4 +1,4 @@
-package bench_test
+package querator_test
 
 import (
 	"context"
@@ -10,57 +10,51 @@ import (
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/random"
 	"github.com/stretchr/testify/require"
-	"log/slog"
 	"math/rand"
-	"os"
 	"runtime"
 	"testing"
 )
 
-// var log = slog.New(slog.NewTextHandler(io.Discard, nil))
-var log = slog.New(slog.NewTextHandler(os.Stdout, nil))
-
-type NewStorageFunc func(cp *clock.Provider) *store.Storage
-
 func BenchmarkProduce(b *testing.B) {
 	fmt.Printf("Current Operating System has '%d' CPUs\n", runtime.NumCPU())
-	bdb := store.BoltDBTesting{Dir: b.TempDir()}
+	bdb := boltTestSetup{Dir: b.TempDir()}
 
-	testCases := []struct {
+	for _, tc := range []struct {
 		Setup    NewStorageFunc
 		TearDown func()
 		Name     string
 	}{
 		{
 			Name: "InMemory",
-			Setup: func(cp *clock.Provider) *store.Storage {
-				return store.TestSetupMemory(store.MemoryBackendConfig{Clock: cp})
+			Setup: func(cp *clock.Provider) store.StorageConfig {
+				return setupMemoryStorage(store.StorageConfig{Clock: cp})
 			},
 			TearDown: func() {},
 		},
 		{
 			Name: "BoltDB",
-			Setup: func(cp *clock.Provider) *store.Storage {
-				return bdb.TestSetup(store.BoltConfig{Clock: cp})
+			Setup: func(cp *clock.Provider) store.StorageConfig {
+				return bdb.Setup(store.BoltConfig{Clock: cp})
 			},
 			TearDown: func() {
 				bdb.Teardown()
 			},
 		},
 		//{
+		//	Name: "SurrealDB",
+		//},
+		//{
 		//	Name: "PostgresSQL",
 		//},
-	}
-
-	for _, tc := range testCases {
+	} {
 		b.Run(tc.Name, func(b *testing.B) {
 			items := generateProduceItems(1_000)
 			mask := len(items) - 1
 
 			d, err := daemon.NewDaemon(context.Background(), daemon.Config{
 				ServiceConfig: querator.ServiceConfig{
-					Storage: tc.Setup(clock.NewProvider()),
-					Logger:  log,
+					StorageConfig: tc.Setup(clock.NewProvider()),
+					Logger:        log,
 				},
 			})
 			require.NoError(b, err)
@@ -105,8 +99,8 @@ func BenchmarkProduce(b *testing.B) {
 		b.Run(tc.Name, func(b *testing.B) {
 			d, err := daemon.NewDaemon(context.Background(), daemon.Config{
 				ServiceConfig: querator.ServiceConfig{
-					Storage: tc.Setup(clock.NewProvider()),
-					Logger:  log,
+					StorageConfig: tc.Setup(clock.NewProvider()),
+					Logger:        log,
 				},
 			})
 			require.NoError(b, err)
@@ -144,30 +138,6 @@ func BenchmarkProduce(b *testing.B) {
 			})
 		})
 	}
-}
-
-type Pair struct {
-	Reserve string
-	Dead    string
-}
-
-var validTimeouts = []Pair{
-	{
-		Reserve: "15s",
-		Dead:    "1m0s",
-	},
-	{
-		Reserve: "1m0s",
-		Dead:    "10m0s",
-	},
-	{
-		Reserve: "10m0s",
-		Dead:    "24h0m0s",
-	},
-	{
-		Reserve: "30m0s",
-		Dead:    "1h0m0s",
-	},
 }
 
 func generateProduceItems(size int) []*pb.QueueProduceItem {

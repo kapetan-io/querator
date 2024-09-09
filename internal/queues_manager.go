@@ -38,6 +38,10 @@ func NewQueuesManager(conf QueuesManagerConfig) (*QueuesManager, error) {
 	set.Default(&conf.LogicalConfig.Clock, clock.NewProvider())
 	set.Default(&conf.Logger, slog.Default())
 
+	if conf.StorageConfig.QueueStore == nil {
+		return nil, errors.New("conf.StorageConfig.QueueStore cannot be nil")
+	}
+
 	if conf.StorageConfig.Backends == nil || len(conf.StorageConfig.Backends) == 0 {
 		return nil, errors.New("conf.StorageConfig.Backends cannot be empty")
 	}
@@ -50,7 +54,7 @@ func NewQueuesManager(conf QueuesManagerConfig) (*QueuesManager, error) {
 	return qm, nil
 }
 
-// TODO: Implement a healthcheck method call, which will ensure access to Storage is working
+// TODO: Implement a healthcheck method call, which will ensure access to StorageConfig is working
 
 func (qm *QueuesManager) Get(ctx context.Context, name string) (*Logical, error) {
 	if qm.inShutdown.Load() {
@@ -133,17 +137,16 @@ func (qm *QueuesManager) startLogicalQueue(ctx context.Context, info types.Queue
 	// NOTE: It is the job of the QueueManager to adjust the number of Logical Queues depending on the
 	// number of consumers and partitions available.
 
-	// TODO: The queue store should have all the information needed to get the partitions
-	// TODO: The queue store should also be able to choose best how partitions should be rebalanced
 	// TODO: The queue store should also know if the config provided is valid, IE: does every partition
 	//  storage name exist in the config? If not, then it's a bad config and Querator should not start.
-
 	// TODO: Should eventually support more than one partition depending on the current number
 	//  of consumers.
 
 	// TODO: If there is only one client, and multiple Logical Queues, then we
-	//  should reduce the number of Logical Queues automatically. We need to
-	//  figure out how clients register themselves as consumers before allowing reservation calls.
+	//  should reduce the number of Logical Queues automatically. Using a congestion detection algorithm
+	//  similar to https://www.usenix.org/conference/nsdi19/presentation/ousterhout
+	// TODO: We need to figure out how clients register themselves as consumers before allowing
+	//  reservation calls.
 
 	// Get all the partitions we want associated with this logical queue instance
 	p := qm.conf.StorageConfig.Backends[0].PartitionStore.Get(info.PartitionInfo[0])
@@ -246,12 +249,12 @@ func (qm *QueuesManager) Shutdown(ctx context.Context) error {
 	wait := make(chan error)
 	go func() {
 		for _, q := range qm.queues {
-			fmt.Printf("QueuesManager.Shutdown() queue '%s'\n", q.info.Name)
+			fmt.Printf("QueuesManager.Shutdown() queue '%s'\n", q.conf.Name)
 			if err := q.Shutdown(ctx); err != nil {
 				wait <- err
 				return
 			}
-			fmt.Printf("QueuesManager.Shutdown() queue '%s' - DONE\n", q.info.Name)
+			fmt.Printf("QueuesManager.Shutdown() queue '%s' - DONE\n", q.conf.Name)
 		}
 		fmt.Printf("QueuesManager.Shutdown() store.Close()\n")
 		if err := qm.store.Close(ctx); err != nil {

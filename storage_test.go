@@ -17,6 +17,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -25,7 +26,7 @@ var log = slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 // TestQueueStorage tests the /storage/queue.* endpoints
 func TestQueueStorage(t *testing.T) {
-	bdb := store.BoltDBTesting{Dir: t.TempDir()}
+	bdb := boltTestSetup{Dir: t.TempDir()}
 
 	for _, tc := range []struct {
 		Setup    NewStorageFunc
@@ -34,15 +35,15 @@ func TestQueueStorage(t *testing.T) {
 	}{
 		{
 			Name: "InMemory",
-			Setup: func(cp *clock.Provider) *store.Storage {
-				return store.TestSetupMemory(store.MemoryBackendConfig{Clock: cp})
+			Setup: func(cp *clock.Provider) store.StorageConfig {
+				return setupMemoryStorage(store.StorageConfig{Clock: cp})
 			},
 			TearDown: func() {},
 		},
 		{
 			Name: "BoltDB",
-			Setup: func(cp *clock.Provider) *store.Storage {
-				return bdb.TestSetup(store.BoltConfig{Clock: cp})
+			Setup: func(cp *clock.Provider) store.StorageConfig {
+				return bdb.Setup(store.BoltConfig{Clock: cp})
 			},
 			TearDown: func() {
 				bdb.Teardown()
@@ -67,7 +68,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 
 	t.Run("CRUDCompare", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{Storage: _store})
+		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: _store})
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -132,7 +133,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 
 	t.Run("CRUD", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{Storage: _store})
+		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: _store})
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -275,7 +276,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 
 	t.Run("StorageQueueDeleteErrors", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 5*clock.Second, que.ServiceConfig{Storage: _store})
+		d, c, ctx := newDaemon(t, 5*clock.Second, que.ServiceConfig{StorageConfig: _store})
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -422,4 +423,53 @@ func setupMemoryStorage(conf store.StorageConfig) store.StorageConfig {
 		},
 	}
 	return conf
+}
+
+// ---------------------------------------------
+// Test Helper
+// ---------------------------------------------
+
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false
+		}
+		return false
+	}
+	return info.IsDir()
+}
+
+type boltTestSetup struct {
+	Dir string
+}
+
+func (b *boltTestSetup) Setup(bc store.BoltConfig) store.StorageConfig {
+	if !dirExists(b.Dir) {
+		if err := os.Mkdir(b.Dir, 0777); err != nil {
+			panic(err)
+		}
+	}
+	b.Dir = filepath.Join(b.Dir, random.String("test-data-", 10))
+	if err := os.Mkdir(b.Dir, 0777); err != nil {
+		panic(err)
+	}
+	bc.StorageDir = b.Dir
+
+	var conf store.StorageConfig
+	conf.QueueStore = store.NewBoltQueueStore(bc)
+	conf.Backends = []store.Backend{
+		{
+			PartitionStore: store.NewBoltPartitionStore(bc),
+			Name:           "memory-0",
+			Affinity:       1,
+		},
+	}
+	return conf
+}
+
+func (b *boltTestSetup) Teardown() {
+	if err := os.RemoveAll(b.Dir); err != nil {
+		panic(err)
+	}
 }

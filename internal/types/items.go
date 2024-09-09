@@ -118,7 +118,7 @@ func (i *Item) FromProto(in *pb.StorageQueueItem) *Item {
 // PartitionInfo is information about partition
 type PartitionInfo struct {
 	QueueName string
-	// Which Storage Instance this partition belong too
+	// Which StorageConfig Instance this partition belong too
 	StorageName string
 	// If the partition is marked as read only
 	ReadOnly bool

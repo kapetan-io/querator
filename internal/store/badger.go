@@ -4,19 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/gob"
-	"fmt"
 	"github.com/dgraph-io/badger/v4"
 	"github.com/duh-rpc/duh-go"
 	"github.com/kapetan-io/errors"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/transport"
 	"github.com/kapetan-io/tackle/clock"
-	"github.com/kapetan-io/tackle/random"
-	"github.com/kapetan-io/tackle/set"
 	"github.com/segmentio/ksuid"
-	"log/slog"
-	"os"
-	"path/filepath"
 )
 
 type BadgerConfig struct {
@@ -33,77 +27,47 @@ type BadgerConfig struct {
 // Storage Implementation
 // ---------------------------------------------
 
-type BadgerStorage struct {
+type BadgerPartitionStore struct {
 	conf BadgerConfig
 }
 
-var _ Storage = &BadgerStorage{}
+var _ PartitionStore = &BadgerPartitionStore{}
 
-func (b *BadgerStorage) ParseID(parse types.ItemID, id *StorageID) error {
-	parts := bytes.Split(parse, []byte("~"))
-	if len(parts) != 2 {
-		return errors.New("expected format <queue_name>~<storage_id>")
-	}
-	id.Queue = string(parts[0])
-	id.ID = parts[1]
-	return nil
+func NewBadgerPartitionStore(conf BadgerConfig) *BadgerPartitionStore {
+	return &BadgerPartitionStore{conf: conf}
 }
 
-func (b *BadgerStorage) BuildStorageID(queue string, id []byte) types.ItemID {
-	return append([]byte(queue+"~"), id...)
+func (b *BadgerPartitionStore) Create(info types.PartitionInfo) error {
+	//TODO implement me
+	panic("implement me")
 }
 
-func (b *BadgerStorage) Close(_ context.Context) error {
-	return nil
-}
-
-func NewBadgerStorage(conf BadgerConfig) *BadgerStorage {
-	set.Default(&conf.Logger, slog.Default())
-	set.Default(&conf.StorageDir, ".")
-	set.Default(&conf.Clock, clock.NewProvider())
-
-	return &BadgerStorage{conf: conf}
+func (b *BadgerPartitionStore) Get(info types.PartitionInfo) Partition {
+	//TODO implement me
+	panic("implement me")
 }
 
 // ---------------------------------------------
-// Queue Implementation
+// Partition Implementation
 // ---------------------------------------------
 
-func (b *BadgerStorage) NewQueue(info types.QueueInfo) (Queue, error) {
-	f := errors.Fields{"category", "badger", "func", "Storage.NewQueue"}
-
-	dbDir := filepath.Join(b.conf.StorageDir, fmt.Sprintf("%s-%s", info.Name, bucketName))
-
-	db, err := badger.Open(badger.DefaultOptions(dbDir))
-	if err != nil {
-		return nil, f.Errorf("while opening db '%s': %w", dbDir, err)
-	}
-
-	return &BadgerQueue{
-		uid:    ksuid.New(),
-		info:   info,
-		db:     db,
-		parent: b,
-	}, nil
+type BadgerPartition struct {
+	info types.QueueInfo
+	conf BadgerConfig
+	uid  ksuid.KSUID
+	db   *badger.DB
 }
 
-type BadgerQueue struct {
-	info   types.QueueInfo
-	parent *BadgerStorage
-	uid    ksuid.KSUID
-	db     *badger.DB
-}
-
-func (q *BadgerQueue) Produce(_ context.Context, batch types.Batch[types.ProduceRequest]) error {
+func (b *BadgerPartition) Produce(_ context.Context, batch types.Batch[types.ProduceRequest]) error {
 	f := errors.Fields{"category", "badger", "func", "Queue.Produce"}
 
-	return q.db.Update(func(txn *badger.Txn) error {
+	return b.db.Update(func(txn *badger.Txn) error {
 
 		for _, r := range batch.Requests {
 			for _, item := range r.Items {
-				q.uid = q.uid.Next()
-				item.ID = []byte(q.uid.String())
-				item.CreatedAt = q.parent.conf.Clock.Now().UTC()
+				b.uid = b.uid.Next()
+				item.ID = []byte(b.uid.String())
+				item.CreatedAt = b.conf.Clock.Now().UTC()
 
 				// TODO: Get buffers from memory pool
 				var buf bytes.Buffer
@@ -114,22 +78,20 @@ func (q *BadgerQueue) Produce(_ context.Context, batch types.Batch[types.Produce
 				if err := txn.Set(item.ID, buf.Bytes()); err != nil {
 					return f.Errorf("during Put(): %w", err)
 				}
-
-				item.ID = q.parent.BuildStorageID(q.info.Name, item.ID)
 			}
 		}
 		return nil
 	})
 }
 
-func (q *BadgerQueue) Reserve(_ context.Context, batch types.ReserveBatch, opts ReserveOptions) error {
+func (b *BadgerPartition) Reserve(_ context.Context, batch types.ReserveBatch, opts ReserveOptions) error {
 	f := errors.Fields{"category", "badger", "func", "Queue.Reserve"}
-	return q.db.Update(func(txn *badger.Txn) error {
+	return b.db.Update(func(txn *badger.Txn) error {
 
 		batchIter := batch.Iterator()
 		var count int
 
-		err := q.db.Update(func(txn *badger.Txn) error {
+		err := b.db.Update(func(txn *badger.Txn) error {
 			iter := txn.NewIterator(badger.DefaultIteratorOptions)
 			defer iter.Close()
 			for iter.Rewind(); iter.Valid(); iter.Next() {
@@ -168,7 +130,6 @@ func (q *BadgerQueue) Reserve(_ context.Context, batch types.ReserveBatch, opts 
 					if err := txn.Set(item.ID, buf.Bytes()); err != nil {
 						return f.Errorf("during Put(): %w", err)
 					}
-					item.ID = q.parent.BuildStorageID(q.info.Name, item.ID)
 					continue
 				}
 				break
@@ -179,12 +140,12 @@ func (q *BadgerQueue) Reserve(_ context.Context, batch types.ReserveBatch, opts 
 	})
 }
 
-func (q *BadgerQueue) Complete(_ context.Context, batch types.Batch[types.CompleteRequest]) error {
+func (b *BadgerPartition) Complete(_ context.Context, batch types.Batch[types.CompleteRequest]) error {
 	f := errors.Fields{"category", "badger", "func", "Queue.Complete"}
 	var done bool
 	var err error
 
-	txn := q.db.NewTransaction(true)
+	txn := b.db.NewTransaction(true)
 
 	defer func() {
 		if !done {
@@ -200,14 +161,13 @@ nextBatch:
 	//  https://github.com/kapetan-io/querator/blob/main/doc/adr/0018-queue-complete-error-semantics.md
 	for i := range batch.Requests {
 		for _, id := range batch.Requests[i].Ids {
-			var sid StorageID
-			if err = q.parent.ParseID(id, &sid); err != nil {
+			if err = b.validateID(id); err != nil {
 				batch.Requests[i].Err = transport.NewInvalidOption("invalid storage id; '%s': %s", id, err)
 				continue nextBatch
 			}
 
 			// TODO: Test complete with id's that do not exist in the database
-			kvItem, err := txn.Get(sid.ID)
+			kvItem, err := txn.Get(id)
 			if err != nil {
 				batch.Requests[i].Err = transport.NewInvalidOption("invalid storage id; '%s' does not exist", id)
 				continue nextBatch
@@ -226,12 +186,12 @@ nextBatch:
 
 			if !item.IsReserved {
 				batch.Requests[i].Err = transport.NewConflict("item(s) cannot be completed; '%s' is not "+
-					"marked as reserved", sid.ID)
+					"marked as reserved", id)
 				continue nextBatch
 			}
 
-			if err = txn.Delete(sid.ID); err != nil {
-				return f.Errorf("during Delete(%s): %w", sid.ID, err)
+			if err = txn.Delete(id); err != nil {
+				return f.Errorf("during Delete(%s): %w", id, err)
 			}
 		}
 	}
@@ -245,26 +205,25 @@ nextBatch:
 	return nil
 }
 
-func (q *BadgerQueue) List(_ context.Context, items *[]*types.Item, opts types.ListOptions) error {
+func (b *BadgerPartition) List(_ context.Context, items *[]*types.Item, opts types.ListOptions) error {
 	f := errors.Fields{"category", "badger", "func", "Queue.List"}
 
-	var sid StorageID
 	if opts.Pivot != nil {
-		if err := q.parent.ParseID(opts.Pivot, &sid); err != nil {
+		if err := b.validateID(opts.Pivot); err != nil {
 			return transport.NewInvalidOption("invalid storage id; '%s': %s", opts.Pivot, err)
 		}
 	}
 
-	return q.db.View(func(txn *badger.Txn) error {
+	return b.db.View(func(txn *badger.Txn) error {
 
 		var count int
 		iter := txn.NewIterator(badger.DefaultIteratorOptions)
 		defer iter.Close()
 
-		if sid.ID != nil {
-			iter.Seek(sid.ID)
+		if opts.Pivot != nil {
+			iter.Seek(opts.Pivot)
 			if !iter.Valid() {
-				return transport.NewInvalidOption("invalid pivot; '%s' does not exist", sid.String())
+				return transport.NewInvalidOption("invalid pivot; '%s' does not exist", opts.Pivot)
 			}
 		} else {
 			iter.Rewind()
@@ -282,7 +241,6 @@ func (q *BadgerQueue) List(_ context.Context, items *[]*types.Item, opts types.L
 				return f.Errorf("during Decode(): %w", err)
 			}
 
-			item.ID = q.parent.BuildStorageID(q.info.Name, item.ID)
 			*items = append(*items, item)
 			count++
 
@@ -294,15 +252,15 @@ func (q *BadgerQueue) List(_ context.Context, items *[]*types.Item, opts types.L
 	})
 }
 
-func (q *BadgerQueue) Add(_ context.Context, items []*types.Item) error {
+func (b *BadgerPartition) Add(_ context.Context, items []*types.Item) error {
 	f := errors.Fields{"category", "badger", "func", "Queue.Add"}
 
-	return q.db.Update(func(txn *badger.Txn) error {
+	return b.db.Update(func(txn *badger.Txn) error {
 
 		for _, item := range items {
-			q.uid = q.uid.Next()
-			item.ID = []byte(q.uid.String())
-			item.CreatedAt = q.parent.conf.Clock.Now().UTC()
+			b.uid = b.uid.Next()
+			item.ID = []byte(b.uid.String())
+			item.CreatedAt = b.conf.Clock.Now().UTC()
 
 			// TODO: Get buffers from memory pool
 			var buf bytes.Buffer
@@ -313,24 +271,21 @@ func (q *BadgerQueue) Add(_ context.Context, items []*types.Item) error {
 			if err := txn.Set(item.ID, buf.Bytes()); err != nil {
 				return f.Errorf("during Put(): %w", err)
 			}
-
-			item.ID = q.parent.BuildStorageID(q.info.Name, item.ID)
 		}
 		return nil
 	})
 }
 
-func (q *BadgerQueue) Delete(_ context.Context, ids []types.ItemID) error {
+func (b *BadgerPartition) Delete(_ context.Context, ids []types.ItemID) error {
 	f := errors.Fields{"category", "badger", "func", "Queue.Delete"}
 
-	return q.db.Update(func(txn *badger.Txn) error {
+	return b.db.Update(func(txn *badger.Txn) error {
 
 		for _, id := range ids {
-			var sid StorageID
-			if err := q.parent.ParseID(id, &sid); err != nil {
+			if err := b.validateID(id); err != nil {
 				return transport.NewInvalidOption("invalid storage id; '%s': %s", id, err)
 			}
-			if err := txn.Delete(sid.ID); err != nil {
+			if err := txn.Delete(id); err != nil {
 				return f.Errorf("during delete: %w", err)
 			}
 		}
@@ -338,12 +293,12 @@ func (q *BadgerQueue) Delete(_ context.Context, ids []types.ItemID) error {
 	})
 }
 
-func (q *BadgerQueue) Clear(_ context.Context, destructive bool) error {
+func (b *BadgerPartition) Clear(_ context.Context, destructive bool) error {
 	f := errors.Fields{"category", "badger", "func", "Queue.Delete"}
 
-	return q.db.Update(func(txn *badger.Txn) error {
+	return b.db.Update(func(txn *badger.Txn) error {
 		if destructive {
-			err := q.db.DropAll()
+			err := b.db.DropAll()
 			if err != nil {
 				return f.Errorf("during destructive DropAll(): %w", err)
 			}
@@ -379,11 +334,11 @@ func (q *BadgerQueue) Clear(_ context.Context, destructive bool) error {
 	})
 }
 
-func (q *BadgerQueue) Stats(_ context.Context, stats *types.QueueStats) error {
+func (b *BadgerPartition) Stats(_ context.Context, stats *types.QueueStats) error {
 	f := errors.Fields{"category", "bunt-db", "func", "Queue.Stats"}
-	now := q.parent.conf.Clock.Now().UTC()
+	now := b.conf.Clock.Now().UTC()
 
-	return q.db.View(func(txn *badger.Txn) error {
+	return b.db.View(func(txn *badger.Txn) error {
 
 		iter := txn.NewIterator(badger.DefaultIteratorOptions)
 		defer iter.Close()
@@ -418,36 +373,47 @@ func (q *BadgerQueue) Stats(_ context.Context, stats *types.QueueStats) error {
 	})
 }
 
-func (q *BadgerQueue) Close(_ context.Context) error {
-	return q.db.Close()
+func (b *BadgerPartition) Close(_ context.Context) error {
+	return b.db.Close()
 }
 
-// ---------------------------------------------
-// Queue Repository Implementation
-// ---------------------------------------------
-
-func (b *BadgerStorage) NewQueuesStore(conf QueuesStoreConfig) (QueuesStore, error) {
-	f := errors.Fields{"category", "badger", "func", "Storage.NewQueuesStore"}
-
-	dbDir := filepath.Join(b.conf.StorageDir, fmt.Sprintf("%s-%s", "queue-storage", bucketName))
-	db, err := badger.Open(badger.DefaultOptions(dbDir))
+func (b *BadgerPartition) validateID(id []byte) error {
+	_, err := ksuid.Parse(string(id))
 	if err != nil {
-		return nil, f.Errorf("while opening db '%s': %w", dbDir, err)
+		return err
 	}
-
-	return &BadgerQueuesStore{
-		db: db,
-	}, nil
+	return nil
 }
 
-type BadgerQueuesStore struct {
+func (b *BadgerPartition) getDB() (*badger.DB, error) {
+	// TODO: implement
+	return nil, nil
+}
+
+// ---------------------------------------------
+// QueueStore Implementation
+// ---------------------------------------------
+
+func NewBadgerQueueStore(conf BadgerConfig) QueueStore {
+	return &BadgerQueueStore{
+		conf: conf,
+	}
+}
+
+type BadgerQueueStore struct {
 	QueuesValidation
-	db *badger.DB
+	db   *badger.DB
+	conf BadgerConfig
 }
 
-var _ QueuesStore = &BadgerQueuesStore{}
+var _ QueueStore = &BadgerQueueStore{}
 
-func (s BadgerQueuesStore) Get(_ context.Context, name string, queue *types.QueueInfo) error {
+func (s *BadgerQueueStore) getDB() (*badger.DB, error) {
+	// TODO: implement
+	return nil, nil
+}
+
+func (s *BadgerQueueStore) Get(_ context.Context, name string, queue *types.QueueInfo) error {
 	f := errors.Fields{"category", "badger", "func", "QueuesStore.Get"}
 
 	if err := s.validateGet(name); err != nil {
@@ -476,7 +442,7 @@ func (s BadgerQueuesStore) Get(_ context.Context, name string, queue *types.Queu
 	})
 }
 
-func (s BadgerQueuesStore) Add(_ context.Context, info types.QueueInfo) error {
+func (s *BadgerQueueStore) Add(_ context.Context, info types.QueueInfo) error {
 	f := errors.Fields{"category", "badger", "func", "QueuesStore.Add"}
 
 	if err := s.validateAdd(info); err != nil {
@@ -503,7 +469,7 @@ func (s BadgerQueuesStore) Add(_ context.Context, info types.QueueInfo) error {
 	})
 }
 
-func (s BadgerQueuesStore) Update(_ context.Context, info types.QueueInfo) error {
+func (s *BadgerQueueStore) Update(_ context.Context, info types.QueueInfo) error {
 	f := errors.Fields{"category", "badger", "func", "QueuesStore.Update"}
 
 	if err := s.validateUpdate(info); err != nil {
@@ -550,7 +516,7 @@ func (s BadgerQueuesStore) Update(_ context.Context, info types.QueueInfo) error
 	})
 }
 
-func (s BadgerQueuesStore) List(_ context.Context, queues *[]types.QueueInfo, opts types.ListOptions) error {
+func (s *BadgerQueueStore) List(_ context.Context, queues *[]types.QueueInfo, opts types.ListOptions) error {
 	f := errors.Fields{"category", "badger", "func", "QueuesStore.List"}
 
 	if err := s.validateList(opts); err != nil {
@@ -593,7 +559,7 @@ func (s BadgerQueuesStore) List(_ context.Context, queues *[]types.QueueInfo, op
 	})
 }
 
-func (s BadgerQueuesStore) Delete(_ context.Context, name string) error {
+func (s *BadgerQueueStore) Delete(_ context.Context, name string) error {
 	f := errors.Fields{"category", "badger", "func", "QueuesStore.Delete"}
 
 	if err := s.validateDelete(name); err != nil {
@@ -609,34 +575,6 @@ func (s BadgerQueuesStore) Delete(_ context.Context, name string) error {
 	})
 }
 
-func (s BadgerQueuesStore) Close(_ context.Context) error {
+func (s *BadgerQueueStore) Close(_ context.Context) error {
 	return s.db.Close()
-}
-
-// ---------------------------------------------
-// Test Helper
-// ---------------------------------------------
-
-type BadgerDBTesting struct {
-	Dir string
-}
-
-func (b *BadgerDBTesting) Setup(conf BadgerConfig) Storage {
-	if !dirExists(b.Dir) {
-		if err := os.Mkdir(b.Dir, 0777); err != nil {
-			panic(err)
-		}
-	}
-	b.Dir = filepath.Join(b.Dir, random.String("test-data-", 10))
-	if err := os.Mkdir(b.Dir, 0777); err != nil {
-		panic(err)
-	}
-	conf.StorageDir = b.Dir
-	return NewBadgerStorage(conf)
-}
-
-func (b *BadgerDBTesting) Teardown() {
-	if err := os.RemoveAll(b.Dir); err != nil {
-		panic(err)
-	}
 }

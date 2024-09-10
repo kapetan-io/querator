@@ -31,7 +31,7 @@ func BenchmarkProduce(b *testing.B) {
 			},
 			TearDown: func() {},
 		},
-			
+
 		//{
 		//	Name: "BoltDB",
 		//	Setup: func(cp *clock.Provider) store.StorageConfig {

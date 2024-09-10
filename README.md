@@ -19,9 +19,10 @@ solve several distributed problems.
 
 ### Does it scale?
 YES! We scaled a closed source version of a reservation queue service at https://mailgun.com to multi-billions of
-messages a day in a very efficient and cost-effective manner. It was a key component of our microservice
-(domain based) system. The implementation was such a success I'm surprised to find no similar projects available
-in the open source community, so I'm building one!
+messages a day in a very efficient and cost-effective manner, Meta (aka FaceBook) 
+[built a similar system](https://engineering.fb.com/2021/02/22/production-engineering/foqs-scaling-a-distributed-priority-queue/) which
+scaled to billions of messages. The closed source version of Querator we ran at mailgun was such a success I'm was 
+surprised to find no similar projects available in the open source community, so I'm building one!
 
 ### What is the Reservation Pattern?
 The reservation pattern is used to implement an “Almost Exactly Once Delivery” style queue by ensuring that 

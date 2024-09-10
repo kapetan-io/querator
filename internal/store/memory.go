@@ -3,7 +3,6 @@ package store
 import (
 	"bytes"
 	"context"
-	"errors"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/transport"
 	"github.com/kapetan-io/tackle/clock"
@@ -91,9 +90,9 @@ nextBatch:
 }
 
 func (q *MemoryPartition) validateID(id []byte) error {
-	_, err := ksuid.FromBytes(id)
+	_, err := ksuid.Parse(string(id))
 	if err != nil {
-		return errors.New("invalid storage id")
+		return err
 	}
 	return nil
 }
@@ -248,10 +247,6 @@ func (s *MemoryQueueStore) Add(_ context.Context, info types.QueueInfo) error {
 }
 
 func (s *MemoryQueueStore) Update(_ context.Context, info types.QueueInfo) error {
-	if err := s.validateUpdate(info); err != nil {
-		return err
-	}
-
 	idx, ok := s.findQueue(info.Name)
 	if !ok {
 		return ErrQueueNotExist
@@ -269,7 +264,13 @@ func (s *MemoryQueueStore) Update(_ context.Context, info types.QueueInfo) error
 			"dead timeout %s", info.ReserveTimeout.String(), s.mem[idx].DeadTimeout.String())
 	}
 
-	s.mem[idx].Update(info)
+	found := s.mem[idx]
+	found.Update(info)
+
+	if err := s.validateUpdate(found); err != nil {
+		return err
+	}
+	s.mem[idx] = found
 	return nil
 
 }

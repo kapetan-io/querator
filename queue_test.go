@@ -19,22 +19,6 @@ import (
 	"testing"
 )
 
-//func TestBrokenStorage(t *testing.T) {
-//	var queueName = random.String("queue-", 10)
-//	conf := &store.MockConfig{}
-//	newStore := func() store.StorageConfig {
-//		return store.NewMockStorage(conf)
-//	}
-//
-//	d, c, ctx := newDaemon(t, _store, 10*clock.Second)
-//	defer d.Shutdown(t)
-//
-//	conf.Methods["Partition.Produce"] = func(args []any) error {
-//		return errors.New("unknown storage error")
-//	}
-//
-//}
-
 const (
 	DeadTimeout    = "24h0m0s"
 	ReserveTimeout = "1m0s"
@@ -183,6 +167,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			QueueName:      queueName,
 			ReserveTimeout: "1m0s",
 			MaxAttempts:    256,
+			Partitions:     1,
 		}))
 
 		t.Run("InheritsQueueInfo", func(t *testing.T) {
@@ -359,6 +344,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			DeadTimeout:    DeadTimeout,
 			QueueName:      queueName,
 			ReserveTimeout: "2m0s",
+			Partitions:     1,
 		}))
 		items := writeRandomItems(t, ctx, c, queueName, 10_000)
 		require.Len(t, items, 10_000)
@@ -567,6 +553,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			ReserveTimeout: ReserveTimeout,
 			DeadTimeout:    DeadTimeout,
 			QueueName:      queueName,
+			Partitions:     1,
 		}))
 
 		t.Run("Success", func(t *testing.T) {
@@ -634,8 +621,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			require.Error(t, err)
 			var e duh.Error
 			require.True(t, errors.As(err, &e))
-			assert.Equal(t, "invalid storage id; 'another-invalid-id': expected format "+
-				"<queue_name>~<storage_id>", e.Message())
+			assert.Contains(t, e.Message(), "invalid storage id; 'another-invalid-id'")
 			assert.Equal(t, 400, e.Code())
 		})
 	})
@@ -652,6 +638,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			ReserveTimeout: ReserveTimeout,
 			DeadTimeout:    DeadTimeout,
 			QueueName:      queueName,
+			Partitions:     1,
 		}))
 
 		items := writeRandomItems(t, ctx, c, queueName, 500)
@@ -693,6 +680,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			ReserveTimeout: ReserveTimeout,
 			DeadTimeout:    DeadTimeout,
 			QueueName:      queueName,
+			Partitions:     1,
 		}))
 
 		// Write some items to the queue
@@ -763,6 +751,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				ReserveTimeout: ReserveTimeout,
 				DeadTimeout:    DeadTimeout,
 				QueueName:      queueName,
+				Partitions:     1,
 			}))
 
 			for _, test := range []struct {
@@ -886,6 +875,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				ReserveTimeout: ReserveTimeout,
 				DeadTimeout:    DeadTimeout,
 				QueueName:      queueName,
+				Partitions:     1,
 			}))
 
 			for _, tc := range []struct {
@@ -1046,6 +1036,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				ReserveTimeout: ReserveTimeout,
 				DeadTimeout:    DeadTimeout,
 				QueueName:      queueName,
+				Partitions:     1,
 			}))
 
 			// TODO: Produce and Reserve some items to create actual ids
@@ -1118,7 +1109,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 						QueueName:      queueName,
 						RequestTimeout: "1m",
 					},
-					Msg:  "invalid storage id; 'invalid-id': expected format <queue_name>~<storage_id>",
+					Msg:  "invalid storage id; 'invalid-id'",
 					Code: duh.CodeBadRequest,
 				},
 				{
@@ -1137,7 +1128,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					if tc.Code != duh.CodeOK {
 						var e duh.Error
 						require.True(t, errors.As(err, &e))
-						assert.Equal(t, tc.Msg, e.Message())
+						assert.Contains(t, e.Message(), tc.Msg)
 						assert.Equal(t, tc.Code, e.Code())
 						if e.Message() == "" {
 							t.Logf("Error: %s", e.Error())

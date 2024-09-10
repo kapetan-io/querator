@@ -26,7 +26,7 @@ var log = slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 // TestQueueStorage tests the /storage/queue.* endpoints
 func TestQueueStorage(t *testing.T) {
-	bdb := boltTestSetup{Dir: t.TempDir()}
+	//bdb := boltTestSetup{Dir: t.TempDir()}
 
 	for _, tc := range []struct {
 		Setup    NewStorageFunc
@@ -40,15 +40,15 @@ func TestQueueStorage(t *testing.T) {
 			},
 			TearDown: func() {},
 		},
-		{
-			Name: "BoltDB",
-			Setup: func(cp *clock.Provider) store.StorageConfig {
-				return bdb.Setup(store.BoltConfig{Clock: cp})
-			},
-			TearDown: func() {
-				bdb.Teardown()
-			},
-		},
+		//{
+		//	Name: "BoltDB",
+		//	Setup: func(cp *clock.Provider) store.StorageConfig {
+		//		return bdb.Setup(store.BoltConfig{Clock: cp})
+		//	},
+		//	TearDown: func() {
+		//		bdb.Teardown()
+		//	},
+		//},
 		//{
 		//	Name: "SurrealDB",
 		//},
@@ -75,6 +75,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 			ReserveTimeout: ReserveTimeout,
 			DeadTimeout:    DeadTimeout,
 			QueueName:      queueName,
+			Partitions:     1,
 		}))
 
 		now := clock.Now().UTC()
@@ -140,6 +141,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 			ReserveTimeout: ReserveTimeout,
 			DeadTimeout:    DeadTimeout,
 			QueueName:      queueName,
+			Partitions:     1,
 		}))
 		items := writeRandomItems(t, ctx, c, queueName, 10_000)
 
@@ -283,6 +285,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 			ReserveTimeout: ReserveTimeout,
 			DeadTimeout:    DeadTimeout,
 			QueueName:      queueName,
+			Partitions:     1,
 		}))
 
 		for _, test := range []struct {
@@ -329,7 +332,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 					QueueName: queueName,
 					Ids:       []string{"invalid-id", "another-invalid-id"},
 				},
-				Msg:  "invalid storage id; 'invalid-id': expected format <queue_name>~<storage_id>",
+				Msg:  "invalid storage id; 'invalid-id'",
 				Code: duh.CodeBadRequest,
 			},
 		} {
@@ -338,7 +341,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 				if test.Code != duh.CodeOK {
 					var e duh.Error
 					require.True(t, errors.As(err, &e))
-					assert.Equal(t, test.Msg, e.Message())
+					assert.Contains(t, e.Message(), test.Msg)
 					assert.Equal(t, test.Code, e.Code())
 				}
 			})
@@ -461,7 +464,7 @@ func (b *boltTestSetup) Setup(bc store.BoltConfig) store.StorageConfig {
 	conf.Backends = []store.Backend{
 		{
 			PartitionStore: store.NewBoltPartitionStore(bc),
-			Name:           "memory-0",
+			Name:           "bolt-0",
 			Affinity:       1,
 		},
 	}

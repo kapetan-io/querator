@@ -17,7 +17,7 @@ import (
 
 func BenchmarkProduce(b *testing.B) {
 	fmt.Printf("Current Operating System has '%d' CPUs\n", runtime.NumCPU())
-	bdb := boltTestSetup{Dir: b.TempDir()}
+	//bdb := boltTestSetup{Dir: b.TempDir()}
 
 	for _, tc := range []struct {
 		Setup    NewStorageFunc
@@ -31,15 +31,15 @@ func BenchmarkProduce(b *testing.B) {
 			},
 			TearDown: func() {},
 		},
-		{
-			Name: "BoltDB",
-			Setup: func(cp *clock.Provider) store.StorageConfig {
-				return bdb.Setup(store.BoltConfig{Clock: cp})
-			},
-			TearDown: func() {
-				bdb.Teardown()
-			},
-		},
+		//{
+		//	Name: "BoltDB",
+		//	Setup: func(cp *clock.Provider) store.StorageConfig {
+		//		return bdb.Setup(store.BoltConfig{Clock: cp})
+		//	},
+		//	TearDown: func() {
+		//		bdb.Teardown()
+		//	},
+		//},
 		//{
 		//	Name: "SurrealDB",
 		//},

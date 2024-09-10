@@ -373,6 +373,8 @@ func (h *HTTPHandler) ReplyError(w http.ResponseWriter, r *http.Request, err err
 		duh.Reply(w, r, re.Code(), re.ProtoMessage())
 		return
 	}
+	// TODO: Extract error.Fields and add them to the log fields
+
 	h.log.Error(err.Error(),
 		"category", "http",
 		"http.request.status", duh.CodeInternalError,

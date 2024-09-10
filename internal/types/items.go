@@ -183,5 +183,8 @@ func (i *QueueInfo) Update(r QueueInfo) bool {
 	if i.UpdatedAt != r.UpdatedAt {
 		i.UpdatedAt = r.UpdatedAt
 	}
+	if r.Partitions != 0 && i.Partitions != r.Partitions {
+		i.Partitions = r.Partitions
+	}
 	return true
 }

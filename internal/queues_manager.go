@@ -2,9 +2,9 @@ package internal
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"github.com/duh-rpc/duh-go"
+	"github.com/kapetan-io/errors"
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/transport"
@@ -29,7 +29,6 @@ type QueuesManagerConfig struct {
 type QueuesManager struct {
 	queues     map[string]*Logical
 	conf       QueuesManagerConfig
-	store      store.QueueStore
 	inShutdown atomic.Bool
 	mutex      sync.Mutex
 }
@@ -71,7 +70,7 @@ func (qm *QueuesManager) Get(ctx context.Context, name string) (*Logical, error)
 
 	// Look for the queue in storage
 	var queue types.QueueInfo
-	if err := qm.store.Get(ctx, name, &queue); err != nil {
+	if err := qm.conf.StorageConfig.QueueStore.Get(ctx, name, &queue); err != nil {
 		if errors.Is(err, store.ErrQueueNotExist) {
 			return nil, transport.NewInvalidOption("queue does not exist; no such queue named '%s'", name)
 		}
@@ -85,6 +84,7 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Log
 	if qm.inShutdown.Load() {
 		return nil, ErrServiceShutdown
 	}
+	f := errors.Fields{"category", "querator", "func", "QueuesManager.Create"}
 	defer qm.mutex.Unlock()
 	qm.mutex.Lock()
 
@@ -100,10 +100,19 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Log
 			QueueName:   info.Name,
 			Partition:   i,
 		}
+		fmt.Printf("Create partition %+v\n", p)
 		if err := qm.conf.StorageConfig.Backends[0].PartitionStore.Create(p); err != nil {
-			return nil, err
+			f = append(f, "partition", p.Partition, "storage-name", p.StorageName)
+			return nil, f.Errorf("PartitionStore.Create(): %w", err)
 		}
 		info.PartitionInfo = append(info.PartitionInfo, p)
+	}
+
+	info.CreatedAt = qm.conf.LogicalConfig.Clock.Now().UTC()
+	info.UpdatedAt = qm.conf.LogicalConfig.Clock.Now().UTC()
+	if err := qm.conf.StorageConfig.QueueStore.Add(ctx, info); err != nil {
+		f = append(f, "queue", info.Name)
+		return nil, f.Errorf("QueueStore.Add(): %w", err)
 	}
 
 	// Assertion that we are not crazy
@@ -112,12 +121,6 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Log
 		//  It's possible the data store where we keep queue info is out of sync with our actual state, in
 		//  this case, it's probably better for us to update the queues when this happens.
 		panic(fmt.Sprintf("queue '%s' does not exist in data store, but is running!", info.Name))
-	}
-
-	info.CreatedAt = qm.conf.LogicalConfig.Clock.Now().UTC()
-	info.UpdatedAt = qm.conf.LogicalConfig.Clock.Now().UTC()
-	if err := qm.store.Add(ctx, info); err != nil {
-		return nil, err
 	}
 
 	return qm.startLogicalQueue(ctx, info)
@@ -129,6 +132,7 @@ func (qm *QueuesManager) rebalanceLogical(info types.QueueInfo) error {
 }
 
 func (qm *QueuesManager) startLogicalQueue(ctx context.Context, info types.QueueInfo) (*Logical, error) {
+	f := errors.Fields{"category", "querator", "func", "QueuesManager.startLogicalQueue"}
 
 	// Each logical queue has their own copy of these options to avoid race conditions with any
 	// reconfiguration the QueuesManager may preform during cluster operation. Additionally,
@@ -163,7 +167,7 @@ func (qm *QueuesManager) startLogicalQueue(ctx context.Context, info types.Queue
 		QueueInfo:            info,
 	})
 	if err != nil {
-		return nil, err
+		return nil, f.Wrap(err)
 	}
 
 	// TODO: This should become a list of queues which hold logical queues
@@ -178,20 +182,21 @@ func (qm *QueuesManager) List(ctx context.Context, items *[]types.QueueInfo, opt
 	defer qm.mutex.Unlock()
 	qm.mutex.Lock()
 
-	return qm.store.List(ctx, items, opts)
+	return qm.conf.StorageConfig.QueueStore.List(ctx, items, opts)
 }
 
 func (qm *QueuesManager) Update(ctx context.Context, info types.QueueInfo) error {
 	if qm.inShutdown.Load() {
 		return ErrServiceShutdown
 	}
+	f := errors.Fields{"category", "querator", "func", "QueuesManager.Update"}
 	defer qm.mutex.Unlock()
 	qm.mutex.Lock()
 
 	// Update the queue info in the data store
 	info.UpdatedAt = qm.conf.LogicalConfig.Clock.Now().UTC()
-	if err := qm.store.Update(ctx, info); err != nil {
-		return err
+	if err := qm.conf.StorageConfig.QueueStore.Update(ctx, info); err != nil {
+		return f.Errorf("QueueStore.Update(): %w", err)
 	}
 
 	// If the queue is currently in use
@@ -202,7 +207,7 @@ func (qm *QueuesManager) Update(ctx context.Context, info types.QueueInfo) error
 
 	// Update the active queue with the latest queue info
 	if err := q.UpdateInfo(ctx, info); err != nil {
-		return err
+		return f.Errorf("LogicalQueue.UpdateInfo(): %w", err)
 	}
 
 	return nil
@@ -212,12 +217,13 @@ func (qm *QueuesManager) Delete(ctx context.Context, name string) error {
 	if qm.inShutdown.Load() {
 		return ErrServiceShutdown
 	}
+	f := errors.Fields{"category", "querator", "func", "QueuesManager.Delete"}
 	defer qm.mutex.Unlock()
 	qm.mutex.Lock()
 
 	// TODO: Delete should return transport.NewInvalidOption("queue does not exist; no such queue named '%s'", name)
-	if err := qm.store.Delete(ctx, name); err != nil {
-		return err
+	if err := qm.conf.StorageConfig.QueueStore.Delete(ctx, name); err != nil {
+		return f.Errorf("QueueStore.Delete(): %w", err)
 	}
 
 	// If the queue is currently in use
@@ -228,7 +234,7 @@ func (qm *QueuesManager) Delete(ctx context.Context, name string) error {
 
 	// Then shutdown the queue
 	if err := q.Shutdown(ctx); err != nil {
-		return err
+		return f.Errorf("LogicalQueue.Shutdown(): %w", err)
 	}
 
 	delete(qm.queues, name)
@@ -239,6 +245,7 @@ func (qm *QueuesManager) Shutdown(ctx context.Context) error {
 	if qm.inShutdown.Load() {
 		return nil
 	}
+	f := errors.Fields{"category", "querator", "func", "QueuesManager.Shutdown"}
 
 	fmt.Printf("QueuesManager.Shutdown()\n")
 	qm.inShutdown.Store(true)
@@ -257,7 +264,7 @@ func (qm *QueuesManager) Shutdown(ctx context.Context) error {
 			fmt.Printf("QueuesManager.Shutdown() queue '%s' - DONE\n", q.conf.Name)
 		}
 		fmt.Printf("QueuesManager.Shutdown() store.Close()\n")
-		if err := qm.store.Close(ctx); err != nil {
+		if err := qm.conf.StorageConfig.QueueStore.Close(ctx); err != nil {
 			wait <- err
 			return
 		}
@@ -268,9 +275,9 @@ func (qm *QueuesManager) Shutdown(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		fmt.Printf("QueuesManager.Shutdown() wait ctx cancel\n")
-		return ctx.Err()
+		return f.Wrap(ctx.Err())
 	case err := <-wait:
 		fmt.Printf("QueuesManager.Shutdown() wait done\n")
-		return err
+		return f.Wrap(err)
 	}
 }

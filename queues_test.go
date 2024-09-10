@@ -71,10 +71,13 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				ReserveTimeout: "1m",
 				DeadTimeout:    "10m",
 				MaxAttempts:    10,
+				Partitions:     1,
 			}))
 
+			fmt.Println("Create queue:", queueName)
 			var list pb.QueuesListResponse
 			require.NoError(t, c.QueuesList(ctx, &list, nil))
+			fmt.Println("List queue:", queueName)
 			require.Equal(t, 1, len(list.Items))
 			assert.Equal(t, queueName, list.Items[0].QueueName)
 			assert.NotEmpty(t, list.Items[0].CreatedAt)
@@ -380,6 +383,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			ReserveTimeout: "1m",
 			DeadTimeout:    "10m",
 			MaxAttempts:    10,
+			Partitions:     1,
 		}))
 
 		t.Run("QueuesCreate", func(t *testing.T) {
@@ -417,6 +421,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 						ReserveTimeout: ReserveTimeout,
 						DeadTimeout:    DeadTimeout,
 						QueueName:      queueName,
+						Partitions:     1,
 					},
 					Msg:  "invalid queue; '" + queueName + "' already exists",
 					Code: duh.CodeBadRequest,
@@ -426,6 +431,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					Req: &pb.QueueInfo{
 						QueueName:   random.String("queue-", 10),
 						DeadTimeout: "24h0m0s",
+						Partitions:  1,
 					},
 					Msg:  "reserve timeout is invalid; cannot be empty",
 					Code: duh.CodeBadRequest,
@@ -435,6 +441,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					Req: &pb.QueueInfo{
 						QueueName:      random.String("queue-", 10),
 						ReserveTimeout: "24h0m0s",
+						Partitions:     1,
 					},
 					Msg:  "dead timeout is invalid; cannot be empty",
 					Code: duh.CodeBadRequest,
@@ -463,6 +470,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 						QueueName:      "ReserveTimeoutTooLong",
 						ReserveTimeout: "1h0m0s",
 						DeadTimeout:    "30m0s",
+						Partitions:     1,
 					},
 					Msg:  "reserve timeout is too long; 1h0m0s cannot be greater than the dead timeout 30m0s",
 					Code: duh.CodeBadRequest,
@@ -692,7 +700,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				},
 				{
 					// TODO: This might be allowed later to indicate infinite retries
-					Name: "InvalidMaxAttempts",
+					Name: "InvalidMinAttempts",
 					Req: &pb.QueueInfo{
 						QueueName:   queueName,
 						MaxAttempts: -1,
@@ -813,6 +821,7 @@ func createRandomQueues(t *testing.T, ctx context.Context, c *que.Client, count 
 			MaxAttempts:    int32(rand.Intn(100)),
 			ReserveTimeout: timeOuts.Reserve,
 			DeadTimeout:    timeOuts.Dead,
+			Partitions:     1,
 		}
 		idx++
 		items = append(items, &info)

@@ -79,12 +79,35 @@ func NewBoltPartitionStore(conf BoltConfig) *BoltPartitionStore {
 }
 
 func (b BoltPartitionStore) Create(info types.PartitionInfo) error {
-	// TODO: Implement
-	return nil
+	f := errors.Fields{"category", "bolt", "func", "BoltPartitionStore.Create"}
+
+	file := filepath.Join(b.conf.StorageDir, fmt.Sprintf("%s-%06d.db", info.QueueName, info.Partition))
+
+	opts := &bolt.Options{
+		FreelistType: bolt.FreelistArrayType,
+		Timeout:      clock.Second,
+		NoGrowSync:   false,
+	}
+
+	db, err := bolt.Open(file, 0600, opts)
+	if err != nil {
+		return f.Errorf("while opening db '%s': %w", file, err)
+	}
+
+	err = db.Update(func(tx *bolt.Tx) error {
+		_, err := tx.CreateBucket(bucketName)
+		if err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return f.Errorf("while creating bucket '%s': %w", file, err)
+	}
+	return db.Close()
 }
 
 func (b BoltPartitionStore) Get(info types.PartitionInfo) Partition {
-	// TODO: Implement
 	return &BoltPartition{
 		uid:  ksuid.New(),
 		conf: b.conf,
@@ -147,13 +170,13 @@ func (b *BoltPartition) Reserve(_ context.Context, batch types.ReserveBatch, opt
 
 	return db.Update(func(tx *bolt.Tx) error {
 
-		b := tx.Bucket(bucketName)
-		if b == nil {
+		bucket := tx.Bucket(bucketName)
+		if bucket == nil {
 			return f.Error("bucket does not exist in data file")
 		}
 
 		batchIter := batch.Iterator()
-		c := b.Cursor()
+		c := bucket.Cursor()
 		var count int
 
 		// We preform a full scan of the entire bucket to find our reserved items.
@@ -186,7 +209,7 @@ func (b *BoltPartition) Reserve(_ context.Context, batch types.ReserveBatch, opt
 					return f.Errorf("during gob.Encode(): %w", err)
 				}
 
-				if err := b.Put(item.ID, buf.Bytes()); err != nil {
+				if err := bucket.Put(item.ID, buf.Bytes()); err != nil {
 					return f.Errorf("during Put(): %w", err)
 				}
 				continue
@@ -280,12 +303,12 @@ func (b *BoltPartition) List(_ context.Context, items *[]*types.Item, opts types
 	}
 
 	return db.View(func(tx *bolt.Tx) error {
-		b := tx.Bucket(bucketName)
-		if b == nil {
+		bucket := tx.Bucket(bucketName)
+		if bucket == nil {
 			return f.Error("bucket does not exist in data file")
 		}
 
-		c := b.Cursor()
+		c := bucket.Cursor()
 		var count int
 		var k, v []byte
 		if opts.Pivot != nil {
@@ -440,12 +463,12 @@ func (b *BoltPartition) Stats(_ context.Context, stats *types.QueueStats) error 
 
 	return db.View(func(tx *bolt.Tx) error {
 
-		b := tx.Bucket(bucketName)
-		if b == nil {
+		bucket := tx.Bucket(bucketName)
+		if bucket == nil {
 			return f.Error("bucket does not exist in data file")
 		}
 
-		c := b.Cursor()
+		c := bucket.Cursor()
 
 		for k, v := c.First(); k != nil; k, v = c.Next() {
 			item := new(types.Item) // TODO: memory pool
@@ -478,9 +501,9 @@ func (b *BoltPartition) Close(_ context.Context) error {
 }
 
 func (b *BoltPartition) validateID(id []byte) error {
-	_, err := ksuid.FromBytes(id)
+	_, err := ksuid.Parse(string(id))
 	if err != nil {
-		return errors.New("invalid storage id")
+		return err
 	}
 	return nil
 }
@@ -504,18 +527,6 @@ func (b *BoltPartition) getDB() (*bolt.DB, error) {
 		return nil, f.Errorf("while opening db '%s': %w", file, err)
 	}
 
-	// TODO: Test opening an existing partition.
-	err = db.Update(func(tx *bolt.Tx) error {
-		// TODO: This should open an bucket, not create one
-		_, err := tx.CreateBucket(bucketName)
-		if err != nil {
-			return err
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, f.Errorf("while creating bucket '%s': %w", file, err)
-	}
 	b.db = db
 	return db, nil
 }
@@ -538,7 +549,7 @@ type BoltQueueStore struct {
 
 var _ QueueStore = &BoltQueueStore{}
 
-func (b BoltQueueStore) getDB() (*bolt.DB, error) {
+func (b *BoltQueueStore) getDB() (*bolt.DB, error) {
 	if b.db != nil {
 		return b.db, nil
 	}
@@ -552,11 +563,15 @@ func (b BoltQueueStore) getDB() (*bolt.DB, error) {
 		return nil, f.Errorf("while opening db '%s': %w", file, err)
 	}
 
+	// Create the bucket if it doesn't already exist
 	err = db.Update(func(tx *bolt.Tx) error {
-		_, err := tx.CreateBucket(bucketName)
-		if err != nil {
-			if !errors.Is(err, bolt.ErrBucketExists) {
-				return err
+		bucket := tx.Bucket(bucketName)
+		if bucket == nil {
+			_, err := tx.CreateBucket(bucketName)
+			if err != nil {
+				if !errors.Is(err, bolt.ErrBucketExists) {
+					return err
+				}
 			}
 		}
 		return nil
@@ -568,7 +583,7 @@ func (b BoltQueueStore) getDB() (*bolt.DB, error) {
 	return db, nil
 }
 
-func (b BoltQueueStore) Get(_ context.Context, name string, queue *types.QueueInfo) error {
+func (b *BoltQueueStore) Get(_ context.Context, name string, queue *types.QueueInfo) error {
 	f := errors.Fields{"category", "bolt", "func", "QueueStore.Get"}
 
 	if err := b.validateGet(name); err != nil {
@@ -581,12 +596,12 @@ func (b BoltQueueStore) Get(_ context.Context, name string, queue *types.QueueIn
 	}
 
 	return db.View(func(tx *bolt.Tx) error {
-		b := tx.Bucket(bucketName)
-		if b == nil {
+		bucket := tx.Bucket(bucketName)
+		if bucket == nil {
 			return f.Error("bucket does not exist in data file")
 		}
 
-		v := b.Get([]byte(name))
+		v := bucket.Get([]byte(name))
 		if v == nil {
 			return ErrQueueNotExist
 		}
@@ -598,7 +613,7 @@ func (b BoltQueueStore) Get(_ context.Context, name string, queue *types.QueueIn
 	})
 }
 
-func (b BoltQueueStore) Add(_ context.Context, info types.QueueInfo) error {
+func (b *BoltQueueStore) Add(_ context.Context, info types.QueueInfo) error {
 	f := errors.Fields{"category", "bolt", "func", "QueueStore.Add"}
 
 	if err := b.validateAdd(info); err != nil {
@@ -633,12 +648,8 @@ func (b BoltQueueStore) Add(_ context.Context, info types.QueueInfo) error {
 	})
 }
 
-func (b BoltQueueStore) Update(_ context.Context, info types.QueueInfo) error {
+func (b *BoltQueueStore) Update(_ context.Context, info types.QueueInfo) error {
 	f := errors.Fields{"category", "bolt", "func", "QueueStore.Update"}
-
-	if err := b.validateUpdate(info); err != nil {
-		return err
-	}
 
 	db, err := b.getDB()
 	if err != nil {
@@ -663,6 +674,10 @@ func (b BoltQueueStore) Update(_ context.Context, info types.QueueInfo) error {
 
 		found.Update(info)
 
+		if err := b.validateUpdate(found); err != nil {
+			return err
+		}
+
 		if found.ReserveTimeout > found.DeadTimeout {
 			return transport.NewInvalidOption("reserve timeout is too long; %s cannot be greater than the "+
 				"dead timeout %s", info.ReserveTimeout.String(), found.DeadTimeout.String())
@@ -680,7 +695,7 @@ func (b BoltQueueStore) Update(_ context.Context, info types.QueueInfo) error {
 	})
 }
 
-func (b BoltQueueStore) List(_ context.Context, queues *[]types.QueueInfo, opts types.ListOptions) error {
+func (b *BoltQueueStore) List(_ context.Context, queues *[]types.QueueInfo, opts types.ListOptions) error {
 	f := errors.Fields{"category", "bolt", "func", "QueueStore.List"}
 
 	if err := b.validateList(opts); err != nil {
@@ -739,7 +754,7 @@ func (b BoltQueueStore) List(_ context.Context, queues *[]types.QueueInfo, opts 
 	})
 }
 
-func (b BoltQueueStore) Delete(_ context.Context, name string) error {
+func (b *BoltQueueStore) Delete(_ context.Context, name string) error {
 	f := errors.Fields{"category", "bolt", "func", "QueueStore.Delete"}
 
 	if err := b.validateDelete(name); err != nil {
@@ -764,6 +779,6 @@ func (b BoltQueueStore) Delete(_ context.Context, name string) error {
 	})
 }
 
-func (b BoltQueueStore) Close(_ context.Context) error {
+func (b *BoltQueueStore) Close(_ context.Context) error {
 	return b.db.Close()
 }

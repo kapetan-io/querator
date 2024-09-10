@@ -471,19 +471,37 @@ type BadgerQueueStore struct {
 
 var _ QueueStore = &BadgerQueueStore{}
 
-func (s *BadgerQueueStore) getDB() (*badger.DB, error) {
-	// TODO: implement
-	return nil, nil
+func (b *BadgerQueueStore) getDB() (*badger.DB, error) {
+	if b.db != nil {
+		return b.db, nil
+	}
+
+	f := errors.Fields{"category", "badger", "func", "StorageConfig.QueueStore"}
+	// We store info about the queues in a single db file. We prefix it with `~` to make it
+	// impossible for someone to create a queue with the same name.
+	dir := filepath.Join(b.conf.StorageDir, fmt.Sprintf("~queue-storage-%s", bucketName))
+	db, err := badger.Open(badger.DefaultOptions(dir))
+	if err != nil {
+		return nil, f.Errorf("while opening db '%s': %w", dir, err)
+	}
+
+	b.db = db
+	return db, nil
 }
 
-func (s *BadgerQueueStore) Get(_ context.Context, name string, queue *types.QueueInfo) error {
-	f := errors.Fields{"category", "badger", "func", "QueuesStore.Get"}
+func (b *BadgerQueueStore) Get(_ context.Context, name string, queue *types.QueueInfo) error {
+	f := errors.Fields{"category", "badger", "func", "QueueStore.Get"}
 
-	if err := s.validateGet(name); err != nil {
+	if err := b.validateGet(name); err != nil {
 		return err
 	}
 
-	return s.db.View(func(txn *badger.Txn) error {
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.View(func(txn *badger.Txn) error {
 
 		kvItem, err := txn.Get([]byte(name))
 		if err != nil {
@@ -498,6 +516,7 @@ func (s *BadgerQueueStore) Get(_ context.Context, name string, queue *types.Queu
 		if err != nil {
 			return f.Errorf("during Get value(): %w", err)
 		}
+
 		if err := gob.NewDecoder(bytes.NewReader(v)).Decode(queue); err != nil {
 			return f.Errorf("during Decode(): %w", err)
 		}
@@ -505,14 +524,19 @@ func (s *BadgerQueueStore) Get(_ context.Context, name string, queue *types.Queu
 	})
 }
 
-func (s *BadgerQueueStore) Add(_ context.Context, info types.QueueInfo) error {
-	f := errors.Fields{"category", "badger", "func", "QueuesStore.Add"}
+func (b *BadgerQueueStore) Add(_ context.Context, info types.QueueInfo) error {
+	f := errors.Fields{"category", "badger", "func", "QueueStore.Add"}
 
-	if err := s.validateAdd(info); err != nil {
+	if err := b.validateAdd(info); err != nil {
 		return err
 	}
 
-	return s.db.Update(func(txn *badger.Txn) error {
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.Update(func(txn *badger.Txn) error {
 
 		// If the queue already exists in the store
 		_, err := txn.Get([]byte(info.Name))
@@ -532,14 +556,15 @@ func (s *BadgerQueueStore) Add(_ context.Context, info types.QueueInfo) error {
 	})
 }
 
-func (s *BadgerQueueStore) Update(_ context.Context, info types.QueueInfo) error {
-	f := errors.Fields{"category", "badger", "func", "QueuesStore.Update"}
+func (b *BadgerQueueStore) Update(_ context.Context, info types.QueueInfo) error {
+	f := errors.Fields{"category", "badger", "func", "QueueStore.Update"}
 
-	if err := s.validateUpdate(info); err != nil {
+	db, err := b.getDB()
+	if err != nil {
 		return err
 	}
 
-	return s.db.Update(func(txn *badger.Txn) error {
+	return db.Update(func(txn *badger.Txn) error {
 
 		kvItem, err := txn.Get([]byte(info.Name))
 		if err != nil {
@@ -562,6 +587,10 @@ func (s *BadgerQueueStore) Update(_ context.Context, info types.QueueInfo) error
 
 		found.Update(info)
 
+		if err := b.validateUpdate(found); err != nil {
+			return err
+		}
+
 		if found.ReserveTimeout > found.DeadTimeout {
 			return transport.NewInvalidOption("reserve timeout is too long; %s cannot be greater than the "+
 				"dead timeout %s", info.ReserveTimeout.String(), found.DeadTimeout.String())
@@ -579,14 +608,19 @@ func (s *BadgerQueueStore) Update(_ context.Context, info types.QueueInfo) error
 	})
 }
 
-func (s *BadgerQueueStore) List(_ context.Context, queues *[]types.QueueInfo, opts types.ListOptions) error {
-	f := errors.Fields{"category", "badger", "func", "QueuesStore.List"}
+func (b *BadgerQueueStore) List(_ context.Context, queues *[]types.QueueInfo, opts types.ListOptions) error {
+	f := errors.Fields{"category", "badger", "func", "QueueStore.List"}
 
-	if err := s.validateList(opts); err != nil {
+	if err := b.validateList(opts); err != nil {
 		return err
 	}
 
-	return s.db.View(func(txn *badger.Txn) error {
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.View(func(txn *badger.Txn) error {
 		var count int
 		var v []byte
 		iter := txn.NewIterator(badger.DefaultIteratorOptions)
@@ -622,14 +656,19 @@ func (s *BadgerQueueStore) List(_ context.Context, queues *[]types.QueueInfo, op
 	})
 }
 
-func (s *BadgerQueueStore) Delete(_ context.Context, name string) error {
-	f := errors.Fields{"category", "badger", "func", "QueuesStore.Delete"}
+func (b *BadgerQueueStore) Delete(_ context.Context, name string) error {
+	f := errors.Fields{"category", "badger", "func", "QueueStore.Delete"}
 
-	if err := s.validateDelete(name); err != nil {
+	if err := b.validateDelete(name); err != nil {
 		return err
 	}
 
-	return s.db.Update(func(txn *badger.Txn) error {
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.Update(func(txn *badger.Txn) error {
 
 		if err := txn.Delete([]byte(name)); err != nil {
 			return f.Errorf("during Delete(%s): %w", name, err)
@@ -638,6 +677,6 @@ func (s *BadgerQueueStore) Delete(_ context.Context, name string) error {
 	})
 }
 
-func (s *BadgerQueueStore) Close(_ context.Context) error {
-	return s.db.Close()
+func (b *BadgerQueueStore) Close(_ context.Context) error {
+	return b.db.Close()
 }

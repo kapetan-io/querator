@@ -27,43 +27,6 @@ type BoltConfig struct {
 	Clock *clock.Provider
 }
 
-// TODO: Make BoltBackend non blocking, and obey the context provided. Perhaps we introduce a AsyncStorage
-//   struct which takes a normal storage implementation and makes each call async and cancellable, making
-//   a new call when the previous call failed, should be an error, a new call cannot be made until the
-//   previous call completes.
-
-//type BoltBackend struct {
-//	conf BoltConfig
-//}
-//
-//var _ Backend = &BoltBackend{}
-//
-//func (b *BoltBackend) ParseID(parse types.ItemID, id *StorageID) error {
-//	parts := bytes.Split(parse, []byte("~"))
-//	if len(parts) != 2 {
-//		return errors.New("expected format <queue_name>~<storage_id>")
-//	}
-//	id.Queue = string(parts[0])
-//	id.ID = parts[1]
-//	return nil
-//}
-//
-//// TODO: Remove this, no need to include the queue name in the id anymore.
-//func (b *BoltBackend) BuildStorageID(queue string, id []byte) types.ItemID {
-//	return append([]byte(queue+"~"), id...)
-//}
-//
-//func (b *BoltBackend) Close(_ context.Context) error {
-//	return nil
-//}
-//
-//func NewBoltBackend(conf BoltConfig) *BoltBackend {
-//	set.Default(&conf.Logger, slog.Default())
-//	set.Default(&conf.StorageDir, ".")
-//	set.Default(&conf.Clock, clock.NewProvider())
-//	return &BoltBackend{conf: conf}
-//}
-
 // ---------------------------------------------
 // PartitionStore Implementation
 // ---------------------------------------------
@@ -656,6 +619,10 @@ func (b *BoltQueueStore) Update(_ context.Context, info types.QueueInfo) error {
 		return err
 	}
 
+	if err := b.validateQueueName(info); err != nil {
+		return err
+	}
+
 	return db.Update(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket(bucketName)
 		if bucket == nil {
@@ -780,5 +747,7 @@ func (b *BoltQueueStore) Delete(_ context.Context, name string) error {
 }
 
 func (b *BoltQueueStore) Close(_ context.Context) error {
-	return b.db.Close()
+	err := b.db.Close()
+	b.db = nil
+	return err
 }

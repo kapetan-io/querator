@@ -711,7 +711,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				{
 					Name: "InvalidMaxAttempts",
 					Req: &pb.QueueInfo{
-						QueueName:   "InvalidMaxAttempts",
+						QueueName:   queueName,
 						MaxAttempts: math.MaxInt32,
 					},
 					Msg:  "max attempts is invalid; cannot be greater than 65536",

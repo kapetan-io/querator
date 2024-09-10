@@ -26,14 +26,9 @@ func (s QueuesValidation) validateGet(name string) error {
 
 	return nil
 }
-
-func (s QueuesValidation) validateQueueInfo(info types.QueueInfo) error {
+func (s QueuesValidation) validateQueueName(info types.QueueInfo) error {
 	if len(info.Name) > maxQueueNameLength {
 		return transport.NewInvalidOption("queue name is invalid; cannot be greater than '%d' characters", maxQueueNameLength)
-	}
-
-	if len(info.DeadQueue) > maxQueueNameLength {
-		return transport.NewInvalidOption("dead queue is invalid; cannot be greater than '%d' characters", maxQueueNameLength)
 	}
 
 	if strings.TrimSpace(info.Name) == "" {
@@ -42,6 +37,17 @@ func (s QueuesValidation) validateQueueInfo(info types.QueueInfo) error {
 
 	if strings.Contains(info.Name, "~") {
 		return transport.NewInvalidOption("queue name is invalid; '%s' cannot contain '~' character", info.Name)
+	}
+	return nil
+}
+
+func (s QueuesValidation) validateQueueInfo(info types.QueueInfo) error {
+	if err := s.validateQueueName(info); err != nil {
+		return err
+	}
+
+	if len(info.DeadQueue) > maxQueueNameLength {
+		return transport.NewInvalidOption("dead queue is invalid; cannot be greater than '%d' characters", maxQueueNameLength)
 	}
 
 	if strings.Contains(info.DeadQueue, "~") {

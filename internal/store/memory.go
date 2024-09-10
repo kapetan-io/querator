@@ -247,6 +247,10 @@ func (s *MemoryQueueStore) Add(_ context.Context, info types.QueueInfo) error {
 }
 
 func (s *MemoryQueueStore) Update(_ context.Context, info types.QueueInfo) error {
+	if err := s.validateQueueName(info); err != nil {
+		return err
+	}
+
 	idx, ok := s.findQueue(info.Name)
 	if !ok {
 		return ErrQueueNotExist

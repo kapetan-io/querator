@@ -101,10 +101,6 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Log
 			Partition:   i,
 		}
 		fmt.Printf("Create partition %+v\n", p)
-		if err := qm.conf.StorageConfig.Backends[0].PartitionStore.Create(p); err != nil {
-			f = append(f, "partition", p.Partition, "storage-name", p.StorageName)
-			return nil, f.Errorf("PartitionStore.Create(): %w", err)
-		}
 		info.PartitionInfo = append(info.PartitionInfo, p)
 	}
 
@@ -113,6 +109,13 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Log
 	if err := qm.conf.StorageConfig.QueueStore.Add(ctx, info); err != nil {
 		f = append(f, "queue", info.Name)
 		return nil, f.Errorf("QueueStore.Add(): %w", err)
+	}
+
+	for _, p := range info.PartitionInfo {
+		if err := qm.conf.StorageConfig.Backends[0].PartitionStore.Create(p); err != nil {
+			f = append(f, "partition", p.Partition, "storage-name", p.StorageName)
+			return nil, f.Errorf("PartitionStore.Create(): %w", err)
+		}
 	}
 
 	// Assertion that we are not crazy
@@ -126,10 +129,10 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Log
 	return qm.startLogicalQueue(ctx, info)
 }
 
-func (qm *QueuesManager) rebalanceLogical(info types.QueueInfo) error {
-	// TODO: See adr/0017-cluster-operation.md
-	return nil
-}
+//func (qm *QueuesManager) rebalanceLogical(info types.QueueInfo) error {
+//	// TODO: See adr/0017-cluster-operation.md
+//	return nil
+//}
 
 func (qm *QueuesManager) startLogicalQueue(ctx context.Context, info types.QueueInfo) (*Logical, error) {
 	f := errors.Fields{"category", "querator", "func", "QueuesManager.startLogicalQueue"}

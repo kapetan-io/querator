@@ -478,3 +478,39 @@ func (b *boltTestSetup) Teardown() {
 		panic(err)
 	}
 }
+
+// Badger test setup
+
+type badgerTestSetup struct {
+	Dir string
+}
+
+func (b *badgerTestSetup) Setup(bc store.BadgerConfig) store.StorageConfig {
+	if !dirExists(b.Dir) {
+		if err := os.Mkdir(b.Dir, 0777); err != nil {
+			panic(err)
+		}
+	}
+	b.Dir = filepath.Join(b.Dir, random.String("test-data-", 10))
+	if err := os.Mkdir(b.Dir, 0777); err != nil {
+		panic(err)
+	}
+	bc.StorageDir = b.Dir
+
+	var conf store.StorageConfig
+	conf.QueueStore = store.NewBadgerQueueStore(bc)
+	conf.Backends = []store.Backend{
+		{
+			PartitionStore: store.NewBadgerPartitionStore(bc),
+			Name:           "badger-0",
+			Affinity:       1,
+		},
+	}
+	return conf
+}
+
+func (b *badgerTestSetup) Teardown() {
+	if err := os.RemoveAll(b.Dir); err != nil {
+		panic(err)
+	}
+}

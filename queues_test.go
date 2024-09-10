@@ -18,8 +18,7 @@ import (
 )
 
 func TestQueuesStorage(t *testing.T) {
-	bdb := store.BoltDBTesting{Dir: t.TempDir()}
-	badger := store.BadgerDBTesting{Dir: t.TempDir()}
+	bdb := boltTestSetup{Dir: t.TempDir()}
 
 	for _, tc := range []struct {
 		Setup    NewStorageFunc
@@ -28,14 +27,14 @@ func TestQueuesStorage(t *testing.T) {
 	}{
 		{
 			Name: "InMemory",
-			Setup: func(cp *clock.Provider) store.Storage {
-				return store.NewMemoryStorage(store.MemoryStorageConfig{Clock: cp})
+			Setup: func(cp *clock.Provider) store.StorageConfig {
+				return setupMemoryStorage(store.StorageConfig{Clock: cp})
 			},
 			TearDown: func() {},
 		},
 		{
 			Name: "BoltDB",
-			Setup: func(cp *clock.Provider) store.Storage {
+			Setup: func(cp *clock.Provider) store.StorageConfig {
 				return bdb.Setup(store.BoltConfig{Clock: cp})
 			},
 			TearDown: func() {
@@ -59,16 +58,16 @@ func TestQueuesStorage(t *testing.T) {
 		//},
 	} {
 		t.Run(tc.Name, func(t *testing.T) {
-			testQueuesStorage(t, tc.Setup, tc.TearDown)
+			testQueues(t, tc.Setup, tc.TearDown)
 		})
 	}
 }
 
-func testQueuesStorage(t *testing.T, setup NewStorageFunc, tearDown func()) {
+func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	t.Run("CRUD", func(t *testing.T) {
 		_store := setup(clock.NewProvider())
 		defer tearDown()
-		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{Storage: _store})
+		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: _store})
 		defer d.Shutdown(t)
 
 		t.Run("Create", func(t *testing.T) {
@@ -81,10 +80,13 @@ func testQueuesStorage(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				ReserveTimeout: "1m",
 				DeadTimeout:    "10m",
 				MaxAttempts:    10,
+				Partitions:     1,
 			}))
 
+			fmt.Println("Create queue:", queueName)
 			var list pb.QueuesListResponse
 			require.NoError(t, c.QueuesList(ctx, &list, nil))
+			fmt.Println("List queue:", queueName)
 			require.Equal(t, 1, len(list.Items))
 			assert.Equal(t, queueName, list.Items[0].QueueName)
 			assert.NotEmpty(t, list.Items[0].CreatedAt)
@@ -290,7 +292,7 @@ func testQueuesStorage(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			// Attempt to delete
 			require.NoError(t, c.QueuesDelete(ctx, &pb.QueuesDeleteRequest{QueueName: l.QueueName}))
 
-			// Queue should no longer exist
+			// Partition should no longer exist
 			require.NoError(t, c.QueuesList(ctx, &list, &que.ListOptions{
 				Pivot: l.QueueName,
 				Limit: 1,
@@ -307,7 +309,7 @@ func testQueuesStorage(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	t.Run("List", func(t *testing.T) {
 		_store := setup(clock.NewProvider())
 		defer tearDown()
-		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{Storage: _store})
+		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: _store})
 		defer d.Shutdown(t)
 
 		queues := createRandomQueues(t, ctx, c, 100)
@@ -379,7 +381,7 @@ func testQueuesStorage(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	t.Run("Errors", func(t *testing.T) {
 		_store := setup(clock.NewProvider())
 		defer tearDown()
-		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{Storage: _store})
+		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: _store})
 		defer d.Shutdown(t)
 
 		var queueName = random.String("queue-", 10)
@@ -390,6 +392,7 @@ func testQueuesStorage(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			ReserveTimeout: "1m",
 			DeadTimeout:    "10m",
 			MaxAttempts:    10,
+			Partitions:     1,
 		}))
 
 		t.Run("QueuesCreate", func(t *testing.T) {
@@ -427,6 +430,7 @@ func testQueuesStorage(t *testing.T, setup NewStorageFunc, tearDown func()) {
 						ReserveTimeout: ReserveTimeout,
 						DeadTimeout:    DeadTimeout,
 						QueueName:      queueName,
+						Partitions:     1,
 					},
 					Msg:  "invalid queue; '" + queueName + "' already exists",
 					Code: duh.CodeBadRequest,
@@ -436,6 +440,7 @@ func testQueuesStorage(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					Req: &pb.QueueInfo{
 						QueueName:   random.String("queue-", 10),
 						DeadTimeout: "24h0m0s",
+						Partitions:  1,
 					},
 					Msg:  "reserve timeout is invalid; cannot be empty",
 					Code: duh.CodeBadRequest,
@@ -445,6 +450,7 @@ func testQueuesStorage(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					Req: &pb.QueueInfo{
 						QueueName:      random.String("queue-", 10),
 						ReserveTimeout: "24h0m0s",
+						Partitions:     1,
 					},
 					Msg:  "dead timeout is invalid; cannot be empty",
 					Code: duh.CodeBadRequest,
@@ -473,6 +479,7 @@ func testQueuesStorage(t *testing.T, setup NewStorageFunc, tearDown func()) {
 						QueueName:      "ReserveTimeoutTooLong",
 						ReserveTimeout: "1h0m0s",
 						DeadTimeout:    "30m0s",
+						Partitions:     1,
 					},
 					Msg:  "reserve timeout is too long; 1h0m0s cannot be greater than the dead timeout 30m0s",
 					Code: duh.CodeBadRequest,
@@ -702,7 +709,7 @@ func testQueuesStorage(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				},
 				{
 					// TODO: This might be allowed later to indicate infinite retries
-					Name: "InvalidMaxAttempts",
+					Name: "InvalidMinAttempts",
 					Req: &pb.QueueInfo{
 						QueueName:   queueName,
 						MaxAttempts: -1,
@@ -823,6 +830,7 @@ func createRandomQueues(t *testing.T, ctx context.Context, c *que.Client, count 
 			MaxAttempts:    int32(rand.Intn(100)),
 			ReserveTimeout: timeOuts.Reserve,
 			DeadTimeout:    timeOuts.Dead,
+			Partitions:     1,
 		}
 		idx++
 		items = append(items, &info)

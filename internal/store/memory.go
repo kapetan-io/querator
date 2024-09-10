@@ -3,89 +3,37 @@ package store
 import (
 	"bytes"
 	"context"
-	"errors"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/transport"
 	"github.com/kapetan-io/tackle/clock"
-	"github.com/kapetan-io/tackle/set"
 	"github.com/segmentio/ksuid"
 	"strings"
 )
 
-type MemoryStorageConfig struct {
-	Clock *clock.Provider
+// ---------------------------------------------
+// Partition Implementation
+// ---------------------------------------------
+
+type MemoryPartition struct {
+	conf StorageConfig
+	mem  []types.Item
+	uid  ksuid.KSUID
 }
 
-type MemoryStorage struct {
-	conf MemoryStorageConfig
-}
-
-var _ Storage = &MemoryStorage{}
-
-func NewMemoryStorage(conf MemoryStorageConfig) *MemoryStorage {
-	set.Default(&conf.Clock, clock.NewProvider())
-	return &MemoryStorage{
-		conf: conf,
-	}
-}
-
-func (s *MemoryStorage) NewQueuesStore(conf QueuesStoreConfig) (QueuesStore, error) {
-	return &MemoryQueuesStore{
-		mem:    make([]types.QueueInfo, 0, 1_000),
-		conf:   conf,
-		parent: s,
-	}, nil
-}
-
-func (s *MemoryStorage) NewQueue(info types.QueueInfo) (Queue, error) {
-	return &MemoryQueue{
-		mem:    make([]types.Item, 0, 1_000),
-		uid:    ksuid.New(),
-		info:   info,
-		parent: s,
-	}, nil
-}
-
-func (s *MemoryStorage) ParseID(parse types.ItemID, id *StorageID) error {
-	parts := bytes.Split(parse, []byte("~"))
-	if len(parts) != 2 {
-		return errors.New("expected format <queue_name>~<storage_id>")
-	}
-	id.Queue = string(parts[0])
-	id.ID = parts[1]
-	return nil
-}
-
-func (s *MemoryStorage) BuildStorageID(queue string, id []byte) types.ItemID {
-	return append([]byte(queue+"~"), id...)
-}
-
-func (s *MemoryStorage) Close(_ context.Context) error {
-	return nil
-}
-
-type MemoryQueue struct {
-	info   types.QueueInfo
-	parent *MemoryStorage
-	mem    []types.Item
-	uid    ksuid.KSUID
-}
-
-func (q *MemoryQueue) Produce(_ context.Context, batch types.Batch[types.ProduceRequest]) error {
+func (q *MemoryPartition) Produce(_ context.Context, batch types.Batch[types.ProduceRequest]) error {
 	for _, r := range batch.Requests {
 		for _, item := range r.Items {
 			q.uid = q.uid.Next()
 			item.ID = []byte(q.uid.String())
-			item.CreatedAt = q.parent.conf.Clock.Now().UTC()
+			item.CreatedAt = q.conf.Clock.Now().UTC()
 
 			q.mem = append(q.mem, *item)
-			item.ID = q.parent.BuildStorageID(q.info.Name, item.ID)
 		}
 	}
 	return nil
 }
 
-func (q *MemoryQueue) Reserve(_ context.Context, batch types.ReserveBatch, opts ReserveOptions) error {
+func (q *MemoryPartition) Reserve(_ context.Context, batch types.ReserveBatch, opts ReserveOptions) error {
 	batchIter := batch.Iterator()
 	var count int
 
@@ -101,7 +49,6 @@ func (q *MemoryQueue) Reserve(_ context.Context, batch types.ReserveBatch, opts 
 		// Item returned gets the public StorageID
 		itemPtr := new(types.Item) // TODO: Memory Pool
 		*itemPtr = item
-		itemPtr.ID = q.parent.BuildStorageID(q.info.Name, item.ID)
 
 		// Assign the item to the next waiting reservation in the batch,
 		// returns false if there are no more reservations available to fill
@@ -115,17 +62,16 @@ func (q *MemoryQueue) Reserve(_ context.Context, batch types.ReserveBatch, opts 
 	return nil
 }
 
-func (q *MemoryQueue) Complete(_ context.Context, batch types.Batch[types.CompleteRequest]) error {
+func (q *MemoryPartition) Complete(_ context.Context, batch types.Batch[types.CompleteRequest]) error {
 nextBatch:
 	for i := range batch.Requests {
 		for _, id := range batch.Requests[i].Ids {
-			var sid StorageID
-			if err := q.parent.ParseID(id, &sid); err != nil {
+			if err := q.validateID(id); err != nil {
 				batch.Requests[i].Err = transport.NewInvalidOption("invalid storage id; '%s': %s", id, err)
 				continue nextBatch
 			}
 
-			idx, ok := q.findID(sid.ID)
+			idx, ok := q.findID(id)
 			if !ok {
 				batch.Requests[i].Err = transport.NewInvalidOption("invalid storage id; '%s' does not exist", id)
 				continue nextBatch
@@ -133,7 +79,7 @@ nextBatch:
 
 			if !q.mem[idx].IsReserved {
 				batch.Requests[i].Err = transport.NewConflict("item(s) cannot be completed; '%s' is not "+
-					"marked as reserved", sid.ID)
+					"marked as reserved", id)
 				continue nextBatch
 			}
 			// Remove the item from the array
@@ -143,51 +89,51 @@ nextBatch:
 	return nil
 }
 
-func (q *MemoryQueue) List(_ context.Context, items *[]*types.Item, opts types.ListOptions) error {
-
-	var sid StorageID
-	if opts.Pivot != nil {
-		if err := q.parent.ParseID(opts.Pivot, &sid); err != nil {
-			return transport.NewInvalidOption("invalid storage id; '%s': %s", opts.Pivot, err)
-		}
+func (q *MemoryPartition) validateID(id []byte) error {
+	_, err := ksuid.Parse(string(id))
+	if err != nil {
+		return err
 	}
+	return nil
+}
 
+func (q *MemoryPartition) List(_ context.Context, items *[]*types.Item, opts types.ListOptions) error {
 	var count, idx int
 
-	if sid.ID != nil {
-		idx, _ = q.findID(sid.ID)
+	if opts.Pivot != nil {
+		if err := q.validateID(opts.Pivot); err != nil {
+			return transport.NewInvalidOption("invalid storage id; '%s': %s", opts.Pivot, err)
+		}
+		idx, _ = q.findID(opts.Pivot)
 	}
 	for _, item := range q.mem[idx:] {
 		if count >= opts.Limit {
 			return nil
 		}
-		item.ID = q.parent.BuildStorageID(q.info.Name, item.ID)
 		*items = append(*items, &item)
 		count++
 	}
 	return nil
 }
 
-func (q *MemoryQueue) Add(_ context.Context, items []*types.Item) error {
+func (q *MemoryPartition) Add(_ context.Context, items []*types.Item) error {
 	for _, item := range items {
 		q.uid = q.uid.Next()
 		item.ID = []byte(q.uid.String())
-		item.CreatedAt = q.parent.conf.Clock.Now().UTC()
+		item.CreatedAt = q.conf.Clock.Now().UTC()
 
 		q.mem = append(q.mem, *item)
-		item.ID = q.parent.BuildStorageID(q.info.Name, item.ID)
 	}
 	return nil
 }
 
-func (q *MemoryQueue) Delete(_ context.Context, ids []types.ItemID) error {
+func (q *MemoryPartition) Delete(_ context.Context, ids []types.ItemID) error {
 	for _, id := range ids {
-		var sid StorageID
-		if err := q.parent.ParseID(id, &sid); err != nil {
+		if err := q.validateID(id); err != nil {
 			return transport.NewInvalidOption("invalid storage id; '%s': %s", id, err)
 		}
 
-		idx, ok := q.findID(sid.ID)
+		idx, ok := q.findID(id)
 		if !ok {
 			continue
 		}
@@ -198,7 +144,7 @@ func (q *MemoryQueue) Delete(_ context.Context, ids []types.ItemID) error {
 	return nil
 }
 
-func (q *MemoryQueue) Clear(_ context.Context, destructive bool) error {
+func (q *MemoryPartition) Clear(_ context.Context, destructive bool) error {
 	if destructive {
 		q.mem = make([]types.Item, 0, 1_000)
 		return nil
@@ -215,8 +161,8 @@ func (q *MemoryQueue) Clear(_ context.Context, destructive bool) error {
 	return nil
 }
 
-func (q *MemoryQueue) Stats(_ context.Context, stats *types.QueueStats) error {
-	now := q.parent.conf.Clock.Now().UTC()
+func (q *MemoryPartition) Stats(_ context.Context, stats *types.QueueStats) error {
+	now := q.conf.Clock.Now().UTC()
 	for _, item := range q.mem {
 		stats.Total++
 		stats.AverageAge += now.Sub(item.CreatedAt)
@@ -234,14 +180,14 @@ func (q *MemoryQueue) Stats(_ context.Context, stats *types.QueueStats) error {
 	return nil
 }
 
-func (q *MemoryQueue) Close(_ context.Context) error {
+func (q *MemoryPartition) Close(_ context.Context) error {
 	q.mem = nil
 	return nil
 }
 
 // findID attempts to find the provided id in q.mem. If found returns the index and true.
 // If not found returns the next nearest item in the list.
-func (q *MemoryQueue) findID(id []byte) (int, bool) {
+func (q *MemoryPartition) findID(id []byte) (int, bool) {
 	var nearest, nearestIdx int
 	for i, item := range q.mem {
 		lex := bytes.Compare(item.ID, id)
@@ -257,19 +203,23 @@ func (q *MemoryQueue) findID(id []byte) (int, bool) {
 }
 
 // ---------------------------------------------
-// Queue Repository Implementation
+// QueueStore Implementation
 // ---------------------------------------------
 
-type MemoryQueuesStore struct {
+type MemoryQueueStore struct {
 	QueuesValidation
-	mem    []types.QueueInfo
-	conf   QueuesStoreConfig
-	parent *MemoryStorage
+	mem []types.QueueInfo
 }
 
-var _ QueuesStore = &MemoryQueuesStore{}
+var _ QueueStore = &MemoryQueueStore{}
 
-func (s *MemoryQueuesStore) Get(_ context.Context, name string, queue *types.QueueInfo) error {
+func NewMemoryQueueStore() *MemoryQueueStore {
+	return &MemoryQueueStore{
+		mem: make([]types.QueueInfo, 0, 1_000),
+	}
+}
+
+func (s *MemoryQueueStore) Get(_ context.Context, name string, queue *types.QueueInfo) error {
 	if err := s.validateGet(name); err != nil {
 		return err
 	}
@@ -282,7 +232,7 @@ func (s *MemoryQueuesStore) Get(_ context.Context, name string, queue *types.Que
 	return nil
 }
 
-func (s *MemoryQueuesStore) Add(_ context.Context, info types.QueueInfo) error {
+func (s *MemoryQueueStore) Add(_ context.Context, info types.QueueInfo) error {
 	if err := s.validateAdd(info); err != nil {
 		return err
 	}
@@ -296,11 +246,7 @@ func (s *MemoryQueuesStore) Add(_ context.Context, info types.QueueInfo) error {
 	return nil
 }
 
-func (s *MemoryQueuesStore) Update(_ context.Context, info types.QueueInfo) error {
-	if err := s.validateUpdate(info); err != nil {
-		return err
-	}
-
+func (s *MemoryQueueStore) Update(_ context.Context, info types.QueueInfo) error {
 	idx, ok := s.findQueue(info.Name)
 	if !ok {
 		return ErrQueueNotExist
@@ -318,12 +264,18 @@ func (s *MemoryQueuesStore) Update(_ context.Context, info types.QueueInfo) erro
 			"dead timeout %s", info.ReserveTimeout.String(), s.mem[idx].DeadTimeout.String())
 	}
 
-	s.mem[idx].Update(info)
+	found := s.mem[idx]
+	found.Update(info)
+
+	if err := s.validateUpdate(found); err != nil {
+		return err
+	}
+	s.mem[idx] = found
 	return nil
 
 }
 
-func (s *MemoryQueuesStore) List(_ context.Context, queues *[]types.QueueInfo, opts types.ListOptions) error {
+func (s *MemoryQueueStore) List(_ context.Context, queues *[]types.QueueInfo, opts types.ListOptions) error {
 	if err := s.validateList(opts); err != nil {
 		return err
 	}
@@ -343,7 +295,7 @@ func (s *MemoryQueuesStore) List(_ context.Context, queues *[]types.QueueInfo, o
 	return nil
 }
 
-func (s *MemoryQueuesStore) Delete(_ context.Context, name string) error {
+func (s *MemoryQueueStore) Delete(_ context.Context, name string) error {
 	if err := s.validateDelete(name); err != nil {
 		return err
 	}
@@ -356,14 +308,14 @@ func (s *MemoryQueuesStore) Delete(_ context.Context, name string) error {
 	return nil
 }
 
-func (s *MemoryQueuesStore) Close(_ context.Context) error {
+func (s *MemoryQueueStore) Close(_ context.Context) error {
 	s.mem = nil
 	return nil
 }
 
 // findID attempts to find the provided queue in q.mem. If found returns the index and true.
 // If not found returns the next nearest item in the list.
-func (s *MemoryQueuesStore) findQueue(name string) (int, bool) {
+func (s *MemoryQueueStore) findQueue(name string) (int, bool) {
 	var nearest, nearestIdx int
 	for i, queue := range s.mem {
 		lex := strings.Compare(queue.Name, name)
@@ -376,4 +328,33 @@ func (s *MemoryQueuesStore) findQueue(name string) (int, bool) {
 		}
 	}
 	return nearestIdx, false
+}
+
+// ---------------------------------------------
+// PartitionStore Implementation
+// ---------------------------------------------
+
+type MemoryPartitionStore struct {
+	conf StorageConfig
+}
+
+var _ PartitionStore = &MemoryPartitionStore{}
+
+func NewMemoryPartitionStore(conf StorageConfig) *MemoryPartitionStore {
+	return &MemoryPartitionStore{conf: conf}
+}
+
+func (m MemoryPartitionStore) Create(info types.PartitionInfo) error {
+	// Does nothing as memory has nothing to create. Calls to Get() create the partition
+	// when requested.
+	return nil
+}
+
+func (m MemoryPartitionStore) Get(info types.PartitionInfo) Partition {
+	return &MemoryPartition{
+		mem:  make([]types.Item, 0, 1_000),
+		uid:  ksuid.New(),
+		conf: m.conf,
+	}
+
 }

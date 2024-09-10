@@ -185,6 +185,10 @@ message QueueInfo {
   // The maximum number of times this message can be deferred by a consumer before it is
   // placed in the dead letter queue.
   int32  maxAttempts = 8 [json_name = "max_attempts"];
+
+  // The number of partitions the queue is requesting. This might be different than the
+  // actual number of partitions if the partition count was recently changed.
+  int32  partitions = 9;
 }
 
 message QueueClearRequest {

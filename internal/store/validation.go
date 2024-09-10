@@ -60,6 +60,11 @@ func (s QueuesValidation) validateQueueInfo(info types.QueueInfo) error {
 		return transport.NewInvalidOption("max attempts is invalid; cannot be negative number")
 	}
 
+	// TODO: Add this check to the errors test
+	if info.Partitions < 1 {
+		return transport.NewInvalidOption("partitions is invalid; cannot be less than 1")
+	}
+
 	return nil
 }
 

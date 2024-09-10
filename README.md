@@ -15,9 +15,13 @@ solve several distributed problems.
 * Run async background tasks that can retry if failed
 * Schedule cron style jobs to run at a specific time in the future and retry if failed
 * Retryable and reliable webhook delivery with external systems
+* A limit locking system, where items in the queue represent a limited lockable resource
 
 ### Does it scale?
-YES! We scaled a closed source version of a reservation queue service at https://mailgun.com to multi-billions of messages a day in a very efficient and cost effective manner. It was a key component of our micro-service (domain based) system. The implementation was such a success I'm surprised to find no similar projects available in the open source community, so I'm building one!
+YES! We scaled a closed source version of a reservation queue service at https://mailgun.com to multi-billions of
+messages a day in a very efficient and cost-effective manner. It was a key component of our microservice
+(domain based) system. The implementation was such a success I'm surprised to find no similar projects available
+in the open source community, so I'm building one!
 
 ### What is the Reservation Pattern?
 The reservation pattern is used to implement an “Almost Exactly Once Delivery” style queue by ensuring that 
@@ -33,20 +37,99 @@ about as reliable as the system it runs on. If you need additional protection ag
 the messages consumed are idempotent. Remember, [Distributed systems are all 
 about trade-offs](https://www.infoq.com/articles/cap-twelve-years-later-how-the-rules-have-changed/)
 
+### Architecture Overview
+Querator enables API users to interact with queues created by the user, where each queue can consist of one or more
+partitions. Each partition is backed by a single table, collection, or bucket provided by the chosen backend storage.
+
+Partitions are a fundamental component of Querator, enabling the Querator to scale horizontally and handle high volumes
+of data efficiently. Partitions provide the following benefits.
+
+##### Scalability
+Partitions allow a single queue to be distributed across multiple Querator instances in a cluster. This distribution
+prevents any single instance from being overwhelmed by data volume, enabling the system to manage larger data volumes
+than a single server could handle. By dividing a queue into multiple partitions, Querator can scale beyond the limits
+of a single machine, making it suitable for large-scale distributed systems.
+
+##### Parallel Distribution
+Partitions serve as units of parallelism, allowing multiple consumer instances to process different partitions
+concurrently. This significantly increases overall processing throughput. Unlike some legacy streaming and queuing
+platforms, clients are not assigned specific partitions. Instead, clients interact with Querator endpoints, which 
+automatically distribute producers and consumers requests across partitions as needed. This automation eliminates the
+need for operators to manage the number of consumers per partition to achieve even work distribution.
+
+For example, if there are 100 partitions and only one consumer, the single consumer will receive items from all 100
+partitions in a round-robin fashion as they become available. As the number of consumers increases, Querator
+automatically adjusts and rebalances the consumers to partitions to ensure even distribution, even if the number
+of consumers exceeds the total number of partitions. This is achieved through "Logical Queues," which dynamically
+grow and shrink based on the number of consumers and available partitions.
+See [ADR 0016 Queue Partitions](doc/adr/0016-queue-partitions.md) for details
+
+##### Disaggregated Storage Backends
+Each partition is supported by a user-chosen data store backend. This separation of storage from processing provides
+operators with the flexibility to select the desired level of fault tolerance for their specific deployment and 
+allows them to use a data store with which they are familiar in terms of operation and scaling. Each partition is 
+backed by a single table, collection, or bucket (depending on the backend), enabling partitions to be added or 
+dropped as throughput capacity changes and items are drained from the partition backends.
+
+Unlike similar queue systems, Querator handles the complexity of partitioning and balancing on the server side, 
+simplifying the client API. This simplicity facilitates easy integration with third-party systems, frameworks, 
+and languages, fostering a rich open-source ecosystem.
+
+### Preserving FIFO Order
+Although a queue is implemented as a First-In-First-Out (FIFO) structure, the system's
+order cannot be maintained if there is more than one consumer accessing the queue.
+
+Consider a scenario with two consumers accessing a FIFO queue:
+
+- Consumer 1 retrieves an item.
+- Consumer 2 retrieves an item.
+- Consumer 2 finishes processing their item.
+- Consumer 1 finishes processing their item.
+
+In this situation, the system -— which includes the entire setup of client producers, Querator, and
+client consumers -— cannot reliably maintain the order of item processing when multiple consumers are
+involved. To ensure ordered processing, items which require preservation of order should be placed
+in the same queue, and that queue must have only one partition and one consumer.
+
+Even though Querator queues are designed to deliver items in the order they were produced (FIFO), this order is 
+disrupted if multiple consumers process items out of sequence. If a user desires a strictly ordered and processed 
+FIFO queue, they must create a queue with only one partition and ensure that only one consumer processes that queue.
+
+### Storage Backends
+- [ ] TODO - Storage backend benchmarks
+
+##### InMemory
+This backend stores all queues and items into RAM memory. This is useful when testing and creating a baseline for 
+benchmarking Querator operation. It can also be used in ephemeral environments where speed is valued over durability.
+
+##### BoltDB
+This backend uses the ETCD flavor of BoltDB and is intended to be used for embedded or in limited resource environments
+where High Availability is not a concern, and where networking is limited or access to a remote storage system is not
+possible. 
+- [ ] TODO - replace this is badgerDB.
+
+### Embedded Querator
+Querator is designed as a library which exposes all API functionality via `Service` method calls. Users can use
+the `daemon` package or invoke `querator.NewService()` directly to get a new instance of `Service` to interact with.
+
 ### API
-See [Querator OSS API Reference](https://thrawn01-llc.stoplight.io/docs/querator-oss/924788fc33955-querator-oss-api) for and idea of what the API looks like.
+See [Querator OSS API Reference](https://thrawn01-llc.stoplight.io/docs/querator-oss/924788fc33955-querator-oss-api)
+for and idea of what the API looks like.
+
+- [ ] TODO - update this with the latest OpenAPI schema
 
 ### Design
 See our [Architecture Decision Docs](doc/adr) for details on our current implementation design.
 
 ### TODOs
-* ReadOnly Queues - The ability to drain a queue of items. A Queue in a "Queue Group" that is put into ReadOnly mode
-  will not allow items to be produced to it, but items already in the queue can be reserved and processed by consumers.
-* "Queue Groups" - See ADR [Queue Groups](doc/adr/0010-queue-groups.md)
-* Experiment with [Badger](https://github.com/dgraph-io/badger) as a replacement for boltDB. Bolt turned out to be much
+- [ ] Implement PostgreSQL backend with SKIP LOCK, Partitions, Truncate.
+- [ ] Experiment with [Badger](https://github.com/dgraph-io/badger) as a replacement for boltDB. Bolt turned out to be much
   slower than I expected due to the lack of an LSM.
-* Figure out why queue creation is so slow, even using the InMemory implementation, it is quite slow compared
-  to `store.Queue`.
-* Finish Testing existing functionality
-* Implement Scheduled and Defer
-* Consider allowing a produced item to specify the ReserveTimeout
+- [ ] Implement Scheduled and Defer
+- [ ] Consider allowing a produced item to specify the ReserveTimeout
+
+See the [Querator Trello Board](https://trello.com/b/cey2cB3i/querator) for work status and progress
+
+### Similar Projects
+* https://engineering.fb.com/2021/02/22/production-engineering/foqs-scaling-a-distributed-priority-queue/
+

@@ -6,6 +6,7 @@ import (
 	"github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/internal"
 	"github.com/kapetan-io/querator/internal/store"
+	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/set"
 	"log/slog"
 )
@@ -40,15 +41,22 @@ func (c *Config) ServerTLS() *tls.Config {
 }
 
 func (c *Config) SetDefaults() error {
-	if c.Storage == nil {
-		c.Storage = store.NewBoltStorage(store.BoltConfig{})
-	}
+	var err error
+	set.Default(&c.Clock, clock.NewProvider())
 	set.Default(&c.Logger, slog.Default())
 	set.Default(&c.MaxReserveBatchSize, internal.DefaultMaxReserveBatchSize)
 	set.Default(&c.MaxProduceBatchSize, internal.DefaultMaxProduceBatchSize)
 	set.Default(&c.MaxCompleteBatchSize, internal.DefaultMaxCompleteBatchSize)
 	set.Default(&c.MaxRequestsPerQueue, internal.DefaultMaxRequestsPerQueue)
-	return nil
+	set.Default(&c.StorageConfig.QueueStore, store.NewMemoryQueueStore())
+	set.Default(&c.StorageConfig.Backends, []store.Backend{
+		{
+			PartitionStore: store.NewMemoryPartitionStore(c.StorageConfig),
+			Name:           "mem-0",
+			Affinity:       1,
+		},
+	})
+	return err
 }
 
 // TODO: Load from config system

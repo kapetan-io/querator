@@ -10,6 +10,7 @@ import (
 
 var ErrQueueNotExist = transport.NewRequestFailed("queue does not exist")
 
+// TODO: Remove
 // StorageID is the decoded storage StorageID
 type StorageID struct {
 	ID    types.ItemID
@@ -20,34 +21,14 @@ func (id StorageID) String() string {
 	return fmt.Sprintf("%s~%s", id.Queue, id.ID)
 }
 
-// Storage is the primary storage interface
-type Storage interface {
-	// NewQueue creates a store.Queue instance. The Queue is used to load and store
-	// items in a singular queue, which is typically backed by a single table where
-	// items for this queue are stored.
-	NewQueue(info types.QueueInfo) (Queue, error)
-
-	// NewQueuesStore creates a new instance of the QueuesStore. A QueuesStore stores
-	// QueueInfo structs, which hold information about all the available queues.
-	NewQueuesStore(conf QueuesStoreConfig) (QueuesStore, error)
-
-	ParseID(parse types.ItemID, id *StorageID) error
-	BuildStorageID(queue string, id []byte) types.ItemID
-	Close(ctx context.Context) error
-}
-
 type ReserveOptions struct {
 	// ReserveDeadline is a time in the future when the reservation should expire
 	ReserveDeadline clock.Time
 }
 
-// TODO: Not sure this should be here, its only used by memory.go
-type QueuesStoreConfig struct {
-}
-
-// QueuesStore is storage for listing and storing information about queues
-type QueuesStore interface {
-	// Get returns a store.Queue from storage ready to be used. Returns ErrQueueNotExist if the
+// QueueStore is storage for listing and storing information about queues
+type QueueStore interface {
+	// Get returns a store.Partition from storage ready to be used. Returns ErrQueueNotExist if the
 	// queue requested does not exist
 	Get(ctx context.Context, name string, queue *types.QueueInfo) error
 
@@ -67,9 +48,9 @@ type QueuesStore interface {
 	Close(ctx context.Context) error
 }
 
-// Queue represents storage for a single queue. An instance of Queue should not be considered thread safe,
-// it is intended to be used from within the internal.Queue only!
-type Queue interface {
+// Partition represents storage for a single partition. An instance of Partition should not be considered
+// thread safe as it is intended to be used by a Logical Queue only.
+type Partition interface {
 	// Produce writes the items for each batch to the data store, assigning an error for each
 	// batch that fails.
 	Produce(ctx context.Context, batch types.Batch[types.ProduceRequest]) error
@@ -101,4 +82,47 @@ type Queue interface {
 	Close(ctx context.Context) error
 }
 
-// TODO: ScheduledStorage interface {} - A place to store scheduled items to be queued. (Defer)
+// TODO: Rename this to `store.Config` if possible
+// StorageConfig is the configuration accepted by QueueManager to manage storage of queues, scheduled items,
+// and partitions.
+type StorageConfig struct {
+	// How Queues are stored can be separate from PartitionInfo and Scheduled stores
+	QueueStore QueueStore
+	// The Backends configured for partitions to utilize
+	Backends []Backend
+	// Clock is the clock provider the backend implementation should use
+	Clock *clock.Provider
+}
+
+// Backend is the struct which holds the configured partition backend interfaces
+type Backend struct {
+	PartitionStore PartitionStore
+	ScheduledStore ScheduledStore
+	Affinity       float64
+	Name           string
+}
+
+// PartitionStore manages the partitions
+type PartitionStore interface {
+	// Create assumes the partition does not exist. Returns an error if the partition exists
+	Create(types.PartitionInfo) error
+	// Get assumes the partition exists and returns a new Partition instance for the requested partition.
+	// returns an error if the partition requested does not exist.
+	Get(types.PartitionInfo) Partition
+}
+
+// TODO: A scheduled store should probably be located or managed by a partition store, possibly in the same table
+//  or a separate table on the same data storage as the partition table. Queued schedule items should be distributed
+//  across partitions as to avoid a throughput bottle neck, and should be queued into whatever partition the logical
+//  queue has access to when the scheduled item deadline is reached. This avoids complication
+//
+
+// ScheduledStore manages scheduled and deferred items
+type ScheduledStore interface {
+	Create(types.PartitionInfo) error
+	Get(types.PartitionInfo) Scheduled
+}
+
+// TODO: Design the Scheduled interface
+type Scheduled interface {
+}

@@ -77,6 +77,7 @@ func BenchmarkProduce(b *testing.B) {
 				QueueName:      "bench-queue",
 				DeadTimeout:    "24h0m0s",
 				ReserveTimeout: "1m0s",
+				Partitions:     1,
 			}))
 
 			for _, p := range []int{1, 8, 24, 32} {
@@ -134,6 +135,7 @@ func BenchmarkProduce(b *testing.B) {
 						MaxAttempts:    int32(rand.Intn(100)),
 						ReserveTimeout: timeOuts.Reserve,
 						DeadTimeout:    timeOuts.Dead,
+						Partitions:     1,
 					}
 
 					err = s.QueuesCreate(context.Background(), &info)

@@ -72,7 +72,7 @@ type BadgerPartition struct {
 }
 
 func (b *BadgerPartition) Produce(_ context.Context, batch types.Batch[types.ProduceRequest]) error {
-	f := errors.Fields{"category", "badger", "func", "Queue.Produce"}
+	f := errors.Fields{"category", "badger", "func", "Partition.Produce"}
 	db, err := b.getDB()
 	if err != nil {
 		return err
@@ -101,7 +101,7 @@ func (b *BadgerPartition) Produce(_ context.Context, batch types.Batch[types.Pro
 }
 
 func (b *BadgerPartition) Reserve(_ context.Context, batch types.ReserveBatch, opts ReserveOptions) error {
-	f := errors.Fields{"category", "badger", "func", "Queue.Reserve"}
+	f := errors.Fields{"category", "badger", "func", "Partition.Reserve"}
 
 	db, err := b.getDB()
 	if err != nil {
@@ -160,7 +160,7 @@ func (b *BadgerPartition) Reserve(_ context.Context, batch types.ReserveBatch, o
 }
 
 func (b *BadgerPartition) Complete(_ context.Context, batch types.Batch[types.CompleteRequest]) error {
-	f := errors.Fields{"category", "badger", "func", "Queue.Complete"}
+	f := errors.Fields{"category", "badger", "func", "Partition.Complete"}
 	var done bool
 
 	db, err := b.getDB()
@@ -229,7 +229,7 @@ nextBatch:
 }
 
 func (b *BadgerPartition) List(_ context.Context, items *[]*types.Item, opts types.ListOptions) error {
-	f := errors.Fields{"category", "badger", "func", "Queue.List"}
+	f := errors.Fields{"category", "badger", "func", "Partition.List"}
 
 	db, err := b.getDB()
 	if err != nil {
@@ -281,7 +281,7 @@ func (b *BadgerPartition) List(_ context.Context, items *[]*types.Item, opts typ
 }
 
 func (b *BadgerPartition) Add(_ context.Context, items []*types.Item) error {
-	f := errors.Fields{"category", "badger", "func", "Queue.Add"}
+	f := errors.Fields{"category", "badger", "func", "Partition.Add"}
 
 	db, err := b.getDB()
 	if err != nil {
@@ -310,7 +310,7 @@ func (b *BadgerPartition) Add(_ context.Context, items []*types.Item) error {
 }
 
 func (b *BadgerPartition) Delete(_ context.Context, ids []types.ItemID) error {
-	f := errors.Fields{"category", "badger", "func", "Queue.Delete"}
+	f := errors.Fields{"category", "badger", "func", "Partition.Delete"}
 
 	db, err := b.getDB()
 	if err != nil {
@@ -332,7 +332,7 @@ func (b *BadgerPartition) Delete(_ context.Context, ids []types.ItemID) error {
 }
 
 func (b *BadgerPartition) Clear(_ context.Context, destructive bool) error {
-	f := errors.Fields{"category", "badger", "func", "Queue.Delete"}
+	f := errors.Fields{"category", "badger", "func", "Partition.Clear"}
 
 	db, err := b.getDB()
 	if err != nil {

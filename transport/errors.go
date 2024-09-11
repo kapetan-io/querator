@@ -182,7 +182,3 @@ func (e *ErrConflict) Message() string {
 }
 
 var _ duh.Error = &ErrConflict{}
-
-type ErrInternal struct {
-	msg string
-}

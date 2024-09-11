@@ -564,6 +564,10 @@ func (b *BadgerQueueStore) Update(_ context.Context, info types.QueueInfo) error
 		return err
 	}
 
+	if err := b.validateQueueName(info); err != nil {
+		return err
+	}
+
 	return db.Update(func(txn *badger.Txn) error {
 
 		kvItem, err := txn.Get([]byte(info.Name))
@@ -678,5 +682,7 @@ func (b *BadgerQueueStore) Delete(_ context.Context, name string) error {
 }
 
 func (b *BadgerQueueStore) Close(_ context.Context) error {
-	return b.db.Close()
+	err := b.db.Close()
+	b.db = nil
+	return err
 }

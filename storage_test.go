@@ -26,7 +26,8 @@ var log = slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 // TestQueueStorage tests the /storage/queue.* endpoints
 func TestQueueStorage(t *testing.T) {
-	//bdb := boltTestSetup{Dir: t.TempDir()}
+	bdb := boltTestSetup{Dir: t.TempDir()}
+	badgerdb := badgerTestSetup{Dir: t.TempDir()}
 
 	for _, tc := range []struct {
 		Setup    NewStorageFunc
@@ -40,16 +41,24 @@ func TestQueueStorage(t *testing.T) {
 			},
 			TearDown: func() {},
 		},
-
-		//{
-		//	Name: "BoltDB",
-		//	Setup: func(cp *clock.Provider) store.StorageConfig {
-		//		return bdb.Setup(store.BoltConfig{Clock: cp})
-		//	},
-		//	TearDown: func() {
-		//		bdb.Teardown()
-		//	},
-		//},
+		{
+			Name: "BoltDB",
+			Setup: func(cp *clock.Provider) store.StorageConfig {
+				return bdb.Setup(store.BoltConfig{Clock: cp})
+			},
+			TearDown: func() {
+				bdb.Teardown()
+			},
+		},
+		{
+			Name: "BadgerDB",
+			Setup: func(cp *clock.Provider) store.StorageConfig {
+				return badgerdb.Setup(store.BadgerConfig{Clock: cp})
+			},
+			TearDown: func() {
+				badgerdb.Teardown()
+			},
+		},
 
 		//{
 		//	Name: "SurrealDB",
@@ -445,6 +454,10 @@ func dirExists(path string) bool {
 	return info.IsDir()
 }
 
+// ---------------------------------------------------------------------
+// Bolt test setup
+// ---------------------------------------------------------------------
+
 type boltTestSetup struct {
 	Dir string
 }
@@ -479,7 +492,9 @@ func (b *boltTestSetup) Teardown() {
 	}
 }
 
+// ---------------------------------------------------------------------
 // Badger test setup
+// ---------------------------------------------------------------------
 
 type badgerTestSetup struct {
 	Dir string

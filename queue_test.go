@@ -30,6 +30,7 @@ type NewStorageFunc func(cp *clock.Provider) store.StorageConfig
 
 func TestQueue(t *testing.T) {
 	bdb := boltTestSetup{Dir: t.TempDir()}
+	badgerdb := badgerTestSetup{Dir: t.TempDir()}
 
 	for _, tc := range []struct {
 		Setup    NewStorageFunc
@@ -50,6 +51,15 @@ func TestQueue(t *testing.T) {
 			},
 			TearDown: func() {
 				bdb.Teardown()
+			},
+		},
+		{
+			Name: "BadgerDB",
+			Setup: func(cp *clock.Provider) store.StorageConfig {
+				return badgerdb.Setup(store.BadgerConfig{Clock: cp})
+			},
+			TearDown: func() {
+				badgerdb.Teardown()
 			},
 		},
 		//{

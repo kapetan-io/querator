@@ -19,6 +19,7 @@ import (
 
 func TestQueuesStorage(t *testing.T) {
 	bdb := boltTestSetup{Dir: t.TempDir()}
+	badgerdb := badgerTestSetup{Dir: t.TempDir()}
 
 	for _, tc := range []struct {
 		Setup    NewStorageFunc
@@ -39,6 +40,15 @@ func TestQueuesStorage(t *testing.T) {
 			},
 			TearDown: func() {
 				bdb.Teardown()
+			},
+		},
+		{
+			Name: "BadgerDB",
+			Setup: func(cp *clock.Provider) store.StorageConfig {
+				return badgerdb.Setup(store.BadgerConfig{Clock: cp})
+			},
+			TearDown: func() {
+				badgerdb.Teardown()
 			},
 		},
 		//{

@@ -17,7 +17,8 @@ import (
 
 func BenchmarkProduce(b *testing.B) {
 	fmt.Printf("Current Operating System has '%d' CPUs\n", runtime.NumCPU())
-	//bdb := boltTestSetup{Dir: b.TempDir()}
+	bdb := boltTestSetup{Dir: b.TempDir()}
+	badgerdb := badgerTestSetup{Dir: b.TempDir()}
 
 	for _, tc := range []struct {
 		Setup    NewStorageFunc
@@ -31,15 +32,25 @@ func BenchmarkProduce(b *testing.B) {
 			},
 			TearDown: func() {},
 		},
-		//{
-		//	Name: "BoltDB",
-		//	Setup: func(cp *clock.Provider) store.StorageConfig {
-		//		return bdb.Setup(store.BoltConfig{Clock: cp})
-		//	},
-		//	TearDown: func() {
-		//		bdb.Teardown()
-		//	},
-		//},
+		{
+			Name: "BoltDB",
+			Setup: func(cp *clock.Provider) store.StorageConfig {
+				return bdb.Setup(store.BoltConfig{Clock: cp})
+			},
+			TearDown: func() {
+				bdb.Teardown()
+			},
+		},
+		{
+			Name: "BadgerDB",
+			Setup: func(cp *clock.Provider) store.StorageConfig {
+				return badgerdb.Setup(store.BadgerConfig{Clock: cp})
+			},
+			TearDown: func() {
+				badgerdb.Teardown()
+			},
+		},
+
 		//{
 		//	Name: "SurrealDB",
 		//},
@@ -66,6 +77,7 @@ func BenchmarkProduce(b *testing.B) {
 				QueueName:      "bench-queue",
 				DeadTimeout:    "24h0m0s",
 				ReserveTimeout: "1m0s",
+				Partitions:     1,
 			}))
 
 			for _, p := range []int{1, 8, 24, 32} {
@@ -123,6 +135,7 @@ func BenchmarkProduce(b *testing.B) {
 						MaxAttempts:    int32(rand.Intn(100)),
 						ReserveTimeout: timeOuts.Reserve,
 						DeadTimeout:    timeOuts.Dead,
+						Partitions:     1,
 					}
 
 					err = s.QueuesCreate(context.Background(), &info)

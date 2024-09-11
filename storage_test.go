@@ -26,7 +26,8 @@ var log = slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 // TestQueueStorage tests the /storage/queue.* endpoints
 func TestQueueStorage(t *testing.T) {
-	//bdb := boltTestSetup{Dir: t.TempDir()}
+	bdb := boltTestSetup{Dir: t.TempDir()}
+	badgerdb := badgerTestSetup{Dir: t.TempDir()}
 
 	for _, tc := range []struct {
 		Setup    NewStorageFunc
@@ -40,15 +41,25 @@ func TestQueueStorage(t *testing.T) {
 			},
 			TearDown: func() {},
 		},
-		//{
-		//	Name: "BoltDB",
-		//	Setup: func(cp *clock.Provider) store.StorageConfig {
-		//		return bdb.Setup(store.BoltConfig{Clock: cp})
-		//	},
-		//	TearDown: func() {
-		//		bdb.Teardown()
-		//	},
-		//},
+		{
+			Name: "BoltDB",
+			Setup: func(cp *clock.Provider) store.StorageConfig {
+				return bdb.Setup(store.BoltConfig{Clock: cp})
+			},
+			TearDown: func() {
+				bdb.Teardown()
+			},
+		},
+		{
+			Name: "BadgerDB",
+			Setup: func(cp *clock.Provider) store.StorageConfig {
+				return badgerdb.Setup(store.BadgerConfig{Clock: cp})
+			},
+			TearDown: func() {
+				badgerdb.Teardown()
+			},
+		},
+
 		//{
 		//	Name: "SurrealDB",
 		//},
@@ -134,7 +145,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 
 	t.Run("CRUD", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: _store})
+		d, c, ctx := newDaemon(t, 15*clock.Second, que.ServiceConfig{StorageConfig: _store})
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -443,6 +454,10 @@ func dirExists(path string) bool {
 	return info.IsDir()
 }
 
+// ---------------------------------------------------------------------
+// Bolt test setup
+// ---------------------------------------------------------------------
+
 type boltTestSetup struct {
 	Dir string
 }
@@ -472,6 +487,44 @@ func (b *boltTestSetup) Setup(bc store.BoltConfig) store.StorageConfig {
 }
 
 func (b *boltTestSetup) Teardown() {
+	if err := os.RemoveAll(b.Dir); err != nil {
+		panic(err)
+	}
+}
+
+// ---------------------------------------------------------------------
+// Badger test setup
+// ---------------------------------------------------------------------
+
+type badgerTestSetup struct {
+	Dir string
+}
+
+func (b *badgerTestSetup) Setup(bc store.BadgerConfig) store.StorageConfig {
+	if !dirExists(b.Dir) {
+		if err := os.Mkdir(b.Dir, 0777); err != nil {
+			panic(err)
+		}
+	}
+	b.Dir = filepath.Join(b.Dir, random.String("test-data-", 10))
+	if err := os.Mkdir(b.Dir, 0777); err != nil {
+		panic(err)
+	}
+	bc.StorageDir = b.Dir
+
+	var conf store.StorageConfig
+	conf.QueueStore = store.NewBadgerQueueStore(bc)
+	conf.Backends = []store.Backend{
+		{
+			PartitionStore: store.NewBadgerPartitionStore(bc),
+			Name:           "badger-0",
+			Affinity:       1,
+		},
+	}
+	return conf
+}
+
+func (b *badgerTestSetup) Teardown() {
 	if err := os.RemoveAll(b.Dir); err != nil {
 		panic(err)
 	}

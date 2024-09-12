@@ -10,6 +10,7 @@ import (
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/set"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -69,17 +70,15 @@ type LogicalConfig struct {
 	Partitions []store.Partition
 }
 
-// TODO: Modify the Logical to Handle many partitions
-// TODO: Implement a round robin strategy which assigns reserves to each partition until the reservation is full or
-//  partitions are exhausted.
-// TODO: The number of partitions this Logical is assigned can change at any time.
-// TODO: Create a new Partition which holds a set of Logical instances
-
 // Logical produces and consumes items from the many partitions ensuring consumers and producers are handled fairly
 // and efficiently. Since a Logical is the synchronization point for R/W there can ONLY BE ONE instance of a
 // Logical running anywhere in the cluster at any given time. All consume and produce requests for the partitions
 // assigned to this Logical instance MUST go through this singleton.
 type Logical struct {
+	// TODO: InFailure should be used to indicate all partitions for this Logical Queue have failed. The QueueManager
+	//  can check for this flag and avoid routing clients to this Logical Queue.
+	// InFailure      atomic.Bool
+
 	reserveQueueCh  chan *types.ReserveRequest
 	produceQueueCh  chan *types.ProduceRequest
 	completeQueueCh chan *types.CompleteRequest
@@ -375,27 +374,53 @@ func (l *Logical) StorageItemsDelete(ctx context.Context, ids []types.ItemID) er
 	return l.queueRequest(ctx, &r)
 }
 
+// prepareQueueState is called whenever partition assignment changes
+func (l *Logical) prepareQueueState(state *QueueState) {
+
+	if state.Producers.Requests == nil {
+		state.Producers.Requests = make([]*types.ProduceRequest, 0, 5_000)
+	}
+
+	if state.Reservations.Requests == nil {
+		state.Reservations.Requests = make([]*types.ReserveRequest, 0, 5_000)
+	}
+	if state.Completes.Requests == nil {
+		state.Completes.Requests = make([]*types.CompleteRequest, 0, 5_000)
+	}
+
+	state.PartitionDistributions = make([]PartitionDistribution, len(l.conf.Partitions))
+	for i, p := range l.conf.Partitions {
+		state.PartitionDistributions[i] = PartitionDistribution{
+			Partition: p,
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), l.conf.ReadTimeout)
+		var stats types.QueueStats
+		if err := p.Stats(ctx, &stats); err != nil {
+			state.PartitionDistributions[i].InFailure = true
+			// TODO: Maintenance needs to partitions that are marked as InFailure until the partition is reassigned
+			//  or no longer fails.
+
+			l.conf.Logger.Warn("unable to query partition stats while preparing partition state; "+
+				" items will not be produced to partition until it is available",
+				"partition", p.Info().Partition,
+				"err", err)
+		}
+		state.PartitionDistributions[i].Count = stats.Total - stats.TotalReserved
+		cancel()
+	}
+}
+
 // -------------------------------------------------
 // Main Loop and Handlers
 // See doc/adr/0003-rw-sync-point.md for an explanation of this design
 // -------------------------------------------------
 
-// TODO: Break up this loop into smaller handlers to reduce the size of this method.
 func (l *Logical) synchronizationLoop() {
 	defer l.wg.Done()
+	var state QueueState
 
-	state := QueueState{
-		Reservations: types.ReserveBatch{
-			Requests: make([]*types.ReserveRequest, 0, 5_000),
-			Total:    0,
-		},
-		Producers: types.Batch[types.ProduceRequest]{
-			Requests: make([]*types.ProduceRequest, 0, 5_000),
-		},
-		Completes: types.Batch[types.CompleteRequest]{
-			Requests: make([]*types.CompleteRequest, 0, 5_000),
-		},
-	}
+	l.prepareQueueState(&state)
 
 	for {
 		fmt.Printf("sync.loop\n")
@@ -455,14 +480,8 @@ EMPTY:
 	//  waiting reserve requests if our queue is caught up.
 	//  (Check for cancel or expire reserve requests first)
 
-	// FUTURE: Buffer the produced items at the top of the queue into memory, so we don't need
-	//  to query them from the database when we reserve items later. Doing so avoids the ListReservable()
-	//  step, in addition, we can back fill reservable items into memory when synchronizationLoop() isn't
-	//  actively producing or consuming.
-
 	// Assign a DeadTimeout and Calculate an appropriate write timeout such that we respect RequestDeadline
 	// if we are experiencing a saturation event
-	writeTimeout := maxRequestTimeout
 	for _, req := range state.Producers.Requests {
 		// Cancel any produce requests that have timed out
 		if l.conf.Clock.Now().UTC().After(req.RequestDeadline) {
@@ -475,45 +494,56 @@ EMPTY:
 		for _, item := range req.Items {
 			item.DeadDeadline = l.conf.Clock.Now().UTC().Add(l.conf.DeadTimeout)
 		}
-		// The writeTimeout should be equal to the request with the least amount of request timeout left.
-		timeLeft := l.conf.Clock.Now().UTC().Sub(req.RequestDeadline)
-		if timeLeft < writeTimeout {
-			writeTimeout = timeLeft
-		}
-	}
 
-	// If we allow a calculated write timeout to be a few milliseconds, then the store.Add()
-	// is almost guaranteed to fail, so we ensure the write timeout is something reasonable.
-	if writeTimeout < l.conf.WriteTimeout {
-		// WriteTimeout comes from the storage implementation as the user who configured the
-		// storage option should know a reasonable timeout value for the configuration chosen.
-		writeTimeout = l.conf.WriteTimeout
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
-	if err := l.conf.Partitions[0].Produce(ctx, state.Producers); err != nil {
-		l.conf.Logger.Error("while calling Partition.Produce()", "error", err,
-			"category", "queue", "queueName", l.conf.Name)
-		cancel()
-		// Let clients that are timed out, know we are done with them.
-		for _, req := range state.Producers.Requests {
-			if l.conf.Clock.Now().UTC().After(req.RequestDeadline) {
-				req.Err = ErrRequestTimeout
-				close(req.ReadyCh)
-				continue
+		// Preform Opportunistic Partition Distribution
+		// See doc/adr/0019-partition-items-distribution.md for details
+		state.PartitionDistributions[0].Add(req)
+		slices.SortFunc(state.PartitionDistributions, func(a, b PartitionDistribution) int {
+			if a.Count < b.Count {
+				return -1
 			}
-		}
-		// We get here if there was an internal error with the data store
-		// TODO: If no new produce requests come in, this may never try again. We need the maintenance
-		//  handler to try again at some reasonable time in the future.
-		return
+			if a.Count > b.Count {
+				return +1
+			}
+			return 0
+		})
 	}
-	cancel()
 
-	// Tell the waiting clients the items have been produced
+	// TODO: Future: Querator should handle Partition failure by redistributing the batches to partitions which have
+	//  not failed. (note: make sure we reduce the PartitionDistributions[].Count when re-assigning)
+
+	for _, p := range state.PartitionDistributions {
+		ctx, cancel := context.WithTimeout(context.Background(), l.conf.WriteTimeout)
+		if err := p.Partition.Produce(ctx, state.Producers); err != nil {
+			l.conf.Logger.Error("while calling Partition.Produce()",
+				"partition", p.Partition.Info().Partition,
+				"queueName", l.conf.Name,
+				"category", "queue",
+				"error", err)
+
+			// Some time may have passed while talking to the partition.
+			// let clients that are timed out, know we are done with them.
+			for _, req := range state.Producers.Requests {
+				if l.conf.Clock.Now().UTC().After(req.RequestDeadline) {
+					req.Err = ErrRequestTimeout
+					close(req.ReadyCh)
+					continue
+				}
+			}
+			// We get here if there was an internal error with the data store
+			// TODO: Identify a degradation vs a failure and set PartitionDistribution[].InFailure as appropriate.
+			// TODO: If no new produce requests come in, this may never try again. We need the maintenance
+			//  handler to poke the partition again at some reasonable time in the future, in case it recovered
+		}
+		cancel()
+	}
+
+	// Tell the waiting clients that items have been produced
 	for _, req := range state.Producers.Requests {
 		close(req.ReadyCh)
 	}
+
+	state.PartitionDistributions[0].Reset()
 	state.Producers.Reset()
 
 	// If there are reservations waiting, then process reservations allowing them pick up the
@@ -711,6 +741,7 @@ func (l *Logical) handleQueueRequests(state *QueueState, req *QueueRequest) {
 	case MethodUpdateInfo:
 		info := req.Request.(types.QueueInfo)
 		l.conf.QueueInfo = info
+		l.prepareQueueState(state)
 		close(req.ReadyCh)
 	case MethodUpdatePartitions:
 		p := req.Request.([]store.Partition)

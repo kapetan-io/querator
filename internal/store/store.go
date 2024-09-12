@@ -79,6 +79,9 @@ type Partition interface {
 	// Stats returns stats about the queue
 	Stats(ctx context.Context, stats *types.PartitionStats) error
 
+	// Info returns the Partition Info for this partition
+	Info() types.PartitionInfo
+
 	Close(ctx context.Context) error
 }
 

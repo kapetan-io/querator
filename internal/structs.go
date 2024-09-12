@@ -2,14 +2,36 @@ package internal
 
 import (
 	"context"
+	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/tackle/clock"
 )
 
+type PartitionDistribution struct {
+	// Batch is the batch of requests that are assigned to this distribution
+	Batch types.Batch[types.ProduceRequest]
+	// Partition is the partition
+	Partition store.Partition
+	// InFailure is true if the Partition has failed and should not be used
+	InFailure bool
+	// Count is the total number of un-reserved items in the partition
+	Count int
+}
+
+func (p *PartitionDistribution) Add(req *types.ProduceRequest) {
+	p.Count += len(req.Items)
+	p.Batch.Add(req)
+}
+
+func (p *PartitionDistribution) Reset() {
+	p.Batch.Reset()
+}
+
 type QueueState struct {
-	Reservations types.ReserveBatch
-	Producers    types.Batch[types.ProduceRequest]
-	Completes    types.Batch[types.CompleteRequest]
+	Reservations           types.ReserveBatch
+	Producers              types.Batch[types.ProduceRequest]
+	Completes              types.Batch[types.CompleteRequest]
+	PartitionDistributions []PartitionDistribution
 
 	NextMaintenanceCh <-chan clock.Time
 }

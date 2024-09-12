@@ -15,6 +15,7 @@ import (
 // ---------------------------------------------
 
 type MemoryPartition struct {
+	info types.PartitionInfo
 	conf StorageConfig
 	mem  []types.Item
 	uid  ksuid.KSUID
@@ -159,6 +160,10 @@ func (q *MemoryPartition) Clear(_ context.Context, destructive bool) error {
 	}
 	q.mem = mem
 	return nil
+}
+
+func (q *MemoryPartition) Info() types.PartitionInfo {
+	return q.info
 }
 
 func (q *MemoryPartition) Stats(_ context.Context, stats *types.PartitionStats) error {
@@ -359,6 +364,7 @@ func (m MemoryPartitionStore) Get(info types.PartitionInfo) Partition {
 		mem:  make([]types.Item, 0, 1_000),
 		uid:  ksuid.New(),
 		conf: m.conf,
+		info: info,
 	}
 
 }

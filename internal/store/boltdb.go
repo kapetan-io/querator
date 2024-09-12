@@ -415,6 +415,10 @@ func (b *BoltPartition) Clear(_ context.Context, destructive bool) error {
 	})
 }
 
+func (b *BoltPartition) Info() types.PartitionInfo {
+	return b.info
+}
+
 func (b *BoltPartition) Stats(_ context.Context, stats *types.PartitionStats) error {
 	f := errors.Fields{"category", "bunt-db", "func", "Partition.Stats"}
 	now := b.conf.Clock.Now().UTC()

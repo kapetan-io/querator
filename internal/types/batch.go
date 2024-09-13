@@ -39,6 +39,11 @@ type ReserveBatch struct {
 	Total    int
 }
 
+func (r *ReserveBatch) Reset() {
+	r.Requests = r.Requests[:0]
+	r.Total = 0
+}
+
 func (r *ReserveBatch) Add(req *ReserveRequest) {
 	r.Total += req.NumRequested
 	r.Requests = append(r.Requests, req)

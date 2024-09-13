@@ -17,8 +17,12 @@ type ReserveRequest struct {
 	ClientID string
 	// The context of the requesting client
 	Context context.Context
+
 	// The result of the reservation
 	Items []*Item
+	// The partition the reserved items are from
+	Partition int
+
 	// The RequestDeadline calculated from RequestTimeout
 	RequestDeadline clock.Time
 	// Used to wait for this request to complete
@@ -47,6 +51,8 @@ type CompleteRequest struct {
 	RequestTimeout clock.Duration
 	// The context of the requesting client
 	Context context.Context
+	// Partition is the partition the complete request is for
+	Partition int
 	// The ids to mark as complete
 	Ids [][]byte
 	// The RequestDeadline calculated from RequestTimeout

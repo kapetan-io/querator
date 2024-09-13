@@ -156,7 +156,6 @@ func (l *Logical) Produce(ctx context.Context, req *types.ProduceRequest) error 
 	req.ReadyCh = make(chan struct{})
 	req.Context = ctx
 
-	fmt.Printf("Produce Len: %d \n", len(l.produceQueueCh))
 	select {
 	case l.produceQueueCh <- req:
 	default:
@@ -388,6 +387,14 @@ func (l *Logical) prepareQueueState(state *QueueState) {
 		state.Completes.Requests = make([]*types.CompleteRequest, 0, 5_000)
 	}
 
+	// TODO: Validate each partition hasn't been modified since last loaded by a Logical queue.
+	//  we do this by saving he last item id in the partition into QueueInfo.Partitions along with
+	//  the the QueueInfo.Partitions.Count of items in the partition. When loading the partition,
+	//  If the last item id saved in QueueInfo.Partitions agrees with what is in the actual partition,
+	//  we should trust that the partition was not modified and the count saved in
+	//  QueueInfo.Partitions.Count is accurate. If it's not accurate, we MUST re-count all the items
+	//  in the partition in order to accurately distribute items.
+
 	state.PartitionDistributions = make([]PartitionDistribution, len(l.conf.Partitions))
 	for i, p := range l.conf.Partitions {
 		state.PartitionDistributions[i] = PartitionDistribution{
@@ -409,6 +416,17 @@ func (l *Logical) prepareQueueState(state *QueueState) {
 		state.PartitionDistributions[i].Count = stats.Total - stats.TotalReserved
 		cancel()
 	}
+
+	slices.SortFunc(state.PartitionDistributions, func(a, b PartitionDistribution) int {
+		if a.Count < b.Count {
+			return -1
+		}
+		if a.Count > b.Count {
+			return +1
+		}
+		return 0
+	})
+
 }
 
 // -------------------------------------------------
@@ -438,7 +456,6 @@ func (l *Logical) synchronizationLoop() {
 			l.handleQueueRequests(&state, req)
 			// If we shut down during a pause, exit immediately
 			if l.inShutdown.Load() {
-				fmt.Printf("sync.InShutdown\n")
 				return
 			}
 			l.stateCleanUp(&state)
@@ -497,7 +514,7 @@ EMPTY:
 
 		// Preform Opportunistic Partition Distribution
 		// See doc/adr/0019-partition-items-distribution.md for details
-		state.PartitionDistributions[0].Add(req)
+		state.PartitionDistributions[0].Produce(req)
 		slices.SortFunc(state.PartitionDistributions, func(a, b PartitionDistribution) int {
 			if a.Count < b.Count {
 				return -1
@@ -512,9 +529,9 @@ EMPTY:
 	// TODO: Future: Querator should handle Partition failure by redistributing the batches to partitions which have
 	//  not failed. (note: make sure we reduce the PartitionDistributions[].Count when re-assigning)
 
-	for _, p := range state.PartitionDistributions {
+	for i, p := range state.PartitionDistributions {
 		ctx, cancel := context.WithTimeout(context.Background(), l.conf.WriteTimeout)
-		if err := p.Partition.Produce(ctx, state.Producers); err != nil {
+		if err := p.Partition.Produce(ctx, p.ProduceRequests); err != nil {
 			l.conf.Logger.Error("while calling Partition.Produce()",
 				"partition", p.Partition.Info().Partition,
 				"queueName", l.conf.Name,
@@ -532,9 +549,12 @@ EMPTY:
 			}
 			// We get here if there was an internal error with the data store
 			// TODO: Identify a degradation vs a failure and set PartitionDistribution[].InFailure as appropriate.
+			// TODO: Adjust the item count in state.PartitionDistributions for failed partitions
 			// TODO: If no new produce requests come in, this may never try again. We need the maintenance
 			//  handler to poke the partition again at some reasonable time in the future, in case it recovered
 		}
+		// Reset the produce request assignments to this partition
+		state.PartitionDistributions[i].ProduceRequests.Reset()
 		cancel()
 	}
 
@@ -543,7 +563,6 @@ EMPTY:
 		close(req.ReadyCh)
 	}
 
-	state.PartitionDistributions[0].Reset()
 	state.Producers.Reset()
 
 	// If there are reservations waiting, then process reservations allowing them pick up the
@@ -571,31 +590,46 @@ EMPTY:
 
 	// Remove any clients that have timed out and find the next request to timeout, which will
 	// become our write timeout.
-	writeTimeout := l.nextTimeout(&state.Reservations)
+	l.nextTimeout(&state.Reservations)
 
-	// If we allow a calculated write timeout to be a few milliseconds, then the store.Add()
-	// is almost guaranteed to fail, so we ensure the write timeout is something reasonable.
-	if writeTimeout < l.conf.WriteTimeout {
-		// WriteTimeout comes from the storage implementation as the user who configured the
-		// storage option should know a reasonable timeout value for the configuration chosen.
-		writeTimeout = l.conf.WriteTimeout
+	// Assign Reservation Requests to Partitions
+	for _, req := range state.Reservations.Requests {
+		// Preform Opportunistic Partition Distribution
+		// See doc/adr/0019-partition-items-distribution.md for details
+		state.PartitionDistributions[len(state.PartitionDistributions)-1].Reserve(req)
+		slices.SortFunc(state.PartitionDistributions, func(a, b PartitionDistribution) int {
+			if a.Count < b.Count {
+				return -1
+			}
+			if a.Count > b.Count {
+				return +1
+			}
+			return 0
+		})
 	}
 
-	// Send the batch that each request wants to the store. If there are items that can be reserved the
-	// store will assign items to each batch request.
-	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
-	if err := l.conf.Partitions[0].Reserve(ctx, state.Reservations, store.ReserveOptions{
-		ReserveDeadline: l.conf.Clock.Now().UTC().Add(l.conf.ReserveTimeout),
-	}); err != nil {
-		l.conf.Logger.Error("while calling Partition.Reserve()", "error", err,
-			"category", "queue", "queueName", l.conf.Name)
+	// Fulfill the assigned reservation requests
+	for i, p := range state.PartitionDistributions {
+		ctx, cancel := context.WithTimeout(context.Background(), l.conf.WriteTimeout)
+		if err := p.Partition.Reserve(ctx, p.ReserveRequests, store.ReserveOptions{
+			ReserveDeadline: l.conf.Clock.Now().UTC().Add(l.conf.ReserveTimeout),
+		}); err != nil {
+			l.conf.Logger.Error("while calling Partition.Reserve()",
+				"partition", p.Partition.Info().Partition,
+				"queueName", l.conf.Name,
+				"category", "queue",
+				"error", err)
+
+			// We get here if there was an internal error with the data store
+			// TODO: Identify a degradation vs a failure and set PartitionDistribution[].InFailure as appropriate.
+			// TODO: Adjust the item count in state.PartitionDistributions for failed partitions
+			// TODO: If no new reserve requests come in, this may never try again. We need the maintenance
+			//  handler to poke the partition again at some reasonable time in the future, in case it recovered
+		}
+		// Reset the reserve request assignments to this partition
+		state.PartitionDistributions[i].ReserveRequests.Reset()
 		cancel()
-		// We get here if there was an internal error with the data store
-		// TODO: If no new reserve requests come in, this may never try again. We need the maintenance
-		//  handler to try again at some reasonable time in the future.
-		return
 	}
-	cancel()
 
 	// Inform clients they have reservations ready or if there was an error
 	for i, req := range state.Reservations.Requests {
@@ -626,45 +660,69 @@ EMPTY:
 		}
 	}
 
-	writeTimeout := maxRequestTimeout
+nextRequest:
 	for _, req := range state.Completes.Requests {
-		// Cancel any produce requests that have timed out
+		// Cancel requests that have timed out
 		if l.conf.Clock.Now().UTC().After(req.RequestDeadline) {
 			req.Err = ErrRequestTimeout
 			state.Completes.Remove(req)
 			close(req.ReadyCh)
 			continue
 		}
-		// The writeTimeout should be equal to the request with the least amount of request timeout left.
-		timeLeft := l.conf.Clock.Now().UTC().Sub(req.RequestDeadline)
-		if timeLeft < writeTimeout {
-			writeTimeout = timeLeft
+
+		// Find the partition in the distribution
+		var found bool
+		for i, p := range state.PartitionDistributions {
+			// Assign the request to the partition
+			if req.Partition == p.Partition.Info().Partition {
+				if p.InFailure {
+					req.Err = transport.NewRetryRequest("partition not available;"+
+						" partition '%d' is failing, retry again", req.Partition)
+					close(req.ReadyCh)
+					continue nextRequest
+				}
+				state.PartitionDistributions[i].CompleteRequests.Add(req)
+				found = true
+			}
+		}
+		if !found {
+			req.Err = transport.NewRetryRequest("partition not found;"+
+				" partition '%d' may have moved, retry again", req.Partition)
+			close(req.ReadyCh)
 		}
 	}
 
-	// If we allow a calculated write timeout to be a few milliseconds, then the store.Add()
-	// is almost guaranteed to fail, so we ensure the write timeout is something reasonable.
-	if writeTimeout < l.conf.WriteTimeout {
-		// WriteTimeout comes from the storage implementation as the user who configured the
-		// storage option should know a reasonable timeout value for the configuration chosen.
-		writeTimeout = l.conf.WriteTimeout
-	}
+	// Fulfill the assigned complete requests
+	for i, p := range state.PartitionDistributions {
+		ctx, cancel := context.WithTimeout(context.Background(), l.conf.WriteTimeout)
+		var err error
+		if err = p.Partition.Complete(ctx, p.CompleteRequests); err != nil {
+			l.conf.Logger.Error("while calling Partition.Complete()",
+				"partition", p.Partition.Info().Partition,
+				"queueName", l.conf.Name,
+				"category", "queue",
+				"error", err)
 
-	var err error
-	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
-	if err = l.conf.Partitions[0].Complete(ctx, state.Completes); err != nil {
-		l.conf.Logger.Error("while calling Partition.Complete()", "error", err,
-			"category", "queue", "queueName", l.conf.Name)
-	}
-	cancel()
-
-	// Tell the waiting clients that items have been marked as complete
-	for _, req := range state.Completes.Requests {
-		if err != nil {
-			req.Err = ErrInternalRetry
+			// We get here if there was an internal error with the data store
+			// TODO: Identify a degradation vs a failure and set PartitionDistribution[].InFailure as appropriate.
+			// TODO: Adjust the item count in state.PartitionDistributions for failed partitions
+			// TODO: If no new reserve requests come in, this may never try again. We need the maintenance
+			//  handler to poke the partition again at some reasonable time in the future, in case it recovered
+			// TODO: We may want to retry on behalf of the client in the future.
 		}
-		close(req.ReadyCh)
+		// Tell the waiting clients that items have been marked as complete for this partition
+		for _, req := range p.CompleteRequests.Requests {
+			if err != nil {
+				// TODO: We likely want to inform the client they should retry instead of return an internal error
+				req.Err = ErrInternalRetry
+			}
+			close(req.ReadyCh)
+			// Reset the complete request assignments to this partition
+			state.PartitionDistributions[i].CompleteRequests.Reset()
+		}
+		cancel()
 	}
+
 	state.Completes.Reset()
 }
 
@@ -849,18 +907,14 @@ func (l *Logical) handleShutdown(state *QueueState, req *types.ShutdownRequest) 
 
 	// Consume all requests currently in flight
 	for l.inFlight.Load() != 0 {
-		fmt.Printf("handleShutdown.QueueInFlight: %d\n", l.inFlight.Load())
 		select {
 		case r := <-l.produceQueueCh:
-			fmt.Printf("handleShutdown.Produce\n")
 			r.Err = ErrQueueShutdown
 			close(r.ReadyCh)
 		case r := <-l.reserveQueueCh:
-			fmt.Printf("handleShutdown.Reserve\n")
 			r.Err = ErrQueueShutdown
 			close(r.ReadyCh)
 		case r := <-l.completeQueueCh:
-			fmt.Printf("handleShutdown.Reserve\n")
 			r.Err = ErrQueueShutdown
 			close(r.ReadyCh)
 		case <-l.conf.Clock.After(100 * clock.Millisecond):

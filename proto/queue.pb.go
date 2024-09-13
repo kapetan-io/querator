@@ -49,7 +49,7 @@ type QueueProduceRequest struct {
 	// request and return an error to the client.
 	//
 	// Example: '1m', '20s'. Default timeout is '1m' and the maximum timeout is 15 minutes.
-	RequestTimeout string `protobuf:"bytes,2,opt,name=requestTimeout,json=request_timeout,proto3" json:"requestTimeout,omitempty"` // TODO: OpenAPI
+	RequestTimeout string `protobuf:"bytes,2,opt,name=requestTimeout,json=request_timeout,proto3" json:"requestTimeout,omitempty"`
 	// A list of items to be queued
 	Items []*QueueProduceItem `protobuf:"bytes,3,rep,name=items,proto3" json:"items,omitempty"`
 }
@@ -223,11 +223,11 @@ type QueueReserveRequest struct {
 	// must be unique for each client reserving items. Multiple clients with the same
 	// id cannot reserve from the same queue. If you need more throughput, increase the batch
 	// size instead.
-	ClientId string `protobuf:"bytes,3,opt,name=clientId,json=client_id,proto3" json:"clientId,omitempty"` // TODO: OpenAPI
+	ClientId string `protobuf:"bytes,3,opt,name=clientId,json=client_id,proto3" json:"clientId,omitempty"`
 	// The duration the client expects to wait for a queue item to be reserved before timing out.
 	// Maximum timeout duration is 15 minutes
 	// Example: '5m', '10s'
-	RequestTimeout string `protobuf:"bytes,4,opt,name=requestTimeout,json=request_timeout,proto3" json:"requestTimeout,omitempty"` // TODO: OpenAPI
+	RequestTimeout string `protobuf:"bytes,4,opt,name=requestTimeout,json=request_timeout,proto3" json:"requestTimeout,omitempty"`
 }
 
 func (x *QueueReserveRequest) Reset() {
@@ -314,7 +314,7 @@ type QueueReserveItem struct {
 	//
 	// The consumer can use this date to decide if it should finalize it's work
 	// if the timeout date has expired.
-	ReserveDeadline *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=reserveDeadline,json=reserve_deadline,proto3" json:"reserveDeadline,omitempty"` // TODO: OpenAPI
+	ReserveDeadline *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=reserveDeadline,json=reserve_deadline,proto3" json:"reserveDeadline,omitempty"`
 	// The payload of the item as an array of raw bytes with no predetermined character set.
 	//
 	// NOTE: If `Content-Type: application/json` is used when communicating with Querator, the
@@ -410,7 +410,12 @@ type QueueReserveResponse struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	Items []*QueueReserveItem `protobuf:"bytes,1,rep,name=items,proto3" json:"items,omitempty"`
+	// The name of the queue the reservation items are from
+	QueueName string `protobuf:"bytes,1,opt,name=queueName,json=queue_name,proto3" json:"queueName,omitempty"`
+	// Partition the reserved items are from
+	Partition int32 `protobuf:"varint,2,opt,name=partition,proto3" json:"partition,omitempty"`
+	// Items reserved
+	Items []*QueueReserveItem `protobuf:"bytes,3,rep,name=items,proto3" json:"items,omitempty"`
 }
 
 func (x *QueueReserveResponse) Reset() {
@@ -443,6 +448,20 @@ func (x *QueueReserveResponse) ProtoReflect() protoreflect.Message {
 // Deprecated: Use QueueReserveResponse.ProtoReflect.Descriptor instead.
 func (*QueueReserveResponse) Descriptor() ([]byte, []int) {
 	return file_proto_queue_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *QueueReserveResponse) GetQueueName() string {
+	if x != nil {
+		return x.QueueName
+	}
+	return ""
+}
+
+func (x *QueueReserveResponse) GetPartition() int32 {
+	if x != nil {
+		return x.Partition
+	}
+	return 0
 }
 
 func (x *QueueReserveResponse) GetItems() []*QueueReserveItem {
@@ -592,6 +611,7 @@ type QueueCompleteRequest struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
+	// The name of the queue these ids are from
 	QueueName string `protobuf:"bytes,1,opt,name=queueName,json=queue_name,proto3" json:"queueName,omitempty"`
 	// The Partition these ids are from
 	Partition int32 `protobuf:"varint,2,opt,name=partition,proto3" json:"partition,omitempty"`

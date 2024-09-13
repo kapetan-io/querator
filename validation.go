@@ -84,6 +84,8 @@ func (s *Service) validateQueueCompleteProto(in *proto.QueueCompleteRequest, out
 		out.Ids = append(out.Ids, []byte(id))
 	}
 
+	out.Partition = int(in.Partition)
+
 	return nil
 }
 

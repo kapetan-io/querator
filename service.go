@@ -124,6 +124,9 @@ func (s *Service) QueueReserve(ctx context.Context, req *proto.QueueReserveReque
 		return err
 	}
 
+	res.Partition = int32(r.Partition)
+	res.QueueName = req.QueueName
+
 	for _, item := range r.Items {
 		res.Items = append(res.Items, &proto.QueueReserveItem{
 			ReserveDeadline: timestamppb.New(item.ReserveDeadline),

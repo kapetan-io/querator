@@ -8,9 +8,13 @@ import (
 )
 
 type PartitionDistribution struct {
-	// Batch is the batch of requests that are assigned to this distribution
-	Batch types.Batch[types.ProduceRequest]
-	// Partition is the partition
+	// ProduceRequests is the batch of produce requests that are assigned to this partition
+	ProduceRequests types.Batch[types.ProduceRequest]
+	// ReserveRequests is the batch of reserve requests that are assigned to this partition
+	ReserveRequests types.ReserveBatch
+	// CompleteRequests is the batch of complete requests that are assigned to this partition
+	CompleteRequests types.Batch[types.CompleteRequest]
+	// Partition is the partition this distribution is for
 	Partition store.Partition
 	// InFailure is true if the Partition has failed and should not be used
 	InFailure bool
@@ -18,20 +22,34 @@ type PartitionDistribution struct {
 	Count int
 }
 
-func (p *PartitionDistribution) Add(req *types.ProduceRequest) {
+func (p *PartitionDistribution) Produce(req *types.ProduceRequest) {
 	p.Count += len(req.Items)
-	p.Batch.Add(req)
+	p.ProduceRequests.Add(req)
 }
 
-func (p *PartitionDistribution) Reset() {
-	p.Batch.Reset()
+func (p *PartitionDistribution) Reserve(req *types.ReserveRequest) {
+	p.Count -= len(req.Items)
+	if p.Count <= 0 {
+		p.Count = 0
+	}
+	// Record which partition this request is assigned, so it can be retrieved by the client later.
+	req.Partition = p.Partition.Info().Partition
+	// Add the request to this partitions reserve batch
+	p.ReserveRequests.Add(req)
 }
+
+//func (p *PartitionDistribution) ResetRequests() {
+//	p.ProduceRequests.Reset()
+//	p.ReserveRequests.Reset()
+//	p.CompleteRequests.Reset()
+//}
 
 type QueueState struct {
 	Reservations           types.ReserveBatch
 	Producers              types.Batch[types.ProduceRequest]
 	Completes              types.Batch[types.CompleteRequest]
 	PartitionDistributions []PartitionDistribution
+	ReserveIndex           int
 
 	NextMaintenanceCh <-chan clock.Time
 }

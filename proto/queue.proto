@@ -30,7 +30,7 @@ message QueueProduceRequest {
   // request and return an error to the client.
   //
   // Example: '1m', '20s'. Default timeout is '1m' and the maximum timeout is 15 minutes.
-  string requestTimeout = 2 [json_name = "request_timeout"]; // TODO: OpenAPI
+  string requestTimeout = 2 [json_name = "request_timeout"];
   // A list of items to be queued
   repeated QueueProduceItem items = 3;
 }
@@ -78,12 +78,12 @@ message QueueReserveRequest {
   // must be unique for each client reserving items. Multiple clients with the same
   // id cannot reserve from the same queue. If you need more throughput, increase the batch
   // size instead.
-  string clientId = 3 [json_name = "client_id"]; // TODO: OpenAPI
+  string clientId = 3 [json_name = "client_id"];
 
   // The duration the client expects to wait for a queue item to be reserved before timing out.
   // Maximum timeout duration is 15 minutes
   // Example: '5m', '10s'
-  string requestTimeout = 4 [json_name = "request_timeout"]; // TODO: OpenAPI
+  string requestTimeout = 4 [json_name = "request_timeout"];
 }
 
 message QueueReserveItem {
@@ -111,7 +111,7 @@ message QueueReserveItem {
   //
   // The consumer can use this date to decide if it should finalize it's work
   // if the timeout date has expired.
-  google.protobuf.Timestamp reserveDeadline = 6 [json_name = "reserve_deadline"]; // TODO: OpenAPI
+  google.protobuf.Timestamp reserveDeadline = 6 [json_name = "reserve_deadline"];
 
   // The payload of the item as an array of raw bytes with no predetermined character set.
   //
@@ -123,7 +123,14 @@ message QueueReserveItem {
 }
 
 message QueueReserveResponse {
-  repeated QueueReserveItem items = 1;
+  // The name of the queue the reservation items are from
+  string queueName = 1  [json_name = "queue_name"];
+
+  // Partition the reserved items are from
+  int32 partition = 2;
+
+  // Items reserved
+  repeated QueueReserveItem items = 3;
 }
 
 message QueueDeferRequest {
@@ -152,15 +159,16 @@ message QueueDeferItem {
 }
 
 message QueueCompleteRequest {
+  // The name of the queue these ids are from
   string queueName = 1  [json_name = "queue_name"];
 
-  // The Partition these ids are from
+  // The Partition these ids are associated with
   int32 partition = 2;
 
   // The duration the client expects to wait for a queue item to be reserved before timing out.
   // Maximum timeout duration is 15 minutes
   // Example: '5m', '10s'
-  string requestTimeout = 3 [json_name = "request_timeout"]; // TODO: OpenAPI
+  string requestTimeout = 3 [json_name = "request_timeout"];
 
   // A list of ids to mark complete
   repeated string ids = 4;

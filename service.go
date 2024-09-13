@@ -274,7 +274,7 @@ func (s *Service) StorageItemsList(ctx context.Context, req *proto.StorageItemsL
 	}
 
 	items := make([]*types.Item, 0, allocInt32(req.Limit))
-	if err := queue.StorageItemsList(ctx, &items, types.ListOptions{
+	if err := queue.StorageQueueList(ctx, int(req.Partition), &items, types.ListOptions{
 		Pivot: types.ToItemID(req.Pivot),
 		Limit: int(req.Limit),
 	}); err != nil {
@@ -302,7 +302,7 @@ func (s *Service) StorageItemsImport(ctx context.Context, req *proto.StorageItem
 		items = append(items, i.FromProto(item))
 	}
 
-	if err := queue.StorageItemsImport(ctx, &items); err != nil {
+	if err := queue.StorageQueueAdd(ctx, int(req.Partition), &items); err != nil {
 		return err
 	}
 
@@ -325,7 +325,7 @@ func (s *Service) StorageItemsDelete(ctx context.Context, req *proto.StorageItem
 		ids = append(ids, types.ItemID(id))
 	}
 
-	if err := queue.StorageItemsDelete(ctx, ids); err != nil {
+	if err := queue.StorageQueueDelete(ctx, int(req.Partition), ids); err != nil {
 		return err
 	}
 	return nil

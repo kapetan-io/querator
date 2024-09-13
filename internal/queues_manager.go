@@ -156,7 +156,24 @@ func (qm *QueuesManager) startLogicalQueue(ctx context.Context, info types.Queue
 	//  reservation calls.
 
 	// Get all the partitions we want associated with this logical queue instance
-	p := qm.conf.StorageConfig.Backends[0].PartitionStore.Get(info.PartitionInfo[0])
+	var partitions []store.Partition
+	for _, p := range info.PartitionInfo {
+		var found bool
+		for _, b := range qm.conf.StorageConfig.Backends {
+			if b.Name == p.StorageName {
+				partitions = append(partitions, b.PartitionStore.Get(p))
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, append(f,
+				"storage", p.StorageName,
+				"partition", p.Partition,
+				"queue", info.Name,
+			).Errorf("no such backend found")
+		}
+	}
 
 	l, err := SpawnLogicalQueue(LogicalConfig{
 		MaxProduceBatchSize:  qm.conf.LogicalConfig.MaxProduceBatchSize,
@@ -165,7 +182,7 @@ func (qm *QueuesManager) startLogicalQueue(ctx context.Context, info types.Queue
 		MaxRequestsPerQueue:  qm.conf.LogicalConfig.MaxRequestsPerQueue,
 		WriteTimeout:         qm.conf.LogicalConfig.WriteTimeout,
 		ReadTimeout:          qm.conf.LogicalConfig.ReadTimeout,
-		Partitions:           []store.Partition{p},
+		Partitions:           partitions,
 		Logger:               qm.conf.Logger,
 		QueueInfo:            info,
 	})

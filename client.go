@@ -211,7 +211,7 @@ func (c *Client) QueuesDelete(ctx context.Context, req *pb.QueuesDeleteRequest) 
 
 // TODO: Write an iterator we can use to iterate through list APIs
 
-func (c *Client) StorageItemsList(ctx context.Context, name string, res *pb.StorageItemsListResponse,
+func (c *Client) StorageItemsList(ctx context.Context, name string, partition int, res *pb.StorageQueueListResponse,
 	opts *ListOptions) error {
 
 	if opts == nil {
@@ -220,6 +220,7 @@ func (c *Client) StorageItemsList(ctx context.Context, name string, res *pb.Stor
 
 	req := pb.StorageItemsListRequest{
 		Limit:     int32(opts.Limit),
+		Partition: int32(partition),
 		Pivot:     opts.Pivot,
 		QueueName: name,
 	}

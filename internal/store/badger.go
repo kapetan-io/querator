@@ -288,6 +288,10 @@ func (b *BadgerPartition) Add(_ context.Context, items []*types.Item) error {
 		return err
 	}
 
+	if len(items) == 0 {
+		return transport.NewInvalidOption("items is invalid; cannot be empty")
+	}
+
 	return db.Update(func(txn *badger.Txn) error {
 
 		for _, item := range items {

@@ -23,8 +23,9 @@ package querator;
 
 message StorageItemsListRequest {
   string queueName = 1 [json_name = "queue_name"];
-  string pivot  = 2;
-  int32 limit = 3;
+  int32 partition = 2;
+  string pivot  = 3;
+  int32 limit = 4;
 }
 
 message StorageItemsListResponse {
@@ -33,16 +34,22 @@ message StorageItemsListResponse {
 
 message StorageItemsImportRequest {
   string queueName = 1 [json_name = "queue_name"];
-  repeated StorageItem items = 2;
+  int32 partition = 2;
+  repeated StorageItem items = 3;
 }
 
 message StorageItemsImportResponse {
   repeated StorageItem items = 2;
 }
 
+message StorageQueueAddResponse {
+  repeated StorageItem items = 2;
+}
+
 message StorageItemsDeleteRequest {
   string queueName = 1 [json_name = "queue_name"];
-  repeated string ids = 2;
+  int32 partition = 2;
+  repeated string ids = 3;
 }
 
 // StorageItem maps directly to the internal.types.Item and allows users to inspect items in storage

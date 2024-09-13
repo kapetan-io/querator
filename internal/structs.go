@@ -28,7 +28,7 @@ func (p *PartitionDistribution) Produce(req *types.ProduceRequest) {
 }
 
 func (p *PartitionDistribution) Reserve(req *types.ReserveRequest) {
-	p.Count -= len(req.Items)
+	p.Count -= req.NumRequested
 	if p.Count <= 0 {
 		p.Count = 0
 	}
@@ -74,4 +74,6 @@ type StorageRequest struct {
 	IDs []types.ItemID
 	// Options used when listing
 	Options types.ListOptions
+	// Partition is the partition this request is for
+	Partition int
 }

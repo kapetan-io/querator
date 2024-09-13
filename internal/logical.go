@@ -333,10 +333,11 @@ func (l *Logical) UpdatePartitions(ctx context.Context, p []store.Partition) err
 // Methods to manage queue storage
 // -------------------------------------------------
 
-func (l *Logical) StorageItemsList(ctx context.Context, items *[]*types.Item, opts types.ListOptions) error {
+func (l *Logical) StorageItemsList(ctx context.Context, partition int, items *[]*types.Item, opts types.ListOptions) error {
 	req := StorageRequest{
-		Items:   items,
-		Options: opts,
+		Partition: partition,
+		Items:     items,
+		Options:   opts,
 	}
 
 	// TODO: Test for invalid pivot
@@ -348,18 +349,19 @@ func (l *Logical) StorageItemsList(ctx context.Context, items *[]*types.Item, op
 	return l.queueRequest(ctx, &r)
 }
 
-func (l *Logical) StorageItemsImport(ctx context.Context, items *[]*types.Item) error {
+func (l *Logical) StorageItemsImport(ctx context.Context, partition int, items *[]*types.Item) error {
 	// TODO: Test for empty list
 	r := QueueRequest{
 		Method: MethodStorageItemsImport,
 		Request: StorageRequest{
-			Items: items,
+			Partition: partition,
+			Items:     items,
 		},
 	}
 	return l.queueRequest(ctx, &r)
 }
 
-func (l *Logical) StorageItemsDelete(ctx context.Context, ids []types.ItemID) error {
+func (l *Logical) StorageItemsDelete(ctx context.Context, partition int, ids []types.ItemID) error {
 	if len(ids) == 0 {
 		return transport.NewInvalidOption("ids is invalid; cannot be empty")
 	}
@@ -367,7 +369,8 @@ func (l *Logical) StorageItemsDelete(ctx context.Context, ids []types.ItemID) er
 	r := QueueRequest{
 		Method: MethodStorageItemsDelete,
 		Request: StorageRequest{
-			IDs: ids,
+			Partition: partition,
+			IDs:       ids,
 		},
 	}
 	return l.queueRequest(ctx, &r)
@@ -729,7 +732,6 @@ nextRequest:
 // stateCleanUp is responsible for cleaning the QueueState by removing clients that have timed out,
 // and finding the next reserve request that will time out and wetting the wakeup timer.
 func (l *Logical) stateCleanUp(state *QueueState) {
-	fmt.Printf("stateCleanUp\n")
 	next := l.nextTimeout(&state.Reservations)
 	if next.Nanoseconds() != 0 {
 		l.conf.Logger.Debug("next maintenance window",
@@ -827,18 +829,23 @@ func (l *Logical) handleClear(_ *QueueState, req *QueueRequest) {
 
 func (l *Logical) handleStorageRequests(req *QueueRequest) {
 	sr := req.Request.(StorageRequest)
-	// TODO: This endpoint should list all items for all partitions this logical is handling
+	if sr.Partition < 0 || !(sr.Partition < len(l.conf.Partitions)) {
+		req.Err = transport.NewInvalidOption("partition is invalid; '%d' is not a valid partition", sr.Partition)
+		close(req.ReadyCh)
+		return
+	}
+
 	switch req.Method {
-	case MethodStorageItemsList:
-		if err := l.conf.Partitions[0].List(req.Context, sr.Items, sr.Options); err != nil {
+	case MethodStorageQueueList:
+		if err := l.conf.Partitions[sr.Partition].List(req.Context, sr.Items, sr.Options); err != nil {
 			req.Err = err
 		}
-	case MethodStorageItemsImport:
-		if err := l.conf.Partitions[0].Add(req.Context, *sr.Items); err != nil {
+	case MethodStorageQueueAdd:
+		if err := l.conf.Partitions[sr.Partition].Add(req.Context, *sr.Items); err != nil {
 			req.Err = err
 		}
-	case MethodStorageItemsDelete:
-		if err := l.conf.Partitions[0].Delete(req.Context, sr.IDs); err != nil {
+	case MethodStorageQueueDelete:
+		if err := l.conf.Partitions[sr.Partition].Delete(req.Context, sr.IDs); err != nil {
 			req.Err = err
 		}
 	default:
@@ -896,7 +903,6 @@ func (l *Logical) handlePause(state *QueueState, r *QueueRequest) {
 }
 
 func (l *Logical) handleShutdown(state *QueueState, req *types.ShutdownRequest) {
-	fmt.Printf("handleShutdown\n")
 	l.stateCleanUp(state)
 
 	// Cancel any open reservations

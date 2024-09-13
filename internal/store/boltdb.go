@@ -316,6 +316,10 @@ func (b *BoltPartition) List(_ context.Context, items *[]*types.Item, opts types
 func (b *BoltPartition) Add(_ context.Context, items []*types.Item) error {
 	f := errors.Fields{"category", "bolt", "func", "Partition.Add"}
 
+	if len(items) == 0 {
+		return transport.NewInvalidOption("items is invalid; cannot be empty")
+	}
+
 	db, err := b.getDB()
 	if err != nil {
 		return err

@@ -118,6 +118,10 @@ func (q *MemoryPartition) List(_ context.Context, items *[]*types.Item, opts typ
 }
 
 func (q *MemoryPartition) Add(_ context.Context, items []*types.Item) error {
+	if len(items) == 0 {
+		return transport.NewInvalidOption("items is invalid; cannot be empty")
+	}
+
 	for _, item := range items {
 		q.uid = q.uid.Next()
 		item.ID = []byte(q.uid.String())

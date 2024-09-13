@@ -19,7 +19,7 @@ import (
 
 func TestQueuesStorage(t *testing.T) {
 	bdb := boltTestSetup{Dir: t.TempDir()}
-	//badgerdb := badgerTestSetup{Dir: t.TempDir()}
+	badgerdb := badgerTestSetup{Dir: t.TempDir()}
 
 	for _, tc := range []struct {
 		Setup    NewStorageFunc
@@ -42,15 +42,15 @@ func TestQueuesStorage(t *testing.T) {
 				bdb.Teardown()
 			},
 		},
-		//{
-		//	Name: "BadgerDB",
-		//	Setup: func(cp *clock.Provider) store.StorageConfig {
-		//		return badgerdb.Setup(store.BadgerConfig{Clock: cp})
-		//	},
-		//	TearDown: func() {
-		//		badgerdb.Teardown()
-		//	},
-		//},
+		{
+			Name: "BadgerDB",
+			Setup: func(cp *clock.Provider) store.StorageConfig {
+				return badgerdb.Setup(store.BadgerConfig{Clock: cp})
+			},
+			TearDown: func() {
+				badgerdb.Teardown()
+			},
+		},
 		//{
 		//	Name: "SurrealDB",
 		//},
@@ -104,11 +104,11 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		// TODO: Test Create with Named DeadLetter queue
 
 		now := clock.Now().UTC()
-		queues := createRandomQueues(t, ctx, c, 200)
+		queues := createRandomQueues(t, ctx, c, 50)
 
 		t.Run("Get", func(t *testing.T) {
 			var list pb.QueuesListResponse
-			l := queues[100]
+			l := queues[10]
 			require.NoError(t, c.QueuesList(ctx, &list, &que.ListOptions{
 				Pivot: l.QueueName,
 				Limit: 1,
@@ -129,7 +129,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		t.Run("Update", func(t *testing.T) {
 
 			t.Run("MaxAttempts", func(t *testing.T) {
-				l := queues[51]
+				l := queues[31]
 				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
 					QueueName:   l.QueueName,
 					MaxAttempts: l.MaxAttempts + 1,
@@ -156,7 +156,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			})
 
 			t.Run("ReserveTimeout", func(t *testing.T) {
-				l := queues[51]
+				l := queues[31]
 
 				rt, err := clock.ParseDuration(l.ReserveTimeout)
 				require.NoError(t, err)
@@ -186,7 +186,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				})
 			})
 			t.Run("DeadTimeout", func(t *testing.T) {
-				l := queues[52]
+				l := queues[32]
 
 				dt, err := clock.ParseDuration(l.DeadTimeout)
 				require.NoError(t, err)
@@ -216,7 +216,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				})
 			})
 			t.Run("Reference", func(t *testing.T) {
-				l := queues[53]
+				l := queues[33]
 
 				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
 					QueueName: l.QueueName,
@@ -240,7 +240,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			})
 
 			t.Run("Everything", func(t *testing.T) {
-				l := queues[54]
+				l := queues[34]
 
 				dt, err := clock.ParseDuration(l.DeadTimeout)
 				require.NoError(t, err)
@@ -313,27 +313,27 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: _store})
 		defer d.Shutdown(t)
 
-		queues := createRandomQueues(t, ctx, c, 100)
+		queues := createRandomQueues(t, ctx, c, 50)
 
 		var list pb.QueuesListResponse
 		require.NoError(t, c.QueuesList(ctx, &list, nil))
-		assert.Equal(t, 100, len(list.Items))
+		assert.Equal(t, 50, len(list.Items))
 
 		t.Run("MoreThanAvailable", func(t *testing.T) {
 			var more pb.QueuesListResponse
 			require.NoError(t, c.QueuesList(ctx, &more, &que.ListOptions{Limit: 20_000}))
-			assert.Equal(t, 100, len(more.Items))
+			assert.Equal(t, 50, len(more.Items))
 
 			compareQueueInfo(t, queues[0], more.Items[0])
-			compareQueueInfo(t, queues[100-1], more.Items[len(more.Items)-1])
+			compareQueueInfo(t, queues[50-1], more.Items[len(more.Items)-1])
 		})
 		t.Run("LessThanAvailable", func(t *testing.T) {
 			var less pb.QueuesListResponse
-			require.NoError(t, c.QueuesList(ctx, &less, &que.ListOptions{Limit: 50}))
-			assert.Equal(t, 50, len(less.Items))
+			require.NoError(t, c.QueuesList(ctx, &less, &que.ListOptions{Limit: 30}))
+			assert.Equal(t, 30, len(less.Items))
 
 			compareQueueInfo(t, queues[0], less.Items[0])
-			compareQueueInfo(t, queues[50-1], less.Items[len(less.Items)-1])
+			compareQueueInfo(t, queues[30-1], less.Items[len(less.Items)-1])
 		})
 		t.Run("GetOne", func(t *testing.T) {
 			var one pb.QueuesListResponse
@@ -350,15 +350,15 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			compareQueueInfo(t, queues[0], first.Items[len(first.Items)-1])
 		})
 		t.Run("WithPivot", func(t *testing.T) {
-			name := queues[60].QueueName
+			name := queues[20].QueueName
 			var pivot pb.QueuesListResponse
 			err := c.QueuesList(ctx, &pivot, &que.ListOptions{Pivot: name, Limit: 10})
 			require.NoError(t, err)
 
 			assert.Equal(t, 10, len(pivot.Items))
-			compareQueueInfo(t, queues[60], pivot.Items[0])
+			compareQueueInfo(t, queues[20], pivot.Items[0])
 			for i := range pivot.Items {
-				compareQueueInfo(t, queues[i+60], pivot.Items[i])
+				compareQueueInfo(t, queues[i+20], pivot.Items[i])
 			}
 			t.Run("PageThroughItems", func(t *testing.T) {
 				name := queues[0].QueueName

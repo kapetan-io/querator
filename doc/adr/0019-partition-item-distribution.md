@@ -240,7 +240,6 @@ partition until performance is restored. This way, Querator can maintain availab
 created by waiting for slow-responding partitions, which might impact other partitions handled by the same
 logical queue.
 
-
 ## Decision
 Querator will implement opportunistic distribution when producing items to partitions.
 
@@ -252,7 +251,6 @@ backend.
 Since the entire produce request batch does not need to be divided for distribution, there is no risk of a
 partial write for a single produce request. As a result, the client implementation can remain simple, requiring
 only the implementation of retry and backoff mechanisms for proper handling of failed or degraded partitions.
-
 
 ## Consequences
 When a client requests an operation via an endpoint, it is Querator's responsibility to fulfill that operation

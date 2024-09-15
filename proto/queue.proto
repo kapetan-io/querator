@@ -127,7 +127,13 @@ message QueueReserveResponse {
 }
 
 message QueueDeferRequest {
-  repeated QueueDeferItem items = 1;
+  // The name of the queue the reservation items are from
+  string queueName = 1  [json_name = "queue_name"];
+
+  // Partition the reserved items are from
+  int32 partition = 2;
+
+  repeated QueueDeferItem items = 3;
 }
 
 message QueueDeferItem {
@@ -147,13 +153,17 @@ message QueueDeferItem {
 
 message QueueCompleteRequest {
   string queueName = 1  [json_name = "queue_name"];
+
+  // The Partition these ids are from
+  int32 partition = 2;
+
   // The duration the client expects to wait for a queue item to be reserved before timing out.
   // Maximum timeout duration is 15 minutes
   // Example: '5m', '10s'
-  string requestTimeout = 2 [json_name = "request_timeout"]; // TODO: OpenAPI
+  string requestTimeout = 3 [json_name = "request_timeout"]; // TODO: OpenAPI
 
   // A list of ids to mark complete
-  repeated string ids = 3;
+  repeated string ids = 4;
 }
 
 message QueueInfo {
@@ -219,25 +229,34 @@ message QueueStatsRequest {
 }
 
 message QueueStatsResponse {
-  // Total is the number of items in the queue
-  int32 total = 1;
-  // TotalReserved is the number of items in the queue that are in reserved state
-  int32 TotalReserved = 2 [json_name = "total_reserved"];
-  // AverageAge is the average age of all items in the queue
-  string AverageAge = 3 [json_name = "average_age"];
-  // AverageReservedAge is the average age of reserved items in the queue
-  string AverageReservedAge = 4 [json_name = "average_reserved_age"];
+  string queueName = 1 [json_name = "queue_name"];
+  repeated QueuePartitionStats partitions = 2;
+}
+
+message QueuePartitionStats {
+  int32 partition = 1;
+  // Total is the number of items in the partition
+  int32 total = 2;
+  // TotalReserved is the number of items in the partition that are in reserved state
+  int32 TotalReserved = 3 [json_name = "total_reserved"];
+  // AverageAge is the average age of all items in the partition
+  string AverageAge = 4 [json_name = "average_age"];
+
+  // TODO: These stats should be sub divided into logical queues
+
+  // AverageReservedAge is the average age of reserved items in the partition
+  string AverageReservedAge = 5 [json_name = "average_reserved_age"];
   // ProduceWaiting is the number of `/queue.produce` requests currently waiting
   // to be processed by the sync loop
-  int32 ProduceWaiting = 5 [json_name = "produce_waiting"];
+  int32 ProduceWaiting = 6 [json_name = "produce_waiting"];
   // ReserveWaiting is the number of `/queue.reserve` requests currently waiting
   // to be processed by the sync loop
-  int32 ReserveWaiting = 6 [json_name = "reserve_waiting"];
+  int32 ReserveWaiting = 7 [json_name = "reserve_waiting"];
   // CompleteWaiting is the number of `/queue.complete` requests currently waiting
   // to be processed by the sync loop
-  int32 CompleteWaiting = 7 [json_name = "complete_waiting"];
+  int32 CompleteWaiting = 8 [json_name = "complete_waiting"];
   // ReserveBlocked is the number of reservations which are blocked waiting for new item to enter the queue.
-  int32 ReserveBlocked = 8 [json_name = "reserve_blocked"];
-  // InFlight is the number of requests currently in flight
-  int32 InFlight = 9 [json_name = "in_flight"];
+  int32 ReserveBlocked = 9 [json_name = "reserve_blocked"];
+  // InFlight is the total number of requests currently in flight waiting for responses from the sync loop
+  int32 InFlight = 10 [json_name = "in_flight"];
 }

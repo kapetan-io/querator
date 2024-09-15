@@ -668,12 +668,13 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		var stats pb.QueueStatsResponse
 		require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats))
 
-		assert.Equal(t, int32(500), stats.Total)
-		assert.Equal(t, int32(15), stats.TotalReserved)
-		assert.NotEmpty(t, stats.AverageAge)
-		assert.NotEmpty(t, stats.AverageReservedAge)
+		stat := stats.Partitions[0]
+		assert.Equal(t, int32(500), stat.Total)
+		assert.Equal(t, int32(15), stat.TotalReserved)
+		assert.NotEmpty(t, stat.AverageAge)
+		assert.NotEmpty(t, stat.AverageReservedAge)
 		t.Logf("total: %d average-age: %s reserved %d average-reserved: %s",
-			stats.Total, stats.AverageAge, stats.TotalReserved, stats.AverageReservedAge)
+			stat.Total, stat.AverageAge, stat.TotalReserved, stat.AverageReservedAge)
 	})
 
 	t.Run("QueueClear", func(t *testing.T) {
@@ -1233,7 +1234,7 @@ func pauseAndReserve(t *testing.T, ctx context.Context, s *que.Service, c *que.C
 		var resp pb.QueueStatsResponse
 		require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: name}, &resp))
 		// There should eventually be 3 waiting reserve requests
-		if int(resp.ReserveWaiting) != len(requests) {
+		if int(resp.Partitions[0].ReserveWaiting) != len(requests) {
 			return fmt.Errorf("ReserveWaiting never reached expected %d", len(requests))
 		}
 		return nil
@@ -1270,7 +1271,7 @@ func untilReserveClientBlocked(t *testing.T, c *que.Client, queueName string, nu
 	return retry.On(_ctx, RetryTenTimes, func(ctx context.Context, i int) error {
 		var resp pb.QueueStatsResponse
 		require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &resp))
-		if int(resp.ReserveBlocked) != numBlocked {
+		if int(resp.Partitions[0].ReserveBlocked) != numBlocked {
 			return fmt.Errorf("ReserveBlocked never reached expected %d", numBlocked)
 		}
 		return nil

@@ -761,14 +761,16 @@ func (l *Logical) handleStorageRequests(req *QueueRequest) {
 func (l *Logical) handleStats(state *QueueState, r *QueueRequest) {
 	qs := r.Request.(*types.QueueStats)
 	// TODO: return all Partition stats
-	if err := l.conf.Partitions[0].Stats(r.Context, qs); err != nil {
+	var ps types.PartitionStats
+	if err := l.conf.Partitions[0].Stats(r.Context, &ps); err != nil {
 		r.Err = err
 	}
-	qs.ProduceWaiting = len(l.produceQueueCh)
-	qs.ReserveWaiting = len(l.reserveQueueCh)
-	qs.CompleteWaiting = len(l.completeQueueCh)
-	qs.ReserveBlocked = len(state.Reservations.Requests)
-	qs.InFlight = int(l.inFlight.Load())
+	ps.ProduceWaiting = len(l.produceQueueCh)
+	ps.ReserveWaiting = len(l.reserveQueueCh)
+	ps.CompleteWaiting = len(l.completeQueueCh)
+	ps.ReserveBlocked = len(state.Reservations.Requests)
+	ps.InFlight = int(l.inFlight.Load())
+	qs.Stats = append(qs.Stats, ps)
 	close(r.ReadyCh)
 }
 

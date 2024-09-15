@@ -161,7 +161,7 @@ func (q *MemoryPartition) Clear(_ context.Context, destructive bool) error {
 	return nil
 }
 
-func (q *MemoryPartition) Stats(_ context.Context, stats *types.QueueStats) error {
+func (q *MemoryPartition) Stats(_ context.Context, stats *types.PartitionStats) error {
 	now := q.conf.Clock.Now().UTC()
 	for _, item := range q.mem {
 		stats.Total++

@@ -341,15 +341,21 @@ func (s *Service) QueueStats(ctx context.Context, req *proto.QueueStatsRequest,
 		return err
 	}
 
-	res.AverageReservedAge = stats.AverageReservedAge.String()
-	res.TotalReserved = int32(stats.TotalReserved)
-	res.AverageAge = stats.AverageAge.String()
-	res.Total = int32(stats.Total)
-	res.ProduceWaiting = int32(stats.ProduceWaiting)
-	res.ReserveWaiting = int32(stats.ReserveWaiting)
-	res.CompleteWaiting = int32(stats.CompleteWaiting)
-	res.ReserveBlocked = int32(stats.ReserveBlocked)
-	res.InFlight = int32(stats.InFlight)
+	for _, stat := range stats.Stats {
+		res.Partitions = append(res.Partitions,
+			&proto.QueuePartitionStats{
+				Partition:          int32(stat.Partition),
+				AverageReservedAge: stat.AverageReservedAge.String(),
+				TotalReserved:      int32(stat.TotalReserved),
+				AverageAge:         stat.AverageAge.String(),
+				Total:              int32(stat.Total),
+				ProduceWaiting:     int32(stat.ProduceWaiting),
+				ReserveWaiting:     int32(stat.ReserveWaiting),
+				CompleteWaiting:    int32(stat.CompleteWaiting),
+				ReserveBlocked:     int32(stat.ReserveBlocked),
+				InFlight:           int32(stat.InFlight),
+			})
+	}
 	return nil
 }
 

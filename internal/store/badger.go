@@ -377,7 +377,7 @@ func (b *BadgerPartition) Clear(_ context.Context, destructive bool) error {
 	})
 }
 
-func (b *BadgerPartition) Stats(_ context.Context, stats *types.QueueStats) error {
+func (b *BadgerPartition) Stats(_ context.Context, stats *types.PartitionStats) error {
 	f := errors.Fields{"category", "badger", "func", "Partition.Stats"}
 	now := b.conf.Clock.Now().UTC()
 

@@ -6,7 +6,7 @@ import (
 )
 
 // PPStats pretty prints the stats response
-func PPStats(stats *QueueStatsResponse) string {
+func PPStats(stats *QueuePartitionStats) string {
 	var buf strings.Builder
 	buf.WriteString("Stats {")
 	_, _ = fmt.Fprintf(&buf, " Total: %d", stats.Total)

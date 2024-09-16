@@ -96,6 +96,12 @@ type ListOptions struct {
 }
 
 type QueueStats struct {
+	Stats []PartitionStats
+}
+
+type PartitionStats struct {
+	// Partition is the partition these stats are for
+	Partition int
 	// Total is the number of items in the queue
 	Total int
 	// TotalReserved is the number of items in the queue that are in reserved state

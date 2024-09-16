@@ -85,7 +85,7 @@ func (i *Item) Compare(r *Item) bool {
 	return true
 }
 
-func (i *Item) ToProto(in *pb.StorageQueueItem) *pb.StorageQueueItem {
+func (i *Item) ToProto(in *pb.StorageItem) *pb.StorageItem {
 	in.ReserveDeadline = timestamppb.New(i.ReserveDeadline)
 	in.DeadDeadline = timestamppb.New(i.DeadDeadline)
 	in.CreatedAt = timestamppb.New(i.CreatedAt)
@@ -100,7 +100,7 @@ func (i *Item) ToProto(in *pb.StorageQueueItem) *pb.StorageQueueItem {
 	return in
 }
 
-func (i *Item) FromProto(in *pb.StorageQueueItem) *Item {
+func (i *Item) FromProto(in *pb.StorageItem) *Item {
 	i.ReserveDeadline = in.ReserveDeadline.AsTime()
 	i.DeadDeadline = in.DeadDeadline.AsTime()
 	i.CreatedAt = in.CreatedAt.AsTime()
@@ -146,8 +146,10 @@ type QueueInfo struct {
 	MaxAttempts int
 	// Reference is the user supplied field which could contain metadata or specify who owns this queue
 	Reference string
-	// Partitions is the number of partitions this queue expects
-	Partitions int
+	// RequestedPartitions is the number of partitions this queue expects to have. This might be different
+	// from the number of Partitions listed in PartitionInfo as the system grows or shrinks the number
+	// of actual partitions.
+	RequestedPartitions int
 	// PartitionInfo is a list current partition details
 	PartitionInfo []PartitionInfo
 }
@@ -183,8 +185,8 @@ func (i *QueueInfo) Update(r QueueInfo) bool {
 	if i.UpdatedAt != r.UpdatedAt {
 		i.UpdatedAt = r.UpdatedAt
 	}
-	if r.Partitions != 0 && i.Partitions != r.Partitions {
-		i.Partitions = r.Partitions
+	if r.RequestedPartitions != 0 && i.RequestedPartitions != r.RequestedPartitions {
+		i.RequestedPartitions = r.RequestedPartitions
 	}
 	return true
 }

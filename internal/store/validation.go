@@ -67,7 +67,7 @@ func (s QueuesValidation) validateQueueInfo(info types.QueueInfo) error {
 	}
 
 	// TODO: Add this check to the errors test
-	if info.Partitions < 1 {
+	if info.RequestedPartitions < 1 {
 		return transport.NewInvalidOption("partitions is invalid; cannot be less than 1")
 	}
 

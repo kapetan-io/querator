@@ -83,15 +83,15 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
-			ReserveTimeout: ReserveTimeout,
-			DeadTimeout:    DeadTimeout,
-			QueueName:      queueName,
-			Partitions:     1,
+			ReserveTimeout:      ReserveTimeout,
+			DeadTimeout:         DeadTimeout,
+			QueueName:           queueName,
+			RequestedPartitions: 1,
 		}))
 
 		now := clock.Now().UTC()
-		var items []*pb.StorageQueueItem
-		items = append(items, &pb.StorageQueueItem{
+		var items []*pb.StorageItem
+		items = append(items, &pb.StorageItem{
 			IsReserved:      true,
 			DeadDeadline:    timestamppb.New(now.Add(100_000 * clock.Minute)),
 			ReserveDeadline: timestamppb.New(now.Add(3_000 * clock.Minute)),
@@ -102,7 +102,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 			Payload: []byte("I mean... have I changed? Same sleek body. Same " +
 				"flowing mane. Same spectacular hooves. Nope, I'm still awesome"),
 		})
-		items = append(items, &pb.StorageQueueItem{
+		items = append(items, &pb.StorageItem{
 			IsReserved:      false,
 			DeadDeadline:    timestamppb.New(now.Add(1_000_000 * clock.Minute)),
 			ReserveDeadline: timestamppb.New(now.Add(3_000 * clock.Minute)),
@@ -113,8 +113,8 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 			Payload:         []byte("Whining? I am not whining, I am complaining"),
 		})
 
-		var resp pb.StorageQueueAddResponse
-		err := c.StorageQueueAdd(ctx, &pb.StorageQueueAddRequest{Items: items, QueueName: queueName}, &resp)
+		var resp pb.StorageItemsImportResponse
+		err := c.StorageItemsImport(ctx, &pb.StorageItemsImportRequest{Items: items, QueueName: queueName}, &resp)
 		require.NoError(t, err)
 
 		require.Equal(t, len(items), len(resp.Items))
@@ -149,16 +149,16 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
-			ReserveTimeout: ReserveTimeout,
-			DeadTimeout:    DeadTimeout,
-			QueueName:      queueName,
-			Partitions:     1,
+			ReserveTimeout:      ReserveTimeout,
+			DeadTimeout:         DeadTimeout,
+			QueueName:           queueName,
+			RequestedPartitions: 1,
 		}))
 		items := writeRandomItems(t, ctx, c, queueName, 10_000)
 
 		t.Run("List", func(t *testing.T) {
-			var resp pb.StorageQueueListResponse
-			err := c.StorageQueueList(ctx, queueName, &resp, &que.ListOptions{Limit: 10_000})
+			var resp pb.StorageItemsListResponse
+			err := c.StorageItemsList(ctx, queueName, &resp, &que.ListOptions{Limit: 10_000})
 			require.NoError(t, err)
 
 			assert.Equal(t, len(items), len(resp.Items))
@@ -174,8 +174,8 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 			}
 
 			t.Run("MoreThanAvailable", func(t *testing.T) {
-				var more pb.StorageQueueListResponse
-				err = c.StorageQueueList(ctx, queueName, &more, &que.ListOptions{Limit: 20_000})
+				var more pb.StorageItemsListResponse
+				err = c.StorageItemsList(ctx, queueName, &more, &que.ListOptions{Limit: 20_000})
 				require.NoError(t, err)
 				assert.Equal(t, 10_000, len(more.Items))
 
@@ -184,8 +184,8 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 			})
 
 			t.Run("LessThanAvailable", func(t *testing.T) {
-				var limit pb.StorageQueueListResponse
-				err = c.StorageQueueList(ctx, queueName, &limit, &que.ListOptions{Limit: 1_000})
+				var limit pb.StorageItemsListResponse
+				err = c.StorageItemsList(ctx, queueName, &limit, &que.ListOptions{Limit: 1_000})
 				require.NoError(t, err)
 				assert.Equal(t, 1_000, len(limit.Items))
 				compareStorageItem(t, items[0], limit.Items[0])
@@ -193,8 +193,8 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 			})
 
 			t.Run("GetOne", func(t *testing.T) {
-				var limit pb.StorageQueueListResponse
-				require.NoError(t, c.StorageQueueList(ctx, queueName, &limit,
+				var limit pb.StorageItemsListResponse
+				require.NoError(t, c.StorageItemsList(ctx, queueName, &limit,
 					&que.ListOptions{Pivot: items[10].Id, Limit: 1}))
 
 				assert.Equal(t, 1, len(limit.Items))
@@ -202,8 +202,8 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 			})
 
 			t.Run("FirstOne", func(t *testing.T) {
-				var limit pb.StorageQueueListResponse
-				require.NoError(t, c.StorageQueueList(ctx, queueName, &limit, &que.ListOptions{Limit: 1}))
+				var limit pb.StorageItemsListResponse
+				require.NoError(t, c.StorageItemsList(ctx, queueName, &limit, &que.ListOptions{Limit: 1}))
 
 				assert.Equal(t, 1, len(limit.Items))
 				assert.Equal(t, items[0].Id, limit.Items[0].Id)
@@ -211,8 +211,8 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 
 			t.Run("WithPivot", func(t *testing.T) {
 				id := items[1000].Id
-				var list pb.StorageQueueListResponse
-				err := c.StorageQueueList(ctx, queueName, &list, &que.ListOptions{Pivot: id, Limit: 10})
+				var list pb.StorageItemsListResponse
+				err := c.StorageItemsList(ctx, queueName, &list, &que.ListOptions{Pivot: id, Limit: 10})
 				require.NoError(t, err)
 
 				assert.Equal(t, 10, len(list.Items))
@@ -221,11 +221,11 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 					compareStorageItem(t, items[i+1000], list.Items[i])
 				}
 
-				// TODO: Replace this test with a test of the list iterator for client.StorageQueueList()
+				// TODO: Replace this test with a test of the list iterator for client.StorageItemsList()
 				t.Run("PageThroughItems", func(t *testing.T) {
 					pivot := list.Items[9]
-					var page pb.StorageQueueListResponse
-					err = c.StorageQueueList(ctx, queueName, &page, &que.ListOptions{Pivot: pivot.Id, Limit: 10})
+					var page pb.StorageItemsListResponse
+					err = c.StorageItemsList(ctx, queueName, &page, &que.ListOptions{Pivot: pivot.Id, Limit: 10})
 					require.NoError(t, err)
 					// First item in the returned page is the pivot we requested
 					compareStorageItem(t, pivot, page.Items[0])
@@ -234,7 +234,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 					compareStorageItem(t, items[1018], page.Items[9])
 
 					pivot = page.Items[9]
-					err = c.StorageQueueList(ctx, queueName, &page, &que.ListOptions{Pivot: pivot.Id, Limit: 10})
+					err = c.StorageItemsList(ctx, queueName, &page, &que.ListOptions{Pivot: pivot.Id, Limit: 10})
 					require.NoError(t, err)
 					// Includes the pivot
 					compareStorageItem(t, pivot, page.Items[0])
@@ -245,7 +245,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 
 				t.Run("PageIncludesPivot", func(t *testing.T) {
 					item := list.Items[9]
-					err = c.StorageQueueList(ctx, queueName, &list, &que.ListOptions{Pivot: item.Id, Limit: 1})
+					err = c.StorageItemsList(ctx, queueName, &list, &que.ListOptions{Pivot: item.Id, Limit: 1})
 					require.NoError(t, err)
 
 					require.Equal(t, 1, len(list.Items))
@@ -257,13 +257,13 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 		})
 
 		t.Run("Delete", func(t *testing.T) {
-			require.NoError(t, c.StorageQueueDelete(ctx, &pb.StorageQueueDeleteRequest{
+			require.NoError(t, c.StorageItemsDelete(ctx, &pb.StorageItemsDeleteRequest{
 				QueueName: queueName,
 				Ids:       que.CollectIDs(items[0:1_000]),
 			}))
 
-			var deleted pb.StorageQueueListResponse
-			require.NoError(t, c.StorageQueueList(ctx, queueName, &deleted, &que.ListOptions{Limit: 10_000}))
+			var deleted pb.StorageItemsListResponse
+			require.NoError(t, c.StorageItemsList(ctx, queueName, &deleted, &que.ListOptions{Limit: 10_000}))
 
 			// Assert the items deleted do not exist
 			for _, d := range items[0:1_000] {
@@ -275,7 +275,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 			}
 
 			t.Run("AlreadyDeletedIsOk", func(t *testing.T) {
-				require.NoError(t, c.StorageQueueDelete(ctx, &pb.StorageQueueDeleteRequest{
+				require.NoError(t, c.StorageItemsDelete(ctx, &pb.StorageItemsDeleteRequest{
 					QueueName: queueName,
 					Ids:       que.CollectIDs(items[0:1_000]),
 				}))
@@ -284,36 +284,36 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 	})
 
 	// TODO: Finish these tests
-	t.Run("StorageQueueListErrors", func(t *testing.T) {})
-	t.Run("StorageQueueAddErrors", func(t *testing.T) {})
+	t.Run("StorageItemsListErrors", func(t *testing.T) {})
+	t.Run("StorageItemsImportErrors", func(t *testing.T) {})
 
-	t.Run("StorageQueueDeleteErrors", func(t *testing.T) {
+	t.Run("StorageItemsDeleteErrors", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
 		d, c, ctx := newDaemon(t, 5*clock.Second, que.ServiceConfig{StorageConfig: _store})
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
-			ReserveTimeout: ReserveTimeout,
-			DeadTimeout:    DeadTimeout,
-			QueueName:      queueName,
-			Partitions:     1,
+			ReserveTimeout:      ReserveTimeout,
+			DeadTimeout:         DeadTimeout,
+			QueueName:           queueName,
+			RequestedPartitions: 1,
 		}))
 
 		for _, test := range []struct {
 			Name string
-			Req  *pb.StorageQueueDeleteRequest
+			Req  *pb.StorageItemsDeleteRequest
 			Msg  string
 			Code int
 		}{
 			{
 				Name: "EmptyRequest",
-				Req:  &pb.StorageQueueDeleteRequest{},
+				Req:  &pb.StorageItemsDeleteRequest{},
 				Msg:  "queue name is invalid; queue name cannot be empty",
 				Code: duh.CodeBadRequest,
 			},
 			{
 				Name: "InvalidQueue",
-				Req: &pb.StorageQueueDeleteRequest{
+				Req: &pb.StorageItemsDeleteRequest{
 					QueueName: "invalid~queue",
 				},
 				Msg:  "queue name is invalid; 'invalid~queue' cannot contain '~' character",
@@ -321,7 +321,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 			},
 			{
 				Name: "NoIds",
-				Req: &pb.StorageQueueDeleteRequest{
+				Req: &pb.StorageItemsDeleteRequest{
 					QueueName: queueName,
 					Ids:       nil,
 				},
@@ -330,7 +330,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 			},
 			{
 				Name: "IdsEmptyList",
-				Req: &pb.StorageQueueDeleteRequest{
+				Req: &pb.StorageItemsDeleteRequest{
 					QueueName: queueName,
 					Ids:       []string{},
 				},
@@ -339,7 +339,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 			},
 			{
 				Name: "InvalidIds",
-				Req: &pb.StorageQueueDeleteRequest{
+				Req: &pb.StorageItemsDeleteRequest{
 					QueueName: queueName,
 					Ids:       []string{"invalid-id", "another-invalid-id"},
 				},
@@ -348,7 +348,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 			},
 		} {
 			t.Run(test.Name, func(t *testing.T) {
-				err := c.StorageQueueDelete(ctx, test.Req)
+				err := c.StorageItemsDelete(ctx, test.Req)
 				if test.Code != duh.CodeOK {
 					var e duh.Error
 					require.True(t, errors.As(err, &e))
@@ -414,7 +414,7 @@ func randomProduceItems(count int) []*pb.QueueProduceItem {
 	return items
 }
 
-func compareStorageItem(t *testing.T, l *pb.StorageQueueItem, r *pb.StorageQueueItem) {
+func compareStorageItem(t *testing.T, l *pb.StorageItem, r *pb.StorageItem) {
 	t.Helper()
 	require.Equal(t, l.Id, r.Id)
 	require.Equal(t, l.IsReserved, r.IsReserved)

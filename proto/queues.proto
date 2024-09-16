@@ -23,7 +23,9 @@ import "proto/queue.proto";
 package querator;
 
 message QueuesListRequest {
+  // Pivot is the name of the queue to pivot upon when paging through lists of queues
   string pivot  = 2;
+  // Limit is the maximum number of items to return in a single list response
   int32 limit = 3;
 }
 

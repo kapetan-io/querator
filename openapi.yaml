@@ -1,0 +1,1254 @@
+openapi: 3.1.0
+info:
+  title: My Project
+  description: ''
+  version: 1.0.0
+tags:
+  - name: Querator V1
+paths:
+  /v1/queue.produce:
+    post:
+      summary: Produce an item on a queue
+      deprecated: false
+      description: >-
+        Produce an item on a queue. Calls to the endpoint may provide multiple
+        items to produce. The call will not return until all items provided have
+        been written to storage.
+
+
+
+        ### Timeout Semantics
+
+        The call will return when the item(s) provided are written to storage or
+        when `request_timeout` has been reached. If the call returns with a non
+        200 response code, the client should consider the items provided as not
+        written to the queue. The client should NOT cancel the request before
+        `request_timeout` has been reached. If the call fails to return after
+        `request_timeout` is reached the client can safely cancel the request.
+      operationId: post-v1-queue.produce
+      tags:
+        - Querator V1
+      parameters: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QueueProduceRequest'
+            example:
+              queue_name: queue-name
+              request_timeout: 30s
+              items:
+                - encoding: application/json
+                  kind: webhook-v2
+                  reference: account-1234
+                  utf8: '{"key":"value"}'
+                - encoding: application/json
+                  kind: webhook-v2
+                  reference: account-5323
+                  bytes: eyJrZXkiOiJ2YWx1ZSJ9
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueueProduceResponse'
+              examples:
+                '1':
+                  summary: Success
+                  value:
+                    code: 200
+          headers: {}
+      security: []
+  /v1/queue.reserve:
+    post:
+      summary: Reserve messages from the queue
+      deprecated: false
+      description: >+
+        Reserve a message from the requested queue.  When a message is reserved
+        by a consumer, that consumer gains exclusive rights to the message. No
+        other consumer will be provided the same message unless the
+        `reserve_deadline` has expired 
+
+        and the consumer with the reservation has not marked the message via 
+        `/queue.complete` or `/queue.defer`
+
+
+        If a message is not acknowledge via `/queue.complete` within the
+        `reserve_deadline` period it will be offered to another consumer.
+
+
+        ### Timeout Semantics
+
+        The call will return when a reservation is successful or when
+        `request_timeout` has been reached. If the call returns with a 454
+        `Retry Request` response code, this means there were no items in the
+        queue and the `request_timeout` was reached. In this case the client
+        should retry the reserve request.
+
+
+        The client should NOT cancel the request before `request_timeout` has
+        been reached. If the call fails to return after `request_timeout` is
+        reached the client can safely cancel the request.
+
+
+      operationId: post-v1-queue.reserve
+      tags:
+        - Querator V1
+      parameters: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QueueReserveRequest'
+            example:
+              queue_name: queue-name
+              batch_size: 1000
+              client_id: client-01
+              request_timeout: 30s
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueueReserveResponse'
+              examples:
+                '1':
+                  summary: Example 1
+                  value:
+                    items:
+                      - encoding: application/json
+                        kind: webhook-v2
+                        reference: account-1234
+                        id: 2m75RTp9PBx69hw1Q7mjoB0F73Q
+                        reserve_deadline: '2024-07-02T20:50:49.366215Z'
+                        bytes: >-
+                          R29vZCBuZXdzIGV2ZXJ5b25lLCBteSBJUSB0ZXN0IGNhbWUgYmFjayBuZWdhdGl2ZQ==
+                    queue_name: webhooks
+                    partition: 0
+          headers: {}
+      security: []
+  /v1/queue.defer:
+    post:
+      summary: Defer a message to be retried
+      deprecated: false
+      description: >
+        Defer an item to be processed again at a later date/time. Once the
+        `enqueue_at` time is reached, querator will enqueue this item into the
+        specified queue and the `attempted` counter for this item will increment
+        by 1. 
+
+
+        If the item should not be retried, but failed immediately. Set `dead:
+        true` and the item will be placed in the dead letter queue regardless of
+        the number of attempts left on the message.
+
+
+        If you wish to fail a message such that it is deleted from the queue and
+        never offered to another consumer, nor placed into the dead letter
+        queue, then call `/queue.complete` instead.
+      operationId: post-v1-queue.defer
+      tags:
+        - Querator V1
+      parameters: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QueueDeferRequest'
+            example:
+              queue_name: queue-name
+              partition: 0
+              items:
+                - id: 2m75RTp9PBx69hw1Q7mjoB0F73Q
+                  enqueue_at: '2024-01-01 12:00:00.0000'
+                  dead: false
+                - id: 2m75RTp9PBx69hw1Q7mjoB0F73R
+                  enqueue_at: '2024-01-01 12:00:00.0000'
+                  dead: false
+                - id: 2m75RTp9PBx69hw1Q7mjoB0F73S
+                  enqueue_at: '2024-01-01 12:00:00.0000'
+                  dead: false
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueueDeferResponse'
+              examples:
+                '1':
+                  summary: Success
+                  value:
+                    code: 200
+          headers: {}
+      security: []
+  /v1/queue.complete:
+    post:
+      summary: Complete reserved items
+      deprecated: false
+      description: >
+        Mark `reserved` items as `completed`. The item can then be removed from
+        the queue by Querator and will not be offered to any other consumers.
+
+
+        If any of the ids provided cannot be marked as `completed` then the
+        entire request will be rejected with a code `453 Request Failed`. It is
+        the responsibility of the client to remove the offending id and try
+        again.
+
+
+        ### Timeout Semantics
+
+        The call will return when the id(s) provided are completed to storage or
+        when `request_timeout` has been reached. If the call returns with a non
+        200 response code, the client should consider the items provided as not
+        completed to the queue. The client should NOT cancel the request before
+        `request_timeout` has been reached. If the call fails to return after
+        `request_timeout` is reached the client can safely cancel the request.
+      operationId: post-v1-queue.complete
+      tags:
+        - Querator V1
+      parameters: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QueueCompleteRequest'
+            example:
+              queue_name: queue-name
+              partition: 0
+              request_timeout: 30s
+              ids:
+                - id-1234
+                - id-1235
+                - id-1236
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueueCompleteResponse'
+              examples:
+                '1':
+                  summary: Success
+                  value:
+                    code: 200
+          headers: {}
+      security: []
+  /v1/queue.list:
+    post:
+      summary: List all available queues
+      deprecated: false
+      description: List all the available queues
+      operationId: post-v1-queue.list
+      tags:
+        - Querator V1
+      parameters: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QueuesListRequest'
+            example:
+              pivot: queue-302
+              limit: 500
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueuesListResponse'
+              examples:
+                '1':
+                  summary: Success
+                  value:
+                    items:
+                      - name: queue-1
+                        created_at: '2024-01-01 12:00:00.0000'
+                        updated_at: '2024-01-01 12:00:00.0000'
+                        dead_queue: queue-1-dead
+                        reference: jake@statefarm.com
+                        reserve_timeout: 60m
+                        dead_timeout: 24h
+                        max_attempts: 10
+                        requested_partitions: 5
+                      - name: queue-2
+                        created_at: '2024-01-01 12:00:00.0000'
+                        updated_at: '2024-01-01 12:00:00.0000'
+                        dead_queue: queue-2-dead
+                        reference: jake@statefarm.com
+                        reserve_timeout: 60m
+                        dead_timeout: 24h
+                        max_attempts: 20
+                        requested_partitions: 1025
+          headers: {}
+      security: []
+  /v1/queue.create:
+    post:
+      summary: Create a queue
+      deprecated: false
+      description: Create a new queue with the provided characteristics
+      operationId: post-v1-queue.create
+      tags:
+        - Querator V1
+      parameters: []
+      requestBody:
+        content:
+          application/json:
+            schema: &ref_0
+              $ref: '#/components/schemas/QueueInfo'
+            example:
+              name: queue-name
+              dead_queue: queue-name-dead
+              reference: jake@statefarm.com
+              reserve_timeout: 60m
+              dead_timeout: 24h
+              max_attempts: 10
+              requested_partitions: 25
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema: &ref_1
+                $ref: '#/components/schemas/Reply'
+              examples:
+                '1':
+                  summary: Success
+                  value: |-
+                    {
+                        "code": 200,
+
+                    }
+          headers: {}
+      security: []
+  /v1/queue.update:
+    post:
+      summary: Update a queue
+      deprecated: false
+      description: Update the details of a queue.
+      operationId: post-v1-queue.update
+      tags:
+        - Querator V1
+      parameters: []
+      requestBody:
+        content:
+          application/json:
+            schema: *ref_0
+            example:
+              name: queue-name
+              dead_queue: queue-name-dead
+              reference: account-12345
+              reserve_timeout: 60m
+              dead_timeout: 24h
+              max_attempts: 35
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema: *ref_1
+              examples:
+                '1':
+                  summary: Success
+                  value:
+                    code: 200
+          headers: {}
+      security: []
+  /v1/queue.info:
+    post:
+      summary: Get Info about a queue
+      deprecated: false
+      description: ''
+      operationId: post-v1-queue.inspect
+      tags:
+        - Querator V1
+      parameters: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  description: The name of the queue to retrieve info about
+              required:
+                - name
+            example:
+              name: queue-name
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema: *ref_0
+              examples:
+                '1':
+                  summary: Success
+                  value:
+                    name: queue-name
+                    created_at: '2024-01-01 12:00:00.0000'
+                    updated_at: '2024-01-01 12:00:00.0000'
+                    dead_queue: queue-name-dead
+                    reference: jake@statefarm.com
+                    reserve_timeout: 60m
+                    dead_timeout: 24h
+                    max_attempts: 50
+                    requested_partitions: 456
+          headers: {}
+      security: []
+  /v1/queue.stats:
+    post:
+      summary: Fetch stats for a queue
+      deprecated: false
+      description: >-
+        Retrieve statistics about a queue. Queue stats provide information on
+        the health of a partition in a queue
+      tags:
+        - Querator V1
+      parameters: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QueueStatsRequest'
+            example:
+              queue_name: queue-name
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueueStatsResponse'
+              examples:
+                '1':
+                  summary: Queue Stats Example
+                  value:
+                    queue_name: queue-name
+                    logical_queues:
+                      - produce_waiting: 12
+                        reserve_waiting: 32
+                        complete_waiting: 2
+                        reserve_blocked: 32
+                        in_flight: 54
+                        partitions:
+                          - partition: 0
+                            total: 65012
+                            total_reserved: 5000
+                            average_age: 1m23s
+                            average_reserved_age: 43s
+                      - produce_waiting: 12
+                        reserve_waiting: 32
+                        complete_waiting: 2
+                        reserve_blocked: 32
+                        in_flight: 54
+                        partitions:
+                          - partition: 1
+                            total: 65012
+                            total_reserved: 5000
+                            average_age: 1m23s
+                            average_reserved_age: 43s
+                          - partition: 2
+                            total: 650133
+                            total_reserved: 5000
+                            average_age: 1m23s
+                            average_reserved_age: 43s
+          headers: {}
+      security: []
+  /v1/queue.clear:
+    post:
+      summary: Clear a queue
+      deprecated: false
+      description: >-
+        Clears all data from a queue, optionally clears all defer and scheduled
+        items
+      tags:
+        - Querator V1
+      parameters: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QueueClearRequest'
+            example:
+              queue_name: queue-name
+              defer: false
+              scheduled: false
+              queue: true
+              destructive: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema: *ref_1
+              examples:
+                '1':
+                  summary: Success
+                  value:
+                    code: 200
+          headers: {}
+      security: []
+  /v1/storage/items.list:
+    post:
+      summary: List Items in a Partition
+      deprecated: false
+      description: List items in a queue partition
+      tags:
+        - Querator V1
+      parameters: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StorageItemsListRequest'
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorageItemsListResponse'
+          headers: {}
+      security: []
+  /v1/storage/items.import:
+    post:
+      summary: Import Items to a Partition
+      deprecated: false
+      description: Import items into a partition
+      tags:
+        - Querator V1
+      parameters: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StorageItemsImportRequest'
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorageItemsImportResponse'
+          headers: {}
+      security: []
+  /v1/storage/items.delete:
+    post:
+      summary: Delete items from a partition
+      deprecated: false
+      description: ''
+      tags:
+        - Querator V1
+      parameters: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StorageItemsDeleteRequest'
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema: *ref_1
+              examples:
+                '1':
+                  summary: Success
+                  value:
+                    code: 200
+          headers: {}
+      security: []
+components:
+  schemas:
+    Inspect-Request:
+      type: object
+      properties:
+        id:
+          type: string
+          x-stoplight:
+            id: 16fo5kqzhzqi2
+      title: Inspect
+      x-stoplight:
+        id: ltyj6nx3rxht5
+    QueueProduceRequest:
+      type: object
+      properties:
+        queue_name:
+          type: string
+          description: The name of the queue
+          examples:
+            - queue1
+            - queue2
+        request_timeout:
+          type: string
+          description: >-
+            The duration this request should block before the client will cancel
+            the request
+          default: 5m
+          examples:
+            - 5m
+            - 15m
+            - 30s
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/QueueProduceItem'
+          description: List of items to be queued
+          maxItems: 1000
+          minItems: 1
+      required:
+        - queue_name
+        - request_timeout
+        - items
+    QueueReserveRequest:
+      type: object
+      properties:
+        queue_name:
+          type: string
+          description: The name of the queue
+        client_id:
+          type: string
+          description: >-
+            A unique id which identifies this client. Duplicate client id's are
+            not allowed
+          examples:
+            - client-1234
+        request_timeout:
+          type: string
+          default: 1m
+          examples:
+            - 30s
+            - 1m
+            - 5m
+            - 15m
+          description: >-
+            The duration this request should block before the client will cancel
+            the request.
+        batch_size:
+          type: integer
+          minimum: 1
+          maximum: 1000
+          description: The maxium number of items to be reserved for this request
+      required:
+        - queue_name
+        - client_id
+        - request_timeout
+    QueueCompleteRequest:
+      type: object
+      properties:
+        queue_name:
+          type: string
+          description: The name of the queue these ids are from
+        partition:
+          type: integer
+          description: The Partition these ids are from
+        request_timeout:
+          type: string
+          description: >-
+            The duration this request should block before the client will cancel
+            the request
+        ids:
+          type: array
+          items:
+            type: string
+            description: A list of ids to mark complete
+          description: A list of the item ids to mark as complete
+      required:
+        - queue_name
+        - request_timeout
+        - ids
+        - partition
+    QueueDeferRequest:
+      type: object
+      properties:
+        queue_name:
+          type: string
+          description: >-
+            The queue name provided when the item was reserved. If the
+            `queue_name` does not match the original `queue_name` provided when
+            the item was reserved, then the defer request will return a non 200
+            status code.
+        partition:
+          type: integer
+          description: >-
+            The partition provided when the item was reserved. If the
+            `partition` does not match the original `partition` provided when
+            the item was reserved, then the defer request will return a non 200
+            status code.
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/QueueDeferItem'
+      required:
+        - queue_name
+        - partition
+        - items
+    QueueStatsRequest:
+      type: object
+      properties:
+        queue_name:
+          type: string
+      required:
+        - queue_name
+    QueueClearRequest:
+      type: object
+      properties:
+        queue_name:
+          type: string
+          description: The name of the queue to clear
+        defer:
+          type: boolean
+          description: >-
+            Indicates the 'defer' queue will be cleared. If true, any items
+            scheduled to be retried at a future date will be removed.
+        scheduled:
+          type: boolean
+          description: >-
+            Indicates any 'scheduled' items in the queue will be cleared. If
+            true, any items scheduled to be enqueued at a future date will be
+            removed.
+        queue:
+          type: boolean
+          description: >-
+            Indicates any items currently waiting in the FIFO queue will clear.
+            If true, any items in the queue which have NOT been reserved will be
+            removed.
+        destructive:
+          type: boolean
+          description: >-
+            Indicates the Defer,Scheduled,Queue operations should be destructive
+            in that all data regardless of status will be removed.
+
+
+            For example, if used with ClearRequest.Queue = true, then ALL items
+            in the queue regardless of reserve status will be removed. This
+            means that clients who currently have ownership of those items will
+            not be able to "complete" those items, as querator will have no
+            knowledge of those items.
+      required:
+        - queue_name
+        - defer
+        - scheduled
+        - queue
+        - destructive
+    QueuesListRequest:
+      type: object
+      properties:
+        pivot:
+          type: string
+          description: >-
+            The name of the queue to pivot upon when paging through lists of
+            queues
+        limit:
+          type: integer
+          maximum: 1000
+          description: The maximum number of items to return in a single list response
+      required:
+        - pivot
+        - limit
+    QueuesDeleteRequest:
+      type: object
+      properties:
+        queue_name:
+          type: string
+          description: The name of the queue to delete
+          examples:
+            - queue-name
+        force:
+          type: boolean
+          description: >-
+            force indicates the deletion should ignore any current open
+            reservations or items in the queue and delete all data related to
+            the queue. In addition, this forcibly cancels all in progress client
+            reservation requests.
+      required:
+        - queue_name
+        - force
+    StorageItemsListRequest:
+      type: object
+      properties:
+        queue_name:
+          type: string
+        partition:
+          type: integer
+        pivot:
+          type: string
+        limit:
+          type: integer
+      required:
+        - queue_name
+        - partition
+        - pivot
+        - limit
+    StorageItemsImportRequest:
+      type: object
+      properties:
+        queue_name:
+          type: string
+        partition:
+          type: integer
+        items:
+          type: array
+          items: &ref_2
+            $ref: '#/components/schemas/StorageItem'
+      required:
+        - queue_name
+        - partition
+        - items
+    StorageItemsDeleteRequest:
+      type: object
+      properties:
+        queue_name:
+          type: string
+        ids:
+          type: array
+          items:
+            type: string
+      required:
+        - queue_name
+        - ids
+    Inspect:
+      type: object
+      properties:
+        queue_name:
+          type: string
+        partitions:
+          type: string
+        queued:
+          type: integer
+          format: int64
+        defered:
+          type: integer
+          format: int64
+        scheduled:
+          type: integer
+          format: int64
+        dead_letter:
+          type: integer
+          format: int64
+    QueueProduceResponse:
+      type: object
+      properties:
+        code:
+          type: integer
+          description: The response code
+        code_text:
+          type: string
+          description: The text explaination of the code
+        message:
+          type: string
+          description: The message that contains details explaining the reason for the code
+      required:
+        - code
+    QueueReserveResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/QueueReserveItem'
+        queue_name:
+          type: string
+          description: The name of the queue the reserved items are from
+        partition:
+          type: integer
+          description: Partition the reserved items are from
+      required:
+        - items
+        - queue_name
+        - partition
+    QueueCompleteResponse:
+      type: object
+      properties:
+        code:
+          type: integer
+          description: The response code
+        code_text:
+          type: string
+          description: The text explaination of the code
+        message:
+          type: string
+          description: The message that contains details explaining the reason for the code
+      required:
+        - code
+    QueueDeferResponse:
+      type: object
+      properties:
+        code:
+          type: integer
+          description: The response code
+        code_text:
+          type: string
+          description: The text explaination of the code
+        message:
+          type: string
+          description: The message that contains details explaining the reason for the code
+      required:
+        - code
+    QueueStatsResponse:
+      type: object
+      properties:
+        queue_name:
+          type: string
+        logical_queues:
+          type: array
+          items:
+            $ref: '#/components/schemas/QueueLogicalStats'
+      required:
+        - queue_name
+        - logical_queues
+    QueuesListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items: *ref_0
+      required:
+        - items
+    StorageItemsListResponse:
+      type: array
+      items: *ref_2
+    StorageItemsImportResponse:
+      type: array
+      items: *ref_2
+    Reply:
+      type: object
+      properties:
+        code:
+          type: integer
+        code_text:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+          properties:
+            key:
+              type: string
+          required:
+            - key
+      required:
+        - code
+        - code_text
+        - message
+        - details
+    QueueProduceItem:
+      type: object
+      properties:
+        encoding:
+          type: string
+          description: >-
+            A user specified field which indicates the encoding the user used to
+            encode the payload
+          examples:
+            - application/json
+            - application/xml
+        kind:
+          type: string
+          description: >-
+            A user specified field that describes the kind or type the payload
+            contains. Consumers can use this field to determine handling of the
+            payload prior to unmarshalling
+          examples:
+            - webhook-v2
+            - webhook-v1
+        reference:
+          type: string
+          description: >-
+            A user specified field that can be used by the consumer to determine
+            handling of the message without needing to unmarshall the body
+          examples:
+            - john.smith
+            - jake@insurance.com
+        bytes:
+          type: string
+          description: >-
+            The payload of the item as an array of raw bytes with no
+            predetermined character set. Clients who communicate with Querator
+            with `Content-Type: application/protobuf` should use this field
+            instead of `utf8`
+
+
+            When using `Content-Type: application/json` this field must be
+            encoded as base64. If you are using `Content-Type: application/json`
+            and your payload is using the utf8 character set, then you should
+            use the `utf8` field instead. 
+          examples:
+            - eyJrZXkiOiJ2YWx1ZSJ9
+        utf8:
+          type: string
+          description: >-
+            This is an a convenience field useful for clients that are
+            communicating with Querator via`Content-Type: application/json`.
+            This field assumes a utf8 encoded payload and does not require the
+            payload to be encoded as base64. As such is is an excellent choice
+            for clients who do not have access to a base64 encoder and can't use
+            the `bytes` field for their payload.
+
+
+            NOTE: Both `bytes` and `utf8` can be set, but `bytes` takes
+            precedence. If `bytes` is set, then that will be used as the
+            payload. If `utf8` is set and `bytes` is empty, then `utf8` will be
+            used. If both `bytes` and `utf8` are set, then `bytes` will be used
+            and `utf8` will be dropped.
+          examples:
+            - Hello World!
+            - '{"key": "value"}'
+    QueueReserveItem:
+      type: object
+      properties:
+        id:
+          type: string
+          description: ' A unique id which identifies an item in a queue'
+        encoding:
+          type: string
+          description: ' A user specified field which indicates the encoding the user used to encode the payload'
+        kind:
+          type: string
+          description: >-
+            A user specified field that describes the kind or type the payload
+            contains. Consumers can use this field to determine handling of the
+            payload prior to unmarshalling
+        reference:
+          type: string
+          description: >-
+            A user specified field that can be used by the consumer to determine
+            handling of the message without needing to unmarshall the body
+        attempts:
+          type: integer
+          description: >-
+            The number of times this item has been deferred or reservation timed
+            out during processing by a consumer
+        reserve_deadline:
+          type: string
+          description: >-
+            The date time that Querator will offer up this item to another
+            consumer if the consumer reserving this item has not marked it
+            complete. The consumer can use this date to decide if it should
+            finalize it's work if the timeout date has expired.
+        bytes:
+          type: string
+          description: >-
+            The payload of the item is an array of raw bytes without a
+            predetermined character set. 
+
+
+            NOTE: When communicating with Querator and using the `Content-Type:
+            application/json` header, the 'bytes' field will be encoded in
+            base64. This is necessary because byte fields, unlike string fields,
+            can contain non-UTF8 binary data. Since raw bytes cannot be directly
+            represented in JSON, Querator base64 encodes this field for
+            consumers who prefer JSON payloads.
+      required:
+        - id
+        - reserve_deadline
+    QueueDeferItem:
+      type: object
+      properties:
+        id:
+          type: string
+          description: >-
+            The item id provided when the message was reserved. If the item id
+            provided does not match an item id already in `reserve` status, then
+            the defer request will return a non 200 status code.
+        enqueue_at:
+          type: string
+          format: date-time
+          description: >-
+            The timestamp after which the message will be queued to the
+            queue/partition specified. If `offer_at` is empty the item will be
+            immediately re-added to the queue and the attempts counter
+            incremented.
+        dead:
+          type: boolean
+          description: >-
+            Indicates the item is dead, will not be retried regardless of the
+            number of attempts remaining. If set to `true` the defer will  place
+            the item in the dead letter queue for the specified queue.
+      required:
+        - id
+        - enqueue_at
+        - dead
+    QueuePartitionStats:
+      type: object
+      properties:
+        partition:
+          type: integer
+          description: The partition the stats are for
+        total:
+          type: integer
+          description: Total is the number of items in the partition
+        total_reserved:
+          type: integer
+          description: The number of items in the partition that are in reserved state
+        average_age:
+          type: string
+          description: The average age of all items in the partition
+      required:
+        - total
+        - partition
+        - total_reserved
+        - average_age
+    QueueLogicalStats:
+      type: object
+      properties:
+        average_reserved_age:
+          type: string
+          description: The average age of reserved items in the partition
+        produce_waiting:
+          type: integer
+          description: >-
+            The number of `/queue.produce` requests currently waiting to be
+            processed by the sync loop
+        reserve_waiting:
+          type: integer
+          description: >-
+            The number of `/queue.reserve` requests currently waiting to be
+            processed by the sync loop
+        complete_waiting:
+          type: integer
+          description: >-
+            the number of `/queue.complete` requests currently waiting to be
+            processed by the sync loop
+        reserve_blocked:
+          type: integer
+          description: >-
+            The number of reservations which are blocked waiting for new item to
+            enter the queue
+        in_flight:
+          type: integer
+          description: >-
+            The total number of requests currently in flight waiting for
+            responses from the sync loop
+        partitions:
+          type: array
+          items:
+            $ref: '#/components/schemas/QueuePartitionStats'
+      required:
+        - average_reserved_age
+        - produce_waiting
+        - reserve_waiting
+        - complete_waiting
+        - reserve_blocked
+        - in_flight
+        - partitions
+    QueueInfo:
+      type: object
+      properties:
+        name:
+          type: string
+          description: The name of the queue
+          examples:
+            - queue-name
+        created_at:
+          type: string
+          description: The timestamp the queue was created
+          format: date-time
+          examples:
+            - '2024-01-01 12:00:00.0000'
+        updated_at:
+          type: string
+          description: The timestamp the queue was last updated
+          format: date-time
+          examples:
+            - '2024-01-01 12:00:00.0000'
+        dead_queue:
+          type: string
+          description: >-
+            The name of the dead letter queue for this queue. If this is a dead
+            letter queue then this field will be empty when retrieved via
+            `/queue.list`
+          examples:
+            - queue-name-dead
+        reference:
+          type: string
+          description: >-
+            This is a user supplied field which could contain metadata or
+            specify who owns this queue
+          examples:
+            - jake@statefarm.com
+            - stapler@office-space.com
+            - account-12345
+        reserve_timeout:
+          type: string
+          description: The default reservation timeout for this queue
+          examples:
+            - 60m
+        dead_timeout:
+          type: string
+          description: >-
+            How long an item can wait in the queue regardless of attempts before
+            it is moved to the dead letter queue
+          examples:
+            - 24h
+        max_attempts:
+          type: integer
+          description: >-
+            The maximum number of times an item can be defered by a consumer
+            before it is placed in the dead letter queue. This includes cases
+            where the 'deadline' was exceeded and the item was retried. 
+        requested_partitions:
+          type: integer
+          description: >-
+            The number of partitions this queue hasrequested. This might be
+            different than the number of currently active partitionsas the
+            system grows or contracts the number of partitions.
+      required:
+        - name
+        - requested_partitions
+        - created_at
+        - updated_at
+        - dead_queue
+        - max_attempts
+        - reference
+        - reserve_timeout
+        - dead_timeout
+    StorageItem:
+      type: object
+      properties:
+        id:
+          type: string
+        is_reserved:
+          type: boolean
+        reserve_deadline:
+          type: string
+        dead_deadline:
+          type: string
+        created_at:
+          type: string
+        updated_at:
+          type: string
+        attempts:
+          type: integer
+        max_attempts:
+          type: integer
+        reference:
+          type: string
+        encoding:
+          type: string
+        kind:
+          type: string
+        payload:
+          type: string
+      required:
+        - id
+        - is_reserved
+        - reserve_deadline
+        - dead_deadline
+        - created_at
+        - attempts
+        - updated_at
+        - max_attempts
+        - reference
+        - encoding
+        - kind
+        - payload
+  securitySchemes: {}
+servers: []

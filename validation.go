@@ -113,7 +113,7 @@ func (s *Service) validateQueueOptionsProto(in *proto.QueueInfo, out *types.Queu
 	}
 
 	out.MaxAttempts = int(in.MaxAttempts)
-	out.Partitions = int(in.Partitions)
+	out.RequestedPartitions = int(in.RequestedPartitions)
 	out.DeadQueue = in.DeadQueue
 	out.Reference = in.Reference
 	out.Name = in.QueueName

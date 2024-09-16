@@ -77,7 +77,7 @@ type Partition interface {
 	Clear(ctx context.Context, destructive bool) error
 
 	// Stats returns stats about the queue
-	Stats(ctx context.Context, stats *types.QueueStats) error
+	Stats(ctx context.Context, stats *types.PartitionStats) error
 
 	Close(ctx context.Context) error
 }

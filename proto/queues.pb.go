@@ -41,8 +41,10 @@ type QueuesListRequest struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
+	// Pivot is the name of the queue to pivot upon when paging through lists of queues
 	Pivot string `protobuf:"bytes,2,opt,name=pivot,proto3" json:"pivot,omitempty"`
-	Limit int32  `protobuf:"varint,3,opt,name=limit,proto3" json:"limit,omitempty"`
+	// Limit is the maximum number of items to return in a single list response
+	Limit int32 `protobuf:"varint,3,opt,name=limit,proto3" json:"limit,omitempty"`
 }
 
 func (x *QueuesListRequest) Reset() {

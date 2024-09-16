@@ -21,41 +21,42 @@ import "google/protobuf/timestamp.proto";
 
 package querator;
 
-message StorageQueueListRequest {
+message StorageItemsListRequest {
   string queueName = 1 [json_name = "queue_name"];
   string pivot  = 2;
   int32 limit = 3;
 }
 
-message StorageQueueListResponse {
-  repeated StorageQueueItem items = 1;
+message StorageItemsListResponse {
+  repeated StorageItem items = 1;
 }
 
-message StorageQueueAddRequest {
+message StorageItemsImportRequest {
   string queueName = 1 [json_name = "queue_name"];
-  repeated StorageQueueItem items = 2;
+  repeated StorageItem items = 2;
 }
 
-message StorageQueueAddResponse {
-  repeated StorageQueueItem items = 2;
+message StorageItemsImportResponse {
+  repeated StorageItem items = 2;
 }
 
-message StorageQueueDeleteRequest {
+message StorageItemsDeleteRequest {
   string queueName = 1 [json_name = "queue_name"];
   repeated string ids = 2;
 }
 
 // StorageItem maps directly to the internal.types.Item and allows users to inspect items in storage
-message StorageQueueItem {
+message StorageItem {
   string id = 1;
   bool isReserved = 2  [json_name = "is_reserved"];
   google.protobuf.Timestamp reserveDeadline = 3 [json_name = "reserve_deadline"];
   google.protobuf.Timestamp deadDeadline = 4 [json_name = "dead_deadline"];
   google.protobuf.Timestamp createdAt = 5 [json_name = "created_at"];
-  int32 attempts = 6;
-  int32 maxAttempts = 7 [json_name = "max_attempts"];
-  string reference = 8;
-  string encoding = 9;
-  string kind = 10;
-  bytes payload = 11;
+  google.protobuf.Timestamp updatedAt = 6 [json_name = "updated_at"];
+  int32 attempts = 7;
+  int32 maxAttempts = 8 [json_name = "max_attempts"];
+  string reference = 9;
+  string encoding = 10;
+  string kind = 11;
+  bytes payload = 12;
 }

@@ -211,14 +211,14 @@ func (c *Client) QueuesDelete(ctx context.Context, req *pb.QueuesDeleteRequest) 
 
 // TODO: Write an iterator we can use to iterate through list APIs
 
-func (c *Client) StorageQueueList(ctx context.Context, name string, res *pb.StorageQueueListResponse,
+func (c *Client) StorageItemsList(ctx context.Context, name string, res *pb.StorageItemsListResponse,
 	opts *ListOptions) error {
 
 	if opts == nil {
 		opts = &ListOptions{}
 	}
 
-	req := pb.StorageQueueListRequest{
+	req := pb.StorageItemsListRequest{
 		Limit:     int32(opts.Limit),
 		Pivot:     opts.Pivot,
 		QueueName: name,
@@ -230,7 +230,7 @@ func (c *Client) StorageQueueList(ctx context.Context, name string, res *pb.Stor
 	}
 
 	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		fmt.Sprintf("%s%s", c.conf.Endpoint, transport.RPCStorageQueueList), bytes.NewReader(payload))
+		fmt.Sprintf("%s%s", c.conf.Endpoint, transport.RPCStorageItemsList), bytes.NewReader(payload))
 	if err != nil {
 		return duh.NewClientError("", err, nil)
 	}
@@ -239,8 +239,8 @@ func (c *Client) StorageQueueList(ctx context.Context, name string, res *pb.Stor
 	return c.client.Do(r, res)
 }
 
-func (c *Client) StorageQueueAdd(ctx context.Context, req *pb.StorageQueueAddRequest,
-	res *pb.StorageQueueAddResponse) error {
+func (c *Client) StorageItemsImport(ctx context.Context, req *pb.StorageItemsImportRequest,
+	res *pb.StorageItemsImportResponse) error {
 
 	payload, err := proto.Marshal(req)
 	if err != nil {
@@ -248,7 +248,7 @@ func (c *Client) StorageQueueAdd(ctx context.Context, req *pb.StorageQueueAddReq
 	}
 
 	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		fmt.Sprintf("%s%s", c.conf.Endpoint, transport.RPCStorageQueueAdd), bytes.NewReader(payload))
+		fmt.Sprintf("%s%s", c.conf.Endpoint, transport.RPCStorageItemsImport), bytes.NewReader(payload))
 	if err != nil {
 		return duh.NewClientError("", err, nil)
 	}
@@ -257,7 +257,7 @@ func (c *Client) StorageQueueAdd(ctx context.Context, req *pb.StorageQueueAddReq
 	return c.client.Do(r, res)
 }
 
-func (c *Client) StorageQueueDelete(ctx context.Context, req *pb.StorageQueueDeleteRequest) error {
+func (c *Client) StorageItemsDelete(ctx context.Context, req *pb.StorageItemsDeleteRequest) error {
 
 	payload, err := proto.Marshal(req)
 	if err != nil {
@@ -265,7 +265,7 @@ func (c *Client) StorageQueueDelete(ctx context.Context, req *pb.StorageQueueDel
 	}
 
 	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		fmt.Sprintf("%s%s", c.conf.Endpoint, transport.RPCStorageQueueDelete), bytes.NewReader(payload))
+		fmt.Sprintf("%s%s", c.conf.Endpoint, transport.RPCStorageItemsDelete), bytes.NewReader(payload))
 	if err != nil {
 		return duh.NewClientError("", err, nil)
 	}

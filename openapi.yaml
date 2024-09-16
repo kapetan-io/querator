@@ -408,7 +408,7 @@ paths:
       deprecated: false
       description: >-
         Retrieve statistics about a queue. Queue stats provide information on
-        the health of a the partitions in a queue
+        the health of the partitions in a queue
       tags:
         - Querator V1
       parameters: []

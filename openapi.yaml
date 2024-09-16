@@ -970,7 +970,7 @@ components:
           type: string
           description: >-
             The payload of the item as an array of raw bytes with no
-            predetermined character set.Clients who communicate with Querator
+            predetermined character set. Clients who communicate with Querator
             with `Content-Type: application/protobuf` should use this field
             instead of `utf8`
 

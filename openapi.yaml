@@ -71,7 +71,7 @@ paths:
         `reserve_deadline` has expired 
 
         and the consumer with the reservation has not marked the message via 
-        `/queue.complete` or `queue.defer`
+        `/queue.complete` or `/queue.defer`
 
 
         If a message is not acknowledge via `/queue.complete` within the

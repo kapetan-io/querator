@@ -71,13 +71,13 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			ClientID := random.String("client-", 10)
 
 			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
-				QueueName:      queueName,
-				DeadQueue:      queueName + "-dead",
-				Reference:      "CreateTestRef",
-				ReserveTimeout: "1m",
-				DeadTimeout:    "10m",
-				MaxAttempts:    10,
-				Partitions:     2,
+				QueueName:           queueName,
+				DeadQueue:           queueName + "-dead",
+				Reference:           "CreateTestRef",
+				ReserveTimeout:      "1m",
+				DeadTimeout:         "10m",
+				MaxAttempts:         10,
+				RequestedPartitions: 2,
 			}))
 
 			fmt.Println("Create queue:", queueName)
@@ -89,8 +89,8 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				QueueName:      queueName,
 				RequestTimeout: "1m",
 			}))
-			var list pb.StorageQueueListResponse
-			require.NoError(t, c.StorageQueueList(ctx, queueName, 0, &list, nil))
+			var list pb.StorageItemsListResponse
+			require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, nil))
 			assert.Equal(t, len(list.Items), 10)
 			assert.Equal(t, partitionZeroItems[0].Bytes, list.Items[0].Payload)
 
@@ -102,7 +102,7 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				RequestTimeout: "1m",
 			}))
 
-			require.NoError(t, c.StorageQueueList(ctx, queueName, 1, &list, nil))
+			require.NoError(t, c.StorageItemsList(ctx, queueName, 1, &list, nil))
 			assert.Equal(t, len(list.Items), 11)
 			assert.Equal(t, partitionOneItems[0].Bytes, list.Items[0].Payload)
 
@@ -127,7 +127,7 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			assert.Equal(t, queueName, reserve.QueueName)
 			assert.Equal(t, 10, len(reserve.Items))
 
-			require.NoError(t, c.StorageQueueList(ctx, queueName, 0, &list, nil))
+			require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, nil))
 
 			var reserved, notReserved int
 			for _, item := range list.Items {
@@ -139,7 +139,7 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			}
 			assert.Equal(t, 10, reserved)
 
-			require.NoError(t, c.StorageQueueList(ctx, queueName, 1, &list, nil))
+			require.NoError(t, c.StorageItemsList(ctx, queueName, 1, &list, nil))
 			for _, item := range list.Items {
 				if item.IsReserved {
 					reserved++

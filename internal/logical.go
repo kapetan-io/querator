@@ -405,7 +405,7 @@ func (l *Logical) prepareQueueState(state *QueueState) {
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), l.conf.ReadTimeout)
-		var stats types.QueueStats
+		var stats types.PartitionStats
 		if err := p.Stats(ctx, &stats); err != nil {
 			state.PartitionDistributions[i].InFailure = true
 			// TODO: Maintenance needs to partitions that are marked as InFailure until the partition is reassigned
@@ -836,15 +836,15 @@ func (l *Logical) handleStorageRequests(req *QueueRequest) {
 	}
 
 	switch req.Method {
-	case MethodStorageQueueList:
+	case MethodStorageItemsList:
 		if err := l.conf.Partitions[sr.Partition].List(req.Context, sr.Items, sr.Options); err != nil {
 			req.Err = err
 		}
-	case MethodStorageQueueAdd:
+	case MethodStorageItemsImport:
 		if err := l.conf.Partitions[sr.Partition].Add(req.Context, *sr.Items); err != nil {
 			req.Err = err
 		}
-	case MethodStorageQueueDelete:
+	case MethodStorageItemsDelete:
 		if err := l.conf.Partitions[sr.Partition].Delete(req.Context, sr.IDs); err != nil {
 			req.Err = err
 		}

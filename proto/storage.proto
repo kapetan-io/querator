@@ -42,10 +42,6 @@ message StorageItemsImportResponse {
   repeated StorageItem items = 2;
 }
 
-message StorageQueueAddResponse {
-  repeated StorageItem items = 2;
-}
-
 message StorageItemsDeleteRequest {
   string queueName = 1 [json_name = "queue_name"];
   int32 partition = 2;

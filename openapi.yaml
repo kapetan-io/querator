@@ -1029,7 +1029,7 @@ components:
           type: string
           description: >-
             The date time that Querator will offer up this item to another
-            consumer. If the consumer reserving this item has not marked it
+            consumer if the consumer reserving this item has not marked it
             complete. The consumer can use this date to decide if it should
             finalize it's work if the timeout date has expired.
         bytes:

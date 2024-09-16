@@ -999,7 +999,7 @@ components:
             and `utf8` will be dropped.
           examples:
             - Hello World!
-            - '{"key", "value"}'
+            - '{"key": "value"}'
     QueueReserveItem:
       type: object
       properties:

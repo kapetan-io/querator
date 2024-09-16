@@ -1012,7 +1012,7 @@ components:
         kind:
           type: string
           description: >-
-            A Kind or Type the payload contains. Consumers can use this field to
+            A user-specified field that describes the Kind or Type the payload contains. Consumers can use this field to
             determine handling  of the payload prior to unmarshalling
         reference:
           type: string

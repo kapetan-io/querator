@@ -8,14 +8,12 @@ reservation until the timeout, it can hold off marking the reservation as comple
 message that was consumed. As a result, you can use the locking primitive the reservation queue provides to
 solve several distributed problems.
 
-* Implement Multistep, retry-able workflows.
-* Implement the Saga Pattern for distributed transactions
-* Use it as a lock to gain exclusive access to an item of work
-* Use it as a FIFO queue with ordered delivery of messages
-* Run async background tasks that can retry if failed
-* Schedule cron style jobs to run at a specific time in the future and retry if failed
-* Retryable and reliable webhook delivery with external systems
-* A limit locking system, where items in the queue represent a limited lockable resource
+- Implement Multistep, retry-able workflows.
+- Implement the Saga Pattern for distributed transactions
+- Use it as a FIFO queue with ordered delivery of messages
+- Run async background tasks that can retry if failed (like webhook delivery)
+- Schedule jobs to run at a specific time in the future and retry if failed
+- Use it as a limit locking system, where items in the queue represent a limited lockable resource
 
 ### Does it scale?
 YES! We scaled a closed source version of a reservation queue service at https://mailgun.com to multi-billions of

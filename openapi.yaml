@@ -408,7 +408,7 @@ paths:
       deprecated: false
       description: >-
         Retrieve statistics about a queue. Queue stats provide information on
-        the health of the partitions in a queue
+        the health of a partition in a queue
       tags:
         - Querator V1
       parameters: []
@@ -953,8 +953,9 @@ components:
         kind:
           type: string
           description: >-
-            A kind or type the payload contains. Consumers can use this field to
-            determine handling of the payload prior to unmarshalling
+            A user specified field that describes the kind or type the payload
+            contains. Consumers can use this field to determine handling of the
+            payload prior to unmarshalling
           examples:
             - webhook-v2
             - webhook-v1
@@ -1012,14 +1013,14 @@ components:
         kind:
           type: string
           description: >-
-            A user-specified field that describes the Kind or Type the payload contains. Consumers can use this field to
-            determine handling  of the payload prior to unmarshalling
+            A user specified field that describes the kind or type the payload
+            contains. Consumers can use this field to determine handling of the
+            payload prior to unmarshalling
         reference:
           type: string
           description: >-
-            This is a user specified field that can be used by the consumer to
-            determine handling of the queue item without needing to unmarshall
-            the payload.
+            A user specified field that can be used by the consumer to determine
+            handling of the message without needing to unmarshall the body
         attempts:
           type: integer
           description: >-
@@ -1035,15 +1036,16 @@ components:
         bytes:
           type: string
           description: >-
-            The payload of the item as an array of raw bytes with no
-            predetermined character set.
+            The payload of the item is an array of raw bytes without a
+            predetermined character set. 
 
 
-            NOTE: If `Content-Type: application/json` is used when communicating
-            with Querator, the 'bytes' field will be encoded as base64. This is
-            because byte fields (unlike string fields) can contain non-UTF8
-            binary data, and since that cannot be directly represented in JSON,
-            we have to base64 encode it.
+            NOTE: When communicating with Querator and using the `Content-Type:
+            application/json` header, the 'bytes' field will be encoded in
+            base64. This is necessary because byte fields, unlike string fields,
+            can contain non-UTF8 binary data. Since raw bytes cannot be directly
+            represented in JSON, Querator base64 encodes this field for
+            consumers who prefer JSON payloads.
       required:
         - id
         - reserve_deadline

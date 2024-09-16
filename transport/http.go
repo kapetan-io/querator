@@ -36,8 +36,8 @@ import (
 const (
 	RPCQueueProduce  = "/v1/queue.produce"
 	RPCQueueReserve  = "/v1/queue.reserve"
-	RPCQueueDefer    = "/v1/queue.defer"
 	RPCQueueComplete = "/v1/queue.complete"
+	RPCQueueDefer    = "/v1/queue.defer"
 	RPCQueueStats    = "/v1/queue.stats"
 	RPCQueueClear    = "/v1/queue.clear"
 
@@ -56,9 +56,9 @@ const (
 	// TODO: We should define a maximum payload size and now allow clients to send or receive larger than expected
 	//   payloads. I think DUH should do this for us when via duh.ReadRequest(r, &req, maxSize)
 
-	RPCStorageQueueList   = "/v1/storage/queue.list"
-	RPCStorageQueueAdd    = "/v1/storage/queue.add"
-	RPCStorageQueueDelete = "/v1/storage/queue.delete"
+	RPCStorageItemsList   = "/v1/storage/items.list"
+	RPCStorageItemsImport = "/v1/storage/items.import"
+	RPCStorageItemsDelete = "/v1/storage/items.delete"
 
 	RPCStorageScheduleList     = "/v1/storage/schedule.list"
 	RPCStorageScheduleQueueAdd = "/v1/storage/schedule.add"
@@ -87,9 +87,9 @@ type Service interface {
 	QueuesUpdate(context.Context, *pb.QueueInfo) error
 	QueuesDelete(context.Context, *pb.QueuesDeleteRequest) error
 
-	StorageQueueList(context.Context, *pb.StorageQueueListRequest, *pb.StorageQueueListResponse) error
-	StorageQueueAdd(context.Context, *pb.StorageQueueAddRequest, *pb.StorageQueueAddResponse) error
-	StorageQueueDelete(context.Context, *pb.StorageQueueDeleteRequest) error
+	StorageItemsList(context.Context, *pb.StorageItemsListRequest, *pb.StorageItemsListResponse) error
+	StorageItemsImport(context.Context, *pb.StorageItemsImportRequest, *pb.StorageItemsImportResponse) error
+	StorageItemsDelete(context.Context, *pb.StorageItemsDeleteRequest) error
 }
 
 type HTTPHandler struct {
@@ -166,14 +166,14 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case RPCQueuesDelete:
 		h.QueuesDelete(ctx, w, r)
 		return
-	case RPCStorageQueueList:
-		h.StorageQueueList(ctx, w, r)
+	case RPCStorageItemsList:
+		h.StorageItemsList(ctx, w, r)
 		return
-	case RPCStorageQueueAdd:
-		h.StorageQueueAdd(ctx, w, r)
+	case RPCStorageItemsImport:
+		h.StorageItemsImport(ctx, w, r)
 		return
-	case RPCStorageQueueDelete:
-		h.StorageQueueDelete(ctx, w, r)
+	case RPCStorageItemsDelete:
+		h.StorageItemsDelete(ctx, w, r)
 		return
 	}
 	duh.ReplyWithCode(w, r, duh.CodeNotImplemented, nil, "no such method; "+r.URL.Path)
@@ -313,44 +313,44 @@ func (h *HTTPHandler) QueueClear(ctx context.Context, w http.ResponseWriter, r *
 	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
 }
 
-func (h *HTTPHandler) StorageQueueList(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-	var req pb.StorageQueueListRequest
+func (h *HTTPHandler) StorageItemsList(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.StorageItemsListRequest
 	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
 		h.ReplyError(w, r, err)
 		return
 	}
 
-	var resp pb.StorageQueueListResponse
-	if err := h.service.StorageQueueList(ctx, &req, &resp); err != nil {
+	var resp pb.StorageItemsListResponse
+	if err := h.service.StorageItemsList(ctx, &req, &resp); err != nil {
 		h.ReplyError(w, r, err)
 		return
 	}
 	duh.Reply(w, r, duh.CodeOK, &resp)
 }
 
-func (h *HTTPHandler) StorageQueueAdd(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-	var req pb.StorageQueueAddRequest
+func (h *HTTPHandler) StorageItemsImport(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.StorageItemsImportRequest
 	if err := duh.ReadRequest(r, &req, 64*duh.MegaByte); err != nil {
 		h.ReplyError(w, r, err)
 		return
 	}
 
-	var resp pb.StorageQueueAddResponse
-	if err := h.service.StorageQueueAdd(ctx, &req, &resp); err != nil {
+	var resp pb.StorageItemsImportResponse
+	if err := h.service.StorageItemsImport(ctx, &req, &resp); err != nil {
 		h.ReplyError(w, r, err)
 		return
 	}
 	duh.Reply(w, r, duh.CodeOK, &resp)
 }
 
-func (h *HTTPHandler) StorageQueueDelete(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-	var req pb.StorageQueueDeleteRequest
+func (h *HTTPHandler) StorageItemsDelete(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.StorageItemsDeleteRequest
 	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
 		h.ReplyError(w, r, err)
 		return
 	}
 
-	if err := h.service.StorageQueueDelete(ctx, &req); err != nil {
+	if err := h.service.StorageItemsDelete(ctx, &req); err != nil {
 		h.ReplyError(w, r, err)
 		return
 	}

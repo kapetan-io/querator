@@ -75,13 +75,13 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			var queueName = random.String("queue-", 10)
 			now := clock.Now().UTC()
 			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
-				QueueName:      queueName,
-				DeadQueue:      queueName + "-dead",
-				Reference:      "CreateTestRef",
-				ReserveTimeout: "1m",
-				DeadTimeout:    "10m",
-				MaxAttempts:    10,
-				Partitions:     1,
+				QueueName:           queueName,
+				DeadQueue:           queueName + "-dead",
+				Reference:           "CreateTestRef",
+				ReserveTimeout:      "1m",
+				DeadTimeout:         "10m",
+				MaxAttempts:         10,
+				RequestedPartitions: 1,
 			}))
 
 			fmt.Println("Create queue:", queueName)
@@ -387,13 +387,13 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		var queueName = random.String("queue-", 10)
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
-			QueueName:      queueName,
-			DeadQueue:      queueName + "-dead",
-			Reference:      "CreateTestRef",
-			ReserveTimeout: "1m",
-			DeadTimeout:    "10m",
-			MaxAttempts:    10,
-			Partitions:     1,
+			QueueName:           queueName,
+			DeadQueue:           queueName + "-dead",
+			Reference:           "CreateTestRef",
+			ReserveTimeout:      "1m",
+			DeadTimeout:         "10m",
+			MaxAttempts:         10,
+			RequestedPartitions: 1,
 		}))
 
 		t.Run("QueuesCreate", func(t *testing.T) {
@@ -428,10 +428,10 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				{
 					Name: "AlreadyExists",
 					Req: &pb.QueueInfo{
-						ReserveTimeout: ReserveTimeout,
-						DeadTimeout:    DeadTimeout,
-						QueueName:      queueName,
-						Partitions:     1,
+						ReserveTimeout:      ReserveTimeout,
+						DeadTimeout:         DeadTimeout,
+						QueueName:           queueName,
+						RequestedPartitions: 1,
 					},
 					Msg:  "invalid queue; '" + queueName + "' already exists",
 					Code: duh.CodeBadRequest,
@@ -439,9 +439,9 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				{
 					Name: "MissingReservationTimeout",
 					Req: &pb.QueueInfo{
-						QueueName:   random.String("queue-", 10),
-						DeadTimeout: "24h0m0s",
-						Partitions:  1,
+						QueueName:           random.String("queue-", 10),
+						DeadTimeout:         "24h0m0s",
+						RequestedPartitions: 1,
 					},
 					Msg:  "reserve timeout is invalid; cannot be empty",
 					Code: duh.CodeBadRequest,
@@ -449,9 +449,9 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				{
 					Name: "MissingDeadTimeout",
 					Req: &pb.QueueInfo{
-						QueueName:      random.String("queue-", 10),
-						ReserveTimeout: "24h0m0s",
-						Partitions:     1,
+						QueueName:           random.String("queue-", 10),
+						ReserveTimeout:      "24h0m0s",
+						RequestedPartitions: 1,
 					},
 					Msg:  "dead timeout is invalid; cannot be empty",
 					Code: duh.CodeBadRequest,
@@ -477,10 +477,10 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				{
 					Name: "ReserveTimeoutTooLong",
 					Req: &pb.QueueInfo{
-						QueueName:      "ReserveTimeoutTooLong",
-						ReserveTimeout: "1h0m0s",
-						DeadTimeout:    "30m0s",
-						Partitions:     1,
+						QueueName:           "ReserveTimeoutTooLong",
+						ReserveTimeout:      "1h0m0s",
+						DeadTimeout:         "30m0s",
+						RequestedPartitions: 1,
 					},
 					Msg:  "reserve timeout is too long; 1h0m0s cannot be greater than the dead timeout 30m0s",
 					Code: duh.CodeBadRequest,
@@ -825,13 +825,13 @@ func createRandomQueues(t *testing.T, ctx context.Context, c *que.Client, count 
 	for i := 0; i < count; i++ {
 		timeOuts := random.Slice(validTimeouts)
 		info := pb.QueueInfo{
-			QueueName:      fmt.Sprintf("queue-%05d", idx),
-			DeadQueue:      random.String("dead-", 10),
-			Reference:      random.String("ref-", 10),
-			MaxAttempts:    int32(rand.Intn(100)),
-			ReserveTimeout: timeOuts.Reserve,
-			DeadTimeout:    timeOuts.Dead,
-			Partitions:     1,
+			QueueName:           fmt.Sprintf("queue-%05d", idx),
+			DeadQueue:           random.String("dead-", 10),
+			Reference:           random.String("ref-", 10),
+			MaxAttempts:         int32(rand.Intn(100)),
+			ReserveTimeout:      timeOuts.Reserve,
+			DeadTimeout:         timeOuts.Dead,
+			RequestedPartitions: 1,
 		}
 		idx++
 		items = append(items, &info)

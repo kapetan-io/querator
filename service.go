@@ -258,8 +258,8 @@ func (s *Service) QueuesDelete(ctx context.Context, req *proto.QueuesDeleteReque
 // API to inspect queue storage
 // -------------------------------------------------
 
-func (s *Service) StorageQueueList(ctx context.Context, req *proto.StorageQueueListRequest,
-	res *proto.StorageQueueListResponse) error {
+func (s *Service) StorageItemsList(ctx context.Context, req *proto.StorageItemsListRequest,
+	res *proto.StorageItemsListResponse) error {
 
 	queue, err := s.queues.Get(ctx, req.QueueName)
 	if err != nil {
@@ -271,7 +271,7 @@ func (s *Service) StorageQueueList(ctx context.Context, req *proto.StorageQueueL
 	}
 
 	items := make([]*types.Item, 0, allocInt32(req.Limit))
-	if err := queue.StorageQueueList(ctx, &items, types.ListOptions{
+	if err := queue.StorageItemsList(ctx, &items, types.ListOptions{
 		Pivot: types.ToItemID(req.Pivot),
 		Limit: int(req.Limit),
 	}); err != nil {
@@ -279,14 +279,14 @@ func (s *Service) StorageQueueList(ctx context.Context, req *proto.StorageQueueL
 	}
 
 	for _, item := range items {
-		res.Items = append(res.Items, item.ToProto(new(proto.StorageQueueItem)))
+		res.Items = append(res.Items, item.ToProto(new(proto.StorageItem)))
 	}
 
 	return nil
 }
 
-func (s *Service) StorageQueueAdd(ctx context.Context, req *proto.StorageQueueAddRequest,
-	res *proto.StorageQueueAddResponse) error {
+func (s *Service) StorageItemsImport(ctx context.Context, req *proto.StorageItemsImportRequest,
+	res *proto.StorageItemsImportResponse) error {
 
 	queue, err := s.queues.Get(ctx, req.QueueName)
 	if err != nil {
@@ -299,18 +299,18 @@ func (s *Service) StorageQueueAdd(ctx context.Context, req *proto.StorageQueueAd
 		items = append(items, i.FromProto(item))
 	}
 
-	if err := queue.StorageQueueAdd(ctx, &items); err != nil {
+	if err := queue.StorageItemsImport(ctx, &items); err != nil {
 		return err
 	}
 
 	for _, item := range items {
-		res.Items = append(res.Items, item.ToProto(new(proto.StorageQueueItem)))
+		res.Items = append(res.Items, item.ToProto(new(proto.StorageItem)))
 	}
 
 	return nil
 }
 
-func (s *Service) StorageQueueDelete(ctx context.Context, req *proto.StorageQueueDeleteRequest) error {
+func (s *Service) StorageItemsDelete(ctx context.Context, req *proto.StorageItemsDeleteRequest) error {
 
 	queue, err := s.queues.Get(ctx, req.QueueName)
 	if err != nil {
@@ -322,7 +322,7 @@ func (s *Service) StorageQueueDelete(ctx context.Context, req *proto.StorageQueu
 		ids = append(ids, types.ItemID(id))
 	}
 
-	if err := queue.StorageQueueDelete(ctx, ids); err != nil {
+	if err := queue.StorageItemsDelete(ctx, ids); err != nil {
 		return err
 	}
 	return nil

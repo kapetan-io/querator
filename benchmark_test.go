@@ -74,10 +74,10 @@ func BenchmarkProduce(b *testing.B) {
 			}()
 			s := d.Service()
 			require.NoError(b, s.QueuesCreate(context.Background(), &pb.QueueInfo{
-				QueueName:      "bench-queue",
-				DeadTimeout:    "24h0m0s",
-				ReserveTimeout: "1m0s",
-				Partitions:     1,
+				QueueName:           "bench-queue",
+				DeadTimeout:         "24h0m0s",
+				ReserveTimeout:      "1m0s",
+				RequestedPartitions: 1,
 			}))
 
 			for _, p := range []int{1, 8, 24, 32} {
@@ -129,13 +129,13 @@ func BenchmarkProduce(b *testing.B) {
 				for n := 0; n < b.N; n++ {
 					timeOuts := random.Slice(validTimeouts)
 					info := pb.QueueInfo{
-						QueueName:      random.String("queue-", 10),
-						DeadQueue:      random.String("dead-", 10),
-						Reference:      random.String("ref-", 10),
-						MaxAttempts:    int32(rand.Intn(100)),
-						ReserveTimeout: timeOuts.Reserve,
-						DeadTimeout:    timeOuts.Dead,
-						Partitions:     1,
+						QueueName:           random.String("queue-", 10),
+						DeadQueue:           random.String("dead-", 10),
+						Reference:           random.String("ref-", 10),
+						MaxAttempts:         int32(rand.Intn(100)),
+						ReserveTimeout:      timeOuts.Reserve,
+						DeadTimeout:         timeOuts.Dead,
+						RequestedPartitions: 1,
 					}
 
 					err = s.QueuesCreate(context.Background(), &info)

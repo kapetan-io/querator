@@ -93,7 +93,7 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Log
 	// place the partitions depending on the storage backend configurations. As such
 	// any details included by the caller will be ignored.
 
-	for i := 0; i < info.Partitions; i++ {
+	for i := 0; i < info.RequestedPartitions; i++ {
 		// TODO: Spread the partitions across the storage backends according to affinity
 		p := types.PartitionInfo{
 			StorageName: qm.conf.StorageConfig.Backends[0].Name,

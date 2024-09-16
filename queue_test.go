@@ -86,10 +86,10 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		// Create a queue
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
-			ReserveTimeout: ReserveTimeout,
-			DeadTimeout:    DeadTimeout,
-			QueueName:      queueName,
-			Partitions:     1,
+			ReserveTimeout:      ReserveTimeout,
+			DeadTimeout:         DeadTimeout,
+			QueueName:           queueName,
+			RequestedPartitions: 1,
 		}))
 
 		// Produce a single message
@@ -129,8 +129,8 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		assert.Equal(t, payload, item.Bytes)
 
 		// Partition storage should have only one item
-		var list pb.StorageQueueListResponse
-		require.NoError(t, c.StorageQueueList(ctx, queueName, &list, &que.ListOptions{Limit: 10}))
+		var list pb.StorageItemsListResponse
+		require.NoError(t, c.StorageItemsList(ctx, queueName, &list, &que.ListOptions{Limit: 10}))
 		require.Equal(t, 1, len(list.Items))
 
 		inspect := list.Items[0]
@@ -151,7 +151,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		}))
 
 		// Partition storage should be empty
-		require.NoError(t, c.StorageQueueList(ctx, queueName, &list, &que.ListOptions{Limit: 10}))
+		require.NoError(t, c.StorageItemsList(ctx, queueName, &list, &que.ListOptions{Limit: 10}))
 		assert.Equal(t, 0, len(list.Items))
 
 		// Remove queue
@@ -172,12 +172,12 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
-			Reference:      "rainbow@dash.com",
-			DeadTimeout:    "20h0m0s",
-			QueueName:      queueName,
-			ReserveTimeout: "1m0s",
-			MaxAttempts:    256,
-			Partitions:     1,
+			Reference:           "rainbow@dash.com",
+			DeadTimeout:         "20h0m0s",
+			QueueName:           queueName,
+			ReserveTimeout:      "1m0s",
+			MaxAttempts:         256,
+			RequestedPartitions: 1,
 		}))
 
 		t.Run("InheritsQueueInfo", func(t *testing.T) {
@@ -201,8 +201,8 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				}}))
 			deadDeadline := clock.Now().UTC().Add(20 * clock.Hour)
 
-			var list pb.StorageQueueListResponse
-			err := c.StorageQueueList(ctx, queueName, &list, &que.ListOptions{Limit: 20})
+			var list pb.StorageItemsListResponse
+			err := c.StorageItemsList(ctx, queueName, &list, &que.ListOptions{Limit: 20})
 			require.NoError(t, err)
 
 			assert.Equal(t, 2, len(list.Items))
@@ -241,8 +241,8 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		})
 
 		// Get the last item in the queue, so the following tests know where to begin their assertions.
-		var last pb.StorageQueueListResponse
-		err := c.StorageQueueList(ctx, queueName, &last, nil)
+		var last pb.StorageItemsListResponse
+		err := c.StorageItemsList(ctx, queueName, &last, nil)
 		require.NoError(t, err)
 		lastItem := last.Items[len(last.Items)-1]
 
@@ -266,8 +266,8 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			deadDeadline := clock.Now().UTC().Add(24 * clock.Hour)
 
 			// Ensure the items produced are in the data store
-			var list pb.StorageQueueListResponse
-			err := c.StorageQueueList(ctx, queueName, &list, &que.ListOptions{Pivot: lastItem.Id, Limit: 20})
+			var list pb.StorageItemsListResponse
+			err := c.StorageItemsList(ctx, queueName, &list, &que.ListOptions{Pivot: lastItem.Id, Limit: 20})
 			require.NoError(t, err)
 			assert.Equal(t, len(items), len(list.Items[1:]))
 			produced := list.Items[1:]
@@ -312,8 +312,8 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			deadDeadline := clock.Now().UTC().Add(24 * clock.Hour)
 
 			// List all the items we just produced
-			var list pb.StorageQueueListResponse
-			err := c.StorageQueueList(ctx, queueName, &list, &que.ListOptions{Pivot: lastItem.Id, Limit: 101})
+			var list pb.StorageItemsListResponse
+			err := c.StorageItemsList(ctx, queueName, &list, &que.ListOptions{Pivot: lastItem.Id, Limit: 101})
 			require.NoError(t, err)
 
 			require.Len(t, items, 100)
@@ -351,17 +351,17 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
-			DeadTimeout:    DeadTimeout,
-			QueueName:      queueName,
-			ReserveTimeout: "2m0s",
-			Partitions:     1,
+			DeadTimeout:         DeadTimeout,
+			QueueName:           queueName,
+			ReserveTimeout:      "2m0s",
+			RequestedPartitions: 1,
 		}))
 		items := writeRandomItems(t, ctx, c, queueName, 10_000)
 		require.Len(t, items, 10_000)
 
 		expire := clock.Now().UTC().Add(2_000 * clock.Minute)
 		var reserved, secondReserve pb.QueueReserveResponse
-		var list pb.StorageQueueListResponse
+		var list pb.StorageItemsListResponse
 
 		t.Run("TenItems", func(t *testing.T) {
 			req := pb.QueueReserveRequest{
@@ -377,7 +377,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			reserveDeadline := clock.Now().UTC().Add(2 * clock.Minute)
 
 			// Ensure the items reserved are marked as reserved in the database
-			require.NoError(t, c.StorageQueueList(ctx, queueName, &list, &que.ListOptions{Limit: 10_000}))
+			require.NoError(t, c.StorageItemsList(ctx, queueName, &list, &que.ListOptions{Limit: 10_000}))
 
 			for i := range reserved.Items {
 				assert.Equal(t, list.Items[i].Id, reserved.Items[i].Id)
@@ -406,7 +406,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			combined = append(combined, reserved.Items...)
 			combined = append(combined, secondReserve.Items...)
 
-			require.NoError(t, c.StorageQueueList(ctx, queueName, &list, &que.ListOptions{Limit: 10_000}))
+			require.NoError(t, c.StorageItemsList(ctx, queueName, &list, &que.ListOptions{Limit: 10_000}))
 			assert.NotEqual(t, reserved.Items[0].Id, secondReserve.Items[0].Id)
 			assert.Equal(t, combined[0].Id, list.Items[0].Id)
 			require.Equal(t, 20, len(combined))
@@ -451,7 +451,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			assert.Equal(t, 20, len(responses[2].Items))
 
 			// Fetch items from storage, ensure items are reserved
-			require.NoError(t, c.StorageQueueList(ctx, queueName, &list, &que.ListOptions{Limit: 10_000}))
+			require.NoError(t, c.StorageItemsList(ctx, queueName, &list, &que.ListOptions{Limit: 10_000}))
 			require.Equal(t, 10_000, len(list.Items))
 
 			var found int
@@ -477,7 +477,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			// Write a limited number of items into the queue
 			items := writeRandomItems(t, ctx, c, queueName, 23)
 			require.Len(t, items, 23)
-			require.NoError(t, c.StorageQueueList(ctx, queueName, &list, nil))
+			require.NoError(t, c.StorageItemsList(ctx, queueName, &list, nil))
 			require.Equal(t, 23, len(list.Items))
 
 			requests := []*pb.QueueReserveRequest{
@@ -560,10 +560,10 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
-			ReserveTimeout: ReserveTimeout,
-			DeadTimeout:    DeadTimeout,
-			QueueName:      queueName,
-			Partitions:     1,
+			ReserveTimeout:      ReserveTimeout,
+			DeadTimeout:         DeadTimeout,
+			QueueName:           queueName,
+			RequestedPartitions: 1,
 		}))
 
 		t.Run("Success", func(t *testing.T) {
@@ -571,7 +571,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			require.Len(t, items, 10)
 
 			var reserved pb.QueueReserveResponse
-			var list pb.StorageQueueListResponse
+			var list pb.StorageItemsListResponse
 
 			req := pb.QueueReserveRequest{
 				ClientId:       clientID,
@@ -590,7 +590,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			}))
 
 			// Fetch items from storage, ensure items are no longer available
-			require.NoError(t, c.StorageQueueList(ctx, queueName, &list, nil))
+			require.NoError(t, c.StorageItemsList(ctx, queueName, &list, nil))
 			require.Equal(t, 0, len(list.Items))
 		})
 
@@ -645,10 +645,10 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
-			ReserveTimeout: ReserveTimeout,
-			DeadTimeout:    DeadTimeout,
-			QueueName:      queueName,
-			Partitions:     1,
+			ReserveTimeout:      ReserveTimeout,
+			DeadTimeout:         DeadTimeout,
+			QueueName:           queueName,
+			RequestedPartitions: 1,
 		}))
 
 		items := writeRandomItems(t, ctx, c, queueName, 500)
@@ -685,23 +685,23 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: _store})
 		defer d.Shutdown(t)
 
-		var reserved []*pb.StorageQueueItem
-		var list pb.StorageQueueListResponse
+		var reserved []*pb.StorageItem
+		var list pb.StorageItemsListResponse
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
-			ReserveTimeout: ReserveTimeout,
-			DeadTimeout:    DeadTimeout,
-			QueueName:      queueName,
-			Partitions:     1,
+			ReserveTimeout:      ReserveTimeout,
+			DeadTimeout:         DeadTimeout,
+			QueueName:           queueName,
+			RequestedPartitions: 1,
 		}))
 
 		// Write some items to the queue
 		_ = writeRandomItems(t, ctx, c, queueName, 500)
 		// Ensure the items exist
-		require.NoError(t, c.StorageQueueList(ctx, queueName, &list, nil))
+		require.NoError(t, c.StorageItemsList(ctx, queueName, &list, nil))
 		assert.Equal(t, 500, len(list.Items))
 
 		expire := clock.Now().UTC().Add(random.Duration(10*clock.Second, clock.Minute))
-		reserved = append(reserved, &pb.StorageQueueItem{
+		reserved = append(reserved, &pb.StorageItem{
 			DeadDeadline:    timestamppb.New(expire),
 			ReserveDeadline: timestamppb.New(expire),
 			Attempts:        int32(rand.Intn(10)),
@@ -711,7 +711,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			Payload:         []byte("Reserved 1"),
 			IsReserved:      true,
 		})
-		reserved = append(reserved, &pb.StorageQueueItem{
+		reserved = append(reserved, &pb.StorageItem{
 			DeadDeadline:    timestamppb.New(expire),
 			ReserveDeadline: timestamppb.New(expire),
 			Attempts:        int32(rand.Intn(10)),
@@ -723,27 +723,27 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		})
 
 		// Add some reserved items
-		var resp pb.StorageQueueAddResponse
-		err := c.StorageQueueAdd(ctx, &pb.StorageQueueAddRequest{Items: reserved, QueueName: queueName}, &resp)
+		var resp pb.StorageItemsImportResponse
+		err := c.StorageItemsImport(ctx, &pb.StorageItemsImportRequest{Items: reserved, QueueName: queueName}, &resp)
 		require.NoError(t, err)
-		require.NoError(t, c.StorageQueueList(ctx, queueName, &list, nil))
+		require.NoError(t, c.StorageItemsList(ctx, queueName, &list, nil))
 		assert.Equal(t, 502, len(list.Items))
 
 		t.Run("NonDestructive", func(t *testing.T) {
 			require.NoError(t, c.QueueClear(ctx, &pb.QueueClearRequest{QueueName: queueName, Queue: true}))
-			require.NoError(t, c.StorageQueueList(ctx, queueName, &list, nil))
+			require.NoError(t, c.StorageItemsList(ctx, queueName, &list, nil))
 			assert.Equal(t, 2, len(list.Items))
 		})
 
 		t.Run("Destructive", func(t *testing.T) {
 			_ = writeRandomItems(t, ctx, c, queueName, 200)
-			require.NoError(t, c.StorageQueueList(ctx, queueName, &list, nil))
+			require.NoError(t, c.StorageItemsList(ctx, queueName, &list, nil))
 			assert.Equal(t, 202, len(list.Items))
 			require.NoError(t, c.QueueClear(ctx, &pb.QueueClearRequest{
 				QueueName:   queueName,
 				Destructive: true,
 				Queue:       true}))
-			require.NoError(t, c.StorageQueueList(ctx, queueName, &list, nil))
+			require.NoError(t, c.StorageItemsList(ctx, queueName, &list, nil))
 			assert.Equal(t, 0, len(list.Items))
 		})
 
@@ -759,10 +759,10 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			maxItems := randomProduceItems(1_001)
 
 			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
-				ReserveTimeout: ReserveTimeout,
-				DeadTimeout:    DeadTimeout,
-				QueueName:      queueName,
-				Partitions:     1,
+				ReserveTimeout:      ReserveTimeout,
+				DeadTimeout:         DeadTimeout,
+				QueueName:           queueName,
+				RequestedPartitions: 1,
 			}))
 
 			for _, test := range []struct {
@@ -883,10 +883,10 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			defer d.Shutdown(t)
 
 			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
-				ReserveTimeout: ReserveTimeout,
-				DeadTimeout:    DeadTimeout,
-				QueueName:      queueName,
-				Partitions:     1,
+				ReserveTimeout:      ReserveTimeout,
+				DeadTimeout:         DeadTimeout,
+				QueueName:           queueName,
+				RequestedPartitions: 1,
 			}))
 
 			for _, tc := range []struct {
@@ -1044,10 +1044,10 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			defer d.Shutdown(t)
 
 			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
-				ReserveTimeout: ReserveTimeout,
-				DeadTimeout:    DeadTimeout,
-				QueueName:      queueName,
-				Partitions:     1,
+				ReserveTimeout:      ReserveTimeout,
+				DeadTimeout:         DeadTimeout,
+				QueueName:           queueName,
+				RequestedPartitions: 1,
 			}))
 
 			// TODO: Produce and Reserve some items to create actual ids
@@ -1169,14 +1169,14 @@ func findInResponses(t *testing.T, responses []*pb.QueueReserveResponse, id stri
 }
 
 func writeRandomItems(t *testing.T, ctx context.Context, c *que.Client,
-	name string, count int) []*pb.StorageQueueItem {
+	name string, count int) []*pb.StorageItem {
 
 	t.Helper()
 	expire := clock.Now().UTC().Add(random.Duration(10*clock.Second, clock.Minute))
 
-	var items []*pb.StorageQueueItem
+	var items []*pb.StorageItem
 	for i := 0; i < count; i++ {
-		items = append(items, &pb.StorageQueueItem{
+		items = append(items, &pb.StorageItem{
 			DeadDeadline: timestamppb.New(expire),
 			Attempts:     int32(rand.Intn(10)),
 			Reference:    random.String("ref-", 10),
@@ -1186,8 +1186,8 @@ func writeRandomItems(t *testing.T, ctx context.Context, c *que.Client,
 		})
 	}
 
-	var resp pb.StorageQueueAddResponse
-	err := c.StorageQueueAdd(ctx, &pb.StorageQueueAddRequest{Items: items, QueueName: name}, &resp)
+	var resp pb.StorageItemsImportResponse
+	err := c.StorageItemsImport(ctx, &pb.StorageItemsImportRequest{Items: items, QueueName: name}, &resp)
 	require.NoError(t, err)
 	return resp.Items
 }

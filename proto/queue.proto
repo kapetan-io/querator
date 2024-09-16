@@ -140,10 +140,10 @@ message QueueDeferItem {
   // A unique id which identifies a unique item in a queue.
   string id = 1;
 
-  // The date after which the item will be added to the queue specified.
+  // The timestamp after which the item will be added to the queue specified.
   // The date can be empty, the current time or a past date/time, in which
   // case the item will be immediately added to the queue.
-  google.protobuf.Timestamp offerAt = 2 [json_name = "offer_at"]; // TODO: OpenAPI
+  google.protobuf.Timestamp enqueueAt = 2 [json_name = "enqueue_at"]; // TODO: OpenAPI
 
   // Indicates the item is dead, will not be retried regardless of the number of attempts
   // remaining. If set to true the defer will place the item in the dead letter queue for
@@ -192,13 +192,19 @@ message QueueInfo {
   // to the dead letter queue. Example: '24h', '60m', '10s'
   string deadTimeout = 7 [json_name = "dead_timeout"];
 
-  // The maximum number of times this message can be deferred by a consumer before it is
+  // The maximum number of times this item can be deferred by a consumer before it is
   // placed in the dead letter queue.
-  int32  maxAttempts = 8 [json_name = "max_attempts"];
+  int32 maxAttempts = 8 [json_name = "max_attempts"];
 
   // The number of partitions the queue is requesting. This might be different than the
-  // actual number of partitions if the partition count was recently changed.
-  int32  partitions = 9;
+  // actual partitions if the requested partition count was recently changed via rebalance request.
+  int32 requestedPartitions = 9 [json_name = "requested_partitions"];
+
+  repeated PartitionInfo partitions = 10;
+}
+
+message PartitionInfo {
+
 }
 
 message QueueClearRequest {

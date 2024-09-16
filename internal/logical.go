@@ -18,9 +18,9 @@ import (
 const (
 	maxRequestTimeout      = 15 * clock.Minute
 	minRequestTimeout      = 10 * clock.Millisecond
-	MethodStorageQueueList = iota
-	MethodStorageQueueAdd
-	MethodStorageQueueDelete
+	MethodStorageItemsList = iota
+	MethodStorageItemsImport
+	MethodStorageItemsDelete
 	MethodQueueStats
 	MethodQueuePause
 	MethodQueueClear
@@ -335,7 +335,7 @@ func (l *Logical) UpdatePartitions(ctx context.Context, p []store.Partition) err
 // Methods to manage queue storage
 // -------------------------------------------------
 
-func (l *Logical) StorageQueueList(ctx context.Context, items *[]*types.Item, opts types.ListOptions) error {
+func (l *Logical) StorageItemsList(ctx context.Context, items *[]*types.Item, opts types.ListOptions) error {
 	req := StorageRequest{
 		Items:   items,
 		Options: opts,
@@ -344,16 +344,16 @@ func (l *Logical) StorageQueueList(ctx context.Context, items *[]*types.Item, op
 	// TODO: Test for invalid pivot
 
 	r := QueueRequest{
-		Method:  MethodStorageQueueList,
+		Method:  MethodStorageItemsList,
 		Request: req,
 	}
 	return l.queueRequest(ctx, &r)
 }
 
-func (l *Logical) StorageQueueAdd(ctx context.Context, items *[]*types.Item) error {
+func (l *Logical) StorageItemsImport(ctx context.Context, items *[]*types.Item) error {
 	// TODO: Test for empty list
 	r := QueueRequest{
-		Method: MethodStorageQueueAdd,
+		Method: MethodStorageItemsImport,
 		Request: StorageRequest{
 			Items: items,
 		},
@@ -361,13 +361,13 @@ func (l *Logical) StorageQueueAdd(ctx context.Context, items *[]*types.Item) err
 	return l.queueRequest(ctx, &r)
 }
 
-func (l *Logical) StorageQueueDelete(ctx context.Context, ids []types.ItemID) error {
+func (l *Logical) StorageItemsDelete(ctx context.Context, ids []types.ItemID) error {
 	if len(ids) == 0 {
 		return transport.NewInvalidOption("ids is invalid; cannot be empty")
 	}
 
 	r := QueueRequest{
-		Method: MethodStorageQueueDelete,
+		Method: MethodStorageItemsDelete,
 		Request: StorageRequest{
 			IDs: ids,
 		},
@@ -700,7 +700,7 @@ func (l *Logical) queueRequest(ctx context.Context, r *QueueRequest) error {
 
 func (l *Logical) handleQueueRequests(state *QueueState, req *QueueRequest) {
 	switch req.Method {
-	case MethodStorageQueueList, MethodStorageQueueAdd, MethodStorageQueueDelete:
+	case MethodStorageItemsList, MethodStorageItemsImport, MethodStorageItemsDelete:
 		l.handleStorageRequests(req)
 	case MethodQueueStats:
 		l.handleStats(state, req)
@@ -740,15 +740,15 @@ func (l *Logical) handleStorageRequests(req *QueueRequest) {
 	sr := req.Request.(StorageRequest)
 	// TODO: This endpoint should list all items for all partitions this logical is handling
 	switch req.Method {
-	case MethodStorageQueueList:
+	case MethodStorageItemsList:
 		if err := l.conf.Partitions[0].List(req.Context, sr.Items, sr.Options); err != nil {
 			req.Err = err
 		}
-	case MethodStorageQueueAdd:
+	case MethodStorageItemsImport:
 		if err := l.conf.Partitions[0].Add(req.Context, *sr.Items); err != nil {
 			req.Err = err
 		}
-	case MethodStorageQueueDelete:
+	case MethodStorageItemsDelete:
 		if err := l.conf.Partitions[0].Delete(req.Context, sr.IDs); err != nil {
 			req.Err = err
 		}

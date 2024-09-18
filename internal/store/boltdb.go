@@ -108,7 +108,7 @@ func (b *BoltPartition) Produce(_ context.Context, batch types.Batch[types.Produ
 				item.ID = []byte(b.uid.String())
 				item.CreatedAt = b.conf.Clock.Now().UTC()
 
-				// TODO: Get buffers from memory pool
+				// TODO: GetByPartition buffers from memory pool
 				var buf bytes.Buffer
 				if err := gob.NewEncoder(&buf).Encode(item); err != nil {
 					return f.Errorf("during gob.Encode(): %w", err)
@@ -336,7 +336,7 @@ func (b *BoltPartition) Add(_ context.Context, items []*types.Item) error {
 			item.ID = []byte(b.uid.String())
 			item.CreatedAt = b.conf.Clock.Now().UTC()
 
-			// TODO: Get buffers from memory pool
+			// TODO: GetByPartition buffers from memory pool
 			var buf bytes.Buffer
 			if err := gob.NewEncoder(&buf).Encode(item); err != nil {
 				return f.Errorf("during gob.Encode(): %w", err)
@@ -555,7 +555,7 @@ func (b *BoltQueueStore) getDB() (*bolt.DB, error) {
 }
 
 func (b *BoltQueueStore) Get(_ context.Context, name string, queue *types.QueueInfo) error {
-	f := errors.Fields{"category", "bolt", "func", "QueueStore.Get"}
+	f := errors.Fields{"category", "bolt", "func", "QueueStore.GetByPartition"}
 
 	if err := b.validateGet(name); err != nil {
 		return err

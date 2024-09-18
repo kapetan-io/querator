@@ -106,7 +106,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		now := clock.Now().UTC()
 		queues := createRandomQueues(t, ctx, c, 50)
 
-		t.Run("Get", func(t *testing.T) {
+		t.Run("GetByPartition", func(t *testing.T) {
 			var list pb.QueuesListResponse
 			l := queues[10]
 			require.NoError(t, c.QueuesList(ctx, &list, &que.ListOptions{

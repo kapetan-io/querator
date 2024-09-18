@@ -275,7 +275,11 @@ func (l *Logical) Complete(ctx context.Context, req *types.CompleteRequest) erro
 }
 
 // QueueStats retrieves stats about the queue and items in storage
-func (l *Logical) QueueStats(ctx context.Context, stats *types.QueueStats) error {
+func (l *Logical) QueueStats(ctx context.Context, stats *types.LogicalStats) error {
+	if l.inShutdown.Load() {
+		return ErrQueueShutdown
+	}
+
 	r := QueueRequest{
 		Method:  MethodQueueStats,
 		Request: stats,
@@ -296,6 +300,10 @@ func (l *Logical) Pause(ctx context.Context, req *types.PauseRequest) error {
 
 // Clear clears enqueued items from the queue
 func (l *Logical) Clear(ctx context.Context, req *types.ClearRequest) error {
+	if l.inShutdown.Load() {
+		return ErrQueueShutdown
+	}
+
 	if !req.Queue && !req.Defer && !req.Scheduled {
 		return transport.NewInvalidOption("invalid clear request; one of 'queue', 'defer'," +
 			" 'scheduled' must be true")
@@ -311,6 +319,9 @@ func (l *Logical) Clear(ctx context.Context, req *types.ClearRequest) error {
 // UpdateInfo is called whenever QueueInfo changes. It is called during initialization of Logical struct and
 // is intended to be called whenever queue configuration changes.
 func (l *Logical) UpdateInfo(ctx context.Context, info types.QueueInfo) error {
+	if l.inShutdown.Load() {
+		return ErrQueueShutdown
+	}
 	r := QueueRequest{
 		Method:  MethodUpdateInfo,
 		Request: info,
@@ -334,6 +345,9 @@ func (l *Logical) UpdatePartitions(ctx context.Context, p []store.Partition) err
 // -------------------------------------------------
 
 func (l *Logical) StorageItemsList(ctx context.Context, partition int, items *[]*types.Item, opts types.ListOptions) error {
+	if l.inShutdown.Load() {
+		return ErrQueueShutdown
+	}
 	req := StorageRequest{
 		Partition: partition,
 		Items:     items,
@@ -350,6 +364,9 @@ func (l *Logical) StorageItemsList(ctx context.Context, partition int, items *[]
 }
 
 func (l *Logical) StorageItemsImport(ctx context.Context, partition int, items *[]*types.Item) error {
+	if l.inShutdown.Load() {
+		return ErrQueueShutdown
+	}
 	// TODO: Test for empty list
 	r := QueueRequest{
 		Method: MethodStorageItemsImport,
@@ -362,6 +379,9 @@ func (l *Logical) StorageItemsImport(ctx context.Context, partition int, items *
 }
 
 func (l *Logical) StorageItemsDelete(ctx context.Context, partition int, ids []types.ItemID) error {
+	if l.inShutdown.Load() {
+		return ErrQueueShutdown
+	}
 	if len(ids) == 0 {
 		return transport.NewInvalidOption("ids is invalid; cannot be empty")
 	}
@@ -855,18 +875,20 @@ func (l *Logical) handleStorageRequests(req *QueueRequest) {
 }
 
 func (l *Logical) handleStats(state *QueueState, r *QueueRequest) {
-	qs := r.Request.(*types.QueueStats)
-	// TODO: return all Partition stats
-	var ps types.PartitionStats
-	if err := l.conf.Partitions[0].Stats(r.Context, &ps); err != nil {
-		r.Err = err
+	qs := r.Request.(*types.LogicalStats)
+	qs.ProduceWaiting = len(l.produceQueueCh)
+	qs.ReserveWaiting = len(l.reserveQueueCh)
+	qs.CompleteWaiting = len(l.completeQueueCh)
+	qs.ReserveBlocked = len(state.Reservations.Requests)
+	qs.InFlight = int(l.inFlight.Load())
+
+	for _, p := range l.conf.Partitions {
+		var ps types.PartitionStats
+		if err := p.Stats(r.Context, &ps); err != nil {
+			r.Err = err
+		}
+		qs.Partitions = append(qs.Partitions, ps)
 	}
-	ps.ProduceWaiting = len(l.produceQueueCh)
-	ps.ReserveWaiting = len(l.reserveQueueCh)
-	ps.CompleteWaiting = len(l.completeQueueCh)
-	ps.ReserveBlocked = len(state.Reservations.Requests)
-	ps.InFlight = int(l.inFlight.Load())
-	qs.Stats = append(qs.Stats, ps)
 	close(r.ReadyCh)
 }
 

@@ -240,7 +240,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			})
 		})
 
-		// Get the last item in the queue, so the following tests know where to begin their assertions.
+		// GetByPartition the last item in the queue, so the following tests know where to begin their assertions.
 		var last pb.StorageItemsListResponse
 		err := c.StorageItemsList(ctx, queueName, 0, &last, nil)
 		require.NoError(t, err)

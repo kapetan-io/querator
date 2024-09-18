@@ -101,21 +101,7 @@ type ListOptions struct {
 	Limit int
 }
 
-type QueueStats struct {
-	Stats []PartitionStats
-}
-
-type PartitionStats struct {
-	// Partition is the partition these stats are for
-	Partition int
-	// Total is the number of items in the queue
-	Total int
-	// TotalReserved is the number of items in the queue that are in reserved state
-	TotalReserved int
-	// AverageAge is the average age of all items in the queue
-	AverageAge clock.Duration
-	// AverageReservedAge is the average age of reserved items in the queue
-	AverageReservedAge clock.Duration
+type LogicalStats struct {
 	// ProduceWaiting is the number of `/queue.produce` requests currently waiting
 	// to be processed by the sync loop
 	ProduceWaiting int
@@ -129,4 +115,19 @@ type PartitionStats struct {
 	ReserveBlocked int
 	// InFlight is the number of requests currently in flight
 	InFlight int
+
+	Partitions []PartitionStats
+}
+
+type PartitionStats struct {
+	// Partition is the partition these stats are for
+	Partition int
+	// Total is the number of items in the queue
+	Total int
+	// TotalReserved is the number of items in the queue that are in reserved state
+	TotalReserved int
+	// AverageAge is the average age of all items in the queue
+	AverageAge clock.Duration
+	// AverageReservedAge is the average age of reserved items in the queue
+	AverageReservedAge clock.Duration
 }

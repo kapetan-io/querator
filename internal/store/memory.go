@@ -358,7 +358,7 @@ func NewMemoryPartitionStore(conf StorageConfig) *MemoryPartitionStore {
 }
 
 func (m MemoryPartitionStore) Create(info types.PartitionInfo) error {
-	// Does nothing as memory has nothing to create. Calls to Get() create the partition
+	// Does nothing as memory has nothing to create. Calls to GetByPartition() create the partition
 	// when requested.
 	return nil
 }

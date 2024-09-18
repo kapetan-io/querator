@@ -7,6 +7,7 @@ import (
 	"github.com/kapetan-io/errors"
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
+	"github.com/kapetan-io/querator/proto"
 	"github.com/kapetan-io/querator/transport"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/set"
@@ -25,12 +26,34 @@ type QueuesManagerConfig struct {
 	LogicalConfig LogicalConfig
 }
 
+// Remote represents a remote instance of querator. Implementations proxy requests to the remote instance
+type Remote interface {
+	QueueReserve(ctx context.Context, req *proto.QueueReserveRequest, res *proto.QueueReserveResponse) error
+	QueueProduce(ctx context.Context, req *proto.QueueProduceRequest) error
+	QueueComplete(ctx context.Context, req *proto.QueueCompleteRequest) error
+	StorageItemsList(ctx context.Context, req *proto.StorageItemsListRequest,
+		res *proto.StorageItemsListResponse) error
+	StorageItemsImport(ctx context.Context, req *proto.StorageItemsImportRequest,
+		res *proto.StorageItemsImportResponse) error
+	StorageItemsDelete(ctx context.Context, req *proto.StorageItemsDeleteRequest) error
+}
+
+// TODO: It is the job of the QueueManager to adjust the number of Logical Queues depending on the
+//  number of consumers and partitions available.
+
+// TODO: If there is only one client, and multiple Logical Queues, then we
+//  should reduce the number of Logical Queues automatically. Using a congestion detection algorithm
+//  similar to https://www.usenix.org/conference/nsdi19/presentation/ousterhout
+
+// TODO: We need to figure out how clients register themselves as consumers before allowing
+//  reservation calls.
+
 // QueuesManager manages queues in use, and information about that queue.
 type QueuesManager struct {
 	queues     map[string]*Logical
 	conf       QueuesManagerConfig
 	inShutdown atomic.Bool
-	mutex      sync.Mutex
+	mutex      sync.RWMutex
 }
 
 func NewQueuesManager(conf QueuesManagerConfig) (*QueuesManager, error) {
@@ -55,12 +78,12 @@ func NewQueuesManager(conf QueuesManagerConfig) (*QueuesManager, error) {
 
 // TODO: Implement a healthcheck method call, which will ensure access to StorageConfig is working
 
-func (qm *QueuesManager) Get(ctx context.Context, name string) (*Logical, error) {
+func (qm *QueuesManager) Get(ctx context.Context, name string) (*Queue, error) {
 	if qm.inShutdown.Load() {
 		return nil, ErrServiceShutdown
 	}
-	defer qm.mutex.Unlock()
-	qm.mutex.Lock()
+	defer qm.mutex.RUnlock()
+	qm.mutex.RLock()
 
 	// If queue is already running
 	q, ok := qm.queues[name]
@@ -137,25 +160,10 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Log
 func (qm *QueuesManager) startLogicalQueue(ctx context.Context, info types.QueueInfo) (*Logical, error) {
 	f := errors.Fields{"category", "querator", "func", "QueuesManager.startLogicalQueue"}
 
-	// Each logical queue has their own copy of these options to avoid race conditions with any
-	// reconfiguration the QueuesManager may preform during cluster operation. Additionally,
-	// each logical queue may independently change these options as they see fit.
-
-	// NOTE: It is the job of the QueueManager to adjust the number of Logical Queues depending on the
-	// number of consumers and partitions available.
-
 	// TODO: The queue store should also know if the config provided is valid, IE: does every partition
 	//  storage name exist in the config? If not, then it's a bad config and Querator should not start.
-	// TODO: Should eventually support more than one partition depending on the current number
-	//  of consumers.
 
-	// TODO: If there is only one client, and multiple Logical Queues, then we
-	//  should reduce the number of Logical Queues automatically. Using a congestion detection algorithm
-	//  similar to https://www.usenix.org/conference/nsdi19/presentation/ousterhout
-	// TODO: We need to figure out how clients register themselves as consumers before allowing
-	//  reservation calls.
-
-	// Get all the partitions we want associated with this logical queue instance
+	// GetByPartition all the partitions we want associated with this logical queue instance
 	var partitions []store.Partition
 	for _, p := range info.PartitionInfo {
 		var found bool

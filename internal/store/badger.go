@@ -85,7 +85,7 @@ func (b *BadgerPartition) Produce(_ context.Context, batch types.Batch[types.Pro
 				item.ID = []byte(b.uid.String())
 				item.CreatedAt = b.conf.Clock.Now().UTC()
 
-				// TODO: Get buffers from memory pool
+				// TODO: GetByPartition buffers from memory pool
 				var buf bytes.Buffer
 				if err := gob.NewEncoder(&buf).Encode(item); err != nil {
 					return f.Errorf("during gob.Encode(): %w", err)
@@ -261,7 +261,7 @@ func (b *BadgerPartition) List(_ context.Context, items *[]*types.Item, opts typ
 			var v []byte
 			v, err := iter.Item().ValueCopy(v)
 			if err != nil {
-				return f.Errorf("during Get value: %w", err)
+				return f.Errorf("during GetByPartition value: %w", err)
 			}
 
 			item := new(types.Item) // TODO: memory pool
@@ -299,7 +299,7 @@ func (b *BadgerPartition) Add(_ context.Context, items []*types.Item) error {
 			item.ID = []byte(b.uid.String())
 			item.CreatedAt = b.conf.Clock.Now().UTC()
 
-			// TODO: Get buffers from memory pool
+			// TODO: GetByPartition buffers from memory pool
 			var buf bytes.Buffer
 			if err := gob.NewEncoder(&buf).Encode(item); err != nil {
 				return f.Errorf("during gob.Encode(): %w", err)
@@ -360,7 +360,7 @@ func (b *BadgerPartition) Clear(_ context.Context, destructive bool) error {
 			k = iter.Item().KeyCopy(k)
 			v, err := iter.Item().ValueCopy(v)
 			if err != nil {
-				return f.Errorf("during Get value: %w", err)
+				return f.Errorf("during GetByPartition value: %w", err)
 			}
 
 			item := new(types.Item) // TODO: memory pool
@@ -403,7 +403,7 @@ func (b *BadgerPartition) Stats(_ context.Context, stats *types.PartitionStats) 
 			var v []byte
 			v, err := iter.Item().ValueCopy(v)
 			if err != nil {
-				return f.Errorf("during Get value: %w", err)
+				return f.Errorf("during GetByPartition value: %w", err)
 			}
 
 			item := new(types.Item) // TODO: memory pool
@@ -498,7 +498,7 @@ func (b *BadgerQueueStore) getDB() (*badger.DB, error) {
 }
 
 func (b *BadgerQueueStore) Get(_ context.Context, name string, queue *types.QueueInfo) error {
-	f := errors.Fields{"category", "badger", "func", "QueueStore.Get"}
+	f := errors.Fields{"category", "badger", "func", "QueueStore.GetByPartition"}
 
 	if err := b.validateGet(name); err != nil {
 		return err
@@ -516,13 +516,13 @@ func (b *BadgerQueueStore) Get(_ context.Context, name string, queue *types.Queu
 			if errors.Is(err, badger.ErrKeyNotFound) {
 				return ErrQueueNotExist
 			}
-			return f.Errorf("during Get(): %w", err)
+			return f.Errorf("during GetByPartition(): %w", err)
 		}
 
 		var v []byte
 		v, err = kvItem.ValueCopy(v)
 		if err != nil {
-			return f.Errorf("during Get value(): %w", err)
+			return f.Errorf("during GetByPartition value(): %w", err)
 		}
 
 		if err := gob.NewDecoder(bytes.NewReader(v)).Decode(queue); err != nil {
@@ -583,13 +583,13 @@ func (b *BadgerQueueStore) Update(_ context.Context, info types.QueueInfo) error
 			if errors.Is(err, badger.ErrKeyNotFound) {
 				return ErrQueueNotExist
 			}
-			return f.Errorf("during Get(): %w", err)
+			return f.Errorf("during GetByPartition(): %w", err)
 		}
 
 		var v []byte
 		v, err = kvItem.ValueCopy(v)
 		if err != nil {
-			return f.Errorf("during Get value(): %w", err)
+			return f.Errorf("during GetByPartition value(): %w", err)
 		}
 
 		var found types.QueueInfo
@@ -650,7 +650,7 @@ func (b *BadgerQueueStore) List(_ context.Context, queues *[]types.QueueInfo, op
 		for ; iter.Valid(); iter.Next() {
 			v, err := iter.Item().ValueCopy(v)
 			if err != nil {
-				return f.Errorf("during Get value(): %w", err)
+				return f.Errorf("during GetByPartition value(): %w", err)
 			}
 
 			var info types.QueueInfo

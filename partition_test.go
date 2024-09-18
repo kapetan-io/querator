@@ -1,7 +1,6 @@
 package querator_test
 
 import (
-	"fmt"
 	que "github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/internal/store"
 	pb "github.com/kapetan-io/querator/proto"
@@ -80,8 +79,6 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				RequestedPartitions: 2,
 			}))
 
-			fmt.Println("Create queue:", queueName)
-
 			// Should be queued into partition 0
 			partitionZeroItems := randomProduceItems(10)
 			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
@@ -151,6 +148,33 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			assert.Equal(t, 20, reserved)
 			assert.Equal(t, 1, notReserved)
 		})
+
+		//t.Run("ConcurrentReserve", func(t *testing.T) {
+		//	var queueName = random.String("queue-", 10)
+		//	ClientID := random.String("client-", 10)
+		//
+		//	require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+		//		QueueName:           queueName,
+		//		DeadQueue:           queueName + "-dead",
+		//		Reference:           "CreateTestRef",
+		//		ReserveTimeout:      "1m",
+		//		DeadTimeout:         "10m",
+		//		MaxAttempts:         10,
+		//		RequestedPartitions: 2,
+		//	}))
+		//
+		//	// Produce 50 items, 10 items at a time.
+		//	for i := 0; i < 5; i++ {
+		//		partitionZeroItems := randomProduceItems(10)
+		//		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+		//			Items:          partitionZeroItems,
+		//			QueueName:      queueName,
+		//			RequestTimeout: "1m",
+		//		}))
+		//	}
+		//  TODO: Need to have the queue manager find the appropriate logical queue based on the partition
+		//   provided. So we can update Service.PauseQueue() to do the appropriate thing for testing
+		//})
 	})
 	// TODO: Even Distribution with 2 consumers and 2 Producers
 	// TODO: Even Distribution with 3 consumers and small batch request sizes

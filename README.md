@@ -105,28 +105,28 @@ benchmarking Querator operation. It can also be used in ephemeral environments w
 This backend uses the ETCD flavor of BoltDB and is intended to be used for embedded or in limited resource environments
 where High Availability is not a concern, and where networking is limited or access to a remote storage system is not
 possible. 
-- [ ] TODO - replace this is badgerDB.
+
+##### BadgerDB
+This backend uses [BadgerDB from DGraph](https://github.com/dgraph-io/badger) and is intended to be used for embedded
+or in limited resource environments where High Availability is not a concern. Badger's LSM design out performs BoltDB
+but the LSM design may result in more writes to disk.
+
+##### Planned Backends
+- PostgreSQL
+- FoundationDB
+- SurrealDB
 
 ### Embedded Querator
 Querator is designed as a library which exposes all API functionality via `Service` method calls. Users can use
 the `daemon` package or invoke `querator.NewService()` directly to get a new instance of `Service` to interact with.
 
-### API
-See [Querator OSS API Reference](https://thrawn01-llc.stoplight.io/docs/querator-oss/924788fc33955-querator-oss-api)
-for and idea of what the API looks like.
-
-- [ ] TODO - update this with the latest OpenAPI schema
+### HTTP API
+See [Querator API Reference](https://querator.io/api) for and idea of what the API looks like.
 
 ### Design
 See our [Architecture Decision Docs](doc/adr) for details on our current implementation design.
 
-### TODOs
-- [ ] Implement PostgreSQL backend with SKIP LOCK, Partitions, Truncate.
-- [ ] Experiment with [Badger](https://github.com/dgraph-io/badger) as a replacement for boltDB. Bolt turned out to be much
-  slower than I expected due to the lack of an LSM.
-- [ ] Implement Scheduled and Defer
-- [ ] Consider allowing a produced item to specify the ReserveTimeout
-
+### TODO
 See the [Querator Trello Board](https://trello.com/b/cey2cB3i/querator) for work status and progress
 
 ### Similar Projects

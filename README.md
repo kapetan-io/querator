@@ -24,7 +24,7 @@ messages a day in a very efficient and cost-effective manner, Meta (aka FaceBook
 scaled to billions of messages. The closed source version of Querator we ran at mailgun was such a success I'm was 
 surprised to find no similar projects available in the open source community, so I'm building one!
 
-### What is the Reservation Pattern?
+### What is Almost Exactly Once?
 The reservation pattern is used to implement an “Almost Exactly Once Delivery” style queue by ensuring that 
 each item is processed “almost exactly” once and in the order it was received. I say, “almost” because 
 [Exactly Once Delivery (EOD) is theoretically impossible](https://bravenewgeek.com/you-cannot-have-exactly-once-delivery/).

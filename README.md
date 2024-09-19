@@ -1,3 +1,5 @@
+Querator is currently still in early development
+
 ## Querator
 A Reservation based FIFO queue backed by a Database with Almost Exactly Once Delivery semantics. (AEOD)
 

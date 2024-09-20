@@ -66,6 +66,12 @@ type Service struct {
 func NewService(conf ServiceConfig) (*Service, error) {
 	set.Default(&conf.Logger, slog.Default())
 
+	// TODO: Validate the Storage Config (somewhere) ensure that we have at least one storage backend with an affinity
+	//  greater than 0.0 else QueuesManager will be unable to assign partitions.
+
+	// TODO: The queue store should also know if the config provided is valid, IE: does every partition
+	//  storage name exist in the config? If not, then it's a bad config and Querator should not start.
+
 	qm, err := internal.NewQueuesManager(internal.QueuesManagerConfig{
 		LogicalConfig: internal.LogicalConfig{
 			MaxReserveBatchSize:  conf.MaxReserveBatchSize,

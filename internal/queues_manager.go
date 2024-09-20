@@ -12,6 +12,7 @@ import (
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/set"
 	"log/slog"
+	"math"
 	"sync"
 	"sync/atomic"
 )
@@ -86,10 +87,10 @@ func (qm *QueuesManager) Get(ctx context.Context, name string) (*Queue, error) {
 	qm.mutex.RLock()
 
 	// If queue is already running
-	q, ok := qm.queues[name]
-	if ok {
-		return q, nil
-	}
+	//q, ok := qm.queues[name]
+	//if ok {
+	//	return nil, nil // TODO: Fix me
+	//}
 
 	// Look for the queue in storage
 	var queue types.QueueInfo
@@ -100,7 +101,8 @@ func (qm *QueuesManager) Get(ctx context.Context, name string) (*Queue, error) {
 		return nil, err
 	}
 
-	return qm.startLogicalQueue(ctx, queue)
+	return nil, nil
+	//return qm.startLogicalQueue(ctx, queue)
 }
 
 func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Logical, error) {
@@ -111,20 +113,30 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Log
 	defer qm.mutex.Unlock()
 	qm.mutex.Lock()
 
+	// NOTE: Assertions in this method assume the Service validates the storage config with the
+	// available partitions before accepting the config. There is no use in returning errors
+	// for a thing that should only happen if there is a coding error, so we use assertions instead.
+
 	// When creating a new Queue, info.PartitionInfo should have no details, but should
-	// include the number of partitions requested. The manager will decide where to
+	// include the number of partitions requested. This QueueManager will decide where to
 	// place the partitions depending on the storage backend configurations. As such
 	// any details included by the caller will be ignored.
 
-	for i := 0; i < info.RequestedPartitions; i++ {
-		// TODO: Spread the partitions across the storage backends according to affinity
-		p := types.PartitionInfo{
-			StorageName: qm.conf.StorageConfig.Backends[0].Name,
-			QueueName:   info.Name,
-			Partition:   i,
+	// TODO: Test partitions are spread across multiple backends
+
+	// Spread the partitions across the storage backends according to affinity
+	var partitionIdx = 0
+	for idx, count := range qm.assignPartitions(info.RequestedPartitions) {
+		for i := 0; i < count; i++ {
+			p := types.PartitionInfo{
+				StorageName: qm.conf.StorageConfig.Backends[idx].Name,
+				QueueName:   info.Name,
+				Partition:   partitionIdx,
+			}
+			partitionIdx++
+			fmt.Printf("Create partition %+v\n", p)
+			info.PartitionInfo = append(info.PartitionInfo, p)
 		}
-		fmt.Printf("Create partition %+v\n", p)
-		info.PartitionInfo = append(info.PartitionInfo, p)
 	}
 
 	info.CreatedAt = qm.conf.LogicalConfig.Clock.Now().UTC()
@@ -134,34 +146,34 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Log
 		return nil, f.Errorf("QueueStore.Add(): %w", err)
 	}
 
+	// EVERYTHING AFTER THIS POINT SHOULD ALSO ASSUME THE QUEUE INFO EXISTS IN THE DATA STORE.
+	// any catastrophic error past this point should be recoverable when we load a partition.
+
+	// TODO: Move this code to a load partition method which can be re-used when loading a partition.
+	// <--- THIS NEXT
+
 	for _, p := range info.PartitionInfo {
-		if err := qm.conf.StorageConfig.Backends[0].PartitionStore.Create(p); err != nil {
+		b := qm.conf.StorageConfig.Backends.Find(p.StorageName)
+		if b.Name == "" { // Assertion
+			panic(fmt.Sprintf("invalid storage config; partition references "+
+				"unknown storage backend '%s'", p.StorageName))
+		}
+
+		if err := b.PartitionStore.Create(p); err != nil {
 			f = append(f, "partition", p.Partition, "storage-name", p.StorageName)
 			return nil, f.Errorf("PartitionStore.Create(): %w", err)
 		}
 	}
 
-	// Assertion that we are not crazy
-	if _, ok := qm.queues[info.Name]; ok {
+	if _, ok := qm.queues[info.Name]; ok { // Assertion
 		// TODO(thrawn01): Consider a preforming a queue.UpdateInfo() if this happens instead of a panic.
 		//  It's possible the data store where we keep queue info is out of sync with our actual state, in
 		//  this case, it's probably better for us to update the queues when this happens.
 		panic(fmt.Sprintf("queue '%s' does not exist in data store, but is running!", info.Name))
 	}
 
-	return qm.startLogicalQueue(ctx, info)
-}
-
-//func (qm *QueuesManager) rebalanceLogical(info types.QueueInfo) error {
-//	// TODO: See adr/0017-cluster-operation.md
-//	return nil
-//}
-
-func (qm *QueuesManager) startLogicalQueue(ctx context.Context, info types.QueueInfo) (*Logical, error) {
-	f := errors.Fields{"category", "querator", "func", "QueuesManager.startLogicalQueue"}
-
-	// TODO: The queue store should also know if the config provided is valid, IE: does every partition
-	//  storage name exist in the config? If not, then it's a bad config and Querator should not start.
+	// We currently start with a single logical queue, contention detection will adjust the number of
+	// logical queues as consumers join.
 
 	// GetByPartition all the partitions we want associated with this logical queue instance
 	var partitions []store.Partition
@@ -202,6 +214,11 @@ func (qm *QueuesManager) startLogicalQueue(ctx context.Context, info types.Queue
 	qm.queues[info.Name] = l
 	return l, nil
 }
+
+//func (qm *QueuesManager) rebalanceLogical(info types.QueueInfo) error {
+//	// TODO: See adr/0017-cluster-operation.md
+//	return nil
+//}
 
 func (qm *QueuesManager) List(ctx context.Context, items *[]types.QueueInfo, opts types.ListOptions) error {
 	if qm.inShutdown.Load() {
@@ -308,4 +325,17 @@ func (qm *QueuesManager) Shutdown(ctx context.Context) error {
 		fmt.Printf("QueuesManager.Shutdown() wait done\n")
 		return f.Wrap(err)
 	}
+}
+
+// assignPartitions assigns partition counts to a backend based on affinity
+func (qm *QueuesManager) assignPartitions(totalPartitions int) []int {
+	var totalAffinity float64
+	for _, backend := range qm.conf.StorageConfig.Backends {
+		totalAffinity += backend.Affinity
+	}
+	assignments := make([]int, len(qm.conf.StorageConfig.Backends))
+	for i, b := range qm.conf.StorageConfig.Backends {
+		assignments[i] = int(math.Floor((b.Affinity / totalAffinity) * float64(totalPartitions)))
+	}
+	return assignments
 }

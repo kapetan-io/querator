@@ -85,6 +85,17 @@ type Partition interface {
 	Close(ctx context.Context) error
 }
 
+type Backends []Backend
+
+func (b Backends) Find(name string) Backend {
+	for _, backend := range b {
+		if backend.Name == name {
+			return backend
+		}
+	}
+	return Backend{}
+}
+
 // TODO: Rename this to `store.Config` if possible
 // StorageConfig is the configuration accepted by QueueManager to manage storage of queues, scheduled items,
 // and partitions.
@@ -92,7 +103,7 @@ type StorageConfig struct {
 	// How Queues are stored can be separate from PartitionInfo and Scheduled stores
 	QueueStore QueueStore
 	// The Backends configured for partitions to utilize
-	Backends []Backend
+	Backends Backends
 	// Clock is the clock provider the backend implementation should use
 	Clock *clock.Provider
 }

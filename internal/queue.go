@@ -28,12 +28,17 @@ func NewQueue(info types.QueueInfo) *Queue {
 		info:    info,
 	}
 
-	for _, info := range info.PartitionInfo {
-		q.ordered = append(q.ordered, &Logical{})
-	}
+	// TODO:
+	//for _, info := range info.PartitionInfo {
+	//	q.ordered = append(q.ordered, &Logical{})
+	//}
 
 	// TODO: Setup ordered
 	return q
+}
+
+func (q *Queue) AddLogical(*Logical) {
+	// Adds or updates partition assignments
 }
 
 func (q *Queue) GetAll(_ context.Context) []*Logical {

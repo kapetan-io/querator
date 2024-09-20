@@ -99,7 +99,7 @@ func (s *Service) QueueProduce(ctx context.Context, req *proto.QueueProduceReque
 		return err
 	}
 
-	proxy, logical := queue.GetNext(ctx)
+	proxy, logical := queue.GetNext()
 	if proxy != nil {
 		return proxy.QueueProduce(ctx, req)
 	}
@@ -125,7 +125,7 @@ func (s *Service) QueueReserve(ctx context.Context, req *proto.QueueReserveReque
 		return err
 	}
 
-	proxy, logical := queue.GetNext(ctx)
+	proxy, logical := queue.GetNext()
 	if proxy != nil {
 		return proxy.QueueReserve(ctx, req, res)
 	}
@@ -164,7 +164,7 @@ func (s *Service) QueueComplete(ctx context.Context, req *proto.QueueCompleteReq
 		return err
 	}
 
-	proxy, logical, err := queue.GetByPartition(ctx, int(req.Partition))
+	proxy, logical, err := queue.GetByPartition(int(req.Partition))
 	if err != nil {
 		return err
 	}
@@ -193,7 +193,7 @@ func (s *Service) QueueClear(ctx context.Context, req *proto.QueueClearRequest) 
 	}
 
 	// Clear all the logical queues on this instance
-	for _, logical := range queue.GetAll(ctx) {
+	for _, logical := range queue.GetAll() {
 		r := types.ClearRequest{
 			Destructive: req.Destructive,
 			Scheduled:   req.Scheduled,
@@ -220,7 +220,7 @@ func (s *Service) PauseQueue(ctx context.Context, queueName string, pause bool) 
 	}
 
 	// Clear all the logical queues on this instance
-	for _, logical := range queue.GetAll(ctx) {
+	for _, logical := range queue.GetAll() {
 		if err := logical.Pause(ctx, &types.PauseRequest{Pause: pause}); err != nil {
 			return err
 		}
@@ -305,7 +305,7 @@ func (s *Service) StorageItemsList(ctx context.Context, req *proto.StorageItemsL
 		return err
 	}
 
-	proxy, logical, err := queue.GetByPartition(ctx, int(req.Partition))
+	proxy, logical, err := queue.GetByPartition(int(req.Partition))
 	if err != nil {
 		return err
 	}
@@ -337,7 +337,7 @@ func (s *Service) StorageItemsImport(ctx context.Context, req *proto.StorageItem
 		return err
 	}
 
-	proxy, logical, err := queue.GetByPartition(ctx, int(req.Partition))
+	proxy, logical, err := queue.GetByPartition(int(req.Partition))
 	if err != nil {
 		return err
 	}
@@ -370,7 +370,7 @@ func (s *Service) StorageItemsDelete(ctx context.Context, req *proto.StorageItem
 		return err
 	}
 
-	proxy, logical, err := queue.GetByPartition(ctx, int(req.Partition))
+	proxy, logical, err := queue.GetByPartition(int(req.Partition))
 	if err != nil {
 		return err
 	}
@@ -399,7 +399,7 @@ func (s *Service) QueueStats(ctx context.Context, req *proto.QueueStatsRequest,
 	}
 
 	res.QueueName = req.QueueName
-	for _, logical := range queue.GetAll(ctx) {
+	for _, logical := range queue.GetAll() {
 		var stats types.LogicalStats
 		if err := logical.QueueStats(ctx, &stats); err != nil {
 			return err

@@ -8,7 +8,9 @@ import (
 	"github.com/kapetan-io/tackle/clock"
 )
 
-var ErrQueueNotExist = transport.NewRequestFailed("queue does not exist")
+var (
+	ErrQueueNotExist = transport.NewRequestFailed("queue does not exist")
+)
 
 // TODO: Remove
 // StorageID is the decoded storage StorageID
@@ -118,11 +120,13 @@ type Backend struct {
 
 // PartitionStore manages the partitions
 type PartitionStore interface {
-	// Create assumes the partition does not exist. Returns an error if the partition exists
-	Create(types.PartitionInfo) error
-	// Get assumes the partition exists and returns a new Partition instance for the requested partition.
-	// returns an error if the partition requested does not exist.
+	// Get returns a new Partition instance for the requested partition. This call preforms
+	// no validation checks if the partition exists in storage nor if storage is available.
+	// the first operation preformed upon the partition will attempt to connect and validate
+	// the state of the storage backend.
 	Get(types.PartitionInfo) Partition
+
+	// TODO: List Partitions, Delete Partitions, etc...
 }
 
 // TODO: A scheduled store should probably be located or managed by a partition store, possibly in the same table

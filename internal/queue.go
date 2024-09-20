@@ -1,7 +1,6 @@
 package internal
 
 import (
-	"context"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/transport"
 	"sync"
@@ -37,11 +36,17 @@ func NewQueue(info types.QueueInfo) *Queue {
 	return q
 }
 
-func (q *Queue) AddLogical(*Logical) {
+func (q *Queue) AddLogical(l ...*Logical) *Queue {
 	// Adds or updates partition assignments
+	// TODO:
+	return nil
 }
 
-func (q *Queue) GetAll(_ context.Context) []*Logical {
+func (q *Queue) Info() types.QueueInfo {
+	return q.info
+}
+
+func (q *Queue) GetAll() []*Logical {
 	defer q.mutex.RUnlock()
 	q.mutex.RLock()
 
@@ -50,7 +55,7 @@ func (q *Queue) GetAll(_ context.Context) []*Logical {
 	return results
 }
 
-func (q *Queue) GetNext(_ context.Context) (Remote, *Logical) {
+func (q *Queue) GetNext() (Remote, *Logical) {
 	defer q.mutex.RUnlock()
 	q.mutex.RLock()
 
@@ -62,7 +67,7 @@ func (q *Queue) GetNext(_ context.Context) (Remote, *Logical) {
 	return nil, l
 }
 
-func (q *Queue) GetByPartition(_ context.Context, partition int) (Remote, *Logical, error) {
+func (q *Queue) GetByPartition(partition int) (Remote, *Logical, error) {
 	defer q.mutex.RUnlock()
 	q.mutex.RLock()
 

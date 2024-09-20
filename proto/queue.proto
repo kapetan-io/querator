@@ -260,8 +260,6 @@ message QueuePartitionStats {
 }
 
 message QueueLogicalStats {
-  // AverageReservedAge is the average age of reserved items in the partition
-  string averageReservedAge = 5 [json_name = "average_reserved_age"];
   // ProduceWaiting is the number of `/queue.produce` requests currently waiting
   // to be processed by the sync loop
   int32 produceWaiting = 6 [json_name = "produce_waiting"];

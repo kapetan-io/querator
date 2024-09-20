@@ -348,27 +348,29 @@ func (s *MemoryQueueStore) findQueue(name string) (int, bool) {
 // ---------------------------------------------
 
 type MemoryPartitionStore struct {
-	conf StorageConfig
+	conf       StorageConfig
+	partitions map[types.PartitionInfo]*MemoryPartition
 }
 
 var _ PartitionStore = &MemoryPartitionStore{}
 
 func NewMemoryPartitionStore(conf StorageConfig) *MemoryPartitionStore {
-	return &MemoryPartitionStore{conf: conf}
-}
-
-func (m MemoryPartitionStore) Create(info types.PartitionInfo) error {
-	// Does nothing as memory has nothing to create. Calls to GetByPartition() create the partition
-	// when requested.
-	return nil
+	return &MemoryPartitionStore{
+		partitions: make(map[types.PartitionInfo]*MemoryPartition),
+		conf:       conf,
+	}
 }
 
 func (m MemoryPartitionStore) Get(info types.PartitionInfo) Partition {
-	return &MemoryPartition{
-		mem:  make([]types.Item, 0, 1_000),
-		uid:  ksuid.New(),
-		conf: m.conf,
-		info: info,
+	p, ok := m.partitions[info]
+	if !ok {
+		m.partitions[info] = &MemoryPartition{
+			mem:  make([]types.Item, 0, 1_000),
+			uid:  ksuid.New(),
+			conf: m.conf,
+			info: info,
+		}
+		return m.partitions[info]
 	}
-
+	return p
 }

@@ -51,7 +51,7 @@ type Remote interface {
 
 // QueuesManager manages queues in use, and information about that queue.
 type QueuesManager struct {
-	queues     map[string]*Logical
+	queues     map[string]*Queue
 	conf       QueuesManagerConfig
 	inShutdown atomic.Bool
 	mutex      sync.RWMutex
@@ -70,7 +70,7 @@ func NewQueuesManager(conf QueuesManagerConfig) (*QueuesManager, error) {
 	}
 
 	qm := &QueuesManager{
-		queues: make(map[string]*Logical),
+		queues: make(map[string]*Queue),
 		conf:   conf,
 	}
 
@@ -79,43 +79,18 @@ func NewQueuesManager(conf QueuesManagerConfig) (*QueuesManager, error) {
 
 // TODO: Implement a healthcheck method call, which will ensure access to StorageConfig is working
 
-func (qm *QueuesManager) Get(ctx context.Context, name string) (*Queue, error) {
+func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Queue, error) {
 	if qm.inShutdown.Load() {
 		return nil, ErrServiceShutdown
 	}
-	defer qm.mutex.RUnlock()
-	qm.mutex.RLock()
-
-	// If queue is already running
-	//q, ok := qm.queues[name]
-	//if ok {
-	//	return nil, nil // TODO: Fix me
-	//}
-
-	// Look for the queue in storage
-	var queue types.QueueInfo
-	if err := qm.conf.StorageConfig.QueueStore.Get(ctx, name, &queue); err != nil {
-		if errors.Is(err, store.ErrQueueNotExist) {
-			return nil, transport.NewInvalidOption("queue does not exist; no such queue named '%s'", name)
-		}
-		return nil, err
-	}
-
-	return nil, nil
-	//return qm.startLogicalQueue(ctx, queue)
-}
-
-func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Logical, error) {
-	if qm.inShutdown.Load() {
-		return nil, ErrServiceShutdown
-	}
-	f := errors.Fields{"category", "querator", "func", "QueuesManager.Create"}
+	f := errors.Fields{"category", "querator", "func", "QueuesManager.Create", "queue", info.Name}
 	defer qm.mutex.Unlock()
 	qm.mutex.Lock()
 
-	// NOTE: Assertions in this method assume the Service validates the storage config with the
-	// available partitions before accepting the config. There is no use in returning errors
-	// for a thing that should only happen if there is a coding error, so we use assertions instead.
+	q, ok := qm.queues[info.Name]
+	if ok {
+		return q, transport.NewInvalidOption("invalid queue; '%s' already exists", info.Name)
+	}
 
 	// When creating a new Queue, info.PartitionInfo should have no details, but should
 	// include the number of partitions requested. This QueueManager will decide where to
@@ -123,7 +98,6 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Log
 	// any details included by the caller will be ignored.
 
 	// TODO: Test partitions are spread across multiple backends
-
 	// Spread the partitions across the storage backends according to affinity
 	var partitionIdx = 0
 	for idx, count := range qm.assignPartitions(info.RequestedPartitions) {
@@ -134,67 +108,65 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Log
 				Partition:   partitionIdx,
 			}
 			partitionIdx++
-			fmt.Printf("Create partition %+v\n", p)
 			info.PartitionInfo = append(info.PartitionInfo, p)
+			fmt.Printf("Partition Assigned: %+v\n", p)
 		}
 	}
 
 	info.CreatedAt = qm.conf.LogicalConfig.Clock.Now().UTC()
 	info.UpdatedAt = qm.conf.LogicalConfig.Clock.Now().UTC()
 	if err := qm.conf.StorageConfig.QueueStore.Add(ctx, info); err != nil {
-		f = append(f, "queue", info.Name)
 		return nil, f.Errorf("QueueStore.Add(): %w", err)
 	}
 
-	// EVERYTHING AFTER THIS POINT SHOULD ALSO ASSUME THE QUEUE INFO EXISTS IN THE DATA STORE.
-	// any catastrophic error past this point should be recoverable when we load a partition.
+	return qm.get(ctx, info.Name)
+}
 
-	// TODO: Move this code to a load partition method which can be re-used when loading a partition.
-	// <--- THIS NEXT
+func (qm *QueuesManager) Get(ctx context.Context, name string) (*Queue, error) {
+	if qm.inShutdown.Load() {
+		return nil, ErrServiceShutdown
+	}
+	defer qm.mutex.RUnlock()
+	qm.mutex.RLock()
 
-	for _, p := range info.PartitionInfo {
-		b := qm.conf.StorageConfig.Backends.Find(p.StorageName)
-		if b.Name == "" { // Assertion
-			panic(fmt.Sprintf("invalid storage config; partition references "+
-				"unknown storage backend '%s'", p.StorageName))
-		}
+	return qm.get(ctx, name)
+}
 
-		if err := b.PartitionStore.Create(p); err != nil {
-			f = append(f, "partition", p.Partition, "storage-name", p.StorageName)
-			return nil, f.Errorf("PartitionStore.Create(): %w", err)
-		}
+// TODO: Fix the PartitionStorage and getDB() handlers to also create the partition if it doesn't exist
+// TODO: Then fix queue.AddLogical()
+// <---- DO THIS NEXT
+
+func (qm *QueuesManager) get(ctx context.Context, name string) (*Queue, error) {
+	f := errors.Fields{"category", "querator", "func", "QueuesManager.get"}
+	// If queue is already running
+	q, ok := qm.queues[name]
+	if ok {
+		return q, nil
 	}
 
-	if _, ok := qm.queues[info.Name]; ok { // Assertion
-		// TODO(thrawn01): Consider a preforming a queue.UpdateInfo() if this happens instead of a panic.
-		//  It's possible the data store where we keep queue info is out of sync with our actual state, in
-		//  this case, it's probably better for us to update the queues when this happens.
-		panic(fmt.Sprintf("queue '%s' does not exist in data store, but is running!", info.Name))
+	// Look for the queue in storage
+	var queue types.QueueInfo
+	if err := qm.conf.StorageConfig.QueueStore.Get(ctx, name, &queue); err != nil {
+		if errors.Is(err, store.ErrQueueNotExist) {
+			return nil, transport.NewInvalidOption("queue does not exist; no such queue named '%s'", name)
+		}
+		return nil, err
 	}
 
-	// We currently start with a single logical queue, contention detection will adjust the number of
-	// logical queues as consumers join.
-
-	// GetByPartition all the partitions we want associated with this logical queue instance
+	// Get the partitions from the store
 	var partitions []store.Partition
-	for _, p := range info.PartitionInfo {
-		var found bool
-		for _, b := range qm.conf.StorageConfig.Backends {
-			if b.Name == p.StorageName {
-				partitions = append(partitions, b.PartitionStore.Get(p))
-				found = true
-				break
-			}
+	for _, info := range queue.PartitionInfo {
+		f = append(f, "partition", info.Partition, "storage-name", info.StorageName, "queue", queue.Name)
+
+		b := qm.conf.StorageConfig.Backends.Find(info.StorageName)
+		if b.Name == "" {
+			return nil, f.Error("queue partition references unknown storage name")
 		}
-		if !found {
-			return nil, append(f,
-				"storage", p.StorageName,
-				"partition", p.Partition,
-				"queue", info.Name,
-			).Errorf("no such backend found")
-		}
+		partitions = append(partitions, b.PartitionStore.Get(info))
 	}
 
+	// We currently start with a single logical queue, contention detection will eventually adjust the
+	// number of logical queues as consumers join.
 	l, err := SpawnLogicalQueue(LogicalConfig{
 		MaxProduceBatchSize:  qm.conf.LogicalConfig.MaxProduceBatchSize,
 		MaxReserveBatchSize:  qm.conf.LogicalConfig.MaxReserveBatchSize,
@@ -202,17 +174,15 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Log
 		MaxRequestsPerQueue:  qm.conf.LogicalConfig.MaxRequestsPerQueue,
 		WriteTimeout:         qm.conf.LogicalConfig.WriteTimeout,
 		ReadTimeout:          qm.conf.LogicalConfig.ReadTimeout,
-		Partitions:           partitions,
 		Logger:               qm.conf.Logger,
-		QueueInfo:            info,
+		Partitions:           partitions,
+		QueueInfo:            queue,
 	})
 	if err != nil {
 		return nil, f.Wrap(err)
 	}
-
-	// TODO: This should become a list of queues which hold logical queues
-	qm.queues[info.Name] = l
-	return l, nil
+	qm.queues[queue.Name] = NewQueue(queue).AddLogical(l)
+	return qm.queues[queue.Name], nil
 }
 
 //func (qm *QueuesManager) rebalanceLogical(info types.QueueInfo) error {
@@ -250,9 +220,10 @@ func (qm *QueuesManager) Update(ctx context.Context, info types.QueueInfo) error
 		return nil
 	}
 
-	// Update the active queue with the latest queue info
-	if err := q.UpdateInfo(ctx, info); err != nil {
-		return f.Errorf("LogicalQueue.UpdateInfo(): %w", err)
+	for _, l := range q.GetAll() {
+		if err := l.UpdateInfo(ctx, info); err != nil {
+			return f.Errorf("LogicalQueue.UpdateInfo(): %w", err)
+		}
 	}
 
 	return nil
@@ -277,9 +248,10 @@ func (qm *QueuesManager) Delete(ctx context.Context, name string) error {
 		return nil
 	}
 
-	// Then shutdown the queue
-	if err := q.Shutdown(ctx); err != nil {
-		return f.Errorf("LogicalQueue.Shutdown(): %w", err)
+	for _, l := range q.GetAll() {
+		if err := l.Shutdown(ctx); err != nil {
+			return f.Errorf("LogicalQueue.Shutdown(): %w", err)
+		}
 	}
 
 	delete(qm.queues, name)
@@ -301,12 +273,13 @@ func (qm *QueuesManager) Shutdown(ctx context.Context) error {
 	wait := make(chan error)
 	go func() {
 		for _, q := range qm.queues {
-			fmt.Printf("QueuesManager.Shutdown() queue '%s'\n", q.conf.Name)
-			if err := q.Shutdown(ctx); err != nil {
-				wait <- err
-				return
+			fmt.Printf("QueuesManager.Shutdown() queue '%s'\n", q.Info().Name)
+			for _, l := range q.GetAll() {
+				if err := l.Shutdown(ctx); err != nil {
+					wait <- err
+				}
 			}
-			fmt.Printf("QueuesManager.Shutdown() queue '%s' - DONE\n", q.conf.Name)
+			fmt.Printf("QueuesManager.Shutdown() queue '%s' - DONE\n", q.Info().Name)
 		}
 		fmt.Printf("QueuesManager.Shutdown() store.Close()\n")
 		if err := qm.conf.StorageConfig.QueueStore.Close(ctx); err != nil {

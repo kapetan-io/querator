@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"fmt"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/transport"
 	"github.com/kapetan-io/tackle/clock"
@@ -12,23 +11,14 @@ var (
 	ErrQueueNotExist = transport.NewRequestFailed("queue does not exist")
 )
 
-// TODO: Remove
-// StorageID is the decoded storage StorageID
-type StorageID struct {
-	ID    types.ItemID
-	Queue string
-}
-
-func (id StorageID) String() string {
-	return fmt.Sprintf("%s~%s", id.Queue, id.ID)
-}
-
 type ReserveOptions struct {
 	// ReserveDeadline is a time in the future when the reservation should expire
 	ReserveDeadline clock.Time
 }
 
-// QueueStore is storage for listing and storing information about queues
+// QueueStore is storage for listing and storing information about queues.  The QueueStore should employ
+// lazy storage initialization such that it makes contact or creates underlying tables only
+// upon first invocation. See 0021-storage-lazy-initialization.md for details.
 type QueueStore interface {
 	// Get returns a store.Partition from storage ready to be used. Returns ErrQueueNotExist if the
 	// queue requested does not exist
@@ -51,7 +41,9 @@ type QueueStore interface {
 }
 
 // Partition represents storage for a single partition. An instance of Partition should not be considered
-// thread safe as it is intended to be used by a Logical Queue only.
+// thread safe as it is intended to be used by a Logical Queue only. The partition should employ
+// lazy storage initialization such that it makes contact or creates underlying tables only
+// upon first invocation. See 0021-storage-lazy-initialization.md for details.
 type Partition interface {
 	// Produce writes the items for each batch to the data store, assigning an error for each
 	// batch that fails.
@@ -120,10 +112,8 @@ type Backend struct {
 
 // PartitionStore manages the partitions
 type PartitionStore interface {
-	// Get returns a new Partition instance for the requested partition. This call preforms
-	// no validation checks if the partition exists in storage nor if storage is available.
-	// the first operation preformed upon the partition will attempt to connect and validate
-	// the state of the storage backend.
+	// Get returns a new Partition instance for the requested partition. NOTE: This method does
+	// NOT return an error. See 0021-storage-lazy-initialization.md for an explanation.
 	Get(types.PartitionInfo) Partition
 
 	// TODO: List Partitions, Delete Partitions, etc...

@@ -41,35 +41,6 @@ func NewBoltPartitionStore(conf BoltConfig) *BoltPartitionStore {
 	return &BoltPartitionStore{conf: conf}
 }
 
-func (b BoltPartitionStore) Create(info types.PartitionInfo) error {
-	f := errors.Fields{"category", "bolt", "func", "BoltPartitionStore.Create"}
-
-	file := filepath.Join(b.conf.StorageDir, fmt.Sprintf("%s-%06d.db", info.QueueName, info.Partition))
-
-	opts := &bolt.Options{
-		FreelistType: bolt.FreelistArrayType,
-		Timeout:      clock.Second,
-		NoGrowSync:   false,
-	}
-
-	db, err := bolt.Open(file, 0600, opts)
-	if err != nil {
-		return f.Errorf("while opening db '%s': %w", file, err)
-	}
-
-	err = db.Update(func(tx *bolt.Tx) error {
-		_, err := tx.CreateBucket(bucketName)
-		if err != nil {
-			return err
-		}
-		return nil
-	})
-	if err != nil {
-		return f.Errorf("while creating bucket '%s': %w", file, err)
-	}
-	return db.Close()
-}
-
 func (b BoltPartitionStore) Get(info types.PartitionInfo) Partition {
 	return &BoltPartition{
 		uid:  ksuid.New(),
@@ -496,6 +467,19 @@ func (b *BoltPartition) getDB() (*bolt.DB, error) {
 	db, err := bolt.Open(file, 0600, opts)
 	if err != nil {
 		return nil, f.Errorf("while opening db '%s': %w", file, err)
+	}
+
+	err = db.Update(func(tx *bolt.Tx) error {
+		// If the bucket does not exist
+		if bucket := tx.Bucket(bucketName); bucket != nil {
+			// Create it
+			_, err := tx.CreateBucket(bucketName)
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, f.Errorf("while creating bucket '%s': %w", file, err)
 	}
 
 	b.db = db

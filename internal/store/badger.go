@@ -39,19 +39,6 @@ func NewBadgerPartitionStore(conf BadgerConfig) *BadgerPartitionStore {
 	return &BadgerPartitionStore{conf: conf}
 }
 
-func (b *BadgerPartitionStore) Create(info types.PartitionInfo) error {
-	f := errors.Fields{"category", "badger", "func", "BadgerPartitionStore.Create"}
-
-	dir := filepath.Join(b.conf.StorageDir, fmt.Sprintf("%s-%06d-%s", info.QueueName, info.Partition, bucketName))
-
-	db, err := badger.Open(badger.DefaultOptions(dir))
-	if err != nil {
-		return f.Errorf("while opening db '%s': %w", dir, err)
-	}
-
-	return db.Close()
-}
-
 func (b *BadgerPartitionStore) Get(info types.PartitionInfo) Partition {
 	return &BadgerPartition{
 		uid:  ksuid.New(),

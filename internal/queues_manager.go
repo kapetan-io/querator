@@ -132,7 +132,6 @@ func (qm *QueuesManager) Get(ctx context.Context, name string) (*Queue, error) {
 	return qm.get(ctx, name)
 }
 
-// TODO: Fix the PartitionStorage and getDB() handlers to also create the partition if it doesn't exist
 // TODO: Then fix queue.AddLogical()
 // <---- DO THIS NEXT
 

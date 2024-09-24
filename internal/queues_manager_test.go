@@ -6,6 +6,9 @@ import (
 	"testing"
 )
 
+// This is a happy path unit test for QueuesManager.assignPartitions() DO NOT ADD MORE TESTS
+// TODO: Add functional tests to ensure backend affinity is respected when the public
+// interface is exercised and remove this test once those are in place.
 func TestAssignPartitions(t *testing.T) {
 
 	for _, test := range []struct {

@@ -849,11 +849,11 @@ func (l *Logical) handleClear(_ *QueueState, req *QueueRequest) {
 
 func (l *Logical) handleStorageRequests(req *QueueRequest) {
 	sr := req.Request.(StorageRequest)
-	if sr.Partition < 0 || !(sr.Partition < len(l.conf.Partitions)) {
-		req.Err = transport.NewInvalidOption("partition is invalid; '%d' is not a valid partition", sr.Partition)
-		close(req.ReadyCh)
-		return
-	}
+	//if sr.Partition < 0 || !(sr.Partition < len(l.conf.Partitions)) {
+	//	req.Err = transport.NewInvalidOption("partition is invalid; '%d' is not a valid partition", sr.Partition)
+	//	close(req.ReadyCh)
+	//	return
+	//}
 
 	switch req.Method {
 	case MethodStorageItemsList:

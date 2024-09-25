@@ -17,8 +17,8 @@ type Queue struct {
 	ordered []*Logical
 	logical []*Logical
 	mutex   sync.RWMutex
-	remote  []Remote
-	idx     int
+	//remote  []Remote
+	idx int
 }
 
 func NewQueue(info types.QueueInfo) *Queue {
@@ -72,8 +72,8 @@ func (q *Queue) GetAll() []*Logical {
 }
 
 func (q *Queue) GetNext() (Remote, *Logical) {
-	defer q.mutex.RUnlock()
-	q.mutex.RLock()
+	defer q.mutex.Unlock()
+	q.mutex.Lock()
 
 	l := q.ordered[q.idx]
 	q.idx++
@@ -87,14 +87,14 @@ func (q *Queue) GetByPartition(partition int) (Remote, *Logical, error) {
 	defer q.mutex.RUnlock()
 	q.mutex.RLock()
 
-	if partition < 0 || partition >= len(q.ordered) {
-		return nil, nil, transport.NewInvalidOption("partition is invalid; '%d' is out of bounds", partition)
+	if partition < 0 || partition >= len(q.logical) {
+		return nil, nil, transport.NewInvalidOption("partition is invalid; '%d' is not a valid partition", partition)
 	}
 
 	if q.logical[partition] == nil {
 		// TODO: This is likely to not happen until we support the concept of 'remote'. We may need to remove this
 		//  check later.
-		return nil, nil, transport.NewInvalidOption("partition is invalid; no such partition '%d'", partition)
+		return nil, nil, transport.NewInvalidOption("partition is invalid; '%d' has no valid logical queue", partition)
 	}
 
 	return nil, q.logical[partition], nil

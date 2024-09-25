@@ -471,7 +471,7 @@ func (b *BoltPartition) getDB() (*bolt.DB, error) {
 
 	err = db.Update(func(tx *bolt.Tx) error {
 		// If the bucket does not exist
-		if bucket := tx.Bucket(bucketName); bucket != nil {
+		if bucket := tx.Bucket(bucketName); bucket == nil {
 			// Create it
 			_, err := tx.CreateBucket(bucketName)
 			return err

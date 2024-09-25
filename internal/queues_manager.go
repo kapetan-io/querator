@@ -132,9 +132,6 @@ func (qm *QueuesManager) Get(ctx context.Context, name string) (*Queue, error) {
 	return qm.get(ctx, name)
 }
 
-// TODO: Then fix queue.AddLogical()
-// <---- DO THIS NEXT
-
 func (qm *QueuesManager) get(ctx context.Context, name string) (*Queue, error) {
 	f := errors.Fields{"category", "querator", "func", "QueuesManager.get"}
 	// If queue is already running

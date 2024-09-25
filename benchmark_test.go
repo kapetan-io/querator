@@ -188,9 +188,9 @@ func generateProduceItems(size int) []*pb.QueueProduceItem {
 // the most efficient method. Sort performance is important as the current
 // implementation calls sort after each request is assigned a partition.
 
-type Partition struct {
-	Count     int64
-	Partition MethodCount
+type BenchPartition struct {
+	Count          int64
+	BenchPartition MethodCount
 }
 
 func BubbleSort(n []int) {
@@ -203,7 +203,7 @@ func BubbleSort(n []int) {
 	}
 }
 
-func BubbleSortPartition(n []Partition) {
+func BubbleSortPartition(n []BenchPartition) {
 	for i := 0; i < len(n); i++ {
 		for j := 0; j < len(n); j++ {
 			if n[i].Count < n[j].Count {
@@ -287,20 +287,20 @@ func BenchmarkSort(b *testing.B) {
 
 	b.Run("slices.SortFunc()", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			a := []Partition{
-				{Count: 0, Partition: &method{count: 0}},
-				{Count: 12, Partition: &method{count: 0}},
-				{Count: 5, Partition: &method{count: 0}},
-				{Count: 44, Partition: &method{count: 0}},
-				{Count: 85, Partition: &method{count: 0}},
-				{Count: 96, Partition: &method{count: 0}},
-				{Count: 27, Partition: &method{count: 0}},
-				{Count: 18, Partition: &method{count: 0}},
-				{Count: 49, Partition: &method{count: 0}},
-				{Count: 1, Partition: &method{count: 0}},
+			a := []BenchPartition{
+				{Count: 0, BenchPartition: &method{count: 0}},
+				{Count: 12, BenchPartition: &method{count: 0}},
+				{Count: 5, BenchPartition: &method{count: 0}},
+				{Count: 44, BenchPartition: &method{count: 0}},
+				{Count: 85, BenchPartition: &method{count: 0}},
+				{Count: 96, BenchPartition: &method{count: 0}},
+				{Count: 27, BenchPartition: &method{count: 0}},
+				{Count: 18, BenchPartition: &method{count: 0}},
+				{Count: 49, BenchPartition: &method{count: 0}},
+				{Count: 1, BenchPartition: &method{count: 0}},
 			}
 
-			slices.SortFunc(a, func(a, b Partition) int {
+			slices.SortFunc(a, func(a, b BenchPartition) int {
 				if a.Count < b.Count {
 					return -1
 				}
@@ -314,17 +314,17 @@ func BenchmarkSort(b *testing.B) {
 
 	b.Run("BubbleSortPartition()", func(b *testing.B) {
 		for i := 0; i < b.N; i++ {
-			a := []Partition{
-				{Count: 0, Partition: &method{count: 0}},
-				{Count: 12, Partition: &method{count: 0}},
-				{Count: 5, Partition: &method{count: 0}},
-				{Count: 44, Partition: &method{count: 0}},
-				{Count: 85, Partition: &method{count: 0}},
-				{Count: 96, Partition: &method{count: 0}},
-				{Count: 27, Partition: &method{count: 0}},
-				{Count: 18, Partition: &method{count: 0}},
-				{Count: 49, Partition: &method{count: 0}},
-				{Count: 1, Partition: &method{count: 0}},
+			a := []BenchPartition{
+				{Count: 0, BenchPartition: &method{count: 0}},
+				{Count: 12, BenchPartition: &method{count: 0}},
+				{Count: 5, BenchPartition: &method{count: 0}},
+				{Count: 44, BenchPartition: &method{count: 0}},
+				{Count: 85, BenchPartition: &method{count: 0}},
+				{Count: 96, BenchPartition: &method{count: 0}},
+				{Count: 27, BenchPartition: &method{count: 0}},
+				{Count: 18, BenchPartition: &method{count: 0}},
+				{Count: 49, BenchPartition: &method{count: 0}},
+				{Count: 1, BenchPartition: &method{count: 0}},
 			}
 
 			BubbleSortPartition(a)

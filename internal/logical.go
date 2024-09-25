@@ -611,12 +611,13 @@ EMPTY:
 		}
 	}
 
-	// Remove any clients that have timed out and find the next request to timeout, which will
-	// become our write timeout.
+	// Remove any clients that have timed out
 	l.nextTimeout(&state.Reservations)
 
 	// Assign Reservation Requests to Partitions
 	for _, req := range state.Reservations.Requests {
+		fmt.Printf("Reserve %d from [%d]\n", req.NumRequested,
+			state.PartitionDistributions[len(state.PartitionDistributions)-1].Partition.Info().Partition)
 		// Preform Opportunistic Partition Distribution
 		// See doc/adr/0019-partition-items-distribution.md for details
 		state.PartitionDistributions[len(state.PartitionDistributions)-1].Reserve(req)
@@ -849,11 +850,6 @@ func (l *Logical) handleClear(_ *QueueState, req *QueueRequest) {
 
 func (l *Logical) handleStorageRequests(req *QueueRequest) {
 	sr := req.Request.(StorageRequest)
-	//if sr.Partition < 0 || !(sr.Partition < len(l.conf.Partitions)) {
-	//	req.Err = transport.NewInvalidOption("partition is invalid; '%d' is not a valid partition", sr.Partition)
-	//	close(req.ReadyCh)
-	//	return
-	//}
 
 	switch req.Method {
 	case MethodStorageItemsList:

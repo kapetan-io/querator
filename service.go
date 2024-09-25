@@ -219,7 +219,7 @@ func (s *Service) PauseQueue(ctx context.Context, queueName string, pause bool) 
 		return err
 	}
 
-	// Clear all the logical queues on this instance
+	// Pause all the logical queues on this instance
 	for _, logical := range queue.GetAll() {
 		if err := logical.Pause(ctx, &types.PauseRequest{Pause: pause}); err != nil {
 			return err

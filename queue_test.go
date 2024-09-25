@@ -1234,14 +1234,14 @@ func pauseAndReserve(t *testing.T, ctx context.Context, s *que.Service, c *que.C
 	err := retry.On(_ctx, RetryTenTimes, func(ctx context.Context, i int) error {
 		var resp pb.QueueStatsResponse
 		require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: name}, &resp))
-		// There should eventually be 3 waiting reserve requests
+		// There should eventually be `len(requests)` waiting reserve requests
 		if int(resp.LogicalQueues[0].ReserveWaiting) != len(requests) {
 			return fmt.Errorf("ReserveWaiting never reached expected %d", len(requests))
 		}
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("while waiting on 3 reserved requests: %v", err)
+		t.Fatalf("while waiting on %d reserved requests: %v", len(requests), err)
 	}
 
 	// Unpause processing of the queue to allow the reservations to be filled.
@@ -1258,7 +1258,7 @@ func pauseAndReserve(t *testing.T, ctx context.Context, s *que.Service, c *que.C
 	select {
 	case <-done:
 	case <-clock.After(10 * clock.Second):
-		t.Fatalf("clockd out waiting for distribution of requests")
+		t.Fatalf("timed out waiting for distribution of requests")
 	}
 	return responses
 }

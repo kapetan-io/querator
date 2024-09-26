@@ -128,8 +128,10 @@ See [Querator API Reference](https://querator.io/api) for and idea of what the A
 ### Design
 See our [Architecture Decision Docs](doc/adr) for details on our current implementation design.
 
-### TODO
-See the [Querator Trello Board](https://trello.com/b/cey2cB3i/querator) for work status and progress
+### Contributing 
+- See the [Querator Trello Board](https://trello.com/b/cey2cB3i/querator) for work status and progress and things to do
+- Join our [Discord](https://discord.gg/EpPwcX3b)
+- Checkout [querator.io](https://querator.io/api) for the HTML OpenAPI docs
 
 ### Similar Projects
 * https://engineering.fb.com/2021/02/22/production-engineering/foqs-scaling-a-distributed-priority-queue/

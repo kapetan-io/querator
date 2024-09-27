@@ -1,9 +1,7 @@
 package querator_test
 
 import (
-	"context"
 	"errors"
-	"fmt"
 	"github.com/duh-rpc/duh-go"
 	que "github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/internal/store"
@@ -13,7 +11,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"math"
-	"math/rand"
 	"testing"
 )
 
@@ -779,61 +776,4 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			}
 		})
 	})
-}
-
-func compareQueueInfo(t *testing.T, expected *pb.QueueInfo, actual *pb.QueueInfo) {
-	t.Helper()
-	require.Equal(t, expected.QueueName, actual.QueueName)
-	require.Equal(t, expected.DeadTimeout, actual.DeadTimeout)
-	require.Equal(t, expected.ReserveTimeout, actual.ReserveTimeout)
-	require.Equal(t, expected.MaxAttempts, actual.MaxAttempts)
-	require.Equal(t, expected.DeadQueue, actual.DeadQueue)
-	require.Equal(t, expected.Reference, actual.Reference)
-}
-
-type Pair struct {
-	Reserve string
-	Dead    string
-}
-
-var validTimeouts = []Pair{
-	{
-		Reserve: "15s",
-		Dead:    "1m0s",
-	},
-	{
-		Reserve: "1m0s",
-		Dead:    "10m0s",
-	},
-	{
-		Reserve: "10m0s",
-		Dead:    "24h0m0s",
-	},
-	{
-		Reserve: "30m0s",
-		Dead:    "1h0m0s",
-	},
-}
-
-func createRandomQueues(t *testing.T, ctx context.Context, c *que.Client, count int) []*pb.QueueInfo {
-	t.Helper()
-
-	var idx int
-	var items []*pb.QueueInfo
-	for i := 0; i < count; i++ {
-		timeOuts := random.Slice(validTimeouts)
-		info := pb.QueueInfo{
-			QueueName:           fmt.Sprintf("queue-%05d", idx),
-			DeadQueue:           random.String("dead-", 10),
-			Reference:           random.String("ref-", 10),
-			MaxAttempts:         int32(rand.Intn(100)),
-			ReserveTimeout:      timeOuts.Reserve,
-			DeadTimeout:         timeOuts.Dead,
-			RequestedPartitions: 1,
-		}
-		idx++
-		items = append(items, &info)
-		require.NoError(t, c.QueuesCreate(ctx, &info))
-	}
-	return items
 }

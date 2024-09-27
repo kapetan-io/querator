@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"context"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -34,6 +35,7 @@ func TestNewQueue(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
+	defer func() { _ = l1.Shutdown(context.Background()) }()
 	l2, err := SpawnLogicalQueue(LogicalConfig{
 		QueueInfo: types.QueueInfo{
 			PartitionInfo: []types.PartitionInfo{
@@ -44,6 +46,7 @@ func TestNewQueue(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
+	defer func() { _ = l2.Shutdown(context.Background()) }()
 	l3, err := SpawnLogicalQueue(LogicalConfig{
 		QueueInfo: types.QueueInfo{
 			PartitionInfo: []types.PartitionInfo{
@@ -54,6 +57,7 @@ func TestNewQueue(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
+	defer func() { _ = l3.Shutdown(context.Background()) }()
 	require.NotNil(t, q.AddLogical(l1, l2, l3))
 
 	assert.Equal(t, 3, len(q.GetAll()))

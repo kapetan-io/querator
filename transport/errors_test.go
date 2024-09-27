@@ -20,5 +20,3 @@ func TestNewErrInvalid(t *testing.T) {
 	assert.Equal(t, "invalid key", d.Error())
 	assert.Equal(t, "invalid key", d.Message())
 }
-
-// TODO: Test the other errors

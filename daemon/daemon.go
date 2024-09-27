@@ -64,6 +64,7 @@ func NewDaemon(ctx context.Context, conf Config) (*Daemon, error) {
 		return nil, err
 	}
 
+	conf.Log = conf.Log.With("code.namespace", "Daemon")
 	d := &Daemon{
 		logAdaptor: duh.NewHttpLogAdaptor(conf.Log),
 		conf:       conf,
@@ -102,6 +103,7 @@ func (d *Daemon) Shutdown(ctx context.Context) error {
 		d.conf.Log.Info("Shutting down server", "address", srv.Addr)
 		_ = srv.Shutdown(ctx)
 	}
+	d.conf.Log.LogAttrs(ctx, slog.LevelDebug, "Shutdown complete")
 	d.servers = nil
 	return nil
 }

@@ -53,6 +53,7 @@ type QueuesManager struct {
 	conf       QueuesManagerConfig
 	inShutdown atomic.Bool
 	mutex      sync.RWMutex
+	log        *slog.Logger
 }
 
 func NewQueuesManager(conf QueuesManagerConfig) (*QueuesManager, error) {
@@ -68,6 +69,7 @@ func NewQueuesManager(conf QueuesManagerConfig) (*QueuesManager, error) {
 	}
 
 	qm := &QueuesManager{
+		log:    conf.Log.With("code.namespace", "QueuesManager"),
 		queues: make(map[string]*Queue),
 		conf:   conf,
 	}
@@ -107,7 +109,7 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Que
 			}
 			partitionIdx++
 			info.PartitionInfo = append(info.PartitionInfo, p)
-			qm.conf.Log.LogAttrs(ctx, slog.LevelDebug, "Partition Assigned",
+			qm.log.LogAttrs(ctx, slog.LevelDebug, "Partition Assigned",
 				slog.String("queue", p.QueueName), slog.String("storage", p.StorageName),
 				slog.Bool("read-only", p.ReadOnly), slog.Int("partition", p.Partition))
 		}
@@ -267,7 +269,7 @@ func (qm *QueuesManager) Shutdown(ctx context.Context) error {
 	wait := make(chan error)
 	go func() {
 		for _, q := range qm.queues {
-			qm.conf.Log.LogAttrs(ctx, slog.LevelDebug, "shutdown logical",
+			qm.log.LogAttrs(ctx, slog.LevelDebug, "shutdown logical",
 				slog.Int("num_queues", len(qm.queues)),
 				slog.String("queue", q.Info().Name))
 			for _, l := range q.GetAll() {
@@ -276,7 +278,7 @@ func (qm *QueuesManager) Shutdown(ctx context.Context) error {
 				}
 			}
 		}
-		qm.conf.Log.LogAttrs(ctx, slog.LevelDebug, "close queue store")
+		qm.log.LogAttrs(ctx, slog.LevelDebug, "close queue store")
 		if err := qm.conf.StorageConfig.QueueStore.Close(ctx); err != nil {
 			wait <- err
 			return
@@ -286,10 +288,10 @@ func (qm *QueuesManager) Shutdown(ctx context.Context) error {
 
 	select {
 	case <-ctx.Done():
-		qm.conf.Log.Warn("ctx cancelled while waiting for shutdown")
+		qm.log.Warn("ctx cancelled while waiting for shutdown")
 		return f.Wrap(ctx.Err())
 	case err := <-wait:
-		qm.conf.Log.LogAttrs(ctx, slog.LevelDebug, "shutdown complete")
+		qm.log.LogAttrs(ctx, slog.LevelDebug, "Shutdown complete")
 		return f.Wrap(err)
 	}
 }

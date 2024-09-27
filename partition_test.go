@@ -15,8 +15,8 @@ import (
 )
 
 func TestPartitions(t *testing.T) {
-	//bdb := boltTestSetup{Dir: t.TempDir()}
-	//badgerdb := badgerTestSetup{Dir: t.TempDir()}
+	bdb := boltTestSetup{Dir: t.TempDir()}
+	badgerdb := badgerTestSetup{Dir: t.TempDir()}
 
 	for _, tc := range []struct {
 		Setup    NewStorageFunc
@@ -30,24 +30,24 @@ func TestPartitions(t *testing.T) {
 			},
 			TearDown: func() {},
 		},
-		//{
-		//	Name: "BoltDB",
-		//	Setup: func(cp *clock.Provider) store.StorageConfig {
-		//		return bdb.Setup(store.BoltConfig{Clock: cp})
-		//	},
-		//	TearDown: func() {
-		//		bdb.Teardown()
-		//	},
-		//},
-		//{
-		//	Name: "BadgerDB",
-		//	Setup: func(cp *clock.Provider) store.StorageConfig {
-		//		return badgerdb.Setup(store.BadgerConfig{Clock: cp})
-		//	},
-		//	TearDown: func() {
-		//		badgerdb.Teardown()
-		//	},
-		//},
+		{
+			Name: "BoltDB",
+			Setup: func(cp *clock.Provider) store.StorageConfig {
+				return bdb.Setup(store.BoltConfig{Clock: cp})
+			},
+			TearDown: func() {
+				bdb.Teardown()
+			},
+		},
+		{
+			Name: "BadgerDB",
+			Setup: func(cp *clock.Provider) store.StorageConfig {
+				return badgerdb.Setup(store.BadgerConfig{Clock: cp})
+			},
+			TearDown: func() {
+				badgerdb.Teardown()
+			},
+		},
 		//{
 		//	Name: "SurrealDB",
 		//},
@@ -436,7 +436,7 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			assert.Equal(t, 2, len(r.Items))
 		}
 	})
-	// TODO: Errors
+	// TODO: Errors <-- DO NEXT, attempt to hit any error paths that are currently not hit
 	// TODO: Attempt to complete ids for a partition which does not exist
 }
 

@@ -108,7 +108,7 @@ func SpawnLogicalQueue(conf LogicalConfig) (*Logical, error) {
 		instanceID:     random.Alpha("", 10),
 		conf:           conf,
 	}
-	l.conf.Log = conf.Log.With("queue", conf.Name, "instance-id", l.instanceID)
+	l.conf.Log = conf.Log.With("code.namespace", "Logical", "queue", conf.Name, "instance-id", l.instanceID)
 
 	// These are request queues that queue requests from clients until the sync loop has
 	// time to process them. When they get processed, every request in the queue is handled

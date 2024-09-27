@@ -1,7 +1,6 @@
 package querator_test
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"github.com/duh-rpc/duh-go"
@@ -24,7 +23,7 @@ const (
 	ReserveTimeout = "1m0s"
 )
 
-var RetryTenTimes = retry.Policy{Interval: retry.Sleep(100 * clock.Millisecond), Attempts: 10}
+var RetryTenTimes = retry.Policy{Interval: retry.Sleep(100 * clock.Millisecond), Attempts: 20}
 
 type NewStorageFunc func(cp *clock.Provider) store.StorageConfig
 
@@ -1085,6 +1084,17 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					Code: duh.CodeBadRequest,
 				},
 				{
+					Name: "InvalidPartition",
+					Req: &pb.QueueCompleteRequest{
+						Ids:            listOfValidIds,
+						QueueName:      queueName,
+						RequestTimeout: "1m0s",
+						Partition:      65234,
+					},
+					Msg:  "partition is invalid; '65234' is not a valid partition",
+					Code: duh.CodeBadRequest,
+				},
+				{
 					Name: "RequestTimeoutTooLong",
 					Req: &pb.QueueCompleteRequest{
 						Ids:            listOfValidIds,
@@ -1137,14 +1147,13 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			} {
 				t.Run(tc.Name, func(t *testing.T) {
 					err := c.QueueComplete(ctx, tc.Req)
-					if tc.Code != duh.CodeOK {
-						var e duh.Error
-						require.True(t, errors.As(err, &e))
-						assert.Contains(t, e.Message(), tc.Msg)
-						assert.Equal(t, tc.Code, e.Code())
-						if e.Message() == "" {
-							t.Logf("Error: %s", e.Error())
-						}
+					fmt.Printf("Err: %+v\n", err)
+					var e duh.Error
+					require.True(t, errors.As(err, &e))
+					assert.Contains(t, e.Message(), tc.Msg)
+					assert.Equal(t, tc.Code, e.Code())
+					if e.Message() == "" {
+						t.Logf("Error: %s", e.Error())
 					}
 				})
 			}
@@ -1154,131 +1163,4 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	// TODO: Test /queue.produce and all the possible incorrect way it could be called
 	// TODO: Test /queue.reserve and all the possible incorrect way it could be called
 	// TODO: Test /queue.complete and all the possible incorrect way it could be called
-}
-
-func findInResponses(t *testing.T, responses []*pb.QueueReserveResponse, id string) bool {
-	t.Helper()
-
-	for _, item := range responses {
-		for _, idItem := range item.Items {
-			if idItem.Id == id {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func writeRandomItems(t *testing.T, ctx context.Context, c *que.Client,
-	name string, count int) []*pb.StorageItem {
-
-	t.Helper()
-	expire := clock.Now().UTC().Add(random.Duration(10*clock.Second, clock.Minute))
-
-	var items []*pb.StorageItem
-	for i := 0; i < count; i++ {
-		items = append(items, &pb.StorageItem{
-			DeadDeadline: timestamppb.New(expire),
-			Attempts:     int32(rand.Intn(10)),
-			Reference:    random.String("ref-", 10),
-			Encoding:     random.String("enc-", 10),
-			Kind:         random.String("kind-", 10),
-			Payload:      []byte(fmt.Sprintf("message-%d", i)),
-		})
-	}
-
-	var resp pb.StorageItemsImportResponse
-	err := c.StorageItemsImport(ctx, &pb.StorageItemsImportRequest{Items: items, QueueName: name}, &resp)
-	require.NoError(t, err)
-	return resp.Items
-}
-
-func randomSliceStrings(count int) []string {
-	var result []string
-	for i := 0; i < count; i++ {
-		result = append(result, fmt.Sprintf("string-%d", i))
-	}
-	return result
-}
-
-func pauseAndReserve(t *testing.T, ctx context.Context, s *que.Service, c *que.Client, name string,
-	requests []*pb.QueueReserveRequest) []*pb.QueueReserveResponse {
-	t.Helper()
-
-	// Pause processing of the queue for testing
-	require.NoError(t, s.PauseQueue(ctx, name, true))
-
-	responses := make([]*pb.QueueReserveResponse, len(requests))
-	for i := range responses {
-		responses[i] = &pb.QueueReserveResponse{}
-	}
-
-	var wg sync.WaitGroup
-	wg.Add(len(requests))
-
-	for i := range requests {
-		go func(idx int) {
-			defer wg.Done()
-			if err := c.QueueReserve(ctx, requests[idx], responses[idx]); err != nil {
-				var d duh.Error
-				if errors.As(err, &d) {
-					if d.Code() == duh.CodeRetryRequest {
-						return
-					}
-				}
-				panic(err)
-			}
-		}(i)
-	}
-
-	_ctx, cancel := context.WithTimeout(context.Background(), clock.Second*10)
-	defer cancel()
-
-	// Wait until every request is waiting
-	err := retry.On(_ctx, RetryTenTimes, func(ctx context.Context, i int) error {
-		var resp pb.QueueStatsResponse
-		require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: name}, &resp))
-		// There should eventually be `len(requests)` waiting reserve requests
-		if int(resp.LogicalQueues[0].ReserveWaiting) != len(requests) {
-			return fmt.Errorf("ReserveWaiting never reached expected %d", len(requests))
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("while waiting on %d reserved requests: %v", len(requests), err)
-	}
-
-	// Unpause processing of the queue to allow the reservations to be filled.
-	require.NoError(t, s.PauseQueue(ctx, name, false))
-
-	// Wait for each request to complete
-	done := make(chan struct{})
-
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-	case <-clock.After(10 * clock.Second):
-		t.Fatalf("timed out waiting for distribution of requests")
-	}
-	return responses
-}
-
-func untilReserveClientBlocked(t *testing.T, c *que.Client, queueName string, numBlocked int) error {
-	_ctx, cancel := context.WithTimeout(context.Background(), 5*clock.Second)
-	defer cancel()
-	t.Helper()
-
-	// Wait until every request is waiting
-	return retry.On(_ctx, RetryTenTimes, func(ctx context.Context, i int) error {
-		var resp pb.QueueStatsResponse
-		require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &resp))
-		if int(resp.LogicalQueues[0].ReserveBlocked) != numBlocked {
-			return fmt.Errorf("ReserveBlocked never reached expected %d", numBlocked)
-		}
-		return nil
-	})
 }

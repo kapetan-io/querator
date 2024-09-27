@@ -1,22 +1,16 @@
 package querator_test
 
 import (
-	"context"
 	"errors"
-	"fmt"
 	"github.com/duh-rpc/duh-go"
 	que "github.com/kapetan-io/querator"
-	"github.com/kapetan-io/querator/daemon"
 	"github.com/kapetan-io/querator/internal/store"
 	pb "github.com/kapetan-io/querator/proto"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/random"
-	"github.com/kapetan-io/tackle/set"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/timestamppb"
-	"os"
-	"path/filepath"
 	"testing"
 )
 
@@ -514,176 +508,4 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 			})
 		}
 	})
-}
-
-type testDaemon struct {
-	cancel context.CancelFunc
-	ctx    context.Context
-	d      *daemon.Daemon
-}
-
-func (td *testDaemon) Shutdown(t *testing.T) {
-	t.Helper()
-
-	require.NoError(t, td.d.Shutdown(td.ctx))
-	td.cancel()
-}
-
-func (td *testDaemon) MustClient() *que.Client {
-	return td.d.MustClient()
-}
-
-func (td *testDaemon) Context() context.Context {
-	return td.ctx
-}
-
-func (td *testDaemon) Service() *que.Service {
-	return td.d.Service()
-}
-
-func newDaemon(t *testing.T, duration clock.Duration, conf que.ServiceConfig) (*testDaemon, *que.Client, context.Context) {
-	t.Helper()
-
-	set.Default(&conf.Log, log)
-	td := &testDaemon{}
-	var err error
-
-	td.ctx, td.cancel = context.WithTimeout(context.Background(), duration)
-	td.d, err = daemon.NewDaemon(td.ctx, daemon.Config{
-		ServiceConfig: conf,
-	})
-	require.NoError(t, err)
-	return td, td.d.MustClient(), td.ctx
-}
-
-func randomProduceItems(count int) []*pb.QueueProduceItem {
-	batch := random.String("", 5)
-	var items []*pb.QueueProduceItem
-	for i := 0; i < count; i++ {
-		items = append(items, &pb.QueueProduceItem{
-			Reference: random.String("ref-", 10),
-			Encoding:  random.String("enc-", 10),
-			Kind:      random.String("kind-", 10),
-			Bytes:     []byte(fmt.Sprintf("message-%s-%d", batch, i)),
-		})
-	}
-	return items
-}
-
-func compareStorageItem(t *testing.T, l *pb.StorageItem, r *pb.StorageItem) {
-	t.Helper()
-	require.Equal(t, l.Id, r.Id)
-	require.Equal(t, l.IsReserved, r.IsReserved)
-	require.Equal(t, l.DeadDeadline.AsTime(), r.DeadDeadline.AsTime())
-	require.Equal(t, l.ReserveDeadline.AsTime(), r.ReserveDeadline.AsTime())
-	require.Equal(t, l.Attempts, r.Attempts)
-	require.Equal(t, l.Reference, r.Reference)
-	require.Equal(t, l.Encoding, r.Encoding)
-	require.Equal(t, l.Kind, r.Kind)
-	require.Equal(t, l.Payload, r.Payload)
-}
-
-func setupMemoryStorage(conf store.StorageConfig) store.StorageConfig {
-	conf.QueueStore = store.NewMemoryQueueStore()
-	conf.Backends = []store.Backend{
-		{
-			PartitionStore: store.NewMemoryPartitionStore(conf),
-			Name:           "memory-0",
-			Affinity:       1,
-		},
-	}
-	return conf
-}
-
-// ---------------------------------------------
-// Test Helper
-// ---------------------------------------------
-
-func dirExists(path string) bool {
-	info, err := os.Stat(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return false
-		}
-		return false
-	}
-	return info.IsDir()
-}
-
-// ---------------------------------------------------------------------
-// Bolt test setup
-// ---------------------------------------------------------------------
-
-type boltTestSetup struct {
-	Dir string
-}
-
-func (b *boltTestSetup) Setup(bc store.BoltConfig) store.StorageConfig {
-	if !dirExists(b.Dir) {
-		if err := os.Mkdir(b.Dir, 0777); err != nil {
-			panic(err)
-		}
-	}
-	b.Dir = filepath.Join(b.Dir, random.String("test-data-", 10))
-	if err := os.Mkdir(b.Dir, 0777); err != nil {
-		panic(err)
-	}
-	bc.StorageDir = b.Dir
-	bc.Log = log
-
-	var conf store.StorageConfig
-	conf.QueueStore = store.NewBoltQueueStore(bc)
-	conf.Backends = []store.Backend{
-		{
-			PartitionStore: store.NewBoltPartitionStore(bc),
-			Name:           "bolt-0",
-			Affinity:       1,
-		},
-	}
-	return conf
-}
-
-func (b *boltTestSetup) Teardown() {
-	if err := os.RemoveAll(b.Dir); err != nil {
-		panic(err)
-	}
-}
-
-// ---------------------------------------------------------------------
-// Badger test setup
-// ---------------------------------------------------------------------
-
-type badgerTestSetup struct {
-	Dir string
-}
-
-func (b *badgerTestSetup) Setup(bc store.BadgerConfig) store.StorageConfig {
-	if !dirExists(b.Dir) {
-		if err := os.Mkdir(b.Dir, 0777); err != nil {
-			panic(err)
-		}
-	}
-	b.Dir = filepath.Join(b.Dir, random.String("test-data-", 10))
-	if err := os.Mkdir(b.Dir, 0777); err != nil {
-		panic(err)
-	}
-	bc.StorageDir = b.Dir
-	bc.Log = log
-
-	var conf store.StorageConfig
-	conf.QueueStore = store.NewBadgerQueueStore(bc)
-	conf.Backends = []store.Backend{
-		{
-			PartitionStore: store.NewBadgerPartitionStore(bc),
-			Name:           "badger-0",
-			Affinity:       1,
-		},
-	}
-	return conf
-}
-
-func (b *badgerTestSetup) Teardown() {
-	if err := os.RemoveAll(b.Dir); err != nil {
-		panic(err)
-	}
 }

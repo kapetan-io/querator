@@ -43,4 +43,4 @@ jobs:
         run: go mod download
 
       - name: Test
-        run: go test -v -race -p=1 -count=1
+        run: go test -v -race -p=1 -count=1 -logging=ci

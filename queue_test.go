@@ -24,7 +24,7 @@ const (
 	ReserveTimeout = "1m0s"
 )
 
-var RetryTenTimes = retry.Policy{Interval: retry.Sleep(clock.Second), Attempts: 10}
+var RetryTenTimes = retry.Policy{Interval: retry.Sleep(100 * clock.Millisecond), Attempts: 10}
 
 type NewStorageFunc func(cp *clock.Provider) store.StorageConfig
 
@@ -1208,14 +1208,18 @@ func pauseAndReserve(t *testing.T, ctx context.Context, s *que.Service, c *que.C
 	// Pause processing of the queue for testing
 	require.NoError(t, s.PauseQueue(ctx, name, true))
 
-	responses := []*pb.QueueReserveResponse{{}, {}, {}}
+	responses := make([]*pb.QueueReserveResponse, len(requests))
+	for i := range responses {
+		responses[i] = &pb.QueueReserveResponse{}
+	}
+
 	var wg sync.WaitGroup
 	wg.Add(len(requests))
 
 	for i := range requests {
-		go func() {
+		go func(idx int) {
 			defer wg.Done()
-			if err := c.QueueReserve(ctx, requests[i], responses[i]); err != nil {
+			if err := c.QueueReserve(ctx, requests[idx], responses[idx]); err != nil {
 				var d duh.Error
 				if errors.As(err, &d) {
 					if d.Code() == duh.CodeRetryRequest {
@@ -1224,7 +1228,7 @@ func pauseAndReserve(t *testing.T, ctx context.Context, s *que.Service, c *que.C
 				}
 				panic(err)
 			}
-		}()
+		}(i)
 	}
 
 	_ctx, cancel := context.WithTimeout(context.Background(), clock.Second*10)

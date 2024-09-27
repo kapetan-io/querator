@@ -15,14 +15,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/timestamppb"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
 )
-
-// var log = slog.New(slog.NewTextHandler(io.Discard, nil))
-var log = slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 // TestQueueStorage tests the /storage/queue.* endpoints
 func TestQueueStorage(t *testing.T) {
@@ -548,7 +544,7 @@ func (td *testDaemon) Service() *que.Service {
 func newDaemon(t *testing.T, duration clock.Duration, conf que.ServiceConfig) (*testDaemon, *que.Client, context.Context) {
 	t.Helper()
 
-	set.Default(&conf.Logger, log)
+	set.Default(&conf.Log, log)
 	td := &testDaemon{}
 	var err error
 
@@ -633,6 +629,7 @@ func (b *boltTestSetup) Setup(bc store.BoltConfig) store.StorageConfig {
 		panic(err)
 	}
 	bc.StorageDir = b.Dir
+	bc.Log = log
 
 	var conf store.StorageConfig
 	conf.QueueStore = store.NewBoltQueueStore(bc)
@@ -671,6 +668,7 @@ func (b *badgerTestSetup) Setup(bc store.BadgerConfig) store.StorageConfig {
 		panic(err)
 	}
 	bc.StorageDir = b.Dir
+	bc.Log = log
 
 	var conf store.StorageConfig
 	conf.QueueStore = store.NewBadgerQueueStore(bc)

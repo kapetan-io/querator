@@ -18,7 +18,6 @@ package querator
 
 import (
 	"context"
-	"github.com/duh-rpc/duh-go"
 	"github.com/kapetan-io/querator/internal"
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
@@ -34,8 +33,8 @@ const (
 )
 
 type ServiceConfig struct {
-	// Logger is the logging implementation used by this Querator instance
-	Logger duh.StandardLogger
+	// Log is the logging implementation used by this Querator instance
+	Log *slog.Logger
 	// StorageConfig is the configured storage backends
 	StorageConfig store.StorageConfig
 	// InstanceID is a unique id for this instance of Querator
@@ -64,7 +63,7 @@ type Service struct {
 }
 
 func NewService(conf ServiceConfig) (*Service, error) {
-	set.Default(&conf.Logger, slog.Default())
+	set.Default(&conf.Log, slog.Default())
 
 	// TODO: Validate the Storage Config (somewhere) ensure that we have at least one storage backend with an affinity
 	//  greater than 0.0 else QueuesManager will be unable to assign partitions.
@@ -81,7 +80,7 @@ func NewService(conf ServiceConfig) (*Service, error) {
 			Clock:                conf.Clock,
 		},
 		StorageConfig: conf.StorageConfig,
-		Logger:        conf.Logger,
+		Log:           conf.Log,
 	})
 	if err != nil {
 		return nil, err

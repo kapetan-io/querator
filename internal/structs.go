@@ -29,7 +29,7 @@ func (p *PartitionDistribution) Produce(req *types.ProduceRequest) {
 
 func (p *PartitionDistribution) Reserve(req *types.ReserveRequest) {
 	p.Count -= req.NumRequested
-	if p.Count <= 0 {
+	if p.Count < 0 {
 		p.Count = 0
 	}
 	// Record which partition this request is assigned, so it can be retrieved by the client later.
@@ -45,11 +45,10 @@ func (p *PartitionDistribution) Reserve(req *types.ReserveRequest) {
 //}
 
 type QueueState struct {
-	Reservations           types.ReserveBatch
-	Producers              types.Batch[types.ProduceRequest]
-	Completes              types.Batch[types.CompleteRequest]
-	PartitionDistributions []PartitionDistribution
-	ReserveIndex           int
+	Reservations  types.ReserveBatch
+	Producers     types.Batch[types.ProduceRequest]
+	Completes     types.Batch[types.CompleteRequest]
+	Distributions []PartitionDistribution
 
 	NextMaintenanceCh <-chan clock.Time
 }

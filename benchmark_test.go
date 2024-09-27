@@ -67,7 +67,7 @@ func BenchmarkProduce(b *testing.B) {
 			d, err := daemon.NewDaemon(context.Background(), daemon.Config{
 				ServiceConfig: querator.ServiceConfig{
 					StorageConfig: tc.Setup(clock.NewProvider()),
-					Logger:        log,
+					Log:           log,
 				},
 			})
 			require.NoError(b, err)
@@ -114,12 +114,11 @@ func BenchmarkProduce(b *testing.B) {
 			d, err := daemon.NewDaemon(context.Background(), daemon.Config{
 				ServiceConfig: querator.ServiceConfig{
 					StorageConfig: tc.Setup(clock.NewProvider()),
-					Logger:        log,
+					Log:           log,
 				},
 			})
 			require.NoError(b, err)
 			defer func() {
-				fmt.Printf("Shutdown\n")
 				_ = d.Shutdown(context.Background())
 			}()
 			s := d.Service()
@@ -142,7 +141,6 @@ func BenchmarkProduce(b *testing.B) {
 
 					err = s.QueuesCreate(context.Background(), &info)
 					if err != nil {
-						fmt.Printf("Error creating queue: %s\n", err)
 						b.Error(err)
 						return
 					}

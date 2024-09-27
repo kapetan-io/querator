@@ -11,7 +11,7 @@ $(LINT): ## Download Go linter
 
 .PHONY: test
 test:
-	go test -timeout 10m -v -p=1 -count=1 -race ./...
+	go test -timeout 10m -v -p=1 -count=1 -race -logging=ci ./...
 
 .PHONY: lint
 lint: $(LINT) ## Run Go linter

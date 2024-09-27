@@ -2,8 +2,6 @@ package internal
 
 import (
 	"context"
-	"fmt"
-	"github.com/duh-rpc/duh-go"
 	"github.com/kapetan-io/errors"
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
@@ -23,8 +21,8 @@ var ErrServiceShutdown = transport.NewRequestFailed(MsgServiceInShutdown)
 
 type QueuesManagerConfig struct {
 	StorageConfig store.StorageConfig
-	Logger        duh.StandardLogger
 	LogicalConfig LogicalConfig
+	Log           *slog.Logger
 }
 
 // Remote represents a remote instance of querator. Implementations proxy requests to the remote instance
@@ -59,7 +57,7 @@ type QueuesManager struct {
 
 func NewQueuesManager(conf QueuesManagerConfig) (*QueuesManager, error) {
 	set.Default(&conf.LogicalConfig.Clock, clock.NewProvider())
-	set.Default(&conf.Logger, slog.Default())
+	set.Default(&conf.Log, slog.Default())
 
 	if conf.StorageConfig.QueueStore == nil {
 		return nil, errors.New("conf.StorageConfig.QueueStore cannot be nil")
@@ -83,7 +81,7 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Que
 	if qm.inShutdown.Load() {
 		return nil, ErrServiceShutdown
 	}
-	f := errors.Fields{"category", "querator", "func", "QueuesManager.Create", "queue", info.Name}
+	f := errors.Fields{"func", "QueuesManager.Create", "queue", info.Name}
 	defer qm.mutex.Unlock()
 	qm.mutex.Lock()
 
@@ -109,7 +107,9 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Que
 			}
 			partitionIdx++
 			info.PartitionInfo = append(info.PartitionInfo, p)
-			fmt.Printf("Partition Assigned: %+v\n", p)
+			qm.conf.Log.LogAttrs(ctx, slog.LevelDebug, "Partition Assigned",
+				slog.String("queue", p.QueueName), slog.String("storage", p.StorageName),
+				slog.Bool("read-only", p.ReadOnly), slog.Int("partition", p.Partition))
 		}
 	}
 
@@ -133,7 +133,7 @@ func (qm *QueuesManager) Get(ctx context.Context, name string) (*Queue, error) {
 }
 
 func (qm *QueuesManager) get(ctx context.Context, name string) (*Queue, error) {
-	f := errors.Fields{"category", "querator", "func", "QueuesManager.get"}
+	f := errors.Fields{"func", "QueuesManager.get"}
 	// If queue is already running
 	q, ok := qm.queues[name]
 	if ok {
@@ -170,7 +170,7 @@ func (qm *QueuesManager) get(ctx context.Context, name string) (*Queue, error) {
 		MaxRequestsPerQueue:  qm.conf.LogicalConfig.MaxRequestsPerQueue,
 		WriteTimeout:         qm.conf.LogicalConfig.WriteTimeout,
 		ReadTimeout:          qm.conf.LogicalConfig.ReadTimeout,
-		Logger:               qm.conf.Logger,
+		Log:                  qm.conf.Log,
 		Partitions:           partitions,
 		QueueInfo:            queue,
 	})
@@ -200,7 +200,7 @@ func (qm *QueuesManager) Update(ctx context.Context, info types.QueueInfo) error
 	if qm.inShutdown.Load() {
 		return ErrServiceShutdown
 	}
-	f := errors.Fields{"category", "querator", "func", "QueuesManager.Update"}
+	f := errors.Fields{"func", "QueuesManager.Update"}
 	defer qm.mutex.Unlock()
 	qm.mutex.Lock()
 
@@ -229,7 +229,7 @@ func (qm *QueuesManager) Delete(ctx context.Context, name string) error {
 	if qm.inShutdown.Load() {
 		return ErrServiceShutdown
 	}
-	f := errors.Fields{"category", "querator", "func", "QueuesManager.Delete"}
+	f := errors.Fields{"func", "QueuesManager.Delete"}
 	defer qm.mutex.Unlock()
 	qm.mutex.Lock()
 
@@ -258,26 +258,25 @@ func (qm *QueuesManager) Shutdown(ctx context.Context) error {
 	if qm.inShutdown.Load() {
 		return nil
 	}
-	f := errors.Fields{"category", "querator", "func", "QueuesManager.Shutdown"}
+	f := errors.Fields{"func", "QueuesManager.Shutdown"}
 
-	fmt.Printf("QueuesManager.Shutdown()\n")
 	qm.inShutdown.Store(true)
 	defer qm.mutex.Unlock()
 	qm.mutex.Lock()
 
-	fmt.Printf("QueuesManager.Shutdown() queues len %d\n", len(qm.queues))
 	wait := make(chan error)
 	go func() {
 		for _, q := range qm.queues {
-			fmt.Printf("QueuesManager.Shutdown() queue '%s'\n", q.Info().Name)
+			qm.conf.Log.LogAttrs(ctx, slog.LevelDebug, "shutdown logical",
+				slog.Int("num_queues", len(qm.queues)),
+				slog.String("queue", q.Info().Name))
 			for _, l := range q.GetAll() {
 				if err := l.Shutdown(ctx); err != nil {
 					wait <- err
 				}
 			}
-			fmt.Printf("QueuesManager.Shutdown() queue '%s' - DONE\n", q.Info().Name)
 		}
-		fmt.Printf("QueuesManager.Shutdown() store.Close()\n")
+		qm.conf.Log.LogAttrs(ctx, slog.LevelDebug, "close queue store")
 		if err := qm.conf.StorageConfig.QueueStore.Close(ctx); err != nil {
 			wait <- err
 			return
@@ -285,13 +284,12 @@ func (qm *QueuesManager) Shutdown(ctx context.Context) error {
 		close(wait)
 	}()
 
-	fmt.Printf("QueuesManager.Shutdown() wait\n")
 	select {
 	case <-ctx.Done():
-		fmt.Printf("QueuesManager.Shutdown() wait ctx cancel\n")
+		qm.conf.Log.Warn("ctx cancelled while waiting for shutdown")
 		return f.Wrap(ctx.Err())
 	case err := <-wait:
-		fmt.Printf("QueuesManager.Shutdown() wait done\n")
+		qm.conf.Log.LogAttrs(ctx, slog.LevelDebug, "shutdown complete")
 		return f.Wrap(err)
 	}
 }

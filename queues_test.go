@@ -84,10 +84,8 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				RequestedPartitions: 1,
 			}))
 
-			fmt.Println("Create queue:", queueName)
 			var list pb.QueuesListResponse
 			require.NoError(t, c.QueuesList(ctx, &list, nil))
-			fmt.Println("List queue:", queueName)
 			require.Equal(t, 1, len(list.Items))
 			assert.Equal(t, queueName, list.Items[0].QueueName)
 			assert.NotEmpty(t, list.Items[0].CreatedAt)

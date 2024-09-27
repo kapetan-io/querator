@@ -5,13 +5,13 @@ import (
 	"context"
 	"encoding/gob"
 	"fmt"
-	"github.com/duh-rpc/duh-go"
 	"github.com/kapetan-io/errors"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/transport"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/segmentio/ksuid"
 	bolt "go.etcd.io/bbolt"
+	"log/slog"
 	"path/filepath"
 )
 
@@ -20,8 +20,8 @@ var bucketName = []byte("queue")
 type BoltConfig struct {
 	// StorageDir is the directory where bolt will store its data
 	StorageDir string
-	// Logger is used to log warnings and errors
-	Logger duh.StandardLogger
+	// Log is used to log warnings and errors
+	Log *slog.Logger
 	// Clock is a time provider used to preform time related calculations. It is configurable so that it can
 	// be overridden for testing.
 	Clock *clock.Provider
@@ -61,7 +61,7 @@ type BoltPartition struct {
 }
 
 func (b *BoltPartition) Produce(_ context.Context, batch types.Batch[types.ProduceRequest]) error {
-	f := errors.Fields{"category", "bolt", "func", "Partition.Produce"}
+	f := errors.Fields{"code.namespace", "bolt", "func", "Partition.Produce"}
 	db, err := b.getDB()
 	if err != nil {
 		return err
@@ -95,7 +95,7 @@ func (b *BoltPartition) Produce(_ context.Context, batch types.Batch[types.Produ
 }
 
 func (b *BoltPartition) Reserve(_ context.Context, batch types.ReserveBatch, opts ReserveOptions) error {
-	f := errors.Fields{"category", "bolt", "func", "Partition.Reserve"}
+	f := errors.Fields{"code.namespace", "bolt", "func", "Partition.Reserve"}
 
 	db, err := b.getDB()
 	if err != nil {
@@ -155,7 +155,7 @@ func (b *BoltPartition) Reserve(_ context.Context, batch types.ReserveBatch, opt
 }
 
 func (b *BoltPartition) Complete(_ context.Context, batch types.Batch[types.CompleteRequest]) error {
-	f := errors.Fields{"category", "bolt", "func", "Partition.Complete"}
+	f := errors.Fields{"code.namespace", "bolt", "func", "Partition.Complete"}
 	var done bool
 
 	db, err := b.getDB()
@@ -171,7 +171,7 @@ func (b *BoltPartition) Complete(_ context.Context, batch types.Batch[types.Comp
 	defer func() {
 		if !done {
 			if err := tx.Rollback(); err != nil {
-				b.conf.Logger.Error("during Rollback()", "error", err)
+				b.conf.Log.Error("during Rollback()", "error", err)
 			}
 		}
 	}()
@@ -223,7 +223,7 @@ nextBatch:
 }
 
 func (b *BoltPartition) List(_ context.Context, items *[]*types.Item, opts types.ListOptions) error {
-	f := errors.Fields{"category", "bolt", "func", "Partition.List"}
+	f := errors.Fields{"code.namespace", "bolt", "func", "Partition.List"}
 
 	db, err := b.getDB()
 	if err != nil {
@@ -285,7 +285,7 @@ func (b *BoltPartition) List(_ context.Context, items *[]*types.Item, opts types
 }
 
 func (b *BoltPartition) Add(_ context.Context, items []*types.Item) error {
-	f := errors.Fields{"category", "bolt", "func", "Partition.Add"}
+	f := errors.Fields{"code.namespace", "bolt", "func", "Partition.Add"}
 
 	if len(items) == 0 {
 		return transport.NewInvalidOption("items is invalid; cannot be empty")
@@ -322,7 +322,7 @@ func (b *BoltPartition) Add(_ context.Context, items []*types.Item) error {
 }
 
 func (b *BoltPartition) Delete(_ context.Context, ids []types.ItemID) error {
-	f := errors.Fields{"category", "bolt", "func", "Partition.Delete"}
+	f := errors.Fields{"code.namespace", "bolt", "func", "Partition.Delete"}
 
 	db, err := b.getDB()
 	if err != nil {
@@ -348,7 +348,7 @@ func (b *BoltPartition) Delete(_ context.Context, ids []types.ItemID) error {
 }
 
 func (b *BoltPartition) Clear(_ context.Context, destructive bool) error {
-	f := errors.Fields{"category", "bolt", "func", "Partition.Delete"}
+	f := errors.Fields{"code.namespace", "bolt", "func", "Partition.Delete"}
 
 	db, err := b.getDB()
 	if err != nil {
@@ -395,7 +395,7 @@ func (b *BoltPartition) Info() types.PartitionInfo {
 }
 
 func (b *BoltPartition) Stats(_ context.Context, stats *types.PartitionStats) error {
-	f := errors.Fields{"category", "bunt-db", "func", "Partition.Stats"}
+	f := errors.Fields{"code.namespace", "bunt-db", "func", "Partition.Stats"}
 	now := b.conf.Clock.Now().UTC()
 
 	db, err := b.getDB()
@@ -455,7 +455,7 @@ func (b *BoltPartition) getDB() (*bolt.DB, error) {
 		return b.db, nil
 	}
 
-	f := errors.Fields{"category", "bolt", "func", "BoltPartition.getDB"}
+	f := errors.Fields{"code.namespace", "bolt", "func", "BoltPartition.getDB"}
 	file := filepath.Join(b.conf.StorageDir, fmt.Sprintf("%s-%06d.db", b.info.QueueName, b.info.Partition))
 
 	opts := &bolt.Options{
@@ -509,7 +509,7 @@ func (b *BoltQueueStore) getDB() (*bolt.DB, error) {
 		return b.db, nil
 	}
 
-	f := errors.Fields{"category", "bolt", "func", "StorageConfig.QueueStore"}
+	f := errors.Fields{"code.namespace", "bolt", "func", "StorageConfig.QueueStore"}
 	// We store info about the queues in a single db file. We prefix it with `~` to make it
 	// impossible for someone to create a queue with the same name.
 	file := filepath.Join(b.conf.StorageDir, "~queue-storage.db")
@@ -539,7 +539,7 @@ func (b *BoltQueueStore) getDB() (*bolt.DB, error) {
 }
 
 func (b *BoltQueueStore) Get(_ context.Context, name string, queue *types.QueueInfo) error {
-	f := errors.Fields{"category", "bolt", "func", "QueueStore.GetByPartition"}
+	f := errors.Fields{"code.namespace", "bolt", "func", "QueueStore.GetByPartition"}
 
 	if err := b.validateGet(name); err != nil {
 		return err
@@ -569,7 +569,7 @@ func (b *BoltQueueStore) Get(_ context.Context, name string, queue *types.QueueI
 }
 
 func (b *BoltQueueStore) Add(_ context.Context, info types.QueueInfo) error {
-	f := errors.Fields{"category", "bolt", "func", "QueueStore.Add"}
+	f := errors.Fields{"code.namespace", "bolt", "func", "QueueStore.Add"}
 
 	if err := b.validateAdd(info); err != nil {
 		return err
@@ -604,7 +604,7 @@ func (b *BoltQueueStore) Add(_ context.Context, info types.QueueInfo) error {
 }
 
 func (b *BoltQueueStore) Update(_ context.Context, info types.QueueInfo) error {
-	f := errors.Fields{"category", "bolt", "func", "QueueStore.Update"}
+	f := errors.Fields{"code.namespace", "bolt", "func", "QueueStore.Update"}
 
 	db, err := b.getDB()
 	if err != nil {
@@ -655,7 +655,7 @@ func (b *BoltQueueStore) Update(_ context.Context, info types.QueueInfo) error {
 }
 
 func (b *BoltQueueStore) List(_ context.Context, queues *[]types.QueueInfo, opts types.ListOptions) error {
-	f := errors.Fields{"category", "bolt", "func", "QueueStore.List"}
+	f := errors.Fields{"code.namespace", "bolt", "func", "QueueStore.List"}
 
 	if err := b.validateList(opts); err != nil {
 		return err
@@ -714,7 +714,7 @@ func (b *BoltQueueStore) List(_ context.Context, queues *[]types.QueueInfo, opts
 }
 
 func (b *BoltQueueStore) Delete(_ context.Context, name string) error {
-	f := errors.Fields{"category", "bolt", "func", "QueueStore.Delete"}
+	f := errors.Fields{"code.namespace", "bolt", "func", "QueueStore.Delete"}
 
 	if err := b.validateDelete(name); err != nil {
 		return err

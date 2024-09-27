@@ -64,7 +64,7 @@ func NewQueuesManager(conf QueuesManagerConfig) (*QueuesManager, error) {
 		return nil, errors.New("conf.StorageConfig.QueueStore cannot be nil")
 	}
 
-	if conf.StorageConfig.Backends == nil || len(conf.StorageConfig.Backends) == 0 {
+	if len(conf.StorageConfig.Backends) == 0 {
 		return nil, errors.New("conf.StorageConfig.Backends cannot be empty")
 	}
 

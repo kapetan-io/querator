@@ -12,6 +12,7 @@ import (
 	"github.com/kapetan-io/tackle/random"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/goleak"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"math/rand"
 	"sync"
@@ -75,6 +76,7 @@ func TestQueue(t *testing.T) {
 }
 
 func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
+	defer goleak.VerifyNone(t)
 
 	t.Run("ProduceAndReserve", func(t *testing.T) {
 		_store := setup(clock.NewProvider())
@@ -1147,7 +1149,6 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			} {
 				t.Run(tc.Name, func(t *testing.T) {
 					err := c.QueueComplete(ctx, tc.Req)
-					fmt.Printf("Err: %+v\n", err)
 					var e duh.Error
 					require.True(t, errors.As(err, &e))
 					assert.Contains(t, e.Message(), tc.Msg)

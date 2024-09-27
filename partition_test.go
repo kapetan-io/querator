@@ -11,6 +11,7 @@ import (
 	"github.com/kapetan-io/tackle/random"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/goleak"
 	"testing"
 )
 
@@ -62,6 +63,7 @@ func TestPartitions(t *testing.T) {
 }
 
 func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
+	defer goleak.VerifyNone(t)
 	_store := setup(clock.NewProvider())
 	defer tearDown()
 	d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: _store})
@@ -415,7 +417,7 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		err := retry.On(ctx, RetryTenTimes, func(ctx context.Context, i int) error {
 			var resp pb.QueueStatsResponse
 			require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &resp))
-			if int(resp.LogicalQueues[0].ReserveWaiting) != len(requests) {
+			if (int(resp.LogicalQueues[0].ReserveWaiting) + int(resp.LogicalQueues[0].ReserveBlocked)) != len(requests) {
 				return fmt.Errorf("ReserveWaiting never reached expected %d", len(requests))
 			}
 			return nil

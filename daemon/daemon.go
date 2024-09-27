@@ -26,7 +26,6 @@ import (
 	"github.com/kapetan-io/tackle/set"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"log"
 	"log/slog"
 	"net"
 	"net/http"
@@ -34,13 +33,12 @@ import (
 )
 
 type Daemon struct {
-	service    *querator.Service
-	logAdaptor *duh.HttpLogAdaptor
-	client     *querator.Client
-	servers    []*http.Server
-	wg         sync.WaitGroup
-	Listener   net.Listener
-	conf       Config
+	service  *querator.Service
+	client   *querator.Client
+	servers  []*http.Server
+	wg       sync.WaitGroup
+	Listener net.Listener
+	conf     Config
 }
 
 func NewDaemon(ctx context.Context, conf Config) (*Daemon, error) {
@@ -66,9 +64,8 @@ func NewDaemon(ctx context.Context, conf Config) (*Daemon, error) {
 
 	conf.Log = conf.Log.With("code.namespace", "Daemon")
 	d := &Daemon{
-		logAdaptor: duh.NewHttpLogAdaptor(conf.Log),
-		conf:       conf,
-		service:    s,
+		conf:    conf,
+		service: s,
 	}
 	return d, d.Start(ctx)
 }
@@ -136,7 +133,7 @@ func (d *Daemon) Client() (*querator.Client, error) {
 
 func (d *Daemon) spawnHTTPS(ctx context.Context, mux http.Handler) error {
 	srv := &http.Server{
-		ErrorLog:  log.New(d.logAdaptor, "", 0),
+		ErrorLog:  slog.NewLogLogger(d.conf.Log.Handler(), slog.LevelError),
 		TLSConfig: d.conf.ServerTLS().Clone(),
 		Addr:      d.conf.ListenAddress,
 		Handler:   mux,
@@ -170,7 +167,7 @@ func (d *Daemon) spawnHTTPS(ctx context.Context, mux http.Handler) error {
 
 func (d *Daemon) spawnHTTP(ctx context.Context, h http.Handler) error {
 	srv := &http.Server{
-		ErrorLog: log.New(d.logAdaptor, "", 0),
+		ErrorLog: slog.NewLogLogger(d.conf.Log.Handler(), slog.LevelError),
 		Addr:     d.conf.ListenAddress,
 		Handler:  h,
 	}

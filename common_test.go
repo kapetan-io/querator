@@ -16,6 +16,7 @@ import (
 	"github.com/kapetan-io/tackle/random"
 	"github.com/kapetan-io/tackle/set"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/goleak"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"io"
 	"log/slog"
@@ -29,6 +30,7 @@ import (
 var log *slog.Logger
 
 func TestMain(m *testing.M) {
+
 	logFlag := flag.String("logging", "", "indicates the type of logging during tests. "+
 		"If unset tests run with debug level colored text log output. "+
 		"If set to 'ci' discards logs during tests which greatly reduces logs during CI runs")
@@ -46,7 +48,8 @@ func TestMain(m *testing.M) {
 		log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 
-	m.Run()
+	goleak.VerifyTestMain(m)
+	//os.Exit(m.Run())
 }
 
 // ---------------------------------------------------------------------

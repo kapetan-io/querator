@@ -10,6 +10,7 @@ import (
 	"github.com/kapetan-io/tackle/random"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/goleak"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"testing"
 )
@@ -64,6 +65,8 @@ func TestQueueStorage(t *testing.T) {
 }
 
 func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
+	defer goleak.VerifyNone(t)
+
 	_store := newStore(clock.NewProvider())
 	defer tearDown()
 

@@ -10,6 +10,7 @@ import (
 	"github.com/kapetan-io/tackle/random"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/goleak"
 	"math"
 	"testing"
 )
@@ -62,6 +63,8 @@ func TestQueuesStorage(t *testing.T) {
 }
 
 func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
+	defer goleak.VerifyNone(t)
+
 	t.Run("CRUD", func(t *testing.T) {
 		_store := setup(clock.NewProvider())
 		defer tearDown()

@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := build
 LINT = $(GOPATH)/bin/golangci-lint
-LINT_VERSION = 1.56.2
+LINT_VERSION = v1.61.0
 
 .PHONY: proto
 proto: ## Build protos

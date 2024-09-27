@@ -468,7 +468,14 @@ func (l *Logical) syncLoop() {
 	l.prepareQueueState(&state)
 
 	for {
-		l.conf.Log.LogAttrs(context.Background(), slog.LevelDebug, "syncLoop()")
+		l.conf.Log.LogAttrs(context.Background(), slog.LevelDebug, "syncLoop()",
+			slog.Int("PWaiting", len(l.produceQueueCh)),
+			slog.Int("RWaiting", len(l.reserveQueueCh)),
+			slog.Int("CWaiting", len(l.completeQueueCh)),
+			slog.Int("RBlocked", len(state.Reservations.Requests)),
+			slog.Int("InFlight", int(l.inFlight.Load())),
+		)
+
 		select {
 		case req := <-l.produceQueueCh:
 			l.handleProduceRequests(&state, req)
@@ -954,10 +961,10 @@ func (l *Logical) handleShutdown(state *QueueState, req *types.ShutdownRequest) 
 		}
 	}
 
-	for _, p := range l.conf.Partitions {
+	for i, p := range l.conf.Partitions {
 		l.conf.Log.LogAttrs(req.Context, slog.LevelDebug, "close partition",
 			slog.Int("partition", p.Info().Partition))
-		if err := l.conf.Partitions[0].Close(req.Context); err != nil {
+		if err := l.conf.Partitions[i].Close(req.Context); err != nil {
 			req.Err = err
 		}
 	}

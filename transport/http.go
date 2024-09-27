@@ -25,6 +25,7 @@ import (
 	pb "github.com/kapetan-io/querator/proto"
 	"github.com/kapetan-io/tackle/set"
 	"github.com/prometheus/client_golang/prometheus"
+	"log/slog"
 	"net/http"
 )
 
@@ -94,13 +95,13 @@ type Service interface {
 
 type HTTPHandler struct {
 	duration       *prometheus.SummaryVec
-	log            duh.StandardLogger
+	log            *slog.Logger
 	metrics        http.Handler
 	service        Service
 	maxProduceSize int64
 }
 
-func NewHTTPHandler(s Service, metrics http.Handler, maxProduceSize int64, log duh.StandardLogger) *HTTPHandler {
+func NewHTTPHandler(s Service, metrics http.Handler, maxProduceSize int64, log *slog.Logger) *HTTPHandler {
 	set.Default(&maxProduceSize, int64(duh.MegaByte))
 
 	return &HTTPHandler{
@@ -376,7 +377,7 @@ func (h *HTTPHandler) ReplyError(w http.ResponseWriter, r *http.Request, err err
 	// TODO: Extract error.Fields and add them to the log fields
 
 	h.log.Error(err.Error(),
-		"category", "http",
+		"location", "HTTPHandler",
 		"http.request.status", duh.CodeInternalError,
 		"http.request.url", r.URL.String(),
 		"http.request.headers", r.Header,

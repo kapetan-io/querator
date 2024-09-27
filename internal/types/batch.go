@@ -39,6 +39,11 @@ type ReserveBatch struct {
 	Total    int
 }
 
+func (r *ReserveBatch) Reset() {
+	r.Requests = r.Requests[:0]
+	r.Total = 0
+}
+
 func (r *ReserveBatch) Add(req *ReserveRequest) {
 	r.Total += req.NumRequested
 	r.Requests = append(r.Requests, req)
@@ -54,7 +59,6 @@ func (r *ReserveBatch) MarkNil(idx int) {
 // resizes the slice without altering the capacity. We filter out nils as it's more efficient
 // and safer to mark requests as nil during iteration, then clean up the nils after.
 func (r *ReserveBatch) FilterNils() {
-	//fmt.Printf("FilterNils Before: %s\n", joinClientId(r.Requests))
 	// Filter in place algorithm. Removes the request and moves all
 	// items up the slice then resizes the slice
 	n := 0
@@ -65,23 +69,7 @@ func (r *ReserveBatch) FilterNils() {
 		}
 	}
 	r.Requests = r.Requests[:n]
-	//fmt.Printf("FilterNils After: %s\n", joinClientId(r.Requests))
 }
-
-// TODO: Remove
-//func joinClientId(reqs []*ReserveRequest) string {
-//	var buf bytes.Buffer
-//
-//	for _, req := range reqs {
-//		if req != nil {
-//			buf.WriteString(req.ClientID)
-//		} else {
-//			buf.WriteString("nil")
-//		}
-//		buf.WriteString(", ")
-//	}
-//	return buf.String()
-//}
 
 func (r *ReserveBatch) Iterator() ReserveBatchIterator {
 	return ReserveBatchIterator{b: r}

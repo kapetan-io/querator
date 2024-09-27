@@ -6,20 +6,22 @@ import (
 	"encoding/gob"
 	"fmt"
 	"github.com/dgraph-io/badger/v4"
-	"github.com/duh-rpc/duh-go"
 	"github.com/kapetan-io/errors"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/transport"
 	"github.com/kapetan-io/tackle/clock"
+	"github.com/kapetan-io/tackle/set"
 	"github.com/segmentio/ksuid"
+	"log/slog"
 	"path/filepath"
+	"strings"
 )
 
 type BadgerConfig struct {
 	// StorageDir is the directory where badger will store its data
 	StorageDir string
-	// Logger is used to log warnings and errors
-	Logger duh.StandardLogger
+	// Log is used to log warnings and errors
+	Log *slog.Logger
 	// Clock is a time provider used to preform time related calculations. It is configurable so that it can
 	// be overridden for testing.
 	Clock *clock.Provider
@@ -37,19 +39,6 @@ var _ PartitionStore = &BadgerPartitionStore{}
 
 func NewBadgerPartitionStore(conf BadgerConfig) *BadgerPartitionStore {
 	return &BadgerPartitionStore{conf: conf}
-}
-
-func (b *BadgerPartitionStore) Create(info types.PartitionInfo) error {
-	f := errors.Fields{"category", "badger", "func", "BadgerPartitionStore.Create"}
-
-	dir := filepath.Join(b.conf.StorageDir, fmt.Sprintf("%s-%06d-%s", info.QueueName, info.Partition, bucketName))
-
-	db, err := badger.Open(badger.DefaultOptions(dir))
-	if err != nil {
-		return f.Errorf("while opening db '%s': %w", dir, err)
-	}
-
-	return db.Close()
 }
 
 func (b *BadgerPartitionStore) Get(info types.PartitionInfo) Partition {
@@ -72,7 +61,7 @@ type BadgerPartition struct {
 }
 
 func (b *BadgerPartition) Produce(_ context.Context, batch types.Batch[types.ProduceRequest]) error {
-	f := errors.Fields{"category", "badger", "func", "Partition.Produce"}
+	f := errors.Fields{"code.namespace", "badger", "func", "Partition.Produce"}
 	db, err := b.getDB()
 	if err != nil {
 		return err
@@ -85,7 +74,7 @@ func (b *BadgerPartition) Produce(_ context.Context, batch types.Batch[types.Pro
 				item.ID = []byte(b.uid.String())
 				item.CreatedAt = b.conf.Clock.Now().UTC()
 
-				// TODO: Get buffers from memory pool
+				// TODO: GetByPartition buffers from memory pool
 				var buf bytes.Buffer
 				if err := gob.NewEncoder(&buf).Encode(item); err != nil {
 					return f.Errorf("during gob.Encode(): %w", err)
@@ -101,7 +90,7 @@ func (b *BadgerPartition) Produce(_ context.Context, batch types.Batch[types.Pro
 }
 
 func (b *BadgerPartition) Reserve(_ context.Context, batch types.ReserveBatch, opts ReserveOptions) error {
-	f := errors.Fields{"category", "badger", "func", "Partition.Reserve"}
+	f := errors.Fields{"code.namespace", "badger", "func", "Partition.Reserve"}
 
 	db, err := b.getDB()
 	if err != nil {
@@ -160,7 +149,7 @@ func (b *BadgerPartition) Reserve(_ context.Context, batch types.ReserveBatch, o
 }
 
 func (b *BadgerPartition) Complete(_ context.Context, batch types.Batch[types.CompleteRequest]) error {
-	f := errors.Fields{"category", "badger", "func", "Partition.Complete"}
+	f := errors.Fields{"code.namespace", "badger", "func", "Partition.Complete"}
 	var done bool
 
 	db, err := b.getDB()
@@ -229,7 +218,7 @@ nextBatch:
 }
 
 func (b *BadgerPartition) List(_ context.Context, items *[]*types.Item, opts types.ListOptions) error {
-	f := errors.Fields{"category", "badger", "func", "Partition.List"}
+	f := errors.Fields{"code.namespace", "badger", "func", "Partition.List"}
 
 	db, err := b.getDB()
 	if err != nil {
@@ -261,7 +250,7 @@ func (b *BadgerPartition) List(_ context.Context, items *[]*types.Item, opts typ
 			var v []byte
 			v, err := iter.Item().ValueCopy(v)
 			if err != nil {
-				return f.Errorf("during Get value: %w", err)
+				return f.Errorf("during GetByPartition value: %w", err)
 			}
 
 			item := new(types.Item) // TODO: memory pool
@@ -281,11 +270,15 @@ func (b *BadgerPartition) List(_ context.Context, items *[]*types.Item, opts typ
 }
 
 func (b *BadgerPartition) Add(_ context.Context, items []*types.Item) error {
-	f := errors.Fields{"category", "badger", "func", "Partition.Add"}
+	f := errors.Fields{"code.namespace", "badger", "func", "Partition.Add"}
 
 	db, err := b.getDB()
 	if err != nil {
 		return err
+	}
+
+	if len(items) == 0 {
+		return transport.NewInvalidOption("items is invalid; cannot be empty")
 	}
 
 	return db.Update(func(txn *badger.Txn) error {
@@ -295,7 +288,7 @@ func (b *BadgerPartition) Add(_ context.Context, items []*types.Item) error {
 			item.ID = []byte(b.uid.String())
 			item.CreatedAt = b.conf.Clock.Now().UTC()
 
-			// TODO: Get buffers from memory pool
+			// TODO: GetByPartition buffers from memory pool
 			var buf bytes.Buffer
 			if err := gob.NewEncoder(&buf).Encode(item); err != nil {
 				return f.Errorf("during gob.Encode(): %w", err)
@@ -310,7 +303,7 @@ func (b *BadgerPartition) Add(_ context.Context, items []*types.Item) error {
 }
 
 func (b *BadgerPartition) Delete(_ context.Context, ids []types.ItemID) error {
-	f := errors.Fields{"category", "badger", "func", "Partition.Delete"}
+	f := errors.Fields{"code.namespace", "badger", "func", "Partition.Delete"}
 
 	db, err := b.getDB()
 	if err != nil {
@@ -332,7 +325,7 @@ func (b *BadgerPartition) Delete(_ context.Context, ids []types.ItemID) error {
 }
 
 func (b *BadgerPartition) Clear(_ context.Context, destructive bool) error {
-	f := errors.Fields{"category", "badger", "func", "Partition.Clear"}
+	f := errors.Fields{"code.namespace", "badger", "func", "Partition.Clear"}
 
 	db, err := b.getDB()
 	if err != nil {
@@ -356,7 +349,7 @@ func (b *BadgerPartition) Clear(_ context.Context, destructive bool) error {
 			k = iter.Item().KeyCopy(k)
 			v, err := iter.Item().ValueCopy(v)
 			if err != nil {
-				return f.Errorf("during Get value: %w", err)
+				return f.Errorf("during GetByPartition value: %w", err)
 			}
 
 			item := new(types.Item) // TODO: memory pool
@@ -377,8 +370,12 @@ func (b *BadgerPartition) Clear(_ context.Context, destructive bool) error {
 	})
 }
 
+func (b *BadgerPartition) Info() types.PartitionInfo {
+	return b.info
+}
+
 func (b *BadgerPartition) Stats(_ context.Context, stats *types.PartitionStats) error {
-	f := errors.Fields{"category", "badger", "func", "Partition.Stats"}
+	f := errors.Fields{"code.namespace", "badger", "func", "Partition.Stats"}
 	now := b.conf.Clock.Now().UTC()
 
 	db, err := b.getDB()
@@ -395,7 +392,7 @@ func (b *BadgerPartition) Stats(_ context.Context, stats *types.PartitionStats) 
 			var v []byte
 			v, err := iter.Item().ValueCopy(v)
 			if err != nil {
-				return f.Errorf("during Get value: %w", err)
+				return f.Errorf("during GetByPartition value: %w", err)
 			}
 
 			item := new(types.Item) // TODO: memory pool
@@ -441,10 +438,12 @@ func (b *BadgerPartition) getDB() (*badger.DB, error) {
 		return b.db, nil
 	}
 
-	f := errors.Fields{"category", "badger", "func", "BadgerPartition.getDB"}
+	f := errors.Fields{"code.namespace", "badger", "func", "BadgerPartition.getDB"}
 	dir := filepath.Join(b.conf.StorageDir, fmt.Sprintf("%s-%06d-%s", b.info.QueueName, b.info.Partition, bucketName))
 
-	db, err := badger.Open(badger.DefaultOptions(dir))
+	opts := badger.DefaultOptions(dir)
+	opts.Logger = newBadgerLogger(b.conf.Log)
+	db, err := badger.Open(opts)
 	if err != nil {
 		return nil, f.Errorf("while opening db '%s': %w", dir, err)
 	}
@@ -458,6 +457,7 @@ func (b *BadgerPartition) getDB() (*badger.DB, error) {
 // ---------------------------------------------
 
 func NewBadgerQueueStore(conf BadgerConfig) QueueStore {
+	set.Default(conf.Log, slog.Default())
 	return &BadgerQueueStore{
 		conf: conf,
 	}
@@ -476,11 +476,14 @@ func (b *BadgerQueueStore) getDB() (*badger.DB, error) {
 		return b.db, nil
 	}
 
-	f := errors.Fields{"category", "badger", "func", "StorageConfig.QueueStore"}
+	f := errors.Fields{"code.namespace", "badger", "func", "StorageConfig.QueueStore"}
 	// We store info about the queues in a single db file. We prefix it with `~` to make it
 	// impossible for someone to create a queue with the same name.
 	dir := filepath.Join(b.conf.StorageDir, fmt.Sprintf("~queue-storage-%s", bucketName))
-	db, err := badger.Open(badger.DefaultOptions(dir))
+
+	opts := badger.DefaultOptions(dir)
+	opts.Logger = newBadgerLogger(b.conf.Log)
+	db, err := badger.Open(opts)
 	if err != nil {
 		return nil, f.Errorf("while opening db '%s': %w", dir, err)
 	}
@@ -490,7 +493,7 @@ func (b *BadgerQueueStore) getDB() (*badger.DB, error) {
 }
 
 func (b *BadgerQueueStore) Get(_ context.Context, name string, queue *types.QueueInfo) error {
-	f := errors.Fields{"category", "badger", "func", "QueueStore.Get"}
+	f := errors.Fields{"code.namespace", "badger", "func", "QueueStore.GetByPartition"}
 
 	if err := b.validateGet(name); err != nil {
 		return err
@@ -508,13 +511,13 @@ func (b *BadgerQueueStore) Get(_ context.Context, name string, queue *types.Queu
 			if errors.Is(err, badger.ErrKeyNotFound) {
 				return ErrQueueNotExist
 			}
-			return f.Errorf("during Get(): %w", err)
+			return f.Errorf("during GetByPartition(): %w", err)
 		}
 
 		var v []byte
 		v, err = kvItem.ValueCopy(v)
 		if err != nil {
-			return f.Errorf("during Get value(): %w", err)
+			return f.Errorf("during GetByPartition value(): %w", err)
 		}
 
 		if err := gob.NewDecoder(bytes.NewReader(v)).Decode(queue); err != nil {
@@ -525,7 +528,7 @@ func (b *BadgerQueueStore) Get(_ context.Context, name string, queue *types.Queu
 }
 
 func (b *BadgerQueueStore) Add(_ context.Context, info types.QueueInfo) error {
-	f := errors.Fields{"category", "badger", "func", "QueueStore.Add"}
+	f := errors.Fields{"code.namespace", "badger", "func", "QueueStore.Add"}
 
 	if err := b.validateAdd(info); err != nil {
 		return err
@@ -557,7 +560,7 @@ func (b *BadgerQueueStore) Add(_ context.Context, info types.QueueInfo) error {
 }
 
 func (b *BadgerQueueStore) Update(_ context.Context, info types.QueueInfo) error {
-	f := errors.Fields{"category", "badger", "func", "QueueStore.Update"}
+	f := errors.Fields{"code.namespace", "badger", "func", "QueueStore.Update"}
 
 	db, err := b.getDB()
 	if err != nil {
@@ -575,13 +578,13 @@ func (b *BadgerQueueStore) Update(_ context.Context, info types.QueueInfo) error
 			if errors.Is(err, badger.ErrKeyNotFound) {
 				return ErrQueueNotExist
 			}
-			return f.Errorf("during Get(): %w", err)
+			return f.Errorf("during GetByPartition(): %w", err)
 		}
 
 		var v []byte
 		v, err = kvItem.ValueCopy(v)
 		if err != nil {
-			return f.Errorf("during Get value(): %w", err)
+			return f.Errorf("during GetByPartition value(): %w", err)
 		}
 
 		var found types.QueueInfo
@@ -613,7 +616,7 @@ func (b *BadgerQueueStore) Update(_ context.Context, info types.QueueInfo) error
 }
 
 func (b *BadgerQueueStore) List(_ context.Context, queues *[]types.QueueInfo, opts types.ListOptions) error {
-	f := errors.Fields{"category", "badger", "func", "QueueStore.List"}
+	f := errors.Fields{"code.namespace", "badger", "func", "QueueStore.List"}
 
 	if err := b.validateList(opts); err != nil {
 		return err
@@ -642,7 +645,7 @@ func (b *BadgerQueueStore) List(_ context.Context, queues *[]types.QueueInfo, op
 		for ; iter.Valid(); iter.Next() {
 			v, err := iter.Item().ValueCopy(v)
 			if err != nil {
-				return f.Errorf("during Get value(): %w", err)
+				return f.Errorf("during GetByPartition value(): %w", err)
 			}
 
 			var info types.QueueInfo
@@ -661,7 +664,7 @@ func (b *BadgerQueueStore) List(_ context.Context, queues *[]types.QueueInfo, op
 }
 
 func (b *BadgerQueueStore) Delete(_ context.Context, name string) error {
-	f := errors.Fields{"category", "badger", "func", "QueueStore.Delete"}
+	f := errors.Fields{"code.namespace", "badger", "func", "QueueStore.Delete"}
 
 	if err := b.validateDelete(name); err != nil {
 		return err
@@ -685,4 +688,28 @@ func (b *BadgerQueueStore) Close(_ context.Context) error {
 	err := b.db.Close()
 	b.db = nil
 	return err
+}
+
+type badgerLogger struct {
+	log *slog.Logger
+}
+
+func newBadgerLogger(log *slog.Logger) *badgerLogger {
+	return &badgerLogger{log: log.With("code.namespace", "badger-lib")}
+}
+
+func (l *badgerLogger) Errorf(f string, v ...interface{}) {
+	l.log.Error(fmt.Sprintf(strings.Trim(f, "\n"), v...))
+}
+
+func (l *badgerLogger) Warningf(f string, v ...interface{}) {
+	l.log.Warn(fmt.Sprintf(strings.Trim(f, "\n"), v...))
+}
+
+func (l *badgerLogger) Infof(f string, v ...interface{}) {
+	l.log.Debug(fmt.Sprintf(strings.Trim(f, "\n"), v...))
+}
+
+func (l *badgerLogger) Debugf(f string, v ...interface{}) {
+	l.log.Debug(fmt.Sprintf(strings.Trim(f, "\n"), v...))
 }

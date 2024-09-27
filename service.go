@@ -18,7 +18,6 @@ package querator
 
 import (
 	"context"
-	"github.com/duh-rpc/duh-go"
 	"github.com/kapetan-io/querator/internal"
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
@@ -34,8 +33,8 @@ const (
 )
 
 type ServiceConfig struct {
-	// Logger is the logging implementation used by this Querator instance
-	Logger duh.StandardLogger
+	// Log is the logging implementation used by this Querator instance
+	Log *slog.Logger
 	// StorageConfig is the configured storage backends
 	StorageConfig store.StorageConfig
 	// InstanceID is a unique id for this instance of Querator
@@ -64,7 +63,13 @@ type Service struct {
 }
 
 func NewService(conf ServiceConfig) (*Service, error) {
-	set.Default(&conf.Logger, slog.Default())
+	set.Default(&conf.Log, slog.Default())
+
+	// TODO: Validate the Storage Config (somewhere) ensure that we have at least one storage backend with an affinity
+	//  greater than 0.0 else QueuesManager will be unable to assign partitions.
+
+	// TODO: The queue store should also know if the config provided is valid, IE: does every partition
+	//  storage name exist in the config? If not, then it's a bad config and Querator should not start.
 
 	qm, err := internal.NewQueuesManager(internal.QueuesManagerConfig{
 		LogicalConfig: internal.LogicalConfig{
@@ -75,7 +80,7 @@ func NewService(conf ServiceConfig) (*Service, error) {
 			Clock:                conf.Clock,
 		},
 		StorageConfig: conf.StorageConfig,
-		Logger:        conf.Logger,
+		Log:           conf.Log,
 	})
 	if err != nil {
 		return nil, err
@@ -93,13 +98,18 @@ func (s *Service) QueueProduce(ctx context.Context, req *proto.QueueProduceReque
 		return err
 	}
 
+	proxy, logical := queue.GetNext()
+	if proxy != nil {
+		return proxy.QueueProduce(ctx, req)
+	}
+
 	var r types.ProduceRequest
 	if err := s.validateQueueProduceProto(req, &r); err != nil {
 		return err
 	}
 
 	// Produce will block until success, context cancel or timeout
-	if err := queue.Produce(ctx, &r); err != nil {
+	if err := logical.Produce(ctx, &r); err != nil {
 		return err
 	}
 
@@ -114,15 +124,23 @@ func (s *Service) QueueReserve(ctx context.Context, req *proto.QueueReserveReque
 		return err
 	}
 
+	proxy, logical := queue.GetNext()
+	if proxy != nil {
+		return proxy.QueueReserve(ctx, req, res)
+	}
+
 	var r types.ReserveRequest
 	if err := s.validateQueueReserveProto(req, &r); err != nil {
 		return err
 	}
 
 	// Reserve will block until success, context cancel or timeout
-	if err := queue.Reserve(ctx, &r); err != nil {
+	if err := logical.Reserve(ctx, &r); err != nil {
 		return err
 	}
+
+	res.Partition = int32(r.Partition)
+	res.QueueName = req.QueueName
 
 	for _, item := range r.Items {
 		res.Items = append(res.Items, &proto.QueueReserveItem{
@@ -145,13 +163,22 @@ func (s *Service) QueueComplete(ctx context.Context, req *proto.QueueCompleteReq
 		return err
 	}
 
+	proxy, logical, err := queue.GetByPartition(int(req.Partition))
+	if err != nil {
+		return err
+	}
+
+	if proxy != nil {
+		return proxy.QueueComplete(ctx, req)
+	}
+
 	var r types.CompleteRequest
 	if err := s.validateQueueCompleteProto(req, &r); err != nil {
 		return err
 	}
 
 	// Complete will block until success, context cancel or timeout
-	if err := queue.Complete(ctx, &r); err != nil {
+	if err := logical.Complete(ctx, &r); err != nil {
 		return err
 	}
 
@@ -164,15 +191,20 @@ func (s *Service) QueueClear(ctx context.Context, req *proto.QueueClearRequest) 
 		return err
 	}
 
-	r := types.ClearRequest{
-		Destructive: req.Destructive,
-		Scheduled:   req.Scheduled,
-		Queue:       req.Queue,
-		Defer:       req.Defer,
-	}
+	// Clear all the logical queues on this instance
+	for _, logical := range queue.GetAll() {
+		r := types.ClearRequest{
+			Destructive: req.Destructive,
+			Scheduled:   req.Scheduled,
+			Queue:       req.Queue,
+			Defer:       req.Defer,
+		}
 
-	if err := queue.Clear(ctx, &r); err != nil {
-		return err
+		if err := logical.Clear(ctx, &r); err != nil {
+			// If a logical queue goes away while we are clearing
+			// return the error to the client, so they know the clear request didn't complete.
+			return err
+		}
 	}
 
 	return nil
@@ -186,8 +218,11 @@ func (s *Service) PauseQueue(ctx context.Context, queueName string, pause bool) 
 		return err
 	}
 
-	if err := queue.Pause(ctx, &types.PauseRequest{Pause: pause}); err != nil {
-		return err
+	// Pause all the logical queues on this instance
+	for _, logical := range queue.GetAll() {
+		if err := logical.Pause(ctx, &types.PauseRequest{Pause: pause}); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -260,18 +295,26 @@ func (s *Service) QueuesDelete(ctx context.Context, req *proto.QueuesDeleteReque
 
 func (s *Service) StorageItemsList(ctx context.Context, req *proto.StorageItemsListRequest,
 	res *proto.StorageItemsListResponse) error {
+	if req.Limit == 0 {
+		req.Limit = DefaultListLimit
+	}
 
 	queue, err := s.queues.Get(ctx, req.QueueName)
 	if err != nil {
 		return err
 	}
 
-	if req.Limit == 0 {
-		req.Limit = DefaultListLimit
+	proxy, logical, err := queue.GetByPartition(int(req.Partition))
+	if err != nil {
+		return err
+	}
+
+	if proxy != nil {
+		return proxy.StorageItemsList(ctx, req, res)
 	}
 
 	items := make([]*types.Item, 0, allocInt32(req.Limit))
-	if err := queue.StorageItemsList(ctx, &items, types.ListOptions{
+	if err := logical.StorageItemsList(ctx, int(req.Partition), &items, types.ListOptions{
 		Pivot: types.ToItemID(req.Pivot),
 		Limit: int(req.Limit),
 	}); err != nil {
@@ -293,13 +336,22 @@ func (s *Service) StorageItemsImport(ctx context.Context, req *proto.StorageItem
 		return err
 	}
 
+	proxy, logical, err := queue.GetByPartition(int(req.Partition))
+	if err != nil {
+		return err
+	}
+
+	if proxy != nil {
+		return proxy.StorageItemsImport(ctx, req, res)
+	}
+
 	items := make([]*types.Item, 0, len(req.Items))
 	for _, item := range req.Items {
 		i := new(types.Item)
 		items = append(items, i.FromProto(item))
 	}
 
-	if err := queue.StorageItemsImport(ctx, &items); err != nil {
+	if err := logical.StorageItemsImport(ctx, int(req.Partition), &items); err != nil {
 		return err
 	}
 
@@ -317,12 +369,21 @@ func (s *Service) StorageItemsDelete(ctx context.Context, req *proto.StorageItem
 		return err
 	}
 
+	proxy, logical, err := queue.GetByPartition(int(req.Partition))
+	if err != nil {
+		return err
+	}
+
+	if proxy != nil {
+		return proxy.StorageItemsDelete(ctx, req)
+	}
+
 	ids := make([]types.ItemID, 0, len(req.Ids))
 	for _, id := range req.Ids {
 		ids = append(ids, types.ItemID(id))
 	}
 
-	if err := queue.StorageItemsDelete(ctx, ids); err != nil {
+	if err := logical.StorageItemsDelete(ctx, int(req.Partition), ids); err != nil {
 		return err
 	}
 	return nil
@@ -336,25 +397,33 @@ func (s *Service) QueueStats(ctx context.Context, req *proto.QueueStatsRequest,
 		return err
 	}
 
-	var stats types.QueueStats
-	if err := queue.QueueStats(ctx, &stats); err != nil {
-		return err
-	}
+	res.QueueName = req.QueueName
+	for _, logical := range queue.GetAll() {
+		var stats types.LogicalStats
+		if err := logical.QueueStats(ctx, &stats); err != nil {
+			return err
+		}
 
-	for _, stat := range stats.Stats {
-		res.Partitions = append(res.Partitions,
-			&proto.QueuePartitionStats{
-				Partition:          int32(stat.Partition),
-				AverageReservedAge: stat.AverageReservedAge.String(),
-				TotalReserved:      int32(stat.TotalReserved),
-				AverageAge:         stat.AverageAge.String(),
-				Total:              int32(stat.Total),
-				ProduceWaiting:     int32(stat.ProduceWaiting),
-				ReserveWaiting:     int32(stat.ReserveWaiting),
-				CompleteWaiting:    int32(stat.CompleteWaiting),
-				ReserveBlocked:     int32(stat.ReserveBlocked),
-				InFlight:           int32(stat.InFlight),
-			})
+		ls := &proto.QueueLogicalStats{
+			ProduceWaiting:  int32(stats.ProduceWaiting),
+			ReserveWaiting:  int32(stats.ReserveWaiting),
+			CompleteWaiting: int32(stats.CompleteWaiting),
+			ReserveBlocked:  int32(stats.ReserveBlocked),
+			InFlight:        int32(stats.InFlight),
+			Partitions:      nil,
+		}
+
+		for _, stat := range stats.Partitions {
+			ls.Partitions = append(ls.Partitions,
+				&proto.QueuePartitionStats{
+					AverageReservedAge: stat.AverageReservedAge.String(),
+					Partition:          int32(stat.Partition),
+					TotalReserved:      int32(stat.TotalReserved),
+					AverageAge:         stat.AverageAge.String(),
+					Total:              int32(stat.Total),
+				})
+		}
+		res.LogicalQueues = append(res.LogicalQueues, ls)
 	}
 	return nil
 }

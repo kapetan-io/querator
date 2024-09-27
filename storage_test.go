@@ -1,28 +1,19 @@
 package querator_test
 
 import (
-	"context"
 	"errors"
-	"fmt"
 	"github.com/duh-rpc/duh-go"
 	que "github.com/kapetan-io/querator"
-	"github.com/kapetan-io/querator/daemon"
 	"github.com/kapetan-io/querator/internal/store"
 	pb "github.com/kapetan-io/querator/proto"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/random"
-	"github.com/kapetan-io/tackle/set"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/goleak"
 	"google.golang.org/protobuf/types/known/timestamppb"
-	"log/slog"
-	"os"
-	"path/filepath"
 	"testing"
 )
-
-// var log = slog.New(slog.NewTextHandler(io.Discard, nil))
-var log = slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 // TestQueueStorage tests the /storage/queue.* endpoints
 func TestQueueStorage(t *testing.T) {
@@ -74,6 +65,8 @@ func TestQueueStorage(t *testing.T) {
 }
 
 func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
+	defer goleak.VerifyNone(t)
+
 	_store := newStore(clock.NewProvider())
 	defer tearDown()
 
@@ -158,7 +151,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 
 		t.Run("List", func(t *testing.T) {
 			var resp pb.StorageItemsListResponse
-			err := c.StorageItemsList(ctx, queueName, &resp, &que.ListOptions{Limit: 10_000})
+			err := c.StorageItemsList(ctx, queueName, 0, &resp, &que.ListOptions{Limit: 10_000})
 			require.NoError(t, err)
 
 			assert.Equal(t, len(items), len(resp.Items))
@@ -175,7 +168,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 
 			t.Run("MoreThanAvailable", func(t *testing.T) {
 				var more pb.StorageItemsListResponse
-				err = c.StorageItemsList(ctx, queueName, &more, &que.ListOptions{Limit: 20_000})
+				err = c.StorageItemsList(ctx, queueName, 0, &more, &que.ListOptions{Limit: 20_000})
 				require.NoError(t, err)
 				assert.Equal(t, 10_000, len(more.Items))
 
@@ -185,7 +178,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 
 			t.Run("LessThanAvailable", func(t *testing.T) {
 				var limit pb.StorageItemsListResponse
-				err = c.StorageItemsList(ctx, queueName, &limit, &que.ListOptions{Limit: 1_000})
+				err = c.StorageItemsList(ctx, queueName, 0, &limit, &que.ListOptions{Limit: 1_000})
 				require.NoError(t, err)
 				assert.Equal(t, 1_000, len(limit.Items))
 				compareStorageItem(t, items[0], limit.Items[0])
@@ -194,7 +187,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 
 			t.Run("GetOne", func(t *testing.T) {
 				var limit pb.StorageItemsListResponse
-				require.NoError(t, c.StorageItemsList(ctx, queueName, &limit,
+				require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &limit,
 					&que.ListOptions{Pivot: items[10].Id, Limit: 1}))
 
 				assert.Equal(t, 1, len(limit.Items))
@@ -203,7 +196,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 
 			t.Run("FirstOne", func(t *testing.T) {
 				var limit pb.StorageItemsListResponse
-				require.NoError(t, c.StorageItemsList(ctx, queueName, &limit, &que.ListOptions{Limit: 1}))
+				require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &limit, &que.ListOptions{Limit: 1}))
 
 				assert.Equal(t, 1, len(limit.Items))
 				assert.Equal(t, items[0].Id, limit.Items[0].Id)
@@ -212,7 +205,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 			t.Run("WithPivot", func(t *testing.T) {
 				id := items[1000].Id
 				var list pb.StorageItemsListResponse
-				err := c.StorageItemsList(ctx, queueName, &list, &que.ListOptions{Pivot: id, Limit: 10})
+				err := c.StorageItemsList(ctx, queueName, 0, &list, &que.ListOptions{Pivot: id, Limit: 10})
 				require.NoError(t, err)
 
 				assert.Equal(t, 10, len(list.Items))
@@ -225,7 +218,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 				t.Run("PageThroughItems", func(t *testing.T) {
 					pivot := list.Items[9]
 					var page pb.StorageItemsListResponse
-					err = c.StorageItemsList(ctx, queueName, &page, &que.ListOptions{Pivot: pivot.Id, Limit: 10})
+					err = c.StorageItemsList(ctx, queueName, 0, &page, &que.ListOptions{Pivot: pivot.Id, Limit: 10})
 					require.NoError(t, err)
 					// First item in the returned page is the pivot we requested
 					compareStorageItem(t, pivot, page.Items[0])
@@ -234,7 +227,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 					compareStorageItem(t, items[1018], page.Items[9])
 
 					pivot = page.Items[9]
-					err = c.StorageItemsList(ctx, queueName, &page, &que.ListOptions{Pivot: pivot.Id, Limit: 10})
+					err = c.StorageItemsList(ctx, queueName, 0, &page, &que.ListOptions{Pivot: pivot.Id, Limit: 10})
 					require.NoError(t, err)
 					// Includes the pivot
 					compareStorageItem(t, pivot, page.Items[0])
@@ -245,7 +238,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 
 				t.Run("PageIncludesPivot", func(t *testing.T) {
 					item := list.Items[9]
-					err = c.StorageItemsList(ctx, queueName, &list, &que.ListOptions{Pivot: item.Id, Limit: 1})
+					err = c.StorageItemsList(ctx, queueName, 0, &list, &que.ListOptions{Pivot: item.Id, Limit: 1})
 					require.NoError(t, err)
 
 					require.Equal(t, 1, len(list.Items))
@@ -263,7 +256,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 			}))
 
 			var deleted pb.StorageItemsListResponse
-			require.NoError(t, c.StorageItemsList(ctx, queueName, &deleted, &que.ListOptions{Limit: 10_000}))
+			require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &deleted, &que.ListOptions{Limit: 10_000}))
 
 			// Assert the items deleted do not exist
 			for _, d := range items[0:1_000] {
@@ -283,9 +276,149 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 		})
 	})
 
-	// TODO: Finish these tests
-	t.Run("StorageItemsListErrors", func(t *testing.T) {})
-	t.Run("StorageItemsImportErrors", func(t *testing.T) {})
+	t.Run("StorageItemsListErrors", func(t *testing.T) {
+		var queueName = random.String("queue-", 10)
+		d, c, ctx := newDaemon(t, 5*clock.Second, que.ServiceConfig{StorageConfig: _store})
+		defer d.Shutdown(t)
+
+		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+			ReserveTimeout:      ReserveTimeout,
+			DeadTimeout:         DeadTimeout,
+			QueueName:           queueName,
+			RequestedPartitions: 1,
+		}))
+
+		for _, test := range []struct {
+			Name string
+			Req  *pb.StorageItemsListRequest
+			Msg  string
+			Code int
+		}{
+			{
+				Name: "InvalidQueue",
+				Req: &pb.StorageItemsListRequest{
+					QueueName: "invalid~queue",
+				},
+				Msg:  "queue name is invalid; 'invalid~queue' cannot contain '~' character",
+				Code: duh.CodeBadRequest,
+			},
+			{
+				Name: "InvalidPartition",
+				Req: &pb.StorageItemsListRequest{
+					QueueName: queueName,
+					Partition: 1,
+				},
+				Msg:  "partition is invalid; '1' is not a valid partition",
+				Code: duh.CodeBadRequest,
+			},
+			{
+				Name: "OutOfBoundsPartition",
+				Req: &pb.StorageItemsListRequest{
+					QueueName: queueName,
+					Partition: 500,
+				},
+				Msg:  "partition is invalid; '500' is not a valid partition",
+				Code: duh.CodeBadRequest,
+			},
+		} {
+			t.Run(test.Name, func(t *testing.T) {
+				var resp pb.StorageItemsListResponse
+				err := c.StorageItemsList(ctx, test.Req.QueueName, int(test.Req.Partition), &resp, &que.ListOptions{
+					Limit: int(test.Req.Limit),
+					Pivot: test.Req.Pivot,
+				})
+				if test.Code != duh.CodeOK {
+					var e duh.Error
+					require.True(t, errors.As(err, &e))
+					assert.Contains(t, e.Message(), test.Msg)
+					assert.Equal(t, test.Code, e.Code())
+				}
+			})
+		}
+	})
+	t.Run("StorageItemsImportErrors", func(t *testing.T) {
+		var queueName = random.String("queue-", 10)
+		d, c, ctx := newDaemon(t, 5*clock.Second, que.ServiceConfig{StorageConfig: _store})
+		defer d.Shutdown(t)
+
+		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+			ReserveTimeout:      ReserveTimeout,
+			DeadTimeout:         DeadTimeout,
+			QueueName:           queueName,
+			RequestedPartitions: 1,
+		}))
+
+		for _, test := range []struct {
+			Name string
+			Req  *pb.StorageItemsImportRequest
+			Msg  string
+			Code int
+		}{
+			{
+				Name: "EmptyRequest",
+				Req:  &pb.StorageItemsImportRequest{},
+				Msg:  "queue name is invalid; queue name cannot be empty",
+				Code: duh.CodeBadRequest,
+			},
+			{
+				Name: "InvalidQueue",
+				Req: &pb.StorageItemsImportRequest{
+					QueueName: "invalid~queue",
+				},
+				Msg:  "queue name is invalid; 'invalid~queue' cannot contain '~' character",
+				Code: duh.CodeBadRequest,
+			},
+			{
+				Name: "NoItems",
+				Req: &pb.StorageItemsImportRequest{
+					QueueName: queueName,
+					Items:     nil,
+				},
+				Msg:  "items is invalid; cannot be empty",
+				Code: duh.CodeBadRequest,
+			},
+			{
+				Name: "ItemsEmptyList",
+				Req: &pb.StorageItemsImportRequest{
+					Items:     []*pb.StorageItem{},
+					QueueName: queueName,
+				},
+				Msg:  "items is invalid; cannot be empty",
+				Code: duh.CodeBadRequest,
+			},
+			{
+				Name: "InvalidPartition",
+				Req: &pb.StorageItemsImportRequest{
+					Items:     []*pb.StorageItem{},
+					QueueName: queueName,
+					Partition: 1,
+				},
+				Msg:  "partition is invalid; '1' is not a valid partition",
+				Code: duh.CodeBadRequest,
+			},
+			{
+				Name: "OutOfBoundsPartition",
+				Req: &pb.StorageItemsImportRequest{
+					Items:     []*pb.StorageItem{},
+					QueueName: queueName,
+					Partition: 500,
+				},
+				Msg:  "partition is invalid; '500' is not a valid partition",
+				Code: duh.CodeBadRequest,
+			},
+		} {
+			t.Run(test.Name, func(t *testing.T) {
+				var resp pb.StorageItemsImportResponse
+				err := c.StorageItemsImport(ctx, test.Req, &resp)
+				if test.Code != duh.CodeOK {
+					var e duh.Error
+					require.True(t, errors.As(err, &e))
+					assert.Contains(t, e.Message(), test.Msg)
+					assert.Equal(t, test.Code, e.Code())
+				}
+			})
+		}
+	})
 
 	t.Run("StorageItemsDeleteErrors", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
@@ -346,6 +479,26 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 				Msg:  "invalid storage id; 'invalid-id'",
 				Code: duh.CodeBadRequest,
 			},
+			{
+				Name: "InvalidPartition",
+				Req: &pb.StorageItemsDeleteRequest{
+					QueueName: queueName,
+					Ids:       []string{"id1", "id2"},
+					Partition: 1,
+				},
+				Msg:  "partition is invalid; '1' is not a valid partition",
+				Code: duh.CodeBadRequest,
+			},
+			{
+				Name: "OutOfBoundsPartition",
+				Req: &pb.StorageItemsDeleteRequest{
+					QueueName: queueName,
+					Ids:       []string{"id1", "id2"},
+					Partition: 500,
+				},
+				Msg:  "partition is invalid; '500' is not a valid partition",
+				Code: duh.CodeBadRequest,
+			},
 		} {
 			t.Run(test.Name, func(t *testing.T) {
 				err := c.StorageItemsDelete(ctx, test.Req)
@@ -358,174 +511,4 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 			})
 		}
 	})
-
-}
-
-type testDaemon struct {
-	cancel context.CancelFunc
-	ctx    context.Context
-	d      *daemon.Daemon
-}
-
-func (td *testDaemon) Shutdown(t *testing.T) {
-	t.Helper()
-
-	require.NoError(t, td.d.Shutdown(td.ctx))
-	td.cancel()
-}
-
-func (td *testDaemon) MustClient() *que.Client {
-	return td.d.MustClient()
-}
-
-func (td *testDaemon) Context() context.Context {
-	return td.ctx
-}
-
-func (td *testDaemon) Service() *que.Service {
-	return td.d.Service()
-}
-
-func newDaemon(t *testing.T, duration clock.Duration, conf que.ServiceConfig) (*testDaemon, *que.Client, context.Context) {
-	t.Helper()
-
-	set.Default(&conf.Logger, log)
-	td := &testDaemon{}
-	var err error
-
-	td.ctx, td.cancel = context.WithTimeout(context.Background(), duration)
-	td.d, err = daemon.NewDaemon(td.ctx, daemon.Config{
-		ServiceConfig: conf,
-	})
-	require.NoError(t, err)
-	return td, td.d.MustClient(), td.ctx
-}
-
-func randomProduceItems(count int) []*pb.QueueProduceItem {
-	var items []*pb.QueueProduceItem
-	for i := 0; i < count; i++ {
-		items = append(items, &pb.QueueProduceItem{
-			Reference: random.String("ref-", 10),
-			Encoding:  random.String("enc-", 10),
-			Kind:      random.String("kind-", 10),
-			Bytes:     []byte(fmt.Sprintf("message-%d", i)),
-		})
-	}
-	return items
-}
-
-func compareStorageItem(t *testing.T, l *pb.StorageItem, r *pb.StorageItem) {
-	t.Helper()
-	require.Equal(t, l.Id, r.Id)
-	require.Equal(t, l.IsReserved, r.IsReserved)
-	require.Equal(t, l.DeadDeadline.AsTime(), r.DeadDeadline.AsTime())
-	require.Equal(t, l.ReserveDeadline.AsTime(), r.ReserveDeadline.AsTime())
-	require.Equal(t, l.Attempts, r.Attempts)
-	require.Equal(t, l.Reference, r.Reference)
-	require.Equal(t, l.Encoding, r.Encoding)
-	require.Equal(t, l.Kind, r.Kind)
-	require.Equal(t, l.Payload, r.Payload)
-}
-
-func setupMemoryStorage(conf store.StorageConfig) store.StorageConfig {
-	conf.QueueStore = store.NewMemoryQueueStore()
-	conf.Backends = []store.Backend{
-		{
-			PartitionStore: store.NewMemoryPartitionStore(conf),
-			Name:           "memory-0",
-			Affinity:       1,
-		},
-	}
-	return conf
-}
-
-// ---------------------------------------------
-// Test Helper
-// ---------------------------------------------
-
-func dirExists(path string) bool {
-	info, err := os.Stat(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return false
-		}
-		return false
-	}
-	return info.IsDir()
-}
-
-// ---------------------------------------------------------------------
-// Bolt test setup
-// ---------------------------------------------------------------------
-
-type boltTestSetup struct {
-	Dir string
-}
-
-func (b *boltTestSetup) Setup(bc store.BoltConfig) store.StorageConfig {
-	if !dirExists(b.Dir) {
-		if err := os.Mkdir(b.Dir, 0777); err != nil {
-			panic(err)
-		}
-	}
-	b.Dir = filepath.Join(b.Dir, random.String("test-data-", 10))
-	if err := os.Mkdir(b.Dir, 0777); err != nil {
-		panic(err)
-	}
-	bc.StorageDir = b.Dir
-
-	var conf store.StorageConfig
-	conf.QueueStore = store.NewBoltQueueStore(bc)
-	conf.Backends = []store.Backend{
-		{
-			PartitionStore: store.NewBoltPartitionStore(bc),
-			Name:           "bolt-0",
-			Affinity:       1,
-		},
-	}
-	return conf
-}
-
-func (b *boltTestSetup) Teardown() {
-	if err := os.RemoveAll(b.Dir); err != nil {
-		panic(err)
-	}
-}
-
-// ---------------------------------------------------------------------
-// Badger test setup
-// ---------------------------------------------------------------------
-
-type badgerTestSetup struct {
-	Dir string
-}
-
-func (b *badgerTestSetup) Setup(bc store.BadgerConfig) store.StorageConfig {
-	if !dirExists(b.Dir) {
-		if err := os.Mkdir(b.Dir, 0777); err != nil {
-			panic(err)
-		}
-	}
-	b.Dir = filepath.Join(b.Dir, random.String("test-data-", 10))
-	if err := os.Mkdir(b.Dir, 0777); err != nil {
-		panic(err)
-	}
-	bc.StorageDir = b.Dir
-
-	var conf store.StorageConfig
-	conf.QueueStore = store.NewBadgerQueueStore(bc)
-	conf.Backends = []store.Backend{
-		{
-			PartitionStore: store.NewBadgerPartitionStore(bc),
-			Name:           "badger-0",
-			Affinity:       1,
-		},
-	}
-	return conf
-}
-
-func (b *badgerTestSetup) Teardown() {
-	if err := os.RemoveAll(b.Dir); err != nil {
-		panic(err)
-	}
 }

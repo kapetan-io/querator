@@ -6,11 +6,12 @@ require (
 	github.com/dgraph-io/badger/v4 v4.3.0
 	github.com/duh-rpc/duh-go v0.9.1
 	github.com/kapetan-io/errors v0.2.0
-	github.com/kapetan-io/tackle v0.6.0
+	github.com/kapetan-io/tackle v0.7.0
 	github.com/prometheus/client_golang v1.19.1
 	github.com/segmentio/ksuid v1.0.4
 	github.com/stretchr/testify v1.9.0
 	go.etcd.io/bbolt v1.3.10
+	go.uber.org/goleak v1.3.0
 	google.golang.org/protobuf v1.34.2
 )
 

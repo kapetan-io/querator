@@ -43,7 +43,7 @@ func (c *Config) ServerTLS() *tls.Config {
 func (c *Config) SetDefaults() error {
 	var err error
 	set.Default(&c.Clock, clock.NewProvider())
-	set.Default(&c.Logger, slog.Default())
+	set.Default(&c.Log, slog.Default())
 	set.Default(&c.MaxReserveBatchSize, internal.DefaultMaxReserveBatchSize)
 	set.Default(&c.MaxProduceBatchSize, internal.DefaultMaxProduceBatchSize)
 	set.Default(&c.MaxCompleteBatchSize, internal.DefaultMaxCompleteBatchSize)

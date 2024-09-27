@@ -15,6 +15,7 @@ import (
 // ---------------------------------------------
 
 type MemoryPartition struct {
+	info types.PartitionInfo
 	conf StorageConfig
 	mem  []types.Item
 	uid  ksuid.KSUID
@@ -117,6 +118,10 @@ func (q *MemoryPartition) List(_ context.Context, items *[]*types.Item, opts typ
 }
 
 func (q *MemoryPartition) Add(_ context.Context, items []*types.Item) error {
+	if len(items) == 0 {
+		return transport.NewInvalidOption("items is invalid; cannot be empty")
+	}
+
 	for _, item := range items {
 		q.uid = q.uid.Next()
 		item.ID = []byte(q.uid.String())
@@ -159,6 +164,10 @@ func (q *MemoryPartition) Clear(_ context.Context, destructive bool) error {
 	}
 	q.mem = mem
 	return nil
+}
+
+func (q *MemoryPartition) Info() types.PartitionInfo {
+	return q.info
 }
 
 func (q *MemoryPartition) Stats(_ context.Context, stats *types.PartitionStats) error {
@@ -339,26 +348,29 @@ func (s *MemoryQueueStore) findQueue(name string) (int, bool) {
 // ---------------------------------------------
 
 type MemoryPartitionStore struct {
-	conf StorageConfig
+	conf       StorageConfig
+	partitions map[types.PartitionInfo]*MemoryPartition
 }
 
 var _ PartitionStore = &MemoryPartitionStore{}
 
 func NewMemoryPartitionStore(conf StorageConfig) *MemoryPartitionStore {
-	return &MemoryPartitionStore{conf: conf}
-}
-
-func (m MemoryPartitionStore) Create(info types.PartitionInfo) error {
-	// Does nothing as memory has nothing to create. Calls to Get() create the partition
-	// when requested.
-	return nil
+	return &MemoryPartitionStore{
+		partitions: make(map[types.PartitionInfo]*MemoryPartition),
+		conf:       conf,
+	}
 }
 
 func (m MemoryPartitionStore) Get(info types.PartitionInfo) Partition {
-	return &MemoryPartition{
-		mem:  make([]types.Item, 0, 1_000),
-		uid:  ksuid.New(),
-		conf: m.conf,
+	p, ok := m.partitions[info]
+	if !ok {
+		m.partitions[info] = &MemoryPartition{
+			mem:  make([]types.Item, 0, 1_000),
+			uid:  ksuid.New(),
+			conf: m.conf,
+			info: info,
+		}
+		return m.partitions[info]
 	}
-
+	return p
 }

@@ -2,31 +2,23 @@ package store
 
 import (
 	"context"
-	"fmt"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/transport"
 	"github.com/kapetan-io/tackle/clock"
 )
 
-var ErrQueueNotExist = transport.NewRequestFailed("queue does not exist")
-
-// TODO: Remove
-// StorageID is the decoded storage StorageID
-type StorageID struct {
-	ID    types.ItemID
-	Queue string
-}
-
-func (id StorageID) String() string {
-	return fmt.Sprintf("%s~%s", id.Queue, id.ID)
-}
+var (
+	ErrQueueNotExist = transport.NewRequestFailed("queue does not exist")
+)
 
 type ReserveOptions struct {
 	// ReserveDeadline is a time in the future when the reservation should expire
 	ReserveDeadline clock.Time
 }
 
-// QueueStore is storage for listing and storing information about queues
+// QueueStore is storage for listing and storing information about queues.  The QueueStore should employ
+// lazy storage initialization such that it makes contact or creates underlying tables only
+// upon first invocation. See 0021-storage-lazy-initialization.md for details.
 type QueueStore interface {
 	// Get returns a store.Partition from storage ready to be used. Returns ErrQueueNotExist if the
 	// queue requested does not exist
@@ -49,7 +41,9 @@ type QueueStore interface {
 }
 
 // Partition represents storage for a single partition. An instance of Partition should not be considered
-// thread safe as it is intended to be used by a Logical Queue only.
+// thread safe as it is intended to be used by a Logical Queue only. The partition should employ
+// lazy storage initialization such that it makes contact or creates underlying tables only
+// upon first invocation. See 0021-storage-lazy-initialization.md for details.
 type Partition interface {
 	// Produce writes the items for each batch to the data store, assigning an error for each
 	// batch that fails.
@@ -79,7 +73,21 @@ type Partition interface {
 	// Stats returns stats about the queue
 	Stats(ctx context.Context, stats *types.PartitionStats) error
 
+	// Info returns the Partition Info for this partition
+	Info() types.PartitionInfo
+
 	Close(ctx context.Context) error
+}
+
+type Backends []Backend
+
+func (b Backends) Find(name string) Backend {
+	for _, backend := range b {
+		if backend.Name == name {
+			return backend
+		}
+	}
+	return Backend{}
 }
 
 // TODO: Rename this to `store.Config` if possible
@@ -89,7 +97,7 @@ type StorageConfig struct {
 	// How Queues are stored can be separate from PartitionInfo and Scheduled stores
 	QueueStore QueueStore
 	// The Backends configured for partitions to utilize
-	Backends []Backend
+	Backends Backends
 	// Clock is the clock provider the backend implementation should use
 	Clock *clock.Provider
 }
@@ -104,11 +112,11 @@ type Backend struct {
 
 // PartitionStore manages the partitions
 type PartitionStore interface {
-	// Create assumes the partition does not exist. Returns an error if the partition exists
-	Create(types.PartitionInfo) error
-	// Get assumes the partition exists and returns a new Partition instance for the requested partition.
-	// returns an error if the partition requested does not exist.
+	// Get returns a new Partition instance for the requested partition. NOTE: This method does
+	// NOT return an error. See 0021-storage-lazy-initialization.md for an explanation.
 	Get(types.PartitionInfo) Partition
+
+	// TODO: List Partitions, Delete Partitions, etc...
 }
 
 // TODO: A scheduled store should probably be located or managed by a partition store, possibly in the same table

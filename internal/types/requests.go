@@ -17,8 +17,12 @@ type ReserveRequest struct {
 	ClientID string
 	// The context of the requesting client
 	Context context.Context
+
 	// The result of the reservation
 	Items []*Item
+	// The partition the reserved items are from
+	Partition int
+
 	// The RequestDeadline calculated from RequestTimeout
 	RequestDeadline clock.Time
 	// Used to wait for this request to complete
@@ -47,6 +51,8 @@ type CompleteRequest struct {
 	RequestTimeout clock.Duration
 	// The context of the requesting client
 	Context context.Context
+	// Partition is the partition the complete request is for
+	Partition int
 	// The ids to mark as complete
 	Ids [][]byte
 	// The RequestDeadline calculated from RequestTimeout
@@ -95,21 +101,7 @@ type ListOptions struct {
 	Limit int
 }
 
-type QueueStats struct {
-	Stats []PartitionStats
-}
-
-type PartitionStats struct {
-	// Partition is the partition these stats are for
-	Partition int
-	// Total is the number of items in the queue
-	Total int
-	// TotalReserved is the number of items in the queue that are in reserved state
-	TotalReserved int
-	// AverageAge is the average age of all items in the queue
-	AverageAge clock.Duration
-	// AverageReservedAge is the average age of reserved items in the queue
-	AverageReservedAge clock.Duration
+type LogicalStats struct {
 	// ProduceWaiting is the number of `/queue.produce` requests currently waiting
 	// to be processed by the sync loop
 	ProduceWaiting int
@@ -123,4 +115,19 @@ type PartitionStats struct {
 	ReserveBlocked int
 	// InFlight is the number of requests currently in flight
 	InFlight int
+
+	Partitions []PartitionStats
+}
+
+type PartitionStats struct {
+	// Partition is the partition these stats are for
+	Partition int
+	// Total is the number of items in the queue
+	Total int
+	// TotalReserved is the number of items in the queue that are in reserved state
+	TotalReserved int
+	// AverageAge is the average age of all items in the queue
+	AverageAge clock.Duration
+	// AverageReservedAge is the average age of reserved items in the queue
+	AverageReservedAge clock.Duration
 }

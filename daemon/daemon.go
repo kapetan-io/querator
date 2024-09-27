@@ -26,7 +26,6 @@ import (
 	"github.com/kapetan-io/tackle/set"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"log"
 	"log/slog"
 	"net"
 	"net/http"
@@ -34,17 +33,16 @@ import (
 )
 
 type Daemon struct {
-	service    *querator.Service
-	logAdaptor *duh.HttpLogAdaptor
-	client     *querator.Client
-	servers    []*http.Server
-	wg         sync.WaitGroup
-	Listener   net.Listener
-	conf       Config
+	service  *querator.Service
+	client   *querator.Client
+	servers  []*http.Server
+	wg       sync.WaitGroup
+	Listener net.Listener
+	conf     Config
 }
 
 func NewDaemon(ctx context.Context, conf Config) (*Daemon, error) {
-	set.Default(&conf.Logger, slog.Default())
+	set.Default(&conf.Log, slog.Default())
 
 	// TODO: Load from config file
 
@@ -57,17 +55,17 @@ func NewDaemon(ctx context.Context, conf Config) (*Daemon, error) {
 		ReadTimeout:          conf.ReadTimeout,
 		InstanceID:           conf.InstanceID,
 		StorageConfig:        conf.StorageConfig,
-		Logger:               conf.Logger,
+		Log:                  conf.Log,
 		Clock:                conf.Clock,
 	})
 	if err != nil {
 		return nil, err
 	}
 
+	conf.Log = conf.Log.With("code.namespace", "Daemon")
 	d := &Daemon{
-		logAdaptor: duh.NewHttpLogAdaptor(conf.Logger),
-		conf:       conf,
-		service:    s,
+		conf:    conf,
+		service: s,
 	}
 	return d, d.Start(ctx)
 }
@@ -77,7 +75,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 
 	handler := transport.NewHTTPHandler(d.service, promhttp.InstrumentMetricHandler(
 		registry, promhttp.HandlerFor(registry, promhttp.HandlerOpts{}),
-	), d.conf.MaxProducePayloadSize, d.conf.Logger)
+	), d.conf.MaxProducePayloadSize, d.conf.Log)
 	registry.MustRegister(handler)
 
 	if d.conf.ServerTLS() != nil {
@@ -99,9 +97,10 @@ func (d *Daemon) Shutdown(ctx context.Context) error {
 		return err
 	}
 	for _, srv := range d.servers {
-		d.conf.Logger.Info("Shutting down server", "address", srv.Addr)
+		d.conf.Log.Info("Shutting down server", "address", srv.Addr)
 		_ = srv.Shutdown(ctx)
 	}
+	d.conf.Log.LogAttrs(ctx, slog.LevelDebug, "Shutdown complete")
 	d.servers = nil
 	return nil
 }
@@ -134,7 +133,7 @@ func (d *Daemon) Client() (*querator.Client, error) {
 
 func (d *Daemon) spawnHTTPS(ctx context.Context, mux http.Handler) error {
 	srv := &http.Server{
-		ErrorLog:  log.New(d.logAdaptor, "", 0),
+		ErrorLog:  slog.NewLogLogger(d.conf.Log.Handler(), slog.LevelError),
 		TLSConfig: d.conf.ServerTLS().Clone(),
 		Addr:      d.conf.ListenAddress,
 		Handler:   mux,
@@ -150,10 +149,10 @@ func (d *Daemon) spawnHTTPS(ctx context.Context, mux http.Handler) error {
 	d.wg.Add(1)
 	go func() {
 		defer d.wg.Done()
-		d.conf.Logger.Info("HTTPS Listening ...", "address", d.Listener.Addr().String())
+		d.conf.Log.Info("HTTPS Listening ...", "address", d.Listener.Addr().String())
 		if err := srv.ServeTLS(d.Listener, "", ""); err != nil {
 			if !errors.Is(err, http.ErrServerClosed) {
-				d.conf.Logger.Error("while starting TLS HTTP server", "error", err)
+				d.conf.Log.Error("while starting TLS HTTP server", "error", err)
 			}
 		}
 	}()
@@ -168,7 +167,7 @@ func (d *Daemon) spawnHTTPS(ctx context.Context, mux http.Handler) error {
 
 func (d *Daemon) spawnHTTP(ctx context.Context, h http.Handler) error {
 	srv := &http.Server{
-		ErrorLog: log.New(d.logAdaptor, "", 0),
+		ErrorLog: slog.NewLogLogger(d.conf.Log.Handler(), slog.LevelError),
 		Addr:     d.conf.ListenAddress,
 		Handler:  h,
 	}
@@ -182,10 +181,10 @@ func (d *Daemon) spawnHTTP(ctx context.Context, h http.Handler) error {
 	d.wg.Add(1)
 	go func() {
 		defer d.wg.Done()
-		d.conf.Logger.Info("HTTP Listening ...", "address", d.Listener.Addr().String())
+		d.conf.Log.Info("HTTP Listening ...", "address", d.Listener.Addr().String())
 		if err := srv.Serve(d.Listener); err != nil {
 			if !errors.Is(err, http.ErrServerClosed) {
-				d.conf.Logger.Error("while starting HTTP server", "error", err)
+				d.conf.Log.Error("while starting HTTP server", "error", err)
 			}
 		}
 	}()

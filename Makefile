@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := build
 LINT = $(GOPATH)/bin/golangci-lint
-LINT_VERSION = 1.56.2
+LINT_VERSION = v1.61.0
 
 .PHONY: proto
 proto: ## Build protos
@@ -11,7 +11,7 @@ $(LINT): ## Download Go linter
 
 .PHONY: test
 test:
-	go test -timeout 10m -v -p=1 -count=1 -race ./...
+	go test -timeout 10m -v -p=1 -count=1 -race -logging=ci ./...
 
 .PHONY: lint
 lint: $(LINT) ## Run Go linter

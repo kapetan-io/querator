@@ -30,7 +30,7 @@ message QueueProduceRequest {
   // request and return an error to the client.
   //
   // Example: '1m', '20s'. Default timeout is '1m' and the maximum timeout is 15 minutes.
-  string requestTimeout = 2 [json_name = "request_timeout"]; // TODO: OpenAPI
+  string requestTimeout = 2 [json_name = "request_timeout"];
   // A list of items to be queued
   repeated QueueProduceItem items = 3;
 }
@@ -78,12 +78,12 @@ message QueueReserveRequest {
   // must be unique for each client reserving items. Multiple clients with the same
   // id cannot reserve from the same queue. If you need more throughput, increase the batch
   // size instead.
-  string clientId = 3 [json_name = "client_id"]; // TODO: OpenAPI
+  string clientId = 3 [json_name = "client_id"];
 
   // The duration the client expects to wait for a queue item to be reserved before timing out.
   // Maximum timeout duration is 15 minutes
   // Example: '5m', '10s'
-  string requestTimeout = 4 [json_name = "request_timeout"]; // TODO: OpenAPI
+  string requestTimeout = 4 [json_name = "request_timeout"];
 }
 
 message QueueReserveItem {
@@ -111,7 +111,7 @@ message QueueReserveItem {
   //
   // The consumer can use this date to decide if it should finalize it's work
   // if the timeout date has expired.
-  google.protobuf.Timestamp reserveDeadline = 6 [json_name = "reserve_deadline"]; // TODO: OpenAPI
+  google.protobuf.Timestamp reserveDeadline = 6 [json_name = "reserve_deadline"];
 
   // The payload of the item as an array of raw bytes with no predetermined character set.
   //
@@ -123,7 +123,14 @@ message QueueReserveItem {
 }
 
 message QueueReserveResponse {
-  repeated QueueReserveItem items = 1;
+  // The name of the queue the reservation items are from
+  string queueName = 1  [json_name = "queue_name"];
+
+  // Partition the reserved items are from
+  int32 partition = 2;
+
+  // Items reserved
+  repeated QueueReserveItem items = 3;
 }
 
 message QueueDeferRequest {
@@ -152,15 +159,16 @@ message QueueDeferItem {
 }
 
 message QueueCompleteRequest {
+  // The name of the queue these ids are from
   string queueName = 1  [json_name = "queue_name"];
 
-  // The Partition these ids are from
+  // The Partition these ids are associated with
   int32 partition = 2;
 
   // The duration the client expects to wait for a queue item to be reserved before timing out.
   // Maximum timeout duration is 15 minutes
   // Example: '5m', '10s'
-  string requestTimeout = 3 [json_name = "request_timeout"]; // TODO: OpenAPI
+  string requestTimeout = 3 [json_name = "request_timeout"];
 
   // A list of ids to mark complete
   repeated string ids = 4;
@@ -236,7 +244,7 @@ message QueueStatsRequest {
 
 message QueueStatsResponse {
   string queueName = 1 [json_name = "queue_name"];
-  repeated QueuePartitionStats partitions = 2;
+  repeated QueueLogicalStats logicalQueues = 2;
 }
 
 message QueuePartitionStats {
@@ -244,25 +252,27 @@ message QueuePartitionStats {
   // Total is the number of items in the partition
   int32 total = 2;
   // TotalReserved is the number of items in the partition that are in reserved state
-  int32 TotalReserved = 3 [json_name = "total_reserved"];
+  int32 totalReserved = 3 [json_name = "total_reserved"];
   // AverageAge is the average age of all items in the partition
-  string AverageAge = 4 [json_name = "average_age"];
-
-  // TODO: These stats should be sub divided into logical queues
-
+  string averageAge = 4 [json_name = "average_age"];
   // AverageReservedAge is the average age of reserved items in the partition
-  string AverageReservedAge = 5 [json_name = "average_reserved_age"];
+  string averageReservedAge = 5 [json_name = "average_reserved_age"];
+}
+
+message QueueLogicalStats {
   // ProduceWaiting is the number of `/queue.produce` requests currently waiting
   // to be processed by the sync loop
-  int32 ProduceWaiting = 6 [json_name = "produce_waiting"];
+  int32 produceWaiting = 6 [json_name = "produce_waiting"];
   // ReserveWaiting is the number of `/queue.reserve` requests currently waiting
   // to be processed by the sync loop
-  int32 ReserveWaiting = 7 [json_name = "reserve_waiting"];
+  int32 reserveWaiting = 7 [json_name = "reserve_waiting"];
   // CompleteWaiting is the number of `/queue.complete` requests currently waiting
   // to be processed by the sync loop
-  int32 CompleteWaiting = 8 [json_name = "complete_waiting"];
+  int32 completeWaiting = 8 [json_name = "complete_waiting"];
   // ReserveBlocked is the number of reservations which are blocked waiting for new item to enter the queue.
-  int32 ReserveBlocked = 9 [json_name = "reserve_blocked"];
+  int32 reserveBlocked = 9 [json_name = "reserve_blocked"];
   // InFlight is the total number of requests currently in flight waiting for responses from the sync loop
-  int32 InFlight = 10 [json_name = "in_flight"];
+  int32 inFlight = 10 [json_name = "in_flight"];
+  // Stats for each partition in the logical queue
+  repeated QueuePartitionStats partitions = 11;
 }

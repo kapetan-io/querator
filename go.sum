@@ -53,8 +53,8 @@ github.com/google/go-cmp v0.5.3/go.mod h1:v8dTdLbMG2kIc/vJvl+f65V22dbkXbowE6jgT/
 github.com/google/go-cmp v0.6.0 h1:ofyhxvXcZhMsU5ulbFiLKl/XBFqE1GSq7atu8tAmTRI=
 github.com/google/go-cmp v0.6.0/go.mod h1:17dUlkBOakJ0+DkrSSNjCkIjxS6bF9zb3elmeNGIjoY=
 github.com/google/uuid v1.1.2/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
-github.com/kapetan-io/errors v0.2.0 h1:+jVVkH394SAqd8kMXP+z1Bxnu12UagJ8dTjLoav/bFg=
-github.com/kapetan-io/errors v0.2.0/go.mod h1:cmK9hMZAn4DZjjgNnKhO+2fAbt8J24aQLTkTEwNxyz4=
+github.com/kapetan-io/errors v0.4.0 h1:yzt6sYlXHvKQfPkE+T5uDtHwAgY2pJpNuNsRG+8QSKo=
+github.com/kapetan-io/errors v0.4.0/go.mod h1:Rc59bpJaA+YHiAyTY702+SmiL+iRQgpZXjR8S6mzyOg=
 github.com/kapetan-io/tackle v0.7.0 h1:kcgnAdoh0t5pB3XKxbnrfW8iWD3TOif/IVGqVK50DTQ=
 github.com/kapetan-io/tackle v0.7.0/go.mod h1:E7MpdJUog4MvyKkWtQyX8UjFe5tL4SHQ44ZGk+zDBM8=
 github.com/kisielk/errcheck v1.5.0/go.mod h1:pFxgyoBC7bSaBwPgfKdkLd5X25qrDl4LWUI2bnpBCr8=

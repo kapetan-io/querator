@@ -61,7 +61,6 @@ type BadgerPartition struct {
 }
 
 func (b *BadgerPartition) Produce(_ context.Context, batch types.Batch[types.ProduceRequest]) error {
-	f := errors.Fields{"code.namespace", "badger", "func", "Partition.Produce"}
 	db, err := b.getDB()
 	if err != nil {
 		return err
@@ -77,11 +76,11 @@ func (b *BadgerPartition) Produce(_ context.Context, batch types.Batch[types.Pro
 				// TODO: GetByPartition buffers from memory pool
 				var buf bytes.Buffer
 				if err := gob.NewEncoder(&buf).Encode(item); err != nil {
-					return f.Errorf("during gob.Encode(): %w", err)
+					return errors.Errorf("during gob.Encode(): %w", err)
 				}
 
 				if err := txn.Set(item.ID, buf.Bytes()); err != nil {
-					return f.Errorf("during Put(): %w", err)
+					return errors.Errorf("during Put(): %w", err)
 				}
 			}
 		}
@@ -90,8 +89,6 @@ func (b *BadgerPartition) Produce(_ context.Context, batch types.Batch[types.Pro
 }
 
 func (b *BadgerPartition) Reserve(_ context.Context, batch types.ReserveBatch, opts ReserveOptions) error {
-	f := errors.Fields{"code.namespace", "badger", "func", "Partition.Reserve"}
-
 	db, err := b.getDB()
 	if err != nil {
 		return err
@@ -112,12 +109,12 @@ func (b *BadgerPartition) Reserve(_ context.Context, batch types.ReserveBatch, o
 			var v []byte
 			v, err := iter.Item().ValueCopy(v)
 			if err != nil {
-				return f.Errorf("while getting value: %w", err)
+				return errors.Errorf("while getting value: %w", err)
 			}
 
 			item := new(types.Item) // TODO: memory pool
 			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(item); err != nil {
-				return f.Errorf("during Decode(): %w", err)
+				return errors.Errorf("during Decode(): %w", err)
 			}
 
 			if item.IsReserved {
@@ -134,11 +131,11 @@ func (b *BadgerPartition) Reserve(_ context.Context, batch types.ReserveBatch, o
 				// If assignment was a success, then we put the updated item into the db
 				var buf bytes.Buffer // TODO: memory pool
 				if err := gob.NewEncoder(&buf).Encode(item); err != nil {
-					return f.Errorf("during gob.Encode(): %w", err)
+					return errors.Errorf("during gob.Encode(): %w", err)
 				}
 
 				if err := txn.Set(item.ID, buf.Bytes()); err != nil {
-					return f.Errorf("during Put(): %w", err)
+					return errors.Errorf("during Put(): %w", err)
 				}
 				continue
 			}
@@ -149,7 +146,6 @@ func (b *BadgerPartition) Reserve(_ context.Context, batch types.ReserveBatch, o
 }
 
 func (b *BadgerPartition) Complete(_ context.Context, batch types.Batch[types.CompleteRequest]) error {
-	f := errors.Fields{"code.namespace", "badger", "func", "Partition.Complete"}
 	var done bool
 
 	db, err := b.getDB()
@@ -193,7 +189,7 @@ nextBatch:
 
 			item := new(types.Item) // TODO: memory pool
 			if err = gob.NewDecoder(bytes.NewReader(v)).Decode(item); err != nil {
-				return f.Errorf("during Decode(): %w", err)
+				return errors.Errorf("during Decode(): %w", err)
 			}
 
 			if !item.IsReserved {
@@ -203,14 +199,14 @@ nextBatch:
 			}
 
 			if err = txn.Delete(id); err != nil {
-				return f.Errorf("during Delete(%s): %w", id, err)
+				return errors.Errorf("during Delete(%s): %w", id, err)
 			}
 		}
 	}
 
 	err = txn.Commit()
 	if err != nil {
-		return f.Errorf("during Commit(): %w", err)
+		return errors.Errorf("during Commit(): %w", err)
 	}
 
 	done = true
@@ -218,8 +214,6 @@ nextBatch:
 }
 
 func (b *BadgerPartition) List(_ context.Context, items *[]*types.Item, opts types.ListOptions) error {
-	f := errors.Fields{"code.namespace", "badger", "func", "Partition.List"}
-
 	db, err := b.getDB()
 	if err != nil {
 		return err
@@ -250,12 +244,12 @@ func (b *BadgerPartition) List(_ context.Context, items *[]*types.Item, opts typ
 			var v []byte
 			v, err := iter.Item().ValueCopy(v)
 			if err != nil {
-				return f.Errorf("during GetByPartition value: %w", err)
+				return errors.Errorf("during GetByPartition value: %w", err)
 			}
 
 			item := new(types.Item) // TODO: memory pool
 			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(item); err != nil {
-				return f.Errorf("during Decode(): %w", err)
+				return errors.Errorf("during Decode(): %w", err)
 			}
 
 			*items = append(*items, item)
@@ -270,8 +264,6 @@ func (b *BadgerPartition) List(_ context.Context, items *[]*types.Item, opts typ
 }
 
 func (b *BadgerPartition) Add(_ context.Context, items []*types.Item) error {
-	f := errors.Fields{"code.namespace", "badger", "func", "Partition.Add"}
-
 	db, err := b.getDB()
 	if err != nil {
 		return err
@@ -291,11 +283,11 @@ func (b *BadgerPartition) Add(_ context.Context, items []*types.Item) error {
 			// TODO: GetByPartition buffers from memory pool
 			var buf bytes.Buffer
 			if err := gob.NewEncoder(&buf).Encode(item); err != nil {
-				return f.Errorf("during gob.Encode(): %w", err)
+				return errors.Errorf("during gob.Encode(): %w", err)
 			}
 
 			if err := txn.Set(item.ID, buf.Bytes()); err != nil {
-				return f.Errorf("during Put(): %w", err)
+				return errors.Errorf("during Put(): %w", err)
 			}
 		}
 		return nil
@@ -303,8 +295,6 @@ func (b *BadgerPartition) Add(_ context.Context, items []*types.Item) error {
 }
 
 func (b *BadgerPartition) Delete(_ context.Context, ids []types.ItemID) error {
-	f := errors.Fields{"code.namespace", "badger", "func", "Partition.Delete"}
-
 	db, err := b.getDB()
 	if err != nil {
 		return err
@@ -317,7 +307,7 @@ func (b *BadgerPartition) Delete(_ context.Context, ids []types.ItemID) error {
 				return transport.NewInvalidOption("invalid storage id; '%s': %s", id, err)
 			}
 			if err := txn.Delete(id); err != nil {
-				return f.Errorf("during delete: %w", err)
+				return errors.Errorf("during delete: %w", err)
 			}
 		}
 		return nil
@@ -325,8 +315,6 @@ func (b *BadgerPartition) Delete(_ context.Context, ids []types.ItemID) error {
 }
 
 func (b *BadgerPartition) Clear(_ context.Context, destructive bool) error {
-	f := errors.Fields{"code.namespace", "badger", "func", "Partition.Clear"}
-
 	db, err := b.getDB()
 	if err != nil {
 		return err
@@ -336,7 +324,7 @@ func (b *BadgerPartition) Clear(_ context.Context, destructive bool) error {
 		if destructive {
 			err := db.DropAll()
 			if err != nil {
-				return f.Errorf("during destructive DropAll(): %w", err)
+				return errors.Errorf("during destructive DropAll(): %w", err)
 			}
 			return nil
 		}
@@ -349,12 +337,12 @@ func (b *BadgerPartition) Clear(_ context.Context, destructive bool) error {
 			k = iter.Item().KeyCopy(k)
 			v, err := iter.Item().ValueCopy(v)
 			if err != nil {
-				return f.Errorf("during GetByPartition value: %w", err)
+				return errors.Errorf("during GetByPartition value: %w", err)
 			}
 
 			item := new(types.Item) // TODO: memory pool
 			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(item); err != nil {
-				return f.Errorf("during Decode(): %w", err)
+				return errors.Errorf("during Decode(): %w", err)
 			}
 
 			// Skip reserved items
@@ -363,7 +351,7 @@ func (b *BadgerPartition) Clear(_ context.Context, destructive bool) error {
 			}
 
 			if err := txn.Delete(k); err != nil {
-				return f.Errorf("during Delete(): %w", err)
+				return errors.Errorf("during Delete(): %w", err)
 			}
 		}
 		return nil
@@ -375,7 +363,6 @@ func (b *BadgerPartition) Info() types.PartitionInfo {
 }
 
 func (b *BadgerPartition) Stats(_ context.Context, stats *types.PartitionStats) error {
-	f := errors.Fields{"code.namespace", "badger", "func", "Partition.Stats"}
 	now := b.conf.Clock.Now().UTC()
 
 	db, err := b.getDB()
@@ -392,12 +379,12 @@ func (b *BadgerPartition) Stats(_ context.Context, stats *types.PartitionStats) 
 			var v []byte
 			v, err := iter.Item().ValueCopy(v)
 			if err != nil {
-				return f.Errorf("during GetByPartition value: %w", err)
+				return errors.Errorf("during GetByPartition value: %w", err)
 			}
 
 			item := new(types.Item) // TODO: memory pool
 			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(item); err != nil {
-				return f.Errorf("during Decode(): %w", err)
+				return errors.Errorf("during Decode(): %w", err)
 			}
 
 			stats.Total++
@@ -438,14 +425,13 @@ func (b *BadgerPartition) getDB() (*badger.DB, error) {
 		return b.db, nil
 	}
 
-	f := errors.Fields{"code.namespace", "badger", "func", "BadgerPartition.getDB"}
 	dir := filepath.Join(b.conf.StorageDir, fmt.Sprintf("%s-%06d-%s", b.info.QueueName, b.info.Partition, bucketName))
 
 	opts := badger.DefaultOptions(dir)
 	opts.Logger = newBadgerLogger(b.conf.Log)
 	db, err := badger.Open(opts)
 	if err != nil {
-		return nil, f.Errorf("while opening db '%s': %w", dir, err)
+		return nil, errors.Errorf("while opening db '%s': %w", dir, err)
 	}
 
 	b.db = db
@@ -476,7 +462,6 @@ func (b *BadgerQueueStore) getDB() (*badger.DB, error) {
 		return b.db, nil
 	}
 
-	f := errors.Fields{"code.namespace", "badger", "func", "StorageConfig.QueueStore"}
 	// We store info about the queues in a single db file. We prefix it with `~` to make it
 	// impossible for someone to create a queue with the same name.
 	dir := filepath.Join(b.conf.StorageDir, fmt.Sprintf("~queue-storage-%s", bucketName))
@@ -485,7 +470,7 @@ func (b *BadgerQueueStore) getDB() (*badger.DB, error) {
 	opts.Logger = newBadgerLogger(b.conf.Log)
 	db, err := badger.Open(opts)
 	if err != nil {
-		return nil, f.Errorf("while opening db '%s': %w", dir, err)
+		return nil, errors.Errorf("while opening db '%s': %w", dir, err)
 	}
 
 	b.db = db
@@ -493,8 +478,6 @@ func (b *BadgerQueueStore) getDB() (*badger.DB, error) {
 }
 
 func (b *BadgerQueueStore) Get(_ context.Context, name string, queue *types.QueueInfo) error {
-	f := errors.Fields{"code.namespace", "badger", "func", "QueueStore.GetByPartition"}
-
 	if err := b.validateGet(name); err != nil {
 		return err
 	}
@@ -511,25 +494,23 @@ func (b *BadgerQueueStore) Get(_ context.Context, name string, queue *types.Queu
 			if errors.Is(err, badger.ErrKeyNotFound) {
 				return ErrQueueNotExist
 			}
-			return f.Errorf("during GetByPartition(): %w", err)
+			return errors.Errorf("during GetByPartition(): %w", err)
 		}
 
 		var v []byte
 		v, err = kvItem.ValueCopy(v)
 		if err != nil {
-			return f.Errorf("during GetByPartition value(): %w", err)
+			return errors.Errorf("during GetByPartition value(): %w", err)
 		}
 
 		if err := gob.NewDecoder(bytes.NewReader(v)).Decode(queue); err != nil {
-			return f.Errorf("during Decode(): %w", err)
+			return errors.Errorf("during Decode(): %w", err)
 		}
 		return nil
 	})
 }
 
 func (b *BadgerQueueStore) Add(_ context.Context, info types.QueueInfo) error {
-	f := errors.Fields{"code.namespace", "badger", "func", "QueueStore.Add"}
-
 	if err := b.validateAdd(info); err != nil {
 		return err
 	}
@@ -549,19 +530,17 @@ func (b *BadgerQueueStore) Add(_ context.Context, info types.QueueInfo) error {
 
 		var buf bytes.Buffer // TODO: memory pool
 		if err := gob.NewEncoder(&buf).Encode(info); err != nil {
-			return f.Errorf("during gob.Encode(): %w", err)
+			return errors.Errorf("during gob.Encode(): %w", err)
 		}
 
 		if err := txn.Set([]byte(info.Name), buf.Bytes()); err != nil {
-			return f.Errorf("during Put(): %w", err)
+			return errors.Errorf("during Put(): %w", err)
 		}
 		return nil
 	})
 }
 
 func (b *BadgerQueueStore) Update(_ context.Context, info types.QueueInfo) error {
-	f := errors.Fields{"code.namespace", "badger", "func", "QueueStore.Update"}
-
 	db, err := b.getDB()
 	if err != nil {
 		return err
@@ -578,18 +557,18 @@ func (b *BadgerQueueStore) Update(_ context.Context, info types.QueueInfo) error
 			if errors.Is(err, badger.ErrKeyNotFound) {
 				return ErrQueueNotExist
 			}
-			return f.Errorf("during GetByPartition(): %w", err)
+			return errors.Errorf("during GetByPartition(): %w", err)
 		}
 
 		var v []byte
 		v, err = kvItem.ValueCopy(v)
 		if err != nil {
-			return f.Errorf("during GetByPartition value(): %w", err)
+			return errors.Errorf("during GetByPartition value(): %w", err)
 		}
 
 		var found types.QueueInfo
 		if err := gob.NewDecoder(bytes.NewReader(v)).Decode(&found); err != nil {
-			return f.Errorf("during Decode(): %w", err)
+			return errors.Errorf("during Decode(): %w", err)
 		}
 
 		found.Update(info)
@@ -605,19 +584,17 @@ func (b *BadgerQueueStore) Update(_ context.Context, info types.QueueInfo) error
 
 		var buf bytes.Buffer
 		if err := gob.NewEncoder(&buf).Encode(found); err != nil {
-			return f.Errorf("during gob.Encode(): %w", err)
+			return errors.Errorf("during gob.Encode(): %w", err)
 		}
 
 		if err := txn.Set([]byte(info.Name), buf.Bytes()); err != nil {
-			return f.Errorf("during Put(): %w", err)
+			return errors.Errorf("during Put(): %w", err)
 		}
 		return nil
 	})
 }
 
 func (b *BadgerQueueStore) List(_ context.Context, queues *[]types.QueueInfo, opts types.ListOptions) error {
-	f := errors.Fields{"code.namespace", "badger", "func", "QueueStore.List"}
-
 	if err := b.validateList(opts); err != nil {
 		return err
 	}
@@ -645,12 +622,12 @@ func (b *BadgerQueueStore) List(_ context.Context, queues *[]types.QueueInfo, op
 		for ; iter.Valid(); iter.Next() {
 			v, err := iter.Item().ValueCopy(v)
 			if err != nil {
-				return f.Errorf("during GetByPartition value(): %w", err)
+				return errors.Errorf("during GetByPartition value(): %w", err)
 			}
 
 			var info types.QueueInfo
 			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(&info); err != nil {
-				return f.Errorf("during Decode(): %w", err)
+				return errors.Errorf("during Decode(): %w", err)
 			}
 			*queues = append(*queues, info)
 			count++
@@ -664,8 +641,6 @@ func (b *BadgerQueueStore) List(_ context.Context, queues *[]types.QueueInfo, op
 }
 
 func (b *BadgerQueueStore) Delete(_ context.Context, name string) error {
-	f := errors.Fields{"code.namespace", "badger", "func", "QueueStore.Delete"}
-
 	if err := b.validateDelete(name); err != nil {
 		return err
 	}
@@ -678,7 +653,7 @@ func (b *BadgerQueueStore) Delete(_ context.Context, name string) error {
 	return db.Update(func(txn *badger.Txn) error {
 
 		if err := txn.Delete([]byte(name)); err != nil {
-			return f.Errorf("during Delete(%s): %w", name, err)
+			return errors.Errorf("during Delete(%s): %w", name, err)
 		}
 		return nil
 	})

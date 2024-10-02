@@ -333,13 +333,13 @@ func pauseAndReserve(t *testing.T, ctx context.Context, s *que.Service, c *que.C
 
 	select {
 	case <-done:
-	case <-clock.After(10 * clock.Second):
+	case <-clock.After(5 * clock.Second):
 		t.Fatalf("timed out waiting for distribution of requests")
 	}
 	return responses
 }
 
-func untilReserveClientBlocked(t *testing.T, c *que.Client, queueName string, numBlocked int) error {
+func untilReserveClientWaiting(t *testing.T, c *que.Client, queueName string, numWaiting int) error {
 	_ctx, cancel := context.WithTimeout(context.Background(), 5*clock.Second)
 	defer cancel()
 	t.Helper()
@@ -348,8 +348,8 @@ func untilReserveClientBlocked(t *testing.T, c *que.Client, queueName string, nu
 	return retry.On(_ctx, RetryTenTimes, func(ctx context.Context, i int) error {
 		var resp pb.QueueStatsResponse
 		require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &resp))
-		if int(resp.LogicalQueues[0].ReserveBlocked) != numBlocked {
-			return fmt.Errorf("ReserveBlocked never reached expected %d", numBlocked)
+		if int(resp.LogicalQueues[0].ReserveWaiting) != numWaiting {
+			return fmt.Errorf("ReserveWaiting never reached expected %d", numWaiting)
 		}
 		return nil
 	})

@@ -10,6 +10,8 @@ import (
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/random"
 	"github.com/stretchr/testify/require"
+	"io"
+	"log/slog"
 	"math/rand"
 	"runtime"
 	"slices"
@@ -19,8 +21,10 @@ import (
 
 func BenchmarkProduce(b *testing.B) {
 	fmt.Printf("Current Operating System has '%d' CPUs\n", runtime.NumCPU())
-	bdb := boltTestSetup{Dir: b.TempDir()}
-	badgerdb := badgerTestSetup{Dir: b.TempDir()}
+	//bdb := boltTestSetup{Dir: b.TempDir()}
+	//badgerdb := badgerTestSetup{Dir: b.TempDir()}
+
+	log = slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError}))
 
 	for _, tc := range []struct {
 		Setup    NewStorageFunc
@@ -34,24 +38,24 @@ func BenchmarkProduce(b *testing.B) {
 			},
 			TearDown: func() {},
 		},
-		{
-			Name: "BoltDB",
-			Setup: func(cp *clock.Provider) store.StorageConfig {
-				return bdb.Setup(store.BoltConfig{Clock: cp})
-			},
-			TearDown: func() {
-				bdb.Teardown()
-			},
-		},
-		{
-			Name: "BadgerDB",
-			Setup: func(cp *clock.Provider) store.StorageConfig {
-				return badgerdb.Setup(store.BadgerConfig{Clock: cp})
-			},
-			TearDown: func() {
-				badgerdb.Teardown()
-			},
-		},
+		//{
+		//	Name: "BoltDB",
+		//	Setup: func(cp *clock.Provider) store.StorageConfig {
+		//		return bdb.Setup(store.BoltConfig{Clock: cp})
+		//	},
+		//	TearDown: func() {
+		//		bdb.Teardown()
+		//	},
+		//},
+		//{
+		//	Name: "BadgerDB",
+		//	Setup: func(cp *clock.Provider) store.StorageConfig {
+		//		return badgerdb.Setup(store.BadgerConfig{Clock: cp})
+		//	},
+		//	TearDown: func() {
+		//		badgerdb.Teardown()
+		//	},
+		//},
 
 		//{
 		//	Name: "SurrealDB",
@@ -110,46 +114,46 @@ func BenchmarkProduce(b *testing.B) {
 			}
 		})
 
-		b.Run(tc.Name, func(b *testing.B) {
-			d, err := daemon.NewDaemon(context.Background(), daemon.Config{
-				ServiceConfig: querator.ServiceConfig{
-					StorageConfig: tc.Setup(clock.NewProvider()),
-					Log:           log,
-				},
-			})
-			require.NoError(b, err)
-			defer func() {
-				_ = d.Shutdown(context.Background())
-			}()
-			s := d.Service()
-
-			b.Run("QueuesCreate", func(b *testing.B) {
-				start := clock.Now()
-				b.ResetTimer()
-
-				for n := 0; n < b.N; n++ {
-					timeOuts := random.Slice(validTimeouts)
-					info := pb.QueueInfo{
-						QueueName:           random.String("queue-", 10),
-						DeadQueue:           random.String("dead-", 10),
-						Reference:           random.String("ref-", 10),
-						MaxAttempts:         int32(rand.Intn(100)),
-						ReserveTimeout:      timeOuts.Reserve,
-						DeadTimeout:         timeOuts.Dead,
-						RequestedPartitions: 1,
-					}
-
-					err = s.QueuesCreate(context.Background(), &info)
-					if err != nil {
-						b.Error(err)
-						return
-					}
-				}
-
-				opsPerSec := float64(b.N) / clock.Since(start).Seconds()
-				b.ReportMetric(opsPerSec, "ops/s")
-			})
-		})
+		//b.Run(tc.Name, func(b *testing.B) {
+		//	d, err := daemon.NewDaemon(context.Background(), daemon.Config{
+		//		ServiceConfig: querator.ServiceConfig{
+		//			StorageConfig: tc.Setup(clock.NewProvider()),
+		//			Log:           log,
+		//		},
+		//	})
+		//	require.NoError(b, err)
+		//	defer func() {
+		//		_ = d.Shutdown(context.Background())
+		//	}()
+		//	s := d.Service()
+		//
+		//	b.Run("QueuesCreate", func(b *testing.B) {
+		//		start := clock.Now()
+		//		b.ResetTimer()
+		//
+		//		for n := 0; n < b.N; n++ {
+		//			timeOuts := random.Slice(validTimeouts)
+		//			info := pb.QueueInfo{
+		//				QueueName:           random.String("queue-", 10),
+		//				DeadQueue:           random.String("dead-", 10),
+		//				Reference:           random.String("ref-", 10),
+		//				MaxAttempts:         int32(rand.Intn(100)),
+		//				ReserveTimeout:      timeOuts.Reserve,
+		//				DeadTimeout:         timeOuts.Dead,
+		//				RequestedPartitions: 1,
+		//			}
+		//
+		//			err = s.QueuesCreate(context.Background(), &info)
+		//			if err != nil {
+		//				b.Error(err)
+		//				return
+		//			}
+		//		}
+		//
+		//		opsPerSec := float64(b.N) / clock.Since(start).Seconds()
+		//		b.ReportMetric(opsPerSec, "ops/s")
+		//	})
+		//})
 	}
 }
 

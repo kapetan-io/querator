@@ -82,10 +82,6 @@ type Logical struct {
 	//  can check for this flag and avoid routing clients to this Logical Queue.
 	// InFailure      atomic.Bool
 
-	reserveQueueCh  chan *types.ReserveRequest
-	produceQueueCh  chan *types.ProduceRequest
-	completeQueueCh chan *types.CompleteRequest
-
 	// Hot request channel is for requests this is included in congestion detection
 	hotRequestCh chan *QueueRequest
 	// Cold request channel is for requests that is NOT included in congestion detection
@@ -94,6 +90,9 @@ type Logical struct {
 	shutdownCh chan *types.ShutdownRequest
 	wg         sync.WaitGroup
 	conf       LogicalConfig
+	// inFlight is a counter of number of hot requests that are in flight waiting
+	// for a response to their request. It is used by shutdown to gracefully shut down
+	// all outstanding requests.
 	inFlight   atomic.Int32
 	inShutdown atomic.Bool
 	instanceID string
@@ -120,9 +119,7 @@ func SpawnLogicalQueue(conf LogicalConfig) (*Logical, error) {
 	// These are request queues that queue requests from clients until the sync loop has
 	// time to process them. When they get processed, every request in the queue is handled
 	// in a batch.
-	l.reserveQueueCh = make(chan *types.ReserveRequest, conf.MaxRequestsPerQueue)
-	l.produceQueueCh = make(chan *types.ProduceRequest, conf.MaxRequestsPerQueue)
-	l.completeQueueCh = make(chan *types.CompleteRequest, conf.MaxRequestsPerQueue)
+	l.hotRequestCh = make(chan *QueueRequest, conf.MaxRequestsPerQueue)
 
 	l.conf.Log.LogAttrs(context.Background(), slog.LevelDebug, "logical queue started")
 	l.wg.Add(1)
@@ -168,7 +165,10 @@ func (l *Logical) Produce(ctx context.Context, req *types.ProduceRequest) error 
 	req.Context = ctx
 
 	select {
-	case l.produceQueueCh <- req:
+	case l.hotRequestCh <- &QueueRequest{
+		Method:  MethodProduce,
+		Request: req,
+	}:
 	default:
 		return transport.NewRetryRequest(MsgQueueOverLoaded)
 	}
@@ -232,7 +232,10 @@ func (l *Logical) Reserve(ctx context.Context, req *types.ReserveRequest) error 
 	req.Context = ctx
 
 	select {
-	case l.reserveQueueCh <- req:
+	case l.hotRequestCh <- &QueueRequest{
+		Method:  MethodReserve,
+		Request: req,
+	}:
 	default:
 		return transport.NewRetryRequest(MsgQueueOverLoaded)
 	}
@@ -275,7 +278,10 @@ func (l *Logical) Complete(ctx context.Context, req *types.CompleteRequest) erro
 	req.Context = ctx
 
 	select {
-	case l.completeQueueCh <- req:
+	case l.hotRequestCh <- &QueueRequest{
+		Method:  MethodComplete,
+		Request: req,
+	}:
 	default:
 		return transport.NewRetryRequest(MsgQueueOverLoaded)
 	}
@@ -476,10 +482,10 @@ func (l *Logical) syncLoop() {
 
 	for {
 		l.conf.Log.LogAttrs(context.Background(), slog.LevelDebug, "syncLoop()",
-			slog.Int("PWaiting", len(l.produceQueueCh)),
-			slog.Int("RWaiting", len(l.reserveQueueCh)),
-			slog.Int("CWaiting", len(l.completeQueueCh)),
+			slog.Int("InChannel", len(l.hotRequestCh)),
 			slog.Int("RBlocked", len(state.Reservations.Requests)),
+			slog.Int("PBlocked", len(state.Producers.Requests)),
+			slog.Int("CBlocked", len(state.Completes.Requests)),
 			slog.Int("InFlight", int(l.inFlight.Load())),
 		)
 
@@ -509,80 +515,33 @@ func (l *Logical) syncLoop() {
 }
 
 func (l *Logical) handleHotRequests(state *QueueState, req *QueueRequest) {
-	// Consume all requests from the channel, so we can process them in a batch
-
-	// TODO: Check for request timeout, it's possible the request was sitting in the channel for a while
-	// Cancel any produce requests that have timed out
-	//if l.conf.Clock.Now().UTC().After(req.RequestDeadline) {
-	//	req.Err = ErrRequestTimeout
-	//	state.Producers.Remove(req)
-	//	close(req.ReadyCh)
-	//	continue
-	//}
-	//
-	// Remove any clients that have timed out
-	// l.nextTimeout(&state.Reservations)
-	//
-	//if l.conf.Clock.Now().UTC().After(req.RequestDeadline) {
-	//	req.Err = ErrRequestTimeout
-	//	state.Completes.Remove(req)
-	//	close(req.ReadyCh)
-	//	continue
-	//}
-
-	switch req.Method {
-	case MethodProduce:
-		state.Producers.Add(req.Request.(*types.ProduceRequest))
-	case MethodComplete:
-		state.Completes.Add(req.Request.(*types.CompleteRequest))
-	case MethodReserve:
-		addIfUnique(&state.Reservations, req.Request.(*types.ReserveRequest))
-	default:
-		panic(fmt.Sprintf("undefined request case '%d'", req.Method))
-	}
-EMPTY:
-	for {
-		select {
-		case req := <-l.hotRequestCh:
-			// TODO(thrawn01): Ensure we don't go beyond our max number of state.Producers, state.Completes, etc..
-			//  If we do then we must inform the client that we are overloaded, and they must try again. We
-			//  cannot hold on to a request and let it sit in the channel, else we break the
-			//  request_timeout contract we have with the client.
-			switch req.Method {
-			case MethodProduce:
-				state.Producers.Add(req.Request.(*types.ProduceRequest))
-			case MethodComplete:
-				state.Completes.Add(req.Request.(*types.CompleteRequest))
-			case MethodReserve:
-				addIfUnique(&state.Reservations, req.Request.(*types.ReserveRequest))
-			default:
-				panic(fmt.Sprintf("undefined request case '%d'", req.Method))
-			}
-		default:
-			break EMPTY
-		}
+	// If request is empty, do not consume more requests, the caller wants us to
+	// only process requests currently waiting in 'state'
+	if req != nil {
+		// Consume all requests from the hot channel, adding the requests to
+		// the current state.
+		l.consumeHotCh(state, req)
 	}
 
 	l.handleProduceRequests(state)
-
-	// FUTURE: handleReserveRequests() should inspect the produce requests, and attempt to assign
-	// produced items with waiting reserve requests if our queue is caught up.
-	//  (Check for cancel or expire reserve requests first)
-
+	// FUTURE: handleReserveRequests() should inspect the produce requests, and
+	// attempt to assign produced items with waiting reserve requests if our
+	// queue is caught up. (Check for cancel or expire reserve requests first)
 	l.handleReserveRequests(state)
 	l.handleCompleteRequests(state)
 
-	// TODO: Send prepared statements to the data store partitions
-	l.handleDistToPartitions(state)
+	// Distribute requests to partitions
+	_ = l.handleDistToPartitions(state)
+	// TODO: If an error occurred, and it's recoverable, then
+	//  attempt to re-distribute remaining requests to other partitions
 
 	// TODO: Some time may have passed while talking to the partition.
 	//  If a partition has failed, and we can't re-distribute to other partitions
 	//  we need to let clients know they  are timed out.
 	//  Perhaps scheduled maint should do this or just let `stateCleanUp()` do it?
 
-	// TODO: If we get here, all partition writes were a success and we just need to inform
-	//  clients and clean up.
 	// ----------------------------------------
+	// If we get here, distributed partition writes were a success.
 	// Inform clients their requests are ready
 	// ----------------------------------------
 	for _, req := range state.Producers.Requests {
@@ -614,6 +573,61 @@ EMPTY:
 	}
 
 	l.stateCleanUp(state)
+}
+
+func (l *Logical) consumeHotCh(state *QueueState, req *QueueRequest) {
+	// TODO: Check for request timeout, it's possible the request has been sitting in
+	//  the channel for a while
+	// Cancel any produce requests that have timed out
+	//if l.conf.Clock.Now().UTC().After(req.RequestDeadline) {
+	//	req.Err = ErrRequestTimeout
+	//	state.Producers.Remove(req)
+	//	close(req.ReadyCh)
+	//	continue
+	//}
+	//
+	// Remove any clients that have timed out
+	// l.nextTimeout(&state.Reservations)
+	//
+	//if l.conf.Clock.Now().UTC().After(req.RequestDeadline) {
+	//	req.Err = ErrRequestTimeout
+	//	state.Completes.Remove(req)
+	//	close(req.ReadyCh)
+	//	continue
+	//}
+
+	switch req.Method {
+	case MethodProduce:
+		state.Producers.Add(req.Request.(*types.ProduceRequest))
+	case MethodComplete:
+		state.Completes.Add(req.Request.(*types.CompleteRequest))
+	case MethodReserve:
+		addIfUnique(&state.Reservations, req.Request.(*types.ReserveRequest))
+	default:
+		panic(fmt.Sprintf("undefined request method '%d'", req.Method))
+	}
+EMPTY:
+	for {
+		select {
+		case req := <-l.hotRequestCh:
+			// TODO(thrawn01): Ensure we don't go beyond our max number of state.Producers, state.Completes, etc..
+			//  If we do then we must inform the client that we are overloaded, and they must try again. We
+			//  cannot hold on to a request and let it sit in the channel, else we break the
+			//  request_timeout contract we have with the client.
+			switch req.Method {
+			case MethodProduce:
+				state.Producers.Add(req.Request.(*types.ProduceRequest))
+			case MethodComplete:
+				state.Completes.Add(req.Request.(*types.CompleteRequest))
+			case MethodReserve:
+				addIfUnique(&state.Reservations, req.Request.(*types.ReserveRequest))
+			default:
+				panic(fmt.Sprintf("undefined request method '%d'", req.Method))
+			}
+		default:
+			break EMPTY
+		}
+	}
 }
 
 func (l *Logical) handleProduceRequests(state *QueueState) {
@@ -695,7 +709,7 @@ nextRequest:
 // TODO: handleDist() needs to indicate if a partition failed, which one, and if we should re-distribute
 //	requests to other partitions.
 
-func (l *Logical) handleDistToPartitions(state *QueueState) {
+func (l *Logical) handleDistToPartitions(state *QueueState) error {
 	// TODO: Future: Querator should handle Partition failure by redistributing the batches to partitions which have
 	//  not failed. (note: make sure we reduce the Distributions[].Count when re-assigning)
 	// TODO: Identify a degradation vs a failure and set PartitionDistribution[].InFailure as appropriate.
@@ -752,7 +766,7 @@ func (l *Logical) handleDistToPartitions(state *QueueState) {
 		}
 		cancel()
 	}
-
+	return nil
 }
 
 // stateCleanUp is responsible for cleaning the QueueState by removing clients that have timed out,
@@ -834,7 +848,7 @@ func (l *Logical) handleColdRequests(state *QueueState, req *QueueRequest) {
 		l.conf.Partitions = p
 		close(req.ReadyCh)
 	default:
-		panic(fmt.Sprintf("unknown queue request method '%d'", req.Method))
+		panic(fmt.Sprintf("undefined request method '%d'", req.Method))
 	}
 }
 
@@ -870,17 +884,17 @@ func (l *Logical) handleStorageRequests(req *QueueRequest) {
 			req.Err = err
 		}
 	default:
-		panic(fmt.Sprintf("unknown storage request method '%d'", req.Method))
+		panic(fmt.Sprintf("undefined request method '%d'", req.Method))
 	}
 	close(req.ReadyCh)
 }
 
 func (l *Logical) handleStats(state *QueueState, r *QueueRequest) {
 	qs := r.Request.(*types.LogicalStats)
-	qs.ProduceWaiting = len(l.produceQueueCh)
-	qs.ReserveWaiting = len(l.reserveQueueCh)
-	qs.CompleteWaiting = len(l.completeQueueCh)
-	qs.ReserveBlocked = len(state.Reservations.Requests)
+	// TODO: Remove ReserveBlocked from protobuf
+	qs.ReserveWaiting = len(state.Reservations.Requests)
+	qs.ProduceWaiting = len(state.Producers.Requests)
+	qs.CompleteWaiting = len(state.Completes.Requests)
 	qs.InFlight = int(l.inFlight.Load())
 
 	for _, p := range l.conf.Partitions {
@@ -907,24 +921,30 @@ func (l *Logical) handlePause(state *QueueState, r *QueueRequest) {
 	l.conf.Log.Debug("paused", "logical", l.instanceID)
 	defer l.conf.Log.Debug("un-paused", "logical", l.instanceID)
 
-	for req := range l.coldRequestCh {
-		switch req.Method {
-		case MethodQueuePause:
-			pr := req.Request.(*types.PauseRequest)
-			if pr.Pause {
-				// Already paused, ignore this request
+	for {
+		select {
+		case req := <-l.coldRequestCh:
+			switch req.Method {
+			case MethodQueuePause:
+				pr := req.Request.(*types.PauseRequest)
+				if pr.Pause {
+					// Already paused, ignore this request
+					close(req.ReadyCh)
+					continue
+				}
+				// Cancel the pause
 				close(req.ReadyCh)
-				continue
+				// Process any hot requests waiting
+				l.handleHotRequests(state, nil)
+				return
+			default:
+				l.handleColdRequests(state, req)
 			}
-			// Cancel the pause
-			close(req.ReadyCh)
-			return
-		default:
-			l.handleColdRequests(state, req)
+		case req := <-l.hotRequestCh:
+			l.consumeHotCh(state, req)
 		}
 	}
 }
-
 func (l *Logical) handleShutdown(state *QueueState, req *types.ShutdownRequest) {
 	l.stateCleanUp(state)
 
@@ -936,21 +956,33 @@ func (l *Logical) handleShutdown(state *QueueState, req *types.ShutdownRequest) 
 
 	// Consume all requests currently in flight
 	for l.inFlight.Load() != 0 {
-		select {
-		case r := <-l.produceQueueCh:
-			r.Err = ErrQueueShutdown
-			close(r.ReadyCh)
-		case r := <-l.reserveQueueCh:
-			r.Err = ErrQueueShutdown
-			close(r.ReadyCh)
-		case r := <-l.completeQueueCh:
-			r.Err = ErrQueueShutdown
-			close(r.ReadyCh)
-		case <-l.conf.Clock.After(100 * clock.Millisecond):
-			// all time for the closed requests handlers to exit
-		case <-req.Context.Done():
-			req.Err = req.Context.Err()
-			return
+		for {
+			select {
+			case r := <-l.hotRequestCh:
+				switch r.Method {
+				case MethodProduce:
+					o := r.Request.(*types.ProduceRequest)
+					o.Err = ErrQueueShutdown
+					close(o.ReadyCh)
+				case MethodReserve:
+					o := r.Request.(*types.ReserveRequest)
+					o.Err = ErrQueueShutdown
+					close(o.ReadyCh)
+				case MethodComplete:
+					o := r.Request.(*types.CompleteRequest)
+					o.Err = ErrQueueShutdown
+					close(o.ReadyCh)
+				default:
+					panic(fmt.Sprintf("undefined request method '%d'", r.Method))
+				}
+			default:
+				// If there is a hot request still in flight, it is possible
+				// it hasn't been added to the channel yet, so we try until there
+				// are no more waiting requests.
+				if l.inFlight.Load() == 0 {
+					break
+				}
+			}
 		}
 	}
 

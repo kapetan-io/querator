@@ -27,6 +27,9 @@ const (
 	MethodQueueClear
 	MethodUpdateInfo
 	MethodUpdatePartitions
+	MethodProduce
+	MethodReserve
+	MethodComplete
 
 	DefaultMaxReserveBatchSize  = 1_000
 	DefaultMaxProduceBatchSize  = 1_000
@@ -79,17 +82,20 @@ type Logical struct {
 	//  can check for this flag and avoid routing clients to this Logical Queue.
 	// InFailure      atomic.Bool
 
-	reserveQueueCh  chan *types.ReserveRequest
-	produceQueueCh  chan *types.ProduceRequest
-	completeQueueCh chan *types.CompleteRequest
+	// Hot request channel is for requests this is included in congestion detection
+	hotRequestCh chan *QueueRequest
+	// Cold request channel is for requests that is NOT included in congestion detection
+	coldRequestCh chan *QueueRequest
 
-	shutdownCh     chan *types.ShutdownRequest
-	queueRequestCh chan *QueueRequest
-	wg             sync.WaitGroup
-	conf           LogicalConfig
-	inFlight       atomic.Int32
-	inShutdown     atomic.Bool
-	instanceID     string
+	shutdownCh chan *types.ShutdownRequest
+	wg         sync.WaitGroup
+	conf       LogicalConfig
+	// inFlight is a counter of number of hot requests that are in flight waiting
+	// for a response to their request. It is used by shutdown to gracefully shut down
+	// all outstanding requests.
+	inFlight   atomic.Int32
+	inShutdown atomic.Bool
+	instanceID string
 }
 
 func SpawnLogicalQueue(conf LogicalConfig) (*Logical, error) {
@@ -104,18 +110,16 @@ func SpawnLogicalQueue(conf LogicalConfig) (*Logical, error) {
 		// Shutdowns require special handling in the sync loop
 		shutdownCh: make(chan *types.ShutdownRequest),
 		// Logical requests are any request that doesn't require special batch processing
-		queueRequestCh: make(chan *QueueRequest),
-		instanceID:     random.Alpha("", 10),
-		conf:           conf,
+		coldRequestCh: make(chan *QueueRequest),
+		instanceID:    random.Alpha("", 10),
+		conf:          conf,
 	}
 	l.conf.Log = conf.Log.With("code.namespace", "Logical", "queue", conf.Name, "instance-id", l.instanceID)
 
 	// These are request queues that queue requests from clients until the sync loop has
 	// time to process them. When they get processed, every request in the queue is handled
 	// in a batch.
-	l.reserveQueueCh = make(chan *types.ReserveRequest, conf.MaxRequestsPerQueue)
-	l.produceQueueCh = make(chan *types.ProduceRequest, conf.MaxRequestsPerQueue)
-	l.completeQueueCh = make(chan *types.CompleteRequest, conf.MaxRequestsPerQueue)
+	l.hotRequestCh = make(chan *QueueRequest, conf.MaxRequestsPerQueue)
 
 	l.conf.Log.LogAttrs(context.Background(), slog.LevelDebug, "logical queue started")
 	l.wg.Add(1)
@@ -161,7 +165,10 @@ func (l *Logical) Produce(ctx context.Context, req *types.ProduceRequest) error 
 	req.Context = ctx
 
 	select {
-	case l.produceQueueCh <- req:
+	case l.hotRequestCh <- &QueueRequest{
+		Method:  MethodProduce,
+		Request: req,
+	}:
 	default:
 		return transport.NewRetryRequest(MsgQueueOverLoaded)
 	}
@@ -225,7 +232,10 @@ func (l *Logical) Reserve(ctx context.Context, req *types.ReserveRequest) error 
 	req.Context = ctx
 
 	select {
-	case l.reserveQueueCh <- req:
+	case l.hotRequestCh <- &QueueRequest{
+		Method:  MethodReserve,
+		Request: req,
+	}:
 	default:
 		return transport.NewRetryRequest(MsgQueueOverLoaded)
 	}
@@ -268,7 +278,10 @@ func (l *Logical) Complete(ctx context.Context, req *types.CompleteRequest) erro
 	req.Context = ctx
 
 	select {
-	case l.completeQueueCh <- req:
+	case l.hotRequestCh <- &QueueRequest{
+		Method:  MethodComplete,
+		Request: req,
+	}:
 	default:
 		return transport.NewRetryRequest(MsgQueueOverLoaded)
 	}
@@ -469,26 +482,20 @@ func (l *Logical) syncLoop() {
 
 	for {
 		l.conf.Log.LogAttrs(context.Background(), slog.LevelDebug, "syncLoop()",
-			slog.Int("PWaiting", len(l.produceQueueCh)),
-			slog.Int("RWaiting", len(l.reserveQueueCh)),
-			slog.Int("CWaiting", len(l.completeQueueCh)),
+			slog.Int("InChannel", len(l.hotRequestCh)),
 			slog.Int("RBlocked", len(state.Reservations.Requests)),
+			slog.Int("PBlocked", len(state.Producers.Requests)),
+			slog.Int("CBlocked", len(state.Completes.Requests)),
 			slog.Int("InFlight", int(l.inFlight.Load())),
 		)
 
 		select {
-		case req := <-l.produceQueueCh:
-			l.handleProduceRequests(&state, req)
+		case req := <-l.hotRequestCh:
+			l.handleHotRequests(&state, req)
 
-		case req := <-l.reserveQueueCh:
-			l.handleReserveRequests(&state, req)
-
-		case req := <-l.completeQueueCh:
-			l.handleCompleteRequests(&state, req)
-
-		case req := <-l.queueRequestCh:
-			l.handleQueueRequests(&state, req)
-			// If we shut down during a pause, exit immediately
+		case req := <-l.coldRequestCh:
+			l.handleColdRequests(&state, req)
+			// If a cold request initiated a shutdown, exit immediately
 			if l.inShutdown.Load() {
 				return
 			}
@@ -507,40 +514,125 @@ func (l *Logical) syncLoop() {
 	}
 }
 
-func (l *Logical) handleProduceRequests(state *QueueState, req *types.ProduceRequest) {
-	// Consume all requests in the channel, so we can process them in a batch
-	state.Producers.Add(req)
+func (l *Logical) handleHotRequests(state *QueueState, req *QueueRequest) {
+	// If request is empty, do not consume more requests, the caller wants us to
+	// only process requests currently waiting in 'state'
+	if req != nil {
+		// Consume all requests from the hot channel, adding the requests to
+		// the current state.
+		l.consumeHotCh(state, req)
+	}
+
+	l.handleProduceRequests(state)
+	// FUTURE: handleReserveRequests() should inspect the produce requests, and
+	// attempt to assign produced items with waiting reserve requests if our
+	// queue is caught up. (Check for cancel or expire reserve requests first)
+	l.handleReserveRequests(state)
+	l.handleCompleteRequests(state)
+
+	// Distribute requests to partitions
+	_ = l.handleDistToPartitions(state)
+	// TODO: If an error occurred, and it's recoverable, then
+	//  attempt to re-distribute remaining requests to other partitions
+
+	// TODO: Some time may have passed while talking to the partition.
+	//  If a partition has failed, and we can't re-distribute to other partitions
+	//  we need to let clients know they  are timed out.
+	//  Perhaps scheduled maint should do this or just let `stateCleanUp()` do it?
+
+	// ----------------------------------------
+	// If we get here, distributed partition writes were a success.
+	// Inform clients their requests are ready
+	// ----------------------------------------
+	for _, req := range state.Producers.Requests {
+		close(req.ReadyCh)
+	}
+
+	for i, req := range state.Reservations.Requests {
+		if req == nil {
+			continue
+		}
+		if len(req.Items) != 0 || req.Err != nil {
+			state.Reservations.MarkNil(i) // TODO: move this, I think
+			close(req.ReadyCh)
+		}
+	}
+
+	for _, req := range state.Completes.Requests {
+		close(req.ReadyCh)
+	}
+
+	state.Producers.Reset()
+	state.Completes.Reset()
+
+	// Reset the partition assignments
+	for i, _ := range state.Distributions {
+		state.Distributions[i].ProduceRequests.Reset()
+		state.Distributions[i].ReserveRequests.Reset()
+		state.Distributions[i].CompleteRequests.Reset()
+	}
+
+	l.stateCleanUp(state)
+}
+
+func (l *Logical) consumeHotCh(state *QueueState, req *QueueRequest) {
+	// TODO: Check for request timeout, it's possible the request has been sitting in
+	//  the channel for a while
+	// Cancel any produce requests that have timed out
+	//if l.conf.Clock.Now().UTC().After(req.RequestDeadline) {
+	//	req.Err = ErrRequestTimeout
+	//	state.Producers.Remove(req)
+	//	close(req.ReadyCh)
+	//	continue
+	//}
+	//
+	// Remove any clients that have timed out
+	// l.nextTimeout(&state.Reservations)
+	//
+	//if l.conf.Clock.Now().UTC().After(req.RequestDeadline) {
+	//	req.Err = ErrRequestTimeout
+	//	state.Completes.Remove(req)
+	//	close(req.ReadyCh)
+	//	continue
+	//}
+
+	switch req.Method {
+	case MethodProduce:
+		state.Producers.Add(req.Request.(*types.ProduceRequest))
+	case MethodComplete:
+		state.Completes.Add(req.Request.(*types.CompleteRequest))
+	case MethodReserve:
+		addIfUnique(&state.Reservations, req.Request.(*types.ReserveRequest))
+	default:
+		panic(fmt.Sprintf("undefined request method '%d'", req.Method))
+	}
 EMPTY:
 	for {
 		select {
-		case req := <-l.produceQueueCh:
-			// TODO(thrawn01): Ensure we don't go beyond our max number of state.Producers, if we do,
-			//  then we must inform the client that we are overloaded, and they must try again. We
+		case req := <-l.hotRequestCh:
+			// TODO(thrawn01): Ensure we don't go beyond our max number of state.Producers, state.Completes, etc..
+			//  If we do then we must inform the client that we are overloaded, and they must try again. We
 			//  cannot hold on to a request and let it sit in the channel, else we break the
 			//  request_timeout contract we have with the client.
-
-			// TODO(thrawn01): Paused queues must also process this channel, and place produce requests
-			//  into state.Producers, and handle requests if this channel is full.
-			state.Producers.Add(req)
+			switch req.Method {
+			case MethodProduce:
+				state.Producers.Add(req.Request.(*types.ProduceRequest))
+			case MethodComplete:
+				state.Completes.Add(req.Request.(*types.CompleteRequest))
+			case MethodReserve:
+				addIfUnique(&state.Reservations, req.Request.(*types.ReserveRequest))
+			default:
+				panic(fmt.Sprintf("undefined request method '%d'", req.Method))
+			}
 		default:
 			break EMPTY
 		}
 	}
+}
 
-	// FUTURE: Inspect the Waiting Reserve Requests, and attempt to assign produced items with
-	//  waiting reserve requests if our queue is caught up.
-	//  (Check for cancel or expire reserve requests first)
-
-	// Assign a DeadTimeout and Calculate an appropriate write timeout such that we respect RequestDeadline
-	// if we are experiencing a saturation event
+func (l *Logical) handleProduceRequests(state *QueueState) {
 	for _, req := range state.Producers.Requests {
-		// Cancel any produce requests that have timed out
-		if l.conf.Clock.Now().UTC().After(req.RequestDeadline) {
-			req.Err = ErrRequestTimeout
-			state.Producers.Remove(req)
-			close(req.ReadyCh)
-			continue
-		}
+
 		// Assign a DeadTimeout to each item
 		for _, item := range req.Items {
 			item.DeadDeadline = l.conf.Clock.Now().UTC().Add(l.conf.DeadTimeout)
@@ -563,69 +655,9 @@ EMPTY:
 			return 0
 		})
 	}
-
-	// TODO: Future: Querator should handle Partition failure by redistributing the batches to partitions which have
-	//  not failed. (note: make sure we reduce the Distributions[].Count when re-assigning)
-
-	for i, p := range state.Distributions {
-		ctx, cancel := context.WithTimeout(context.Background(), l.conf.WriteTimeout)
-		if err := p.Partition.Produce(ctx, p.ProduceRequests); err != nil {
-			l.conf.Log.Error("while calling Partition.Produce()",
-				"partition", p.Partition.Info().Partition, "error", err)
-
-			// Some time may have passed while talking to the partition.
-			// let clients that are timed out, know we are done with them.
-			for _, req := range state.Producers.Requests {
-				if l.conf.Clock.Now().UTC().After(req.RequestDeadline) {
-					req.Err = ErrRequestTimeout
-					close(req.ReadyCh)
-					continue
-				}
-			}
-			// We get here if there was an internal error with the data store
-			// TODO: Identify a degradation vs a failure and set PartitionDistribution[].InFailure as appropriate.
-			// TODO: Adjust the item count in state.Distributions for failed partitions
-			// TODO: If no new produce requests come in, this may never try again. We need the maintenance
-			//  handler to poke the partition again at some reasonable time in the future, in case it recovered
-		}
-		// Reset the produce request assignments to this partition
-		state.Distributions[i].ProduceRequests.Reset()
-		cancel()
-	}
-
-	// Tell the waiting clients that items have been produced
-	for _, req := range state.Producers.Requests {
-		close(req.ReadyCh)
-	}
-
-	state.Producers.Reset()
-
-	// If there are reservations waiting, then process reservations allowing them pick up the
-	// items just placed into the queue.
-	if state.Reservations.Total != 0 {
-		l.handleReserveRequests(state, nil)
-	}
 }
 
-func (l *Logical) handleReserveRequests(state *QueueState, req *types.ReserveRequest) {
-	// TODO(thrawn01): Ensure we don't go beyond our max number of state.Reservations, return
-	//  an error to the client
-
-	// Consume all requests in the channel, so we can process them in a batch
-	addIfUnique(&state.Reservations, req)
-EMPTY:
-	for {
-		select {
-		case req := <-l.reserveQueueCh:
-			addIfUnique(&state.Reservations, req)
-		default:
-			break EMPTY
-		}
-	}
-
-	// Remove any clients that have timed out
-	l.nextTimeout(&state.Reservations)
-
+func (l *Logical) handleReserveRequests(state *QueueState) {
 	// Assign Reservation Requests to Partitions
 	for _, req := range state.Reservations.Requests {
 		l.conf.Log.LogAttrs(req.Context, slog.LevelDebug, "Reserve",
@@ -646,67 +678,11 @@ EMPTY:
 			return 0
 		})
 	}
-
-	// Fulfill the assigned reservation requests
-	for i, p := range state.Distributions {
-		ctx, cancel := context.WithTimeout(context.Background(), l.conf.WriteTimeout)
-		if err := p.Partition.Reserve(ctx, p.ReserveRequests, store.ReserveOptions{
-			ReserveDeadline: l.conf.Clock.Now().UTC().Add(l.conf.ReserveTimeout),
-		}); err != nil {
-			l.conf.Log.Error("while calling Partition.Reserve()",
-				"partition", p.Partition.Info().Partition,
-				"error", err)
-
-			// We get here if there was an internal error with the data store
-			// TODO: Identify a degradation vs a failure and set PartitionDistribution[].InFailure as appropriate.
-			// TODO: Adjust the item count in state.Distributions for failed partitions
-			// TODO: If no new reserve requests come in, this may never try again. We need the maintenance
-			//  handler to poke the partition again at some reasonable time in the future, in case it recovered
-		}
-		// Reset the reserve request assignments to this partition
-		state.Distributions[i].ReserveRequests.Reset()
-		cancel()
-	}
-
-	// Inform clients they have reservations ready or if there was an error
-	for i, req := range state.Reservations.Requests {
-		if req == nil {
-			continue
-		}
-		if len(req.Items) != 0 || req.Err != nil {
-			state.Reservations.MarkNil(i)
-			close(req.ReadyCh)
-		}
-	}
-	l.stateCleanUp(state)
 }
 
-func (l *Logical) handleCompleteRequests(state *QueueState, req *types.CompleteRequest) {
-	// TODO(thrawn01): Ensure we don't go beyond our max number of state.Completes, return
-	//  an error to the client
-
-	// Consume all requests in the channel, so we can process them in a batch
-	state.Completes.Add(req)
-EMPTY:
-	for {
-		select {
-		case req := <-l.completeQueueCh:
-			state.Completes.Add(req)
-		default:
-			break EMPTY
-		}
-	}
-
+func (l *Logical) handleCompleteRequests(state *QueueState) {
 nextRequest:
 	for _, req := range state.Completes.Requests {
-		// Cancel requests that have timed out
-		if l.conf.Clock.Now().UTC().After(req.RequestDeadline) {
-			req.Err = ErrRequestTimeout
-			state.Completes.Remove(req)
-			close(req.ReadyCh)
-			continue
-		}
-
 		// Find the partition in the distribution
 		var found bool
 		for i, p := range state.Distributions {
@@ -728,38 +704,69 @@ nextRequest:
 			close(req.ReadyCh)
 		}
 	}
+}
 
-	// Fulfill the assigned complete requests
-	for i, p := range state.Distributions {
+// TODO: handleDist() needs to indicate if a partition failed, which one, and if we should re-distribute
+//	requests to other partitions.
+
+func (l *Logical) handleDistToPartitions(state *QueueState) error {
+	// TODO: Future: Querator should handle Partition failure by redistributing the batches to partitions which have
+	//  not failed. (note: make sure we reduce the Distributions[].Count when re-assigning)
+	// TODO: Identify a degradation vs a failure and set PartitionDistribution[].InFailure as appropriate.
+	// TODO: Adjust the item count in state.Distributions for failed partitions
+	// TODO: If no new produce requests come in, this may never try again. We need the maintenance
+	//  handler to poke the partition again at some reasonable time in the future, in case it recovered
+
+	// TODO: Interaction with each partition should probably be async so we can send multiple
+	//  writes simultaneously. If one of the partitions is slow, it won't hold up the other partitions
+
+	// TODO: Partition should accept batched writes if such a thing is supported.
+
+	for _, p := range state.Distributions {
 		ctx, cancel := context.WithTimeout(context.Background(), l.conf.WriteTimeout)
-		var err error
-		if err = p.Partition.Complete(ctx, p.CompleteRequests); err != nil {
+		// ----------------------------------------
+		// Produce
+		// ----------------------------------------
+		if err := p.Partition.Produce(ctx, p.ProduceRequests); err != nil {
+			l.conf.Log.Error("while calling Partition.Produce()",
+				"partition", p.Partition.Info().Partition, "error", err)
+			// TODO: Handle degradation
+		}
+
+		// ----------------------------------------
+		// Reserve
+		// ----------------------------------------
+		if err := p.Partition.Reserve(ctx, p.ReserveRequests, store.ReserveOptions{
+			ReserveDeadline: l.conf.Clock.Now().UTC().Add(l.conf.ReserveTimeout),
+		}); err != nil {
+			l.conf.Log.Error("while calling Partition.Reserve()",
+				"partition", p.Partition.Info().Partition,
+				"error", err)
+			// TODO: Handle degradation
+		}
+
+		// ----------------------------------------
+		// Complete
+		// ----------------------------------------
+		if err := p.Partition.Complete(ctx, p.CompleteRequests); err != nil {
 			l.conf.Log.Error("while calling Partition.Complete()",
 				"partition", p.Partition.Info().Partition,
 				"queueName", l.conf.Name,
 				"error", err)
 
-			// We get here if there was an internal error with the data store
-			// TODO: Identify a degradation vs a failure and set PartitionDistribution[].InFailure as appropriate.
-			// TODO: Adjust the item count in state.Distributions for failed partitions
-			// TODO: If no new reserve requests come in, this may never try again. We need the maintenance
-			//  handler to poke the partition again at some reasonable time in the future, in case it recovered
-			// TODO: We may want to retry on behalf of the client in the future.
-		}
-		// Tell the waiting clients that items have been marked as complete for this partition
-		for _, req := range p.CompleteRequests.Requests {
-			if err != nil {
-				// TODO: We likely want to inform the client they should retry instead of return an internal error
+			// Completes are a bit different, in that we can't assign them to different
+			// partitions, a complete request is FOR a specific partition, if there was
+			// an error talking to that partition we need to tell the client.
+			for _, req := range p.CompleteRequests.Requests {
+				// TODO: We likely want to inform the client they should retry
+				//  instead of return an internal error
 				req.Err = ErrInternalRetry
 			}
-			close(req.ReadyCh)
-			// Reset the complete request assignments to this partition
-			state.Distributions[i].CompleteRequests.Reset()
+			// TODO: Handle degradation
 		}
 		cancel()
 	}
-
-	state.Completes.Reset()
+	return nil
 }
 
 // stateCleanUp is responsible for cleaning the QueueState by removing clients that have timed out,
@@ -804,7 +811,7 @@ func (l *Logical) queueRequest(ctx context.Context, r *QueueRequest) error {
 	r.Context = ctx
 
 	select {
-	case l.queueRequestCh <- r:
+	case l.coldRequestCh <- r:
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -821,7 +828,7 @@ func (l *Logical) queueRequest(ctx context.Context, r *QueueRequest) error {
 // Handlers for the main and pause loops
 // -------------------------------------------------
 
-func (l *Logical) handleQueueRequests(state *QueueState, req *QueueRequest) {
+func (l *Logical) handleColdRequests(state *QueueState, req *QueueRequest) {
 	switch req.Method {
 	case MethodStorageItemsList, MethodStorageItemsImport, MethodStorageItemsDelete:
 		l.handleStorageRequests(req)
@@ -841,7 +848,7 @@ func (l *Logical) handleQueueRequests(state *QueueState, req *QueueRequest) {
 		l.conf.Partitions = p
 		close(req.ReadyCh)
 	default:
-		panic(fmt.Sprintf("unknown queue request method '%d'", req.Method))
+		panic(fmt.Sprintf("undefined request method '%d'", req.Method))
 	}
 }
 
@@ -877,17 +884,16 @@ func (l *Logical) handleStorageRequests(req *QueueRequest) {
 			req.Err = err
 		}
 	default:
-		panic(fmt.Sprintf("unknown storage request method '%d'", req.Method))
+		panic(fmt.Sprintf("undefined request method '%d'", req.Method))
 	}
 	close(req.ReadyCh)
 }
 
 func (l *Logical) handleStats(state *QueueState, r *QueueRequest) {
 	qs := r.Request.(*types.LogicalStats)
-	qs.ProduceWaiting = len(l.produceQueueCh)
-	qs.ReserveWaiting = len(l.reserveQueueCh)
-	qs.CompleteWaiting = len(l.completeQueueCh)
-	qs.ReserveBlocked = len(state.Reservations.Requests)
+	qs.ReserveWaiting = len(state.Reservations.Requests)
+	qs.ProduceWaiting = len(state.Producers.Requests)
+	qs.CompleteWaiting = len(state.Completes.Requests)
 	qs.InFlight = int(l.inFlight.Load())
 
 	for _, p := range l.conf.Partitions {
@@ -914,24 +920,30 @@ func (l *Logical) handlePause(state *QueueState, r *QueueRequest) {
 	l.conf.Log.Debug("paused", "logical", l.instanceID)
 	defer l.conf.Log.Debug("un-paused", "logical", l.instanceID)
 
-	for req := range l.queueRequestCh {
-		switch req.Method {
-		case MethodQueuePause:
-			pr := req.Request.(*types.PauseRequest)
-			if pr.Pause {
-				// Already paused, ignore this request
+	for {
+		select {
+		case req := <-l.coldRequestCh:
+			switch req.Method {
+			case MethodQueuePause:
+				pr := req.Request.(*types.PauseRequest)
+				if pr.Pause {
+					// Already paused, ignore this request
+					close(req.ReadyCh)
+					continue
+				}
+				// Cancel the pause
 				close(req.ReadyCh)
-				continue
+				// Process any hot requests waiting
+				l.handleHotRequests(state, nil)
+				return
+			default:
+				l.handleColdRequests(state, req)
 			}
-			// Cancel the pause
-			close(req.ReadyCh)
-			return
-		default:
-			l.handleQueueRequests(state, req)
+		case req := <-l.hotRequestCh:
+			l.consumeHotCh(state, req)
 		}
 	}
 }
-
 func (l *Logical) handleShutdown(state *QueueState, req *types.ShutdownRequest) {
 	l.stateCleanUp(state)
 
@@ -943,21 +955,33 @@ func (l *Logical) handleShutdown(state *QueueState, req *types.ShutdownRequest) 
 
 	// Consume all requests currently in flight
 	for l.inFlight.Load() != 0 {
-		select {
-		case r := <-l.produceQueueCh:
-			r.Err = ErrQueueShutdown
-			close(r.ReadyCh)
-		case r := <-l.reserveQueueCh:
-			r.Err = ErrQueueShutdown
-			close(r.ReadyCh)
-		case r := <-l.completeQueueCh:
-			r.Err = ErrQueueShutdown
-			close(r.ReadyCh)
-		case <-l.conf.Clock.After(100 * clock.Millisecond):
-			// all time for the closed requests handlers to exit
-		case <-req.Context.Done():
-			req.Err = req.Context.Err()
-			return
+		for {
+			select {
+			case r := <-l.hotRequestCh:
+				switch r.Method {
+				case MethodProduce:
+					o := r.Request.(*types.ProduceRequest)
+					o.Err = ErrQueueShutdown
+					close(o.ReadyCh)
+				case MethodReserve:
+					o := r.Request.(*types.ReserveRequest)
+					o.Err = ErrQueueShutdown
+					close(o.ReadyCh)
+				case MethodComplete:
+					o := r.Request.(*types.CompleteRequest)
+					o.Err = ErrQueueShutdown
+					close(o.ReadyCh)
+				default:
+					panic(fmt.Sprintf("undefined request method '%d'", r.Method))
+				}
+			default:
+				// If there is a hot request still in flight, it is possible
+				// it hasn't been added to the channel yet, so we try until there
+				// are no more waiting requests.
+				if l.inFlight.Load() == 0 {
+					break
+				}
+			}
 		}
 	}
 

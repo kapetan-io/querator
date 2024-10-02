@@ -98,6 +98,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		enc := random.String("enc-", 10)
 		kind := random.String("kind-", 10)
 		payload := []byte("I didn't learn a thing. I was right all along")
+		fmt.Printf("Produce()\n")
 		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
 			QueueName:      queueName,
 			RequestTimeout: "1m",
@@ -113,6 +114,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		// Reserve a single message
 		var reserve pb.QueueReserveResponse
+		fmt.Printf("Reserve()\n")
 		require.NoError(t, c.QueueReserve(ctx, &pb.QueueReserveRequest{
 			ClientId:       random.String("client-", 10),
 			RequestTimeout: "5s",
@@ -1016,7 +1018,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				}()
 
 				// Wait until there is one reserve client blocking on the queue.
-				require.NoError(t, untilReserveClientBlocked(t, c, queueName, 1))
+				require.NoError(t, untilReserveClientWaiting(t, c, queueName, 1))
 
 				// Should fail immediately
 				var res pb.QueueReserveResponse

@@ -408,7 +408,6 @@ func (s *Service) QueueStats(ctx context.Context, req *proto.QueueStatsRequest,
 			ProduceWaiting:  int32(stats.ProduceWaiting),
 			ReserveWaiting:  int32(stats.ReserveWaiting),
 			CompleteWaiting: int32(stats.CompleteWaiting),
-			ReserveBlocked:  int32(stats.ReserveBlocked),
 			InFlight:        int32(stats.InFlight),
 			Partitions:      nil,
 		}

@@ -891,7 +891,6 @@ func (l *Logical) handleStorageRequests(req *QueueRequest) {
 
 func (l *Logical) handleStats(state *QueueState, r *QueueRequest) {
 	qs := r.Request.(*types.LogicalStats)
-	// TODO: Remove ReserveBlocked from protobuf
 	qs.ReserveWaiting = len(state.Reservations.Requests)
 	qs.ProduceWaiting = len(state.Producers.Requests)
 	qs.CompleteWaiting = len(state.Completes.Requests)

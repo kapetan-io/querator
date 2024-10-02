@@ -417,7 +417,7 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		err := retry.On(ctx, RetryTenTimes, func(ctx context.Context, i int) error {
 			var resp pb.QueueStatsResponse
 			require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &resp))
-			if (int(resp.LogicalQueues[0].ReserveWaiting) + int(resp.LogicalQueues[0].ReserveBlocked)) != len(requests) {
+			if int(resp.LogicalQueues[0].ReserveWaiting) != len(requests) {
 				return fmt.Errorf("ReserveWaiting never reached expected %d", len(requests))
 			}
 			return nil

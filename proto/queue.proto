@@ -261,16 +261,14 @@ message QueuePartitionStats {
 
 message QueueLogicalStats {
   // ProduceWaiting is the number of `/queue.produce` requests currently waiting
-  // to be processed by the sync loop
+  // to be processed
   int32 produceWaiting = 6 [json_name = "produce_waiting"];
   // ReserveWaiting is the number of `/queue.reserve` requests currently waiting
-  // to be processed by the sync loop
+  // to for items from the queue
   int32 reserveWaiting = 7 [json_name = "reserve_waiting"];
   // CompleteWaiting is the number of `/queue.complete` requests currently waiting
-  // to be processed by the sync loop
+  // to be processed
   int32 completeWaiting = 8 [json_name = "complete_waiting"];
-  // ReserveBlocked is the number of reservations which are blocked waiting for new item to enter the queue.
-  int32 reserveBlocked = 9 [json_name = "reserve_blocked"];
   // InFlight is the total number of requests currently in flight waiting for responses from the sync loop
   int32 inFlight = 10 [json_name = "in_flight"];
   // Stats for each partition in the logical queue

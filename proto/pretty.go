@@ -12,7 +12,6 @@ package proto
 //	_, _ = fmt.Fprintf(&buf, " ProduceWaiting: %d", stats.ProduceWaiting)
 //	_, _ = fmt.Fprintf(&buf, " ReserveWaiting: %d", stats.ReserveWaiting)
 //	_, _ = fmt.Fprintf(&buf, " CompleteWaiting: %d", stats.CompleteWaiting)
-//	_, _ = fmt.Fprintf(&buf, " ReserveBlocked: %d", stats.ReserveBlocked)
 //	buf.WriteString("}")
 //	return buf.String()
 //}

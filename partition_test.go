@@ -438,7 +438,7 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			assert.Equal(t, 2, len(r.Items))
 		}
 	})
-	// TODO: Errors <-- DO NEXT, attempt to hit any error paths that are currently not hit
+	// TODO: Errors
 	// TODO: Attempt to complete ids for a partition which does not exist
 }
 

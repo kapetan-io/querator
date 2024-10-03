@@ -80,7 +80,7 @@ func (b *BadgerPartition) Produce(_ context.Context, batch types.Batch[types.Pro
 				}
 
 				if err := txn.Set(item.ID, buf.Bytes()); err != nil {
-					return errors.Errorf("during Put(): %w", err)
+					return errors.Errorf("during Set(): %w", err)
 				}
 			}
 		}

@@ -98,7 +98,6 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		enc := random.String("enc-", 10)
 		kind := random.String("kind-", 10)
 		payload := []byte("I didn't learn a thing. I was right all along")
-		fmt.Printf("Produce()\n")
 		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
 			QueueName:      queueName,
 			RequestTimeout: "1m",
@@ -114,7 +113,6 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		// Reserve a single message
 		var reserve pb.QueueReserveResponse
-		fmt.Printf("Reserve()\n")
 		require.NoError(t, c.QueueReserve(ctx, &pb.QueueReserveRequest{
 			ClientId:       random.String("client-", 10),
 			RequestTimeout: "5s",
@@ -1162,8 +1160,81 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			}
 		})
 	})
+	t.Run("Timeout", func(t *testing.T) {
+		time := clock.NewProvider()
+		_store := setup(time)
+		defer tearDown()
+		var queueName = random.String("queue-", 10)
+		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: _store})
+		defer d.Shutdown(t)
 
-	// TODO: Test /queue.produce and all the possible incorrect way it could be called
-	// TODO: Test /queue.reserve and all the possible incorrect way it could be called
-	// TODO: Test /queue.complete and all the possible incorrect way it could be called
+		// Create a queue
+		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+			ReserveTimeout:      "1m0s",
+			DeadTimeout:         DeadTimeout,
+			QueueName:           queueName,
+			RequestedPartitions: 1,
+		}))
+
+		t.Run("ReserveTimeout", func(t *testing.T) {
+			t.Run("AttemptComplete", func(t *testing.T) {
+				time.Freeze(clock.Now())
+				defer time.UnFreeze()
+
+				require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+					QueueName:      queueName,
+					RequestTimeout: "1m",
+					Items: []*pb.QueueProduceItem{
+						{
+							Reference: "flutter@shy.com",
+							Encoding:  "friendship",
+							Kind:      "yes",
+							Bytes:     []byte("Could I hold you against your will for a bit?"),
+						},
+					}}))
+
+				var reserve pb.QueueReserveResponse
+				require.NoError(t, c.QueueReserve(ctx, &pb.QueueReserveRequest{
+					ClientId:       random.String("client-", 10),
+					RequestTimeout: "5s",
+					QueueName:      queueName,
+					BatchSize:      1,
+				}, &reserve))
+
+				require.Equal(t, "friendship", reserve.Items[0].Encoding)
+
+				// Advance time til we meet the ReserveTime set by the queue
+				time.Advance(1 * clock.Minute)
+
+				err := c.QueueComplete(ctx, &pb.QueueCompleteRequest{
+					QueueName:      queueName,
+					RequestTimeout: "5s",
+					Ids: []string{
+						reserve.Items[0].Id,
+					},
+				})
+				require.Error(t, err)
+				assert.Equal(t, "some error", err.Error())
+			})
+
+			t.Run("ReservableAgain", func(t *testing.T) {
+				// Produce an item
+				// Reserve it
+				// Wait for the Timeout
+				// Reserve it again
+				// Ensure attempts increased
+			})
+			t.Run("UntilDeadLetter", func(t *testing.T) {
+				// Produce an item
+				// Reserve it
+				// Wait for the Timeout
+				// Repeat until max attempts reached
+			})
+		})
+
+		t.Run("RequestTimeouts", func(t *testing.T) {})
+		t.Run("DeadTimeout", func(t *testing.T) {
+			// TODO: Test with and without a dead letter queue
+		})
+	})
 }

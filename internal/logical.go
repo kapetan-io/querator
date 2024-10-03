@@ -499,19 +499,58 @@ func (l *Logical) syncLoop() {
 			if l.inShutdown.Load() {
 				return
 			}
-			l.stateCleanUp(&state)
 
 		case req := <-l.shutdownCh:
 			l.handleShutdown(&state, req)
 			return
 
 		case <-state.NextMaintenanceCh:
-			l.stateCleanUp(&state)
+			l.handleRequestTimeouts(&state)
 
 			// TODO: Preform queue maintenance, cleaning up reserved items that have not been completed and
 			//  moving items into the dead letter queue.
 		}
 	}
+}
+
+// maintLoop acts much like a garbage collection system which runs async from the main syncLoop
+// looking/marking items to collect. Any writes will STW (Stop The World) by writing to the main
+// syncLoop. This is efficient as maintLoop can batch many items to be moved or updated and those
+// batched items can be merged with current produce/reserve batches in the main loop to avoid
+// unnecessary writes to the partition. This design allows the syncLoop to immediately provide
+// items which have expired their reservation to waiting reserve requests if no items are currently
+// waiting in the queue.
+func (l *Logical) maintLoop() {
+
+	// This main loop runs separately from syncLoop(). It ONLY preforms read operations
+	// on the data store. This means the underlying data store MUST support concurrent
+	// R/W operations. (which most do)
+
+	// The main loop searches the partitions for items that have expired their reservation
+	// or that have been in the partition for too long. This loop keeps statistics on the
+	// partitions. when partitions are updated, both this and the main sync loop must be updated
+	// simultaneously to avoid mis-communication during partition hand off.
+
+	// All WRITE operations are handled by the main syncLoop() where this maintLoop() will
+	// make requests to logicals just like a client would, except it is on behalf of the queue
+	// itself.
+
+	// We could optimize this by making a Logical.Move() command which moves the items when
+	// a bulk action is taking place in the main syncLoop(). It's up to the storage implementation
+	// to implement that in the most efficient manner possible.
+
+	// The WRITE operations are
+	// - Write an item to a dead letter queue (in a separate logical queue, possibly handled by a
+	//  different querator instance
+	// - Update the reserve status and attempts number
+	// - Move an item from the scheduled table to the active FIFO table (they might be the same,
+	//   table depending on storage implementation, as such, storage implementations may just
+	//   modify a field to make them available to the main FIFO)
+
+	// NOTE: Complete operations should NOT warn if a complete was preformed upon an un-reserved
+	// item as it's possible the item was placed in an un-reserved state after processing took to
+	// long.
+
 }
 
 func (l *Logical) handleHotRequests(state *QueueState, req *QueueRequest) {
@@ -538,7 +577,7 @@ func (l *Logical) handleHotRequests(state *QueueState, req *QueueRequest) {
 	// TODO: Some time may have passed while talking to the partition.
 	//  If a partition has failed, and we can't re-distribute to other partitions
 	//  we need to let clients know they  are timed out.
-	//  Perhaps scheduled maint should do this or just let `stateCleanUp()` do it?
+	//  Perhaps scheduled maint should do this or just let `handleRequestTimeouts()` do it?
 
 	// ----------------------------------------
 	// If we get here, distributed partition writes were a success.
@@ -547,23 +586,19 @@ func (l *Logical) handleHotRequests(state *QueueState, req *QueueRequest) {
 	for _, req := range state.Producers.Requests {
 		close(req.ReadyCh)
 	}
+	for _, req := range state.Completes.Requests {
+		close(req.ReadyCh)
+	}
 
 	for i, req := range state.Reservations.Requests {
 		if req == nil {
 			continue
 		}
 		if len(req.Items) != 0 || req.Err != nil {
-			state.Reservations.MarkNil(i) // TODO: move this, I think
+			state.Reservations.MarkNil(i)
 			close(req.ReadyCh)
 		}
 	}
-
-	for _, req := range state.Completes.Requests {
-		close(req.ReadyCh)
-	}
-
-	state.Producers.Reset()
-	state.Completes.Reset()
 
 	// Reset the partition assignments
 	for i, _ := range state.Distributions {
@@ -572,7 +607,11 @@ func (l *Logical) handleHotRequests(state *QueueState, req *QueueRequest) {
 		state.Distributions[i].CompleteRequests.Reset()
 	}
 
-	l.stateCleanUp(state)
+	state.Reservations.FilterNils()
+	state.Producers.Reset()
+	state.Completes.Reset()
+
+	l.handleRequestTimeouts(state)
 }
 
 func (l *Logical) consumeHotCh(state *QueueState, req *QueueRequest) {
@@ -769,16 +808,14 @@ func (l *Logical) handleDistToPartitions(state *QueueState) error {
 	return nil
 }
 
-// stateCleanUp is responsible for cleaning the QueueState by removing clients that have timed out,
-// and finding the next reserve request that will time out and wetting the wakeup timer.
-func (l *Logical) stateCleanUp(state *QueueState) {
+func (l *Logical) handleRequestTimeouts(state *QueueState) {
+	// TODO: Consider state.nextDeadLine which should be the next time a reservation will expire
 	next := l.nextTimeout(&state.Reservations)
 	if next.Nanoseconds() != 0 {
 		l.conf.Log.LogAttrs(context.Background(), slog.LevelDebug, "next maintenance",
 			slog.String("duration", next.String()))
 		state.NextMaintenanceCh = l.conf.Clock.After(next)
 	}
-	state.Reservations.FilterNils()
 }
 
 func (l *Logical) Shutdown(ctx context.Context) error {
@@ -945,8 +982,6 @@ func (l *Logical) handlePause(state *QueueState, r *QueueRequest) {
 	}
 }
 func (l *Logical) handleShutdown(state *QueueState, req *types.ShutdownRequest) {
-	l.stateCleanUp(state)
-
 	// Cancel any open reservations
 	for _, r := range state.Reservations.Requests {
 		r.Err = ErrQueueShutdown

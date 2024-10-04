@@ -175,7 +175,7 @@ func (qm *QueuesManager) get(ctx context.Context, name string) (*Queue, error) {
 		WriteTimeout:         qm.conf.LogicalConfig.WriteTimeout,
 		ReadTimeout:          qm.conf.LogicalConfig.ReadTimeout,
 		Log:                  qm.conf.Log,
-		Partitions:           partitions,
+		StoragePartitions:    partitions,
 		QueueInfo:            queue,
 	})
 	if err != nil {

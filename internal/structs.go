@@ -5,6 +5,7 @@ import (
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/tackle/clock"
+	"sync/atomic"
 )
 
 type PartitionDistribution struct {
@@ -16,8 +17,8 @@ type PartitionDistribution struct {
 	CompleteRequests types.Batch[types.CompleteRequest]
 	// Partition is the partition this distribution is for
 	Partition store.Partition
-	// InFailure is true if the Partition has failed and should not be used
-	InFailure bool
+	// Available is true if the Partition is available for distribution
+	Available atomic.Bool
 	// Count is the total number of un-reserved items in the partition
 	Count int
 }
@@ -45,15 +46,15 @@ func (p *PartitionDistribution) Reserve(req *types.ReserveRequest) {
 //}
 
 type QueueState struct {
-	Reservations  types.ReserveBatch
-	Producers     types.Batch[types.ProduceRequest]
-	Completes     types.Batch[types.CompleteRequest]
-	Distributions []PartitionDistribution
-
+	Reservations      types.ReserveBatch
+	Producers         types.Batch[types.ProduceRequest]
+	Completes         types.Batch[types.CompleteRequest]
+	Distributions     []*PartitionDistribution
+	LifeCycles        []*LifeCycle
 	NextMaintenanceCh <-chan clock.Time
 }
 
-type QueueRequest struct {
+type Request struct {
 	// The API method called
 	Method int
 	// Context is the context of the request

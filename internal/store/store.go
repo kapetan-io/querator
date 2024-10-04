@@ -116,7 +116,7 @@ type PartitionStore interface {
 	// NOT return an error. See 0021-storage-lazy-initialization.md for an explanation.
 	Get(types.PartitionInfo) Partition
 
-	// TODO: List Partitions, Delete Partitions, etc...
+	// TODO: List StoragePartitions, Delete StoragePartitions, etc...
 }
 
 // TODO: A scheduled store should probably be located or managed by a partition store, possibly in the same table

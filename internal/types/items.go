@@ -147,7 +147,7 @@ type QueueInfo struct {
 	// Reference is the user supplied field which could contain metadata or specify who owns this queue
 	Reference string
 	// RequestedPartitions is the number of partitions this queue expects to have. This might be different
-	// from the number of Partitions listed in PartitionInfo as the system grows or shrinks the number
+	// from the number of StoragePartitions listed in PartitionInfo as the system grows or shrinks the number
 	// of actual partitions.
 	RequestedPartitions int
 	// PartitionInfo is a list current partition details

@@ -11,8 +11,10 @@ import (
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/segmentio/ksuid"
 	bolt "go.etcd.io/bbolt"
+	"iter"
 	"log/slog"
 	"path/filepath"
+	"time"
 )
 
 var bucketName = []byte("queue")
@@ -384,6 +386,17 @@ func (b *BoltPartition) Clear(_ context.Context, destructive bool) error {
 
 func (b *BoltPartition) Info() types.PartitionInfo {
 	return b.info
+}
+
+func (b *BoltPartition) LifeCycleActions(timeout time.Duration) iter.Seq[types.Action] {
+	return func(yield func(types.Action) bool) {
+		// TODO(lifecycle)
+	}
+}
+
+func (b *BoltPartition) LifeCycleInfo(ctx context.Context, info *types.LifeCycleInfo) error {
+	// TODO(lifecycle)
+	return nil
 }
 
 func (b *BoltPartition) Stats(_ context.Context, stats *types.PartitionStats) error {

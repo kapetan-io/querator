@@ -16,10 +16,13 @@ import (
 	"sync/atomic"
 )
 
+type MethodKind int
+
 const (
-	maxRequestTimeout      = 15 * clock.Minute
-	minRequestTimeout      = 10 * clock.Millisecond
-	MethodStorageItemsList = iota
+	maxRequestTimeout = 15 * clock.Minute
+	minRequestTimeout = 10 * clock.Millisecond
+
+	MethodStorageItemsList MethodKind = iota
 	MethodStorageItemsImport
 	MethodStorageItemsDelete
 	MethodQueueStats
@@ -80,9 +83,9 @@ type LogicalConfig struct {
 // Logical running anywhere in the cluster at any given time. All consume and produce requests for the partitions
 // assigned to this Logical instance MUST go through this singleton.
 type Logical struct {
-	// TODO: Available should be used to indicate all partitions for this Logical Queue have failed. The QueueManager
+	// TODO: Failures should be used to indicate all partitions for this Logical Queue have failed. The QueueManager
 	//  can check for this flag and avoid routing clients to this Logical Queue.
-	// Available      atomic.Bool
+	// Failures      atomic.Bool
 
 	// Hot request channel is for requests this is included in congestion detection
 	hotRequestCh chan *Request
@@ -302,6 +305,10 @@ func (l *Logical) Complete(ctx context.Context, req *types.CompleteRequest) erro
 	return req.Err
 }
 
+func (l *Logical) LifeCycle(ctx context.Context, req *types.LifeCycleRequest) error {
+	return nil // TODO(lifecycle)
+}
+
 // QueueStats retrieves stats about the queue and items in storage
 func (l *Logical) QueueStats(ctx context.Context, stats *types.LogicalStats) error {
 	if l.inShutdown.Load() {
@@ -457,6 +464,7 @@ func (l *Logical) prepareQueueState(state *QueueState) {
 		state.Distributions[i] = &PartitionDistribution{
 			Partition: p,
 		}
+		state.Distributions[i].Failures.Store(-1)
 
 		state.LifeCycles[i] = NewLifeCycle(LifeCycleConfig{
 			Distribution: state.Distributions[i],
@@ -708,7 +716,7 @@ nextRequest:
 		for i, p := range state.Distributions {
 			// Assign the request to the partition
 			if req.Partition == p.Partition.Info().Partition {
-				if !p.Available.Load() {
+				if p.Failures.Load() != 0 {
 					req.Err = transport.NewRetryRequest("partition not available;"+
 						" partition '%d' is failing, retry again", req.Partition)
 					//close(req.ReadyCh)
@@ -732,7 +740,7 @@ nextRequest:
 func (l *Logical) handleDistToPartitions(state *QueueState) error {
 	// TODO: Future: Querator should handle Partition failure by redistributing the batches to partitions which have
 	//  not failed. (note: make sure we reduce the Distributions[].Count when re-assigning)
-	// TODO: Identify a degradation vs a failure and set PartitionDistribution[].Available as appropriate.
+	// TODO: Identify a degradation vs a failure and set PartitionDistribution[].Failures as appropriate.
 	// TODO: Adjust the item count in state.Distributions for failed partitions
 	// TODO: If no new produce requests come in, this may never try again. We need the maintenance
 	//  handler to poke the partition again at some reasonable time in the future, in case it recovered

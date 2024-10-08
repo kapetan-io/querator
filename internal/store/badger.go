@@ -12,9 +12,11 @@ import (
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/set"
 	"github.com/segmentio/ksuid"
+	"iter"
 	"log/slog"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 type BadgerConfig struct {
@@ -360,6 +362,17 @@ func (b *BadgerPartition) Clear(_ context.Context, destructive bool) error {
 
 func (b *BadgerPartition) Info() types.PartitionInfo {
 	return b.info
+}
+
+func (b *BadgerPartition) LifeCycleActions(timeout time.Duration) iter.Seq[types.Action] {
+	return func(yield func(types.Action) bool) {
+		// TODO(lifecycle)
+	}
+}
+
+func (b *BadgerPartition) LifeCycleInfo(ctx context.Context, info *types.LifeCycleInfo) error {
+	// TODO(lifecycle)
+	return nil
 }
 
 func (b *BadgerPartition) Stats(_ context.Context, stats *types.PartitionStats) error {

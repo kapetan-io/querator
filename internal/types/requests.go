@@ -129,3 +129,8 @@ type PartitionStats struct {
 	// AverageReservedAge is the average age of reserved items in the queue
 	AverageReservedAge clock.Duration
 }
+
+type LifeCycleRequest struct {
+	RequestTimeout clock.Duration
+	Actions        []Action
+}

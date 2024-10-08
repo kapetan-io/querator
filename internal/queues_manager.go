@@ -228,6 +228,10 @@ func (qm *QueuesManager) Update(ctx context.Context, info types.QueueInfo) error
 	return nil
 }
 
+func (qm *QueuesManager) LifeCycle(ctx context.Context, req *types.LifeCycleRequest) error {
+	return nil // TODO(lifecycle)
+}
+
 func (qm *QueuesManager) Delete(ctx context.Context, name string) error {
 	if qm.inShutdown.Load() {
 		return ErrServiceShutdown

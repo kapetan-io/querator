@@ -190,3 +190,7 @@ func (i *QueueInfo) Update(r QueueInfo) bool {
 	}
 	return true
 }
+
+type LifeCycleInfo struct {
+	NextReserveExpiry clock.Time
+}

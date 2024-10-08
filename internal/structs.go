@@ -17,8 +17,10 @@ type PartitionDistribution struct {
 	CompleteRequests types.Batch[types.CompleteRequest]
 	// Partition is the partition this distribution is for
 	Partition store.Partition
-	// Available is true if the Partition is available for distribution
-	Available atomic.Bool
+	// Failures is a count of how many times the underlying storage has failed. Resets to
+	// zero when storage stops failing. If the value is zero, then the partition is considered
+	// active and has communication with the underlying storage.
+	Failures atomic.Int32
 	// Count is the total number of un-reserved items in the partition
 	Count int
 	// NumReserved is the total number of items reserved during the most recent distribution
@@ -66,7 +68,7 @@ type QueueState struct {
 
 type Request struct {
 	// The API method called
-	Method int
+	Method MethodKind
 	// Context is the context of the request
 	Context context.Context
 	// The request struct for this method

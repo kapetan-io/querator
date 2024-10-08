@@ -5,16 +5,14 @@ import (
 	"github.com/kapetan-io/errors"
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
+	"github.com/kapetan-io/tackle/clock"
 	"log/slog"
 	"sync"
 	"sync/atomic"
-	"time"
 )
 
 const (
-	LifeCycleMethodRun = iota
-	LifeCycleMethodScheduled
-	LifeCycleMethodShutdown
+	Years = (24 * clock.Hour) * 365
 )
 
 var (
@@ -25,6 +23,7 @@ var (
 type LifeCycleConfig struct {
 	Distribution *PartitionDistribution
 	Storage      store.Partition
+	Clock        clock.Provider
 	Logical      *Logical
 }
 
@@ -36,13 +35,15 @@ type LifeCycleConfig struct {
 // - Decides if a partition is available or not
 // - Sets the initial partition counts if none exist
 type LifeCycle struct {
-	conf      LifeCycleConfig
-	wg        sync.WaitGroup
-	requestCh chan Request
-	running   atomic.Bool
-	manager   *QueuesManager
-	logical   *Logical
-	log       *slog.Logger
+	conf       LifeCycleConfig
+	wg         sync.WaitGroup
+	manager    *QueuesManager
+	runCh      chan Request
+	notifyCh   chan Request
+	shutdownCh chan Request
+	log        *slog.Logger
+	running    atomic.Bool
+	logical    *Logical
 }
 
 func NewLifeCycle(conf LifeCycleConfig) *LifeCycle {
@@ -50,10 +51,12 @@ func NewLifeCycle(conf LifeCycleConfig) *LifeCycle {
 		log: conf.Logical.conf.Log.With(errors.OtelCodeNamespace, "LifeCycle").
 			With("instance-id", conf.Logical.instanceID).
 			With("queue", conf.Logical.conf.Name),
-		manager:   conf.Logical.conf.Manager,
-		requestCh: make(chan Request),
-		logical:   conf.Logical,
-		conf:      conf,
+		manager:    conf.Logical.conf.Manager,
+		notifyCh:   make(chan Request),
+		runCh:      make(chan Request),
+		shutdownCh: make(chan Request),
+		logical:    conf.Logical,
+		conf:       conf,
 	}
 }
 
@@ -85,58 +88,82 @@ func (l *LifeCycle) start() chan struct{} {
 		if ch := l.Run(); ch != nil {
 			return ch
 		}
-		time.Sleep(time.Microsecond)
+		clock.Sleep(clock.Microsecond)
 	}
 }
 
+// Run runs the lifecycle immediately, returning a channel that when closed indicates the run has completed.
 func (l *LifeCycle) Run() chan struct{} {
 	req := Request{
 		ReadyCh: make(chan struct{}),
-		Method:  LifeCycleMethodRun,
 	}
 	select {
-	case l.requestCh <- req:
+	case l.runCh <- req:
 	default:
 		return nil
 	}
 	return req.ReadyCh
 }
 
-func (l *LifeCycle) NotifyScheduledItem(t time.Time) chan struct{} {
+// Notify notifies the life cycle that it needs to consider running at the provided time.
+// The life cycle will decide if a previous notify or action supersedes this notification
+// time.
+func (l *LifeCycle) Notify(t clock.Time) {
 	req := Request{
-		ReadyCh: make(chan struct{}),
-		Method:  LifeCycleMethodScheduled,
+		Request: t,
 	}
 	select {
-	case l.requestCh <- req:
+	case l.notifyCh <- req:
 	default:
-		return nil
 	}
-	return req.ReadyCh
 }
 
 func (l *LifeCycle) requestLoop() {
 	defer l.wg.Done()
+	state := lifeCycleState{
+		timer: clock.NewTimer(100 * Years),
+	}
 
 	// nolint
 	for {
+		// NOTE: Separate channels avoids missing a shutdown or run cycle requests
+		// in the case where we have a ton of notify requests.
 		select {
-		case req := <-l.requestCh:
-			switch req.Method {
-			case LifeCycleMethodRun:
-				l.runLifeCycle()
-			case LifeCycleMethodScheduled:
-				// TODO
-			case LifeCycleMethodShutdown:
-				close(req.ReadyCh)
-				return
-			}
+		case req := <-l.runCh:
+			l.runLifeCycle(&state)
 			close(req.ReadyCh)
+		case req := <-l.notifyCh:
+			l.handleNotify(&state, req.Request.(clock.Time))
+		case req := <-l.shutdownCh:
+			close(req.ReadyCh)
+			return
+		case <-state.timer.C():
+			l.runLifeCycle(&state)
 		}
 	}
 }
 
-func (l *LifeCycle) runLifeCycle() {
+func (l *LifeCycle) handleNotify(state *lifeCycleState, notify clock.Time) {
+	now := clock.Now().UTC()
+	// Ignore notify times from the past
+	if now.After(notify) {
+		return
+	}
+
+	// Ignore if we already have a life cycle run scheduled that is before
+	// the notify time.
+	if !state.runDeadline.IsZero() && notify.After(state.runDeadline) {
+		return
+	}
+	state.runDeadline = notify
+	state.timer.Reset(notify.Sub(now))
+}
+
+func (l *LifeCycle) runLifeCycle(state *lifeCycleState) {
+	// TODO: Find the next reservation which will expire
+	// TODO: Find the next scheduled item which needs to be moved over
+	// TODO: Set l.nextRun or set to nil if no items
+
 	var stats types.PartitionStats
 	ctx, cancel := context.WithTimeout(context.Background(), l.logical.conf.ReadTimeout)
 	defer cancel()
@@ -162,12 +189,11 @@ func (l *LifeCycle) Shutdown(ctx context.Context) error {
 	// Request shutdown
 	req := Request{
 		ReadyCh: make(chan struct{}),
-		Method:  LifeCycleMethodShutdown,
 	}
 
 	// Queue shutdown request
 	select {
-	case l.requestCh <- req:
+	case l.shutdownCh <- req:
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -192,4 +218,9 @@ func (l *LifeCycle) Shutdown(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+type lifeCycleState struct {
+	runDeadline clock.Time
+	timer       clock.Timer
 }

@@ -163,6 +163,14 @@ func (l *Logical) Produce(ctx context.Context, req *types.ProduceRequest) error 
 			" %d but received %d", l.conf.MaxProduceBatchSize, len(req.Items))
 	}
 
+	// TODO(schedule): Ignore Schedule dates in the past and enqueue immediately.
+	// TODO(schedule): If Scheduled is set, and if the future date is less than 1 second from now, then skip schedule
+	//  and enqueue the item immediately. This avoids unnecessary work for something that will be moved into
+	//  the queue less than 1 second from now. If someone queued work with the intention that is be be scheduled
+	//  now or within a few seconds we should optimize for this common mistake. Programmers may want to be
+	//  "complete", so they may include a Scheduled time which is set to now or near to now, due to clock drift
+	//  between systems.
+
 	req.RequestDeadline = l.conf.Clock.Now().UTC().Add(req.RequestTimeout)
 	req.ReadyCh = make(chan struct{})
 	req.Context = ctx
@@ -542,6 +550,7 @@ func (l *Logical) handleHotRequests(state *QueueState, req *Request) {
 
 	// Distribute requests to partitions
 	_ = l.handleDistToPartitions(state)
+
 	// TODO: If an error occurred, and it's recoverable, then
 	//  attempt to re-distribute remaining requests to other partitions
 
@@ -571,10 +580,13 @@ func (l *Logical) handleHotRequests(state *QueueState, req *Request) {
 	}
 
 	// Reset the partition assignments
-	for i, _ := range state.Distributions {
-		state.Distributions[i].ProduceRequests.Reset()
-		state.Distributions[i].ReserveRequests.Reset()
-		state.Distributions[i].CompleteRequests.Reset()
+	for i, d := range state.Distributions {
+		if d.NumReserved != 0 {
+			// Indexing LifeCycles here only works because LifeCycles and Distributions have the
+			// same number of entries, consider merging them in the future.
+			state.LifeCycles[i].Notify(d.MostRecentDeadline)
+		}
+		d.Reset()
 	}
 
 	state.Reservations.FilterNils()
@@ -735,22 +747,31 @@ func (l *Logical) handleDistToPartitions(state *QueueState) error {
 		// ----------------------------------------
 		// Produce
 		// ----------------------------------------
-		if err := p.Partition.Produce(ctx, p.ProduceRequests); err != nil {
-			l.log.Error("while calling Partition.Produce()",
-				"partition", p.Partition.Info().Partition, "error", err)
-			// TODO: Handle degradation
+		if len(p.ProduceRequests.Requests) != 0 {
+			if err := p.Partition.Produce(ctx, p.ProduceRequests); err != nil {
+				l.log.Error("while calling Partition.Produce()",
+					"partition", p.Partition.Info().Partition, "error", err)
+				// TODO: Handle degradation
+			}
+			// Only if Produce was successful
+			p.MostRecentDeadline = l.conf.Clock.Now().UTC().Add(l.conf.DeadTimeout)
 		}
 
 		// ----------------------------------------
 		// Reserve
 		// ----------------------------------------
-		if err := p.Partition.Reserve(ctx, p.ReserveRequests, store.ReserveOptions{
-			ReserveDeadline: l.conf.Clock.Now().UTC().Add(l.conf.ReserveTimeout),
-		}); err != nil {
-			l.log.Error("while calling Partition.Reserve()",
-				"partition", p.Partition.Info().Partition,
-				"error", err)
-			// TODO: Handle degradation
+		if len(p.ReserveRequests.Requests) != 0 {
+			reserveDeadline := l.conf.Clock.Now().UTC().Add(l.conf.ReserveTimeout)
+			if err := p.Partition.Reserve(ctx, p.ReserveRequests, store.ReserveOptions{
+				ReserveDeadline: reserveDeadline,
+			}); err != nil {
+				l.log.Error("while calling Partition.Reserve()",
+					"partition", p.Partition.Info().Partition,
+					"error", err)
+				// TODO: Handle degradation
+			}
+			// Only if Reserve was successful
+			p.MostRecentDeadline = reserveDeadline
 		}
 
 		// ----------------------------------------
@@ -1035,7 +1056,7 @@ func (l *Logical) nextTimeout(r *types.ReserveBatch) clock.Duration {
 
 		// If client has gone away
 		if req.Context.Err() != nil {
-			r.Total -= req.NumRequested
+			r.TotalRequested -= req.NumRequested
 			req.Err = req.Context.Err()
 			close(req.ReadyCh)
 			r.MarkNil(i)
@@ -1076,6 +1097,6 @@ func addIfUnique(r *types.ReserveBatch, req *types.ReserveRequest) {
 			return
 		}
 	}
-	r.Total += req.NumRequested
+	r.TotalRequested += req.NumRequested
 	r.Requests = append(r.Requests, req)
 }

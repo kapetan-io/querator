@@ -102,7 +102,7 @@ func (b *BadgerPartition) Reserve(_ context.Context, batch types.ReserveBatch, o
 		defer iter.Close()
 
 		for iter.Rewind(); iter.Valid(); iter.Next() {
-			if count >= batch.Total {
+			if count >= batch.TotalRequested {
 				break
 			}
 

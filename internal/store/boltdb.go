@@ -114,7 +114,7 @@ func (b *BoltPartition) Reserve(_ context.Context, batch types.ReserveBatch, opt
 		// I might entertain using an index for this if Bolt becomes a popular choice
 		// in production.
 		for k, v := c.First(); k != nil; k, v = c.Next() {
-			if count >= batch.Total {
+			if count >= batch.TotalRequested {
 				break
 			}
 

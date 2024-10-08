@@ -1238,3 +1238,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		})
 	})
 }
+
+// TODO: Start the Service, produce some items, then Shutdown the service
+// TODO: Variations on this, produce/reserve, shutdown, etc.... ensure all items are consumed.
+// TODO: Attempt to shutdown the service while clients are still making requests

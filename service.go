@@ -26,6 +26,7 @@ import (
 	"github.com/kapetan-io/tackle/set"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"log/slog"
+	"time"
 )
 
 const (
@@ -64,6 +65,8 @@ type Service struct {
 
 func NewService(conf ServiceConfig) (*Service, error) {
 	set.Default(&conf.Log, slog.Default())
+	set.Default(&conf.ReadTimeout, 3*time.Second)
+	set.Default(&conf.WriteTimeout, 3*time.Second)
 
 	// TODO: Validate the Storage Config (somewhere) ensure that we have at least one storage backend with an affinity
 	//  greater than 0.0 else QueuesManager will be unable to assign partitions.
@@ -77,6 +80,8 @@ func NewService(conf ServiceConfig) (*Service, error) {
 			MaxProduceBatchSize:  conf.MaxProduceBatchSize,
 			MaxCompleteBatchSize: conf.MaxCompleteBatchSize,
 			MaxRequestsPerQueue:  conf.MaxRequestsPerQueue,
+			WriteTimeout:         conf.WriteTimeout,
+			ReadTimeout:          conf.ReadTimeout,
 			Clock:                conf.Clock,
 		},
 		StorageConfig: conf.StorageConfig,

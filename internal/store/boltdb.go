@@ -11,8 +11,10 @@ import (
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/segmentio/ksuid"
 	bolt "go.etcd.io/bbolt"
+	"iter"
 	"log/slog"
 	"path/filepath"
+	"time"
 )
 
 var bucketName = []byte("queue")
@@ -114,7 +116,7 @@ func (b *BoltPartition) Reserve(_ context.Context, batch types.ReserveBatch, opt
 		// I might entertain using an index for this if Bolt becomes a popular choice
 		// in production.
 		for k, v := c.First(); k != nil; k, v = c.Next() {
-			if count >= batch.Total {
+			if count >= batch.TotalRequested {
 				break
 			}
 
@@ -386,6 +388,17 @@ func (b *BoltPartition) Info() types.PartitionInfo {
 	return b.info
 }
 
+func (b *BoltPartition) LifeCycleActions(timeout time.Duration) iter.Seq[types.Action] {
+	return func(yield func(types.Action) bool) {
+		// TODO(lifecycle)
+	}
+}
+
+func (b *BoltPartition) LifeCycleInfo(ctx context.Context, info *types.LifeCycleInfo) error {
+	// TODO(lifecycle)
+	return nil
+}
+
 func (b *BoltPartition) Stats(_ context.Context, stats *types.PartitionStats) error {
 	now := b.conf.Clock.Now().UTC()
 
@@ -446,7 +459,7 @@ func (b *BoltPartition) getDB() (*bolt.DB, error) {
 		return b.db, nil
 	}
 
-	file := filepath.Join(b.conf.StorageDir, fmt.Sprintf("%s-%06d.db", b.info.QueueName, b.info.Partition))
+	file := filepath.Join(b.conf.StorageDir, fmt.Sprintf("%s-%06d.db", b.info.QueueName, b.info.PartitionNum))
 
 	opts := &bolt.Options{
 		FreelistType: bolt.FreelistArrayType,
@@ -457,7 +470,7 @@ func (b *BoltPartition) getDB() (*bolt.DB, error) {
 	db, err := bolt.Open(file, 0600, opts)
 	if err != nil {
 		return nil, errors.With(
-			"partition", b.info.Partition,
+			"partition", b.info.PartitionNum,
 			errors.OtelFileName, file).
 			Errorf("while opening db: %w", err)
 	}
@@ -473,7 +486,7 @@ func (b *BoltPartition) getDB() (*bolt.DB, error) {
 	})
 	if err != nil {
 		return nil, errors.With(
-			"partition", b.info.Partition,
+			"partition", b.info.PartitionNum,
 			errors.OtelFileName, file).
 			Errorf("while creating bucket: %w", err)
 	}

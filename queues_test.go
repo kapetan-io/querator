@@ -99,8 +99,6 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			assert.Equal(t, "CreateTestRef", list.Items[0].Reference)
 		})
 
-		// TODO: Test Create with Named DeadLetter queue
-
 		now := clock.Now().UTC()
 		queues := createRandomQueues(t, ctx, c, 50)
 
@@ -303,6 +301,17 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			// TODO
 			t.Run("DeleteAlreadyDeletedIsOk", func(t *testing.T) {})
 		})
+
+		t.Run("DeadLetterQueue", func(t *testing.T) {
+			// TODO: Test Create with Named DeadLetter queue
+			// Ensure the dead letter queue already exists when specified
+			// dead letter queues MUST be created manually (I think?)
+			t.Run("AvoidCircularQueue", func(t *testing.T) {
+				// TODO: A dead letter queue cannot point to an other queue which itself has a dead letter queue
+				//  a dead letter queue cannot point to it's self.
+			})
+		})
+
 	})
 
 	t.Run("List", func(t *testing.T) {

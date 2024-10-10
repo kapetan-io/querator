@@ -12,9 +12,11 @@ import (
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/set"
 	"github.com/segmentio/ksuid"
+	"iter"
 	"log/slog"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 type BadgerConfig struct {
@@ -80,7 +82,7 @@ func (b *BadgerPartition) Produce(_ context.Context, batch types.Batch[types.Pro
 				}
 
 				if err := txn.Set(item.ID, buf.Bytes()); err != nil {
-					return errors.Errorf("during Put(): %w", err)
+					return errors.Errorf("during Set(): %w", err)
 				}
 			}
 		}
@@ -102,7 +104,7 @@ func (b *BadgerPartition) Reserve(_ context.Context, batch types.ReserveBatch, o
 		defer iter.Close()
 
 		for iter.Rewind(); iter.Valid(); iter.Next() {
-			if count >= batch.Total {
+			if count >= batch.TotalRequested {
 				break
 			}
 
@@ -362,6 +364,17 @@ func (b *BadgerPartition) Info() types.PartitionInfo {
 	return b.info
 }
 
+func (b *BadgerPartition) LifeCycleActions(timeout time.Duration) iter.Seq[types.Action] {
+	return func(yield func(types.Action) bool) {
+		// TODO(lifecycle)
+	}
+}
+
+func (b *BadgerPartition) LifeCycleInfo(ctx context.Context, info *types.LifeCycleInfo) error {
+	// TODO(lifecycle)
+	return nil
+}
+
 func (b *BadgerPartition) Stats(_ context.Context, stats *types.PartitionStats) error {
 	now := b.conf.Clock.Now().UTC()
 
@@ -425,7 +438,7 @@ func (b *BadgerPartition) getDB() (*badger.DB, error) {
 		return b.db, nil
 	}
 
-	dir := filepath.Join(b.conf.StorageDir, fmt.Sprintf("%s-%06d-%s", b.info.QueueName, b.info.Partition, bucketName))
+	dir := filepath.Join(b.conf.StorageDir, fmt.Sprintf("%s-%06d-%s", b.info.QueueName, b.info.PartitionNum, bucketName))
 
 	opts := badger.DefaultOptions(dir)
 	opts.Logger = newBadgerLogger(b.conf.Log)

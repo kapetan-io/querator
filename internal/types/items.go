@@ -123,7 +123,7 @@ type PartitionInfo struct {
 	// If the partition is marked as read only
 	ReadOnly bool
 	// The partition number
-	Partition int
+	PartitionNum int
 }
 
 // QueueInfo is information about a queue
@@ -147,7 +147,7 @@ type QueueInfo struct {
 	// Reference is the user supplied field which could contain metadata or specify who owns this queue
 	Reference string
 	// RequestedPartitions is the number of partitions this queue expects to have. This might be different
-	// from the number of Partitions listed in PartitionInfo as the system grows or shrinks the number
+	// from the number of StoragePartitions listed in PartitionInfo as the system grows or shrinks the number
 	// of actual partitions.
 	RequestedPartitions int
 	// PartitionInfo is a list current partition details
@@ -189,4 +189,8 @@ func (i *QueueInfo) Update(r QueueInfo) bool {
 		i.RequestedPartitions = r.RequestedPartitions
 	}
 	return true
+}
+
+type LifeCycleInfo struct {
+	NextReserveExpiry clock.Time
 }

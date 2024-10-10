@@ -5,6 +5,7 @@ import (
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/tackle/clock"
+	"sync/atomic"
 )
 
 type PartitionDistribution struct {
@@ -16,10 +17,26 @@ type PartitionDistribution struct {
 	CompleteRequests types.Batch[types.CompleteRequest]
 	// Partition is the partition this distribution is for
 	Partition store.Partition
-	// InFailure is true if the Partition has failed and should not be used
-	InFailure bool
+	// Failures is a count of how many times the underlying storage has failed. Resets to
+	// zero when storage stops failing. If the value is zero, then the partition is considered
+	// active and has communication with the underlying storage.
+	Failures atomic.Int32
 	// Count is the total number of un-reserved items in the partition
 	Count int
+	// NumReserved is the total number of items reserved during the most recent distribution
+	NumReserved int
+	// MostRecentDeadline is the most recent deadline of this distribution. This could be
+	// the ReserveDeadline, or it could be the DeadDeadline which ever is sooner. It is
+	// used to notify LifeCycle of changes to the partition made by this distribution
+	// as a hint for when an action might be needed on items in the partition.
+	MostRecentDeadline clock.Time
+}
+
+func (p *PartitionDistribution) Reset() {
+	p.ProduceRequests.Reset()
+	p.ReserveRequests.Reset()
+	p.CompleteRequests.Reset()
+	p.NumReserved = 0
 }
 
 func (p *PartitionDistribution) Produce(req *types.ProduceRequest) {
@@ -28,34 +45,30 @@ func (p *PartitionDistribution) Produce(req *types.ProduceRequest) {
 }
 
 func (p *PartitionDistribution) Reserve(req *types.ReserveRequest) {
-	p.Count -= req.NumRequested
-	if p.Count < 0 {
-		p.Count = 0
-	}
+	// Use the Number of Requested items OR the count of items in the partition which ever is least.
+	reserved := min(p.Count, req.NumRequested)
+	// Increment the number of reserved items in this distribution.
+	p.NumReserved += reserved
+	// Decrement requested from the actual count
+	p.Count -= reserved
 	// Record which partition this request is assigned, so it can be retrieved by the client later.
-	req.Partition = p.Partition.Info().Partition
+	req.Partition = p.Partition.Info().PartitionNum
 	// Add the request to this partitions reserve batch
 	p.ReserveRequests.Add(req)
 }
 
-//func (p *PartitionDistribution) ResetRequests() {
-//	p.ProduceRequests.Reset()
-//	p.ReserveRequests.Reset()
-//	p.CompleteRequests.Reset()
-//}
-
 type QueueState struct {
-	Reservations  types.ReserveBatch
-	Producers     types.Batch[types.ProduceRequest]
-	Completes     types.Batch[types.CompleteRequest]
-	Distributions []PartitionDistribution
-
+	Reservations      types.ReserveBatch
+	Producers         types.Batch[types.ProduceRequest]
+	Completes         types.Batch[types.CompleteRequest]
+	Distributions     []*PartitionDistribution
+	LifeCycles        []*LifeCycle
 	NextMaintenanceCh <-chan clock.Time
 }
 
-type QueueRequest struct {
+type Request struct {
 	// The API method called
-	Method int
+	Method MethodKind
 	// Context is the context of the request
 	Context context.Context
 	// The request struct for this method

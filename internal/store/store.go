@@ -5,6 +5,8 @@ import (
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/transport"
 	"github.com/kapetan-io/tackle/clock"
+	"iter"
+	"time"
 )
 
 var (
@@ -73,6 +75,10 @@ type Partition interface {
 	// Stats returns stats about the queue
 	Stats(ctx context.Context, stats *types.PartitionStats) error
 
+	LifeCycleActions(timeout time.Duration) iter.Seq[types.Action]
+
+	LifeCycleInfo(ctx context.Context, info *types.LifeCycleInfo) error
+
 	// Info returns the Partition Info for this partition
 	Info() types.PartitionInfo
 
@@ -116,7 +122,7 @@ type PartitionStore interface {
 	// NOT return an error. See 0021-storage-lazy-initialization.md for an explanation.
 	Get(types.PartitionInfo) Partition
 
-	// TODO: List Partitions, Delete Partitions, etc...
+	// TODO: List StoragePartitions, Delete StoragePartitions, etc...
 }
 
 // TODO: A scheduled store should probably be located or managed by a partition store, possibly in the same table

@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/duh-rpc/duh-go"
-	"github.com/duh-rpc/duh-go/retry"
 	que "github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/internal/store"
 	pb "github.com/kapetan-io/querator/proto"
@@ -18,15 +17,6 @@ import (
 	"sync"
 	"testing"
 )
-
-const (
-	DeadTimeout    = "24h0m0s"
-	ReserveTimeout = "1m0s"
-)
-
-var RetryTenTimes = retry.Policy{Interval: retry.Sleep(100 * clock.Millisecond), Attempts: 20}
-
-type NewStorageFunc func(cp *clock.Provider) store.StorageConfig
 
 func TestQueue(t *testing.T) {
 	bdb := boltTestSetup{Dir: t.TempDir()}

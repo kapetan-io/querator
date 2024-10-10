@@ -27,6 +27,15 @@ import (
 	"testing"
 )
 
+const (
+	DeadTimeout    = "24h0m0s"
+	ReserveTimeout = "1m0s"
+)
+
+var RetryTenTimes = retry.Policy{Interval: retry.Sleep(100 * clock.Millisecond), Attempts: 20}
+
+type NewStorageFunc func(cp *clock.Provider) store.StorageConfig
+
 var log *slog.Logger
 
 func TestMain(m *testing.M) {

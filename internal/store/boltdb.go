@@ -459,7 +459,7 @@ func (b *BoltPartition) getDB() (*bolt.DB, error) {
 		return b.db, nil
 	}
 
-	file := filepath.Join(b.conf.StorageDir, fmt.Sprintf("%s-%06d.db", b.info.QueueName, b.info.Partition))
+	file := filepath.Join(b.conf.StorageDir, fmt.Sprintf("%s-%06d.db", b.info.QueueName, b.info.PartitionNum))
 
 	opts := &bolt.Options{
 		FreelistType: bolt.FreelistArrayType,
@@ -470,7 +470,7 @@ func (b *BoltPartition) getDB() (*bolt.DB, error) {
 	db, err := bolt.Open(file, 0600, opts)
 	if err != nil {
 		return nil, errors.With(
-			"partition", b.info.Partition,
+			"partition", b.info.PartitionNum,
 			errors.OtelFileName, file).
 			Errorf("while opening db: %w", err)
 	}
@@ -486,7 +486,7 @@ func (b *BoltPartition) getDB() (*bolt.DB, error) {
 	})
 	if err != nil {
 		return nil, errors.With(
-			"partition", b.info.Partition,
+			"partition", b.info.PartitionNum,
 			errors.OtelFileName, file).
 			Errorf("while creating bucket: %w", err)
 	}

@@ -52,7 +52,7 @@ type LifeCycle struct {
 func NewLifeCycle(conf LifeCycleConfig) *LifeCycle {
 	return &LifeCycle{
 		log: conf.Logical.conf.Log.With(errors.OtelCodeNamespace, "LifeCycle",
-			"partition", conf.Distribution.Partition,
+			"partition", conf.Distribution.Partition.Info().PartitionNum,
 			"instance-id", conf.Logical.instanceID,
 			"queue", conf.Logical.conf.Name),
 		manager:    conf.Logical.conf.Manager,
@@ -176,7 +176,7 @@ func (l *LifeCycle) runLifeCycle(state *lifeCycleState) {
 				"error", err)
 		} else {
 			l.log.LogAttrs(context.Background(), slog.LevelDebug, "partition available",
-				slog.Int("partition", l.conf.Distribution.Partition.Info().Partition))
+				slog.Int("partition", l.conf.Distribution.Partition.Info().PartitionNum))
 			l.conf.Distribution.Count = stats.Total - stats.TotalReserved
 			l.conf.Distribution.Failures.Store(0)
 		}

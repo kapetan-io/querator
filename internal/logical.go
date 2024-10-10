@@ -477,7 +477,7 @@ func (l *Logical) prepareQueueState(state *QueueState) {
 		ctx, cancel := context.WithTimeout(context.Background(), l.conf.ReadTimeout)
 		if err := state.LifeCycles[i].Start(ctx); err != nil {
 			l.log.Warn("partition unavailable; while waiting for life cycle to start",
-				"partition", p.Info().Partition,
+				"partition", p.Info().PartitionNum,
 				"timeout", l.conf.ReadTimeout,
 				"error", err.Error())
 		}
@@ -667,7 +667,7 @@ func (l *Logical) distributeProduceRequests(state *QueueState) {
 		}
 
 		l.log.LogAttrs(req.Context, slog.LevelDebug, "Produce",
-			slog.Int("partition", state.Distributions[0].Partition.Info().Partition),
+			slog.Int("partition", state.Distributions[0].Partition.Info().PartitionNum),
 			slog.Int("items", len(req.Items)))
 
 		// Preform Opportunistic Partition Distribution
@@ -689,7 +689,7 @@ func (l *Logical) distributeReserveRequests(state *QueueState) {
 	// Assign Reservation Requests to StoragePartitions
 	for _, req := range state.Reservations.Requests {
 		l.log.LogAttrs(req.Context, slog.LevelDebug, "Reserve",
-			slog.Int("partition", state.Distributions[len(state.Distributions)-1].Partition.Info().Partition),
+			slog.Int("partition", state.Distributions[len(state.Distributions)-1].Partition.Info().PartitionNum),
 			slog.Int("num_requested", req.NumRequested),
 			slog.String("client_id", req.ClientID))
 
@@ -715,7 +715,7 @@ nextRequest:
 		var found bool
 		for i, p := range state.Distributions {
 			// Assign the request to the partition
-			if req.Partition == p.Partition.Info().Partition {
+			if req.Partition == p.Partition.Info().PartitionNum {
 				if p.Failures.Load() != 0 {
 					req.Err = transport.NewRetryRequest("partition not available;"+
 						" partition '%d' is failing, retry again", req.Partition)
@@ -758,7 +758,7 @@ func (l *Logical) handleDistToPartitions(state *QueueState) error {
 		if len(p.ProduceRequests.Requests) != 0 {
 			if err := p.Partition.Produce(ctx, p.ProduceRequests); err != nil {
 				l.log.Error("while calling Partition.Produce()",
-					"partition", p.Partition.Info().Partition, "error", err)
+					"partition", p.Partition.Info().PartitionNum, "error", err)
 				// TODO: Handle degradation
 			}
 			// Only if Produce was successful
@@ -774,7 +774,7 @@ func (l *Logical) handleDistToPartitions(state *QueueState) error {
 				ReserveDeadline: reserveDeadline,
 			}); err != nil {
 				l.log.Error("while calling Partition.Reserve()",
-					"partition", p.Partition.Info().Partition,
+					"partition", p.Partition.Info().PartitionNum,
 					"error", err)
 				// TODO: Handle degradation
 			}
@@ -787,7 +787,7 @@ func (l *Logical) handleDistToPartitions(state *QueueState) error {
 		// ----------------------------------------
 		if err := p.Partition.Complete(ctx, p.CompleteRequests); err != nil {
 			l.log.Error("while calling Partition.Complete()",
-				"partition", p.Partition.Info().Partition,
+				"partition", p.Partition.Info().PartitionNum,
 				"queueName", l.conf.Name,
 				"error", err)
 
@@ -1022,7 +1022,7 @@ func (l *Logical) handleShutdown(state *QueueState, req *types.ShutdownRequest) 
 
 	for _, lc := range state.LifeCycles {
 		l.log.LogAttrs(req.Context, slog.LevelDebug, "shutdown lifecycle",
-			slog.Int("partition", lc.conf.Storage.Info().Partition))
+			slog.Int("partition", lc.conf.Storage.Info().PartitionNum))
 		if err := lc.Shutdown(req.Context); err != nil {
 			l.log.Error("during lifecycle shutdown", "error", err)
 			req.Err = err
@@ -1031,7 +1031,7 @@ func (l *Logical) handleShutdown(state *QueueState, req *types.ShutdownRequest) 
 
 	for i, p := range l.conf.StoragePartitions {
 		l.log.LogAttrs(req.Context, slog.LevelDebug, "close partition",
-			slog.Int("partition", p.Info().Partition))
+			slog.Int("partition", p.Info().PartitionNum))
 		if err := l.conf.StoragePartitions[i].Close(req.Context); err != nil {
 			l.log.Error("during partition close", "error", err)
 			req.Err = err

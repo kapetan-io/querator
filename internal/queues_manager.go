@@ -102,15 +102,15 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Que
 	for idx, count := range qm.assignPartitions(info.RequestedPartitions) {
 		for i := 0; i < count; i++ {
 			p := types.PartitionInfo{
-				StorageName: qm.conf.StorageConfig.Backends[idx].Name,
-				QueueName:   info.Name,
-				Partition:   partitionIdx,
+				StorageName:  qm.conf.StorageConfig.Backends[idx].Name,
+				QueueName:    info.Name,
+				PartitionNum: partitionIdx,
 			}
 			partitionIdx++
 			info.PartitionInfo = append(info.PartitionInfo, p)
 			qm.log.LogAttrs(ctx, slog.LevelDebug, "Partition Assigned",
 				slog.String("queue", p.QueueName), slog.String("storage", p.StorageName),
-				slog.Bool("read-only", p.ReadOnly), slog.Int("partition", p.Partition))
+				slog.Bool("read-only", p.ReadOnly), slog.Int("partition", p.PartitionNum))
 		}
 	}
 
@@ -157,7 +157,7 @@ func (qm *QueuesManager) get(ctx context.Context, name string) (*Queue, error) {
 		b := qm.conf.StorageConfig.Backends.Find(info.StorageName)
 		if b.Name == "" {
 			return nil, errors.WithAttr(
-				slog.Int("partition", info.Partition),
+				slog.Int("partition", info.PartitionNum),
 				slog.String("storage-name", info.StorageName),
 				slog.String("queue", queue.Name),
 			).Error("queue partition references unknown storage name")

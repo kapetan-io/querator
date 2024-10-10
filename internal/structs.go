@@ -52,7 +52,7 @@ func (p *PartitionDistribution) Reserve(req *types.ReserveRequest) {
 	// Decrement requested from the actual count
 	p.Count -= reserved
 	// Record which partition this request is assigned, so it can be retrieved by the client later.
-	req.Partition = p.Partition.Info().Partition
+	req.Partition = p.Partition.Info().PartitionNum
 	// Add the request to this partitions reserve batch
 	p.ReserveRequests.Add(req)
 }

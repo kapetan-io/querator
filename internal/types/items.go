@@ -123,7 +123,7 @@ type PartitionInfo struct {
 	// If the partition is marked as read only
 	ReadOnly bool
 	// The partition number
-	Partition int
+	PartitionNum int
 }
 
 // QueueInfo is information about a queue

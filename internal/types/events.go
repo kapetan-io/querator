@@ -9,8 +9,8 @@ const (
 type ActionKind int
 
 type Action struct {
-	Action    ActionKind
-	Queue     string
-	Item      Item
-	Partition int
+	Action       ActionKind
+	Queue        string
+	Item         Item
+	PartitionNum int
 }

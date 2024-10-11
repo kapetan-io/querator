@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/duh-rpc/duh-go/retry"
+	"github.com/dustin/go-humanize"
 	"github.com/kapetan-io/errors"
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
@@ -14,10 +15,6 @@ import (
 	"time"
 )
 
-const (
-	Years = (24 * clock.Hour) * 365
-)
-
 var (
 	ErrLifeCycleRunning  = errors.New("life cycle is already running")
 	ErrLifeCycleShutdown = errors.New("life cycle is already shutdown")
@@ -26,7 +23,7 @@ var (
 type LifeCycleConfig struct {
 	Distribution *PartitionDistribution
 	Storage      store.Partition
-	Clock        clock.Provider
+	Clock        *clock.Provider
 	Logical      *Logical
 }
 
@@ -92,7 +89,7 @@ func (l *LifeCycle) start() chan struct{} {
 		if ch := l.Run(); ch != nil {
 			return ch
 		}
-		clock.Sleep(clock.Microsecond)
+		time.Sleep(clock.Microsecond)
 	}
 }
 
@@ -123,7 +120,7 @@ func (l *LifeCycle) Notify(t clock.Time) {
 func (l *LifeCycle) requestLoop() {
 	defer l.wg.Done()
 	state := lifeCycleState{
-		timer: clock.NewTimer(100 * Years),
+		timer: l.conf.Clock.NewTimer(humanize.LongTime),
 	}
 
 	// nolint
@@ -146,7 +143,7 @@ func (l *LifeCycle) requestLoop() {
 }
 
 func (l *LifeCycle) handleNotify(state *lifeCycleState, notify clock.Time) {
-	now := clock.Now().UTC()
+	now := l.conf.Clock.Now().UTC()
 	// Ignore notify times from the past
 	if now.After(notify) {
 		return
@@ -157,11 +154,16 @@ func (l *LifeCycle) handleNotify(state *lifeCycleState, notify clock.Time) {
 	if !state.nextRunDeadline.IsZero() && notify.After(state.nextRunDeadline) {
 		return
 	}
+	l.log.LogAttrs(context.Background(), LevelDebugAll, "handleNotify()",
+		slog.String("next", notify.String()),
+		slog.String("now", now.String()))
 	state.nextRunDeadline = notify
 	state.timer.Reset(notify.Sub(now))
 }
 
 func (l *LifeCycle) runLifeCycle(state *lifeCycleState) {
+	l.log.LogAttrs(context.Background(), LevelDebugAll, "runLifeCycle()")
+
 	// Attempt to get the partition out of a failed state
 	if l.conf.Distribution.Failures.Load() != 0 {
 		ctx, cancel := context.WithTimeout(context.Background(), l.logical.conf.ReadTimeout)
@@ -170,12 +172,12 @@ func (l *LifeCycle) runLifeCycle(state *lifeCycleState) {
 
 		if err := l.conf.Storage.Stats(ctx, &stats); err != nil {
 			retryIn := retry.DefaultBackOff.Next(int(l.conf.Distribution.Failures.Add(1)))
-			state.nextRunDeadline = clock.Now().UTC().Add(retryIn)
+			state.nextRunDeadline = l.conf.Clock.Now().UTC().Add(retryIn)
 			l.log.Warn("while fetching partition stats; retrying...",
 				"retry-in", retryIn,
 				"error", err)
 		} else {
-			l.log.LogAttrs(context.Background(), slog.LevelDebug, "partition available",
+			l.log.LogAttrs(context.Background(), LevelDebug, "partition available",
 				slog.Int("partition", l.conf.Distribution.Partition.Info().PartitionNum))
 			l.conf.Distribution.Count = stats.Total - stats.TotalReserved
 			l.conf.Distribution.Failures.Store(0)
@@ -185,22 +187,27 @@ func (l *LifeCycle) runLifeCycle(state *lifeCycleState) {
 	lActions := make([]types.Action, 0, 1_000)
 	mActions := make([]types.Action, 0, 1_000)
 	// Separate the events into separate slices handling them in batches
-	for e := range l.conf.Storage.LifeCycleActions(l.logical.conf.ReadTimeout) {
-		switch e.Action {
-		case types.ActionMoveScheduledItem, types.ActionResetReserved:
-			lActions = append(lActions, e)
+	for a := range l.conf.Storage.LifeCycleActions(l.logical.conf.ReadTimeout, l.conf.Clock.Now().UTC()) {
+		l.log.LogAttrs(context.Background(), LevelDebugAll, "new action",
+			slog.String("reserve_deadline", a.Item.ReserveDeadline.String()),
+			slog.String("expire_deadline", a.Item.ExpireDeadline.String()),
+			slog.String("action", types.ActionToString(a.Action)),
+			slog.String("id", string(a.Item.ID)))
+		switch a.Action {
+		case types.ActionMoveScheduledItem, types.ActionReserveExpired:
+			lActions = append(lActions, a)
 			if len(lActions) >= 1_000 {
 				l.handleLogicalActions(state, lActions)
 				lActions = lActions[:]
 			}
-		case types.ActionDeadLetter:
-			mActions = append(mActions, e)
+		case types.ActionItemExpired:
+			mActions = append(mActions, a)
 			if len(mActions) >= 1_000 {
 				l.handleManagerEvents(state, mActions)
 				mActions = mActions[:]
 			}
 		default:
-			panic(fmt.Sprintf("undefined action '%d'", e.Action))
+			panic(fmt.Sprintf("undefined action '%d'", a.Action))
 		}
 	}
 
@@ -218,7 +225,7 @@ func (l *LifeCycle) runLifeCycle(state *lifeCycleState) {
 
 	if err := l.conf.Storage.LifeCycleInfo(ctx, &info); err != nil {
 		retryIn := retry.DefaultBackOff.Next(int(l.conf.Distribution.Failures.Add(1)))
-		state.nextRunDeadline = clock.Now().UTC().Add(retryIn)
+		state.nextRunDeadline = l.conf.Clock.Now().UTC().Add(retryIn)
 		l.log.Warn("while fetching life cycle info from partition; retrying...",
 			"retry-in", retryIn,
 			"error", err)
@@ -241,7 +248,7 @@ func (l *LifeCycle) handleLogicalActions(state *lifeCycleState, actions []types.
 		// items and attempt to handle them in the same way.
 
 		retryIn := retry.DefaultBackOff.Next(int(l.conf.Distribution.Failures.Add(1)))
-		state.nextRunDeadline = clock.Now().UTC().Add(retryIn)
+		state.nextRunDeadline = l.conf.Clock.Now().UTC().Add(retryIn)
 		l.log.Warn("storage failure during logical life cycle; retrying...",
 			"retry-in", retryIn,
 			"error", err)
@@ -259,7 +266,7 @@ func (l *LifeCycle) handleManagerEvents(state *lifeCycleState, actions []types.A
 		// It's possible the item was written, but we lost contact with a remote logical queue
 		// in either case, we must assume it wasn't written and try again.
 		retryIn := retry.DefaultBackOff.Next(int(l.conf.Distribution.Failures.Add(1)))
-		state.nextRunDeadline = clock.Now().UTC().Add(retryIn)
+		state.nextRunDeadline = l.conf.Clock.Now().UTC().Add(retryIn)
 		l.log.Warn("storage failure during logical life cycle; retrying...",
 			"retry-in", retryIn,
 			"error", err)

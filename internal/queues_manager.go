@@ -103,13 +103,13 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Que
 		for i := 0; i < count; i++ {
 			p := types.PartitionInfo{
 				StorageName:  qm.conf.StorageConfig.Backends[idx].Name,
-				QueueName:    info.Name,
 				PartitionNum: partitionIdx,
+				Queue:        info,
 			}
 			partitionIdx++
 			info.PartitionInfo = append(info.PartitionInfo, p)
-			qm.log.LogAttrs(ctx, slog.LevelDebug, "Partition Assigned",
-				slog.String("queue", p.QueueName), slog.String("storage", p.StorageName),
+			qm.log.LogAttrs(ctx, LevelDebug, "Partition Assigned",
+				slog.String("queue", p.Queue.Name), slog.String("storage", p.StorageName),
 				slog.Bool("read-only", p.ReadOnly), slog.Int("partition", p.PartitionNum))
 		}
 	}
@@ -272,7 +272,7 @@ func (qm *QueuesManager) Shutdown(ctx context.Context) error {
 	wait := make(chan error)
 	go func() {
 		for _, q := range qm.queues {
-			qm.log.LogAttrs(ctx, slog.LevelDebug, "shutdown logical",
+			qm.log.LogAttrs(ctx, LevelDebugAll, "shutdown logical",
 				slog.Int("num_queues", len(qm.queues)),
 				slog.String("queue", q.Info().Name))
 			for _, l := range q.GetAll() {
@@ -281,7 +281,7 @@ func (qm *QueuesManager) Shutdown(ctx context.Context) error {
 				}
 			}
 		}
-		qm.log.LogAttrs(ctx, slog.LevelDebug, "close queue store")
+		qm.log.LogAttrs(ctx, LevelDebugAll, "close queue store")
 		if err := qm.conf.StorageConfig.QueueStore.Close(ctx); err != nil {
 			wait <- err
 			return
@@ -294,7 +294,7 @@ func (qm *QueuesManager) Shutdown(ctx context.Context) error {
 		qm.log.Warn("ctx cancelled while waiting for shutdown")
 		return errors.Wrap(ctx.Err())
 	case err := <-wait:
-		qm.log.LogAttrs(ctx, slog.LevelDebug, "Shutdown complete")
+		qm.log.LogAttrs(ctx, LevelDebugAll, "Shutdown complete")
 		return errors.Wrap(err)
 	}
 }

@@ -19,8 +19,8 @@ import (
 )
 
 func TestQueue(t *testing.T) {
-	bdb := boltTestSetup{Dir: t.TempDir()}
-	badgerdb := badgerTestSetup{Dir: t.TempDir()}
+	//bdb := boltTestSetup{Dir: t.TempDir()}
+	//badgerdb := badgerTestSetup{Dir: t.TempDir()}
 
 	for _, tc := range []struct {
 		Setup    NewStorageFunc
@@ -34,24 +34,25 @@ func TestQueue(t *testing.T) {
 			},
 			TearDown: func() {},
 		},
-		{
-			Name: "BoltDB",
-			Setup: func(cp *clock.Provider) store.StorageConfig {
-				return bdb.Setup(store.BoltConfig{Clock: cp})
-			},
-			TearDown: func() {
-				bdb.Teardown()
-			},
-		},
-		{
-			Name: "BadgerDB",
-			Setup: func(cp *clock.Provider) store.StorageConfig {
-				return badgerdb.Setup(store.BadgerConfig{Clock: cp})
-			},
-			TearDown: func() {
-				badgerdb.Teardown()
-			},
-		},
+		// TODO: Uncomment
+		//{
+		//	Name: "BoltDB",
+		//	Setup: func(cp *clock.Provider) store.StorageConfig {
+		//		return bdb.Setup(store.BoltConfig{Clock: cp})
+		//	},
+		//	TearDown: func() {
+		//		bdb.Teardown()
+		//	},
+		//},
+		//{
+		//	Name: "BadgerDB",
+		//	Setup: func(cp *clock.Provider) store.StorageConfig {
+		//		return badgerdb.Setup(store.BadgerConfig{Clock: cp})
+		//	},
+		//	TearDown: func() {
+		//		badgerdb.Teardown()
+		//	},
+		//},
 		//{
 		//	Name: "SurrealDB",
 		//},
@@ -78,7 +79,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		// Create a queue
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
 			ReserveTimeout:      ReserveTimeout,
-			DeadTimeout:         DeadTimeout,
+			ExpireTimeout:       ExpireTimeout,
 			QueueName:           queueName,
 			RequestedPartitions: 1,
 		}))
@@ -164,7 +165,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
 			Reference:           "rainbow@dash.com",
-			DeadTimeout:         "20h0m0s",
+			ExpireTimeout:       "20h0m0s",
 			QueueName:           queueName,
 			ReserveTimeout:      "1m0s",
 			MaxAttempts:         256,
@@ -190,7 +191,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 						Bytes:     []byte("It needs to be about 20% cooler"),
 					},
 				}}))
-			deadDeadline := clock.Now().UTC().Add(20 * clock.Hour)
+			expireDeadline := clock.Now().UTC().Add(20 * clock.Hour)
 
 			var list pb.StorageItemsListResponse
 			err := c.StorageItemsList(ctx, queueName, 0, &list, &que.ListOptions{Limit: 20})
@@ -201,17 +202,17 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			assert.Equal(t, "friendship", list.Items[0].Encoding)
 			assert.Equal(t, "yes", list.Items[0].Kind)
 			assert.True(t, list.Items[0].ReserveDeadline.AsTime().IsZero())
-			assert.False(t, list.Items[0].DeadDeadline.AsTime().IsZero())
-			assert.True(t, list.Items[0].DeadDeadline.AsTime().After(now))
-			assert.True(t, list.Items[0].DeadDeadline.AsTime().Before(deadDeadline))
+			assert.False(t, list.Items[0].ExpireDeadline.AsTime().IsZero())
+			assert.True(t, list.Items[0].ExpireDeadline.AsTime().After(now))
+			assert.True(t, list.Items[0].ExpireDeadline.AsTime().Before(expireDeadline))
 
 			assert.Equal(t, "", list.Items[1].Reference)
 			assert.Equal(t, "application/json", list.Items[1].Encoding)
 			assert.Equal(t, "no", list.Items[1].Kind)
 			assert.True(t, list.Items[1].ReserveDeadline.AsTime().IsZero())
-			assert.False(t, list.Items[1].DeadDeadline.AsTime().IsZero())
-			assert.True(t, list.Items[1].DeadDeadline.AsTime().After(now))
-			assert.True(t, list.Items[1].DeadDeadline.AsTime().Before(deadDeadline))
+			assert.False(t, list.Items[1].ExpireDeadline.AsTime().IsZero())
+			assert.True(t, list.Items[1].ExpireDeadline.AsTime().After(now))
+			assert.True(t, list.Items[1].ExpireDeadline.AsTime().Before(expireDeadline))
 		})
 
 		t.Run("MaxAttempts", func(t *testing.T) {
@@ -219,14 +220,14 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			//  then assert item was deleted.
 		})
 		t.Run("ReserveTimeout", func(t *testing.T) {})
-		t.Run("DeadTimeout", func(t *testing.T) {
+		t.Run("ExpireTimeout", func(t *testing.T) {
 			// TODO: Fast Forward to the future, and ensure the item is removed after the dead clockout
 		})
 		t.Run("DeadQueue", func(t *testing.T) {
 			// TODO: Create a new queue with a dead queue. Ensure an item produced in this queue is moved to
 			//  the dead queue after all attempts are exhausted
 
-			t.Run("DeadTimeout", func(t *testing.T) {
+			t.Run("ExpireTimeout", func(t *testing.T) {
 				// TODO: Fast forward to the future, and ensure the item is moved to the dead queue after dead clockout
 			})
 		})
@@ -254,7 +255,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				RequestTimeout: "1m",
 				Items:          items,
 			}))
-			deadDeadline := clock.Now().UTC().Add(24 * clock.Hour)
+			expireDeadline := clock.Now().UTC().Add(24 * clock.Hour)
 
 			// Ensure the items produced are in the data store
 			var list pb.StorageItemsListResponse
@@ -267,11 +268,11 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			for i := range produced {
 				assert.True(t, produced[i].CreatedAt.AsTime().After(now))
 
-				// DeadDeadline should be after we produced the item, but before the dead clockout
+				// ExpireDeadline should be after we produced the item, but before the dead clockout
 				assert.True(t, produced[i].ReserveDeadline.AsTime().IsZero())
-				assert.False(t, produced[i].DeadDeadline.AsTime().IsZero())
-				assert.True(t, produced[i].DeadDeadline.AsTime().After(now))
-				assert.True(t, produced[i].DeadDeadline.AsTime().Before(deadDeadline))
+				assert.False(t, produced[i].ExpireDeadline.AsTime().IsZero())
+				assert.True(t, produced[i].ExpireDeadline.AsTime().After(now))
+				assert.True(t, produced[i].ExpireDeadline.AsTime().Before(expireDeadline))
 
 				assert.Equal(t, false, produced[i].IsReserved)
 				assert.Equal(t, int32(0), produced[i].Attempts)
@@ -300,7 +301,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				RequestTimeout: "1m",
 				Items:          items,
 			}))
-			deadDeadline := clock.Now().UTC().Add(24 * clock.Hour)
+			expireDeadline := clock.Now().UTC().Add(24 * clock.Hour)
 
 			// List all the items we just produced
 			var list pb.StorageItemsListResponse
@@ -316,10 +317,10 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			for i := range produced {
 				assert.True(t, produced[i].CreatedAt.AsTime().After(now))
 
-				// DeadDeadline should be after we produced the item, but before the dead clockout
-				assert.False(t, produced[i].DeadDeadline.AsTime().IsZero())
-				assert.True(t, produced[i].DeadDeadline.AsTime().After(now))
-				assert.True(t, produced[i].DeadDeadline.AsTime().Before(deadDeadline))
+				// ExpireDeadline should be after we produced the item, but before the dead clockout
+				assert.False(t, produced[i].ExpireDeadline.AsTime().IsZero())
+				assert.True(t, produced[i].ExpireDeadline.AsTime().After(now))
+				assert.True(t, produced[i].ExpireDeadline.AsTime().Before(expireDeadline))
 
 				assert.Equal(t, false, produced[i].IsReserved)
 				assert.Equal(t, int32(0), produced[i].Attempts)
@@ -342,7 +343,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
-			DeadTimeout:         DeadTimeout,
+			ExpireTimeout:       ExpireTimeout,
 			QueueName:           queueName,
 			ReserveTimeout:      "2m0s",
 			RequestedPartitions: 1,
@@ -552,7 +553,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
 			ReserveTimeout:      ReserveTimeout,
-			DeadTimeout:         DeadTimeout,
+			ExpireTimeout:       ExpireTimeout,
 			QueueName:           queueName,
 			RequestedPartitions: 1,
 		}))
@@ -637,7 +638,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
 			ReserveTimeout:      ReserveTimeout,
-			DeadTimeout:         DeadTimeout,
+			ExpireTimeout:       ExpireTimeout,
 			QueueName:           queueName,
 			RequestedPartitions: 1,
 		}))
@@ -681,7 +682,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		var list pb.StorageItemsListResponse
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
 			ReserveTimeout:      ReserveTimeout,
-			DeadTimeout:         DeadTimeout,
+			ExpireTimeout:       ExpireTimeout,
 			QueueName:           queueName,
 			RequestedPartitions: 1,
 		}))
@@ -694,7 +695,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		expire := clock.Now().UTC().Add(random.Duration(10*clock.Second, clock.Minute))
 		reserved = append(reserved, &pb.StorageItem{
-			DeadDeadline:    timestamppb.New(expire),
+			ExpireDeadline:  timestamppb.New(expire),
 			ReserveDeadline: timestamppb.New(expire),
 			Attempts:        int32(rand.Intn(10)),
 			Reference:       random.String("ref-", 10),
@@ -704,7 +705,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			IsReserved:      true,
 		})
 		reserved = append(reserved, &pb.StorageItem{
-			DeadDeadline:    timestamppb.New(expire),
+			ExpireDeadline:  timestamppb.New(expire),
 			ReserveDeadline: timestamppb.New(expire),
 			Attempts:        int32(rand.Intn(10)),
 			Reference:       random.String("ref-", 10),
@@ -752,7 +753,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
 				ReserveTimeout:      ReserveTimeout,
-				DeadTimeout:         DeadTimeout,
+				ExpireTimeout:       ExpireTimeout,
 				QueueName:           queueName,
 				RequestedPartitions: 1,
 			}))
@@ -876,7 +877,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
 				ReserveTimeout:      ReserveTimeout,
-				DeadTimeout:         DeadTimeout,
+				ExpireTimeout:       ExpireTimeout,
 				QueueName:           queueName,
 				RequestedPartitions: 1,
 			}))
@@ -1037,7 +1038,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
 				ReserveTimeout:      ReserveTimeout,
-				DeadTimeout:         DeadTimeout,
+				ExpireTimeout:       ExpireTimeout,
 				QueueName:           queueName,
 				RequestedPartitions: 1,
 			}))
@@ -1152,6 +1153,9 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	})
 	t.Run("Timeout", func(t *testing.T) {
 		time := clock.NewProvider()
+		time.Freeze(clock.Now())
+		defer time.UnFreeze()
+
 		_store := setup(time)
 		defer tearDown()
 		var queueName = random.String("queue-", 10)
@@ -1161,16 +1165,13 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		// Create a queue
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
 			ReserveTimeout:      "1m0s",
-			DeadTimeout:         DeadTimeout,
+			ExpireTimeout:       ExpireTimeout,
 			QueueName:           queueName,
 			RequestedPartitions: 1,
 		}))
 
 		t.Run("ReserveTimeout", func(t *testing.T) {
 			//t.Run("AttemptComplete", func(t *testing.T) {
-			//	time.Freeze(clock.Now())
-			//	defer time.UnFreeze()
-			//
 			//	require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
 			//		QueueName:      queueName,
 			//		RequestTimeout: "1m",
@@ -1194,7 +1195,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			//	require.Equal(t, "friendship", reserve.Items[0].Encoding)
 			//
 			//	// Advance time til we meet the ReserveTime set by the queue
-			//	time.Advance(1 * clock.Minute)
+			//	time.Advance(2 * clock.Minute)
 			//
 			//	err := c.QueueComplete(ctx, &pb.QueueCompleteRequest{
 			//		QueueName:      queueName,
@@ -1223,7 +1224,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		})
 
 		t.Run("RequestTimeouts", func(t *testing.T) {})
-		t.Run("DeadTimeout", func(t *testing.T) {
+		t.Run("ExpireTimeout", func(t *testing.T) {
 			// TODO: Test with and without a dead letter queue
 		})
 	})

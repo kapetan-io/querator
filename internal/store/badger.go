@@ -16,7 +16,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"strings"
-	"time"
+	"sync"
 )
 
 type BadgerConfig struct {
@@ -58,6 +58,7 @@ func (b *BadgerPartitionStore) Get(info types.PartitionInfo) Partition {
 type BadgerPartition struct {
 	info types.PartitionInfo
 	conf BadgerConfig
+	mu   sync.RWMutex
 	uid  ksuid.KSUID
 	db   *badger.DB
 }
@@ -361,10 +362,20 @@ func (b *BadgerPartition) Clear(_ context.Context, destructive bool) error {
 }
 
 func (b *BadgerPartition) Info() types.PartitionInfo {
+	defer b.mu.RUnlock()
+	b.mu.RLock()
 	return b.info
 }
 
-func (b *BadgerPartition) LifeCycleActions(timeout time.Duration) iter.Seq[types.Action] {
+func (b *BadgerPartition) UpdateQueueInfo(info types.QueueInfo) {
+	defer b.mu.Unlock()
+	b.mu.Lock()
+	b.info.Queue = info
+}
+
+func (b *BadgerPartition) LifeCycleActions(timeout clock.Duration, now clock.Time) iter.Seq[types.Action] {
+	//info := b.Info()
+
 	return func(yield func(types.Action) bool) {
 		// TODO(lifecycle)
 	}
@@ -438,7 +449,7 @@ func (b *BadgerPartition) getDB() (*badger.DB, error) {
 		return b.db, nil
 	}
 
-	dir := filepath.Join(b.conf.StorageDir, fmt.Sprintf("%s-%06d-%s", b.info.QueueName, b.info.PartitionNum, bucketName))
+	dir := filepath.Join(b.conf.StorageDir, fmt.Sprintf("%s-%06d-%s", b.info.Queue.Name, b.info.PartitionNum, bucketName))
 
 	opts := badger.DefaultOptions(dir)
 	opts.Logger = newBadgerLogger(b.conf.Log)
@@ -590,9 +601,9 @@ func (b *BadgerQueueStore) Update(_ context.Context, info types.QueueInfo) error
 			return err
 		}
 
-		if found.ReserveTimeout > found.DeadTimeout {
+		if found.ReserveTimeout > found.ExpireTimeout {
 			return transport.NewInvalidOption("reserve timeout is too long; %s cannot be greater than the "+
-				"dead timeout %s", info.ReserveTimeout.String(), found.DeadTimeout.String())
+				"expire timeout %s", info.ReserveTimeout.String(), found.ExpireTimeout.String())
 		}
 
 		var buf bytes.Buffer

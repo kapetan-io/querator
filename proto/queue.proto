@@ -198,7 +198,7 @@ message QueueInfo {
 
   // How long the item can wait in the queue regardless of attempts before it is moved
   // to the dead letter queue. Example: '24h', '60m', '10s'
-  string deadTimeout = 7 [json_name = "dead_timeout"];
+  string expireTimeout = 7 [json_name = "expire_timeout"];
 
   // The maximum number of times this item can be deferred by a consumer before it is
   // placed in the dead letter queue.

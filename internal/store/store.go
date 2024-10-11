@@ -6,11 +6,18 @@ import (
 	"github.com/kapetan-io/querator/transport"
 	"github.com/kapetan-io/tackle/clock"
 	"iter"
+	"log/slog"
 	"time"
+)
+
+const (
+	LevelDebugAll = slog.LevelDebug
+	LevelDebug    = slog.LevelDebug + 1
 )
 
 var (
 	ErrQueueNotExist = transport.NewRequestFailed("queue does not exist")
+	theFuture        = time.Date(2800, 1, 1, 1, 1, 1, 1, time.UTC)
 )
 
 type ReserveOptions struct {
@@ -75,12 +82,26 @@ type Partition interface {
 	// Stats returns stats about the queue
 	Stats(ctx context.Context, stats *types.PartitionStats) error
 
-	LifeCycleActions(timeout time.Duration) iter.Seq[types.Action]
+	// LifeCycleActions returns an iterator that traverses actions required for the partition life cycle.
+	// This method must be thread safe as it will be called by a go routine that is separate from the
+	// main request loop.
+	//
+	// ### Parameters
+	// - `timeout`: The read timeout for each read operation to the underlying storage system.
+	// If a read exceeds this timeout, the iterator is aborted.
+	// - `now`: The time used by LifeCycleActions to determine which items need action.
+	LifeCycleActions(timeout clock.Duration, now clock.Time) iter.Seq[types.Action]
 
 	LifeCycleInfo(ctx context.Context, info *types.LifeCycleInfo) error
 
-	// Info returns the Partition Info for this partition
+	// Info returns the Partition Info for this partition. This call should be thread
+	// safe as it may be called from a separate go routine.
 	Info() types.PartitionInfo
+
+	// UpdateQueueInfo updates the queue information for this partition. This is called when
+	// a user updates queue info that needs to take effect immediately. This call should be thread
+	// safe as it may be called from a separate go routine.
+	UpdateQueueInfo(info types.QueueInfo)
 
 	Close(ctx context.Context) error
 }

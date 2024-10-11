@@ -127,7 +127,7 @@ func SpawnLogicalQueue(conf LogicalConfig) (*Logical, error) {
 	// in a batch.
 	l.hotRequestCh = make(chan *Request, conf.MaxRequestsPerQueue)
 
-	l.log.LogAttrs(context.Background(), slog.LevelDebug, "logical queue started")
+	l.log.LogAttrs(context.Background(), LevelDebugAll, "logical queue started")
 	l.wg.Add(1)
 	go l.requestLoop()
 	return l, nil
@@ -468,6 +468,7 @@ func (l *Logical) prepareQueueState(state *QueueState) {
 
 		state.LifeCycles[i] = NewLifeCycle(LifeCycleConfig{
 			Distribution: state.Distributions[i],
+			Clock:        l.conf.Clock,
 			Storage:      p,
 			Logical:      l,
 		})
@@ -511,7 +512,7 @@ func (l *Logical) requestLoop() {
 	//  of the new items via state.Maintenance.NotifyScheduledItem(date)
 
 	for {
-		l.log.LogAttrs(context.Background(), slog.LevelDebug, "requestLoop()",
+		l.log.LogAttrs(context.Background(), LevelDebugAll, "requestLoop()",
 			slog.Int("InChannel", len(l.hotRequestCh)),
 			slog.Int("RBlocked", len(state.Reservations.Requests)),
 			slog.Int("PBlocked", len(state.Producers.Requests)),
@@ -661,12 +662,12 @@ EMPTY:
 
 func (l *Logical) distributeProduceRequests(state *QueueState) {
 	for _, req := range state.Producers.Requests {
-		// Assign a DeadTimeout to each item
+		// Assign a ExpireTimeout to each item
 		for _, item := range req.Items {
-			item.DeadDeadline = l.conf.Clock.Now().UTC().Add(l.conf.DeadTimeout)
+			item.ExpireDeadline = l.conf.Clock.Now().UTC().Add(l.conf.ExpireTimeout)
 		}
 
-		l.log.LogAttrs(req.Context, slog.LevelDebug, "Produce",
+		l.log.LogAttrs(req.Context, LevelDebug, "Produce",
 			slog.Int("partition", state.Distributions[0].Partition.Info().PartitionNum),
 			slog.Int("items", len(req.Items)))
 
@@ -688,7 +689,7 @@ func (l *Logical) distributeProduceRequests(state *QueueState) {
 func (l *Logical) distributeReserveRequests(state *QueueState) {
 	// Assign Reservation Requests to StoragePartitions
 	for _, req := range state.Reservations.Requests {
-		l.log.LogAttrs(req.Context, slog.LevelDebug, "Reserve",
+		l.log.LogAttrs(req.Context, LevelDebug, "Reserve",
 			slog.Int("partition", state.Distributions[len(state.Distributions)-1].Partition.Info().PartitionNum),
 			slog.Int("num_requested", req.NumRequested),
 			slog.String("client_id", req.ClientID))
@@ -762,7 +763,7 @@ func (l *Logical) handleDistToPartitions(state *QueueState) error {
 				// TODO: Handle degradation
 			}
 			// Only if Produce was successful
-			p.MostRecentDeadline = l.conf.Clock.Now().UTC().Add(l.conf.DeadTimeout)
+			p.MostRecentDeadline = l.conf.Clock.Now().UTC().Add(l.conf.ExpireTimeout)
 		}
 
 		// ----------------------------------------
@@ -810,7 +811,7 @@ func (l *Logical) handleRequestTimeouts(state *QueueState) {
 	// TODO: Consider state.nextDeadLine which should be the next time a reservation will expire
 	next := l.nextTimeout(&state.Reservations)
 	if next.Nanoseconds() != 0 {
-		l.log.LogAttrs(context.Background(), slog.LevelDebug, "next maintenance",
+		l.log.LogAttrs(context.Background(), LevelDebug, "next maintenance",
 			slog.String("duration", next.String()))
 		state.NextMaintenanceCh = l.conf.Clock.After(next)
 	}
@@ -876,6 +877,9 @@ func (l *Logical) handleColdRequests(state *QueueState, req *Request) {
 	case MethodUpdateInfo:
 		info := req.Request.(types.QueueInfo)
 		l.conf.QueueInfo = info
+		for _, d := range state.Distributions {
+			d.Partition.UpdateQueueInfo(info)
+		}
 		//l.prepareQueueState(state)
 		close(req.ReadyCh)
 	case MethodUpdatePartitions:
@@ -1021,7 +1025,7 @@ func (l *Logical) handleShutdown(state *QueueState, req *types.ShutdownRequest) 
 	}
 
 	for _, lc := range state.LifeCycles {
-		l.log.LogAttrs(req.Context, slog.LevelDebug, "shutdown lifecycle",
+		l.log.LogAttrs(req.Context, LevelDebugAll, "shutdown lifecycle",
 			slog.Int("partition", lc.conf.Storage.Info().PartitionNum))
 		if err := lc.Shutdown(req.Context); err != nil {
 			l.log.Error("during lifecycle shutdown", "error", err)
@@ -1030,7 +1034,7 @@ func (l *Logical) handleShutdown(state *QueueState, req *types.ShutdownRequest) 
 	}
 
 	for i, p := range l.conf.StoragePartitions {
-		l.log.LogAttrs(req.Context, slog.LevelDebug, "close partition",
+		l.log.LogAttrs(req.Context, LevelDebugAll, "close partition",
 			slog.Int("partition", p.Info().PartitionNum))
 		if err := l.conf.StoragePartitions[i].Close(req.Context); err != nil {
 			l.log.Error("during partition close", "error", err)

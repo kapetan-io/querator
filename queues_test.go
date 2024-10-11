@@ -79,7 +79,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				DeadQueue:           queueName + "-dead",
 				Reference:           "CreateTestRef",
 				ReserveTimeout:      "1m",
-				DeadTimeout:         "10m",
+				ExpireTimeout:       "10m",
 				MaxAttempts:         10,
 				RequestedPartitions: 1,
 			}))
@@ -94,7 +94,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			assert.True(t, now.Before(list.Items[0].UpdatedAt.AsTime()))
 			assert.Equal(t, int32(10), list.Items[0].MaxAttempts)
 			assert.Equal(t, "1m0s", list.Items[0].ReserveTimeout)
-			assert.Equal(t, "10m0s", list.Items[0].DeadTimeout)
+			assert.Equal(t, "10m0s", list.Items[0].ExpireTimeout)
 			assert.Equal(t, queueName+"-dead", list.Items[0].DeadQueue)
 			assert.Equal(t, "CreateTestRef", list.Items[0].Reference)
 		})
@@ -118,7 +118,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			assert.True(t, now.Before(r.UpdatedAt.AsTime()))
 			assert.Equal(t, l.MaxAttempts, r.MaxAttempts)
 			assert.Equal(t, l.ReserveTimeout, r.ReserveTimeout)
-			assert.Equal(t, l.DeadTimeout, r.DeadTimeout)
+			assert.Equal(t, l.ExpireTimeout, r.ExpireTimeout)
 			assert.Equal(t, l.DeadQueue, r.DeadQueue)
 			assert.Equal(t, l.Reference, r.Reference)
 		})
@@ -181,16 +181,16 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					// TODO: Ensure producing and consuming on this queue respects the updated value
 				})
 			})
-			t.Run("DeadTimeout", func(t *testing.T) {
+			t.Run("ExpireTimeout", func(t *testing.T) {
 				l := queues[32]
 
-				dt, err := clock.ParseDuration(l.DeadTimeout)
+				dt, err := clock.ParseDuration(l.ExpireTimeout)
 				require.NoError(t, err)
 				dt += 20 * clock.Second
 
 				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
-					QueueName:   l.QueueName,
-					DeadTimeout: dt.String(),
+					QueueName:     l.QueueName,
+					ExpireTimeout: dt.String(),
 				}))
 
 				var list pb.QueuesListResponse
@@ -206,7 +206,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				assert.True(t, clock.Now().After(r.UpdatedAt.AsTime()))
 				assert.True(t, now.Before(r.UpdatedAt.AsTime()))
 				assert.True(t, r.CreatedAt.AsTime().Before(r.UpdatedAt.AsTime()))
-				assert.Equal(t, dt.String(), r.DeadTimeout)
+				assert.Equal(t, dt.String(), r.ExpireTimeout)
 				t.Run("Respected", func(t *testing.T) {
 					// TODO: Ensure producing and consuming on this queue respects the updated value
 				})
@@ -238,7 +238,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			t.Run("Everything", func(t *testing.T) {
 				l := queues[34]
 
-				dt, err := clock.ParseDuration(l.DeadTimeout)
+				dt, err := clock.ParseDuration(l.ExpireTimeout)
 				require.NoError(t, err)
 				dt += 35 * clock.Second
 
@@ -251,7 +251,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					Reference:      "FriendshipIsMagic",
 					MaxAttempts:    l.MaxAttempts + 1,
 					ReserveTimeout: rt.String(),
-					DeadTimeout:    dt.String(),
+					ExpireTimeout:  dt.String(),
 				}))
 
 				var list pb.QueuesListResponse
@@ -270,7 +270,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				assert.True(t, r.CreatedAt.AsTime().Before(r.UpdatedAt.AsTime()))
 				assert.Equal(t, "FriendshipIsMagic", r.Reference)
 				assert.Equal(t, l.MaxAttempts+1, r.MaxAttempts)
-				assert.Equal(t, dt.String(), r.DeadTimeout)
+				assert.Equal(t, dt.String(), r.ExpireTimeout)
 				assert.Equal(t, rt.String(), r.ReserveTimeout)
 			})
 		})
@@ -398,7 +398,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			DeadQueue:           queueName + "-dead",
 			Reference:           "CreateTestRef",
 			ReserveTimeout:      "1m",
-			DeadTimeout:         "10m",
+			ExpireTimeout:       "10m",
 			MaxAttempts:         10,
 			RequestedPartitions: 1,
 		}))
@@ -436,7 +436,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					Name: "AlreadyExists",
 					Req: &pb.QueueInfo{
 						ReserveTimeout:      ReserveTimeout,
-						DeadTimeout:         DeadTimeout,
+						ExpireTimeout:       ExpireTimeout,
 						QueueName:           queueName,
 						RequestedPartitions: 1,
 					},
@@ -447,20 +447,20 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					Name: "MissingReservationTimeout",
 					Req: &pb.QueueInfo{
 						QueueName:           random.String("queue-", 10),
-						DeadTimeout:         "24h0m0s",
+						ExpireTimeout:       "24h0m0s",
 						RequestedPartitions: 1,
 					},
 					Msg:  "reserve timeout is invalid; cannot be empty",
 					Code: duh.CodeBadRequest,
 				},
 				{
-					Name: "MissingDeadTimeout",
+					Name: "MissingExpireTimeout",
 					Req: &pb.QueueInfo{
 						QueueName:           random.String("queue-", 10),
 						ReserveTimeout:      "24h0m0s",
 						RequestedPartitions: 1,
 					},
-					Msg:  "dead timeout is invalid; cannot be empty",
+					Msg:  "expire timeout is invalid; cannot be empty",
 					Code: duh.CodeBadRequest,
 				},
 				{
@@ -486,10 +486,10 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					Req: &pb.QueueInfo{
 						QueueName:           "ReserveTimeoutTooLong",
 						ReserveTimeout:      "1h0m0s",
-						DeadTimeout:         "30m0s",
+						ExpireTimeout:       "30m0s",
 						RequestedPartitions: 1,
 					},
-					Msg:  "reserve timeout is too long; 1h0m0s cannot be greater than the dead timeout 30m0s",
+					Msg:  "reserve timeout is too long; 1h0m0s cannot be greater than the expire timeout 30m0s",
 					Code: duh.CodeBadRequest,
 				},
 				{
@@ -502,21 +502,21 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					Code: duh.CodeBadRequest,
 				},
 				{
-					Name: "InvalidDeadTimeout",
+					Name: "InvalidExpireTimeout",
 					Req: &pb.QueueInfo{
-						QueueName:   "InvalidDeadTimeout",
-						DeadTimeout: "foo",
+						QueueName:     "InvalidExpireTimeout",
+						ExpireTimeout: "foo",
 					},
-					Msg:  "dead timeout is invalid; time: invalid duration \"foo\" - expected format: 60m, 2h or 24h",
+					Msg:  "expire timeout is invalid; time: invalid duration \"foo\" - expected format: 60m, 2h or 24h",
 					Code: duh.CodeBadRequest,
 				},
 				{
-					Name: "DeadTimeoutMaxLength",
+					Name: "ExpireTimeoutMaxLength",
 					Req: &pb.QueueInfo{
-						QueueName:   "DeadTimeoutMaxLength",
-						DeadTimeout: random.String("", 2_001),
+						QueueName:     "ExpireTimeoutMaxLength",
+						ExpireTimeout: random.String("", 2_001),
 					},
-					Msg:  "dead timeout is invalid; cannot be greater than '15' characters",
+					Msg:  "expire timeout is invalid; cannot be greater than '15' characters",
 					Code: duh.CodeBadRequest,
 				},
 				{
@@ -531,10 +531,10 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				{
 					Name: "DeadQueueMaxLength",
 					Req: &pb.QueueInfo{
-						QueueName:   "DeadTimeoutMaxLength",
-						DeadTimeout: random.String("", 2_001),
+						QueueName:     "ExpireTimeoutMaxLength",
+						ExpireTimeout: random.String("", 2_001),
 					},
-					Msg:  "dead timeout is invalid; cannot be greater than '15' characters",
+					Msg:  "expire timeout is invalid; cannot be greater than '15' characters",
 					Code: duh.CodeBadRequest,
 				},
 				{
@@ -665,9 +665,9 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					Req: &pb.QueueInfo{
 						QueueName:      queueName,
 						ReserveTimeout: "1h0m0s",
-						DeadTimeout:    "30m0s",
+						ExpireTimeout:  "30m0s",
 					},
-					Msg:  "reserve timeout is too long; 1h0m0s cannot be greater than the dead timeout 30m0s",
+					Msg:  "reserve timeout is too long; 1h0m0s cannot be greater than the expire timeout 30m0s",
 					Code: duh.CodeBadRequest,
 				},
 				{
@@ -680,30 +680,30 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					Code: duh.CodeBadRequest,
 				},
 				{
-					Name: "InvalidDeadTimeout",
+					Name: "InvalidExpireTimeout",
 					Req: &pb.QueueInfo{
-						QueueName:   queueName,
-						DeadTimeout: "foo",
+						QueueName:     queueName,
+						ExpireTimeout: "foo",
 					},
-					Msg:  "dead timeout is invalid; time: invalid duration \"foo\" - expected format: 60m, 2h or 24h",
+					Msg:  "expire timeout is invalid; time: invalid duration \"foo\" - expected format: 60m, 2h or 24h",
 					Code: duh.CodeBadRequest,
 				},
 				{
-					Name: "DeadTimeoutMaxLength",
+					Name: "ExpireTimeoutMaxLength",
 					Req: &pb.QueueInfo{
-						QueueName:   "DeadTimeoutMaxLength",
-						DeadTimeout: random.String("", 2_001),
+						QueueName:     "ExpireTimeoutMaxLength",
+						ExpireTimeout: random.String("", 2_001),
 					},
-					Msg:  "dead timeout is invalid; cannot be greater than '15' characters",
+					Msg:  "expire timeout is invalid; cannot be greater than '15' characters",
 					Code: duh.CodeBadRequest,
 				},
 				{
 					Name: "DeadQueueMaxLength",
 					Req: &pb.QueueInfo{
-						QueueName:   "DeadTimeoutMaxLength",
-						DeadTimeout: random.String("", 2_001),
+						QueueName:     "ExpireTimeoutMaxLength",
+						ExpireTimeout: random.String("", 2_001),
 					},
-					Msg:  "dead timeout is invalid; cannot be greater than '15' characters",
+					Msg:  "expire timeout is invalid; cannot be greater than '15' characters",
 					Code: duh.CodeBadRequest,
 				},
 				{

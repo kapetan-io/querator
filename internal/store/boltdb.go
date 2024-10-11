@@ -14,7 +14,7 @@ import (
 	"iter"
 	"log/slog"
 	"path/filepath"
-	"time"
+	"sync"
 )
 
 var bucketName = []byte("queue")
@@ -57,6 +57,7 @@ func (b BoltPartitionStore) Get(info types.PartitionInfo) Partition {
 
 type BoltPartition struct {
 	info types.PartitionInfo
+	mu   sync.RWMutex
 	uid  ksuid.KSUID
 	conf BoltConfig
 	db   *bolt.DB
@@ -385,10 +386,20 @@ func (b *BoltPartition) Clear(_ context.Context, destructive bool) error {
 }
 
 func (b *BoltPartition) Info() types.PartitionInfo {
+	defer b.mu.RUnlock()
+	b.mu.RLock()
 	return b.info
 }
 
-func (b *BoltPartition) LifeCycleActions(timeout time.Duration) iter.Seq[types.Action] {
+func (b *BoltPartition) UpdateQueueInfo(info types.QueueInfo) {
+	defer b.mu.Unlock()
+	b.mu.Lock()
+	b.info.Queue = info
+}
+
+func (b *BoltPartition) LifeCycleActions(timeout clock.Duration, now clock.Time) iter.Seq[types.Action] {
+	//info := b.Info()
+
 	return func(yield func(types.Action) bool) {
 		// TODO(lifecycle)
 	}
@@ -459,7 +470,7 @@ func (b *BoltPartition) getDB() (*bolt.DB, error) {
 		return b.db, nil
 	}
 
-	file := filepath.Join(b.conf.StorageDir, fmt.Sprintf("%s-%06d.db", b.info.QueueName, b.info.PartitionNum))
+	file := filepath.Join(b.conf.StorageDir, fmt.Sprintf("%s-%06d.db", b.info.Queue.Name, b.info.PartitionNum))
 
 	opts := &bolt.Options{
 		FreelistType: bolt.FreelistArrayType,
@@ -639,9 +650,9 @@ func (b *BoltQueueStore) Update(_ context.Context, info types.QueueInfo) error {
 			return err
 		}
 
-		if found.ReserveTimeout > found.DeadTimeout {
+		if found.ReserveTimeout > found.ExpireTimeout {
 			return transport.NewInvalidOption("reserve timeout is too long; %s cannot be greater than the "+
-				"dead timeout %s", info.ReserveTimeout.String(), found.DeadTimeout.String())
+				"expire timeout %s", info.ReserveTimeout.String(), found.ExpireTimeout.String())
 		}
 
 		var buf bytes.Buffer

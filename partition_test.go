@@ -78,7 +78,7 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			DeadQueue:           queueName + "-dead",
 			Reference:           "CreateTestRef",
 			ReserveTimeout:      "1m",
-			DeadTimeout:         "10m",
+			ExpireTimeout:       "10m",
 			MaxAttempts:         10,
 			RequestedPartitions: 2,
 		}))
@@ -160,7 +160,7 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			DeadQueue:           queueName + "-dead",
 			Reference:           "CreateTestRef",
 			ReserveTimeout:      "1m",
-			DeadTimeout:         "10m",
+			ExpireTimeout:       "10m",
 			MaxAttempts:         10,
 			RequestedPartitions: 2,
 		}))
@@ -257,7 +257,7 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			DeadQueue:           queueName + "-dead",
 			Reference:           "CreateTestMany",
 			ReserveTimeout:      "1m",
-			DeadTimeout:         "10m",
+			ExpireTimeout:       "10m",
 			MaxAttempts:         10,
 			RequestedPartitions: 1,
 		}))
@@ -323,7 +323,7 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			DeadQueue:           queueName + "-dead",
 			Reference:           "CreateTestMany",
 			ReserveTimeout:      "1m",
-			DeadTimeout:         "10m",
+			ExpireTimeout:       "10m",
 			MaxAttempts:         10,
 			RequestedPartitions: 10,
 		}))
@@ -370,7 +370,7 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			DeadQueue:           queueName + "-dead",
 			Reference:           "WaitingConsumers",
 			ReserveTimeout:      "1m",
-			DeadTimeout:         "10m",
+			ExpireTimeout:       "10m",
 			MaxAttempts:         10,
 			RequestedPartitions: 5,
 		}))

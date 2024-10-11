@@ -6,10 +6,12 @@ import (
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/transport"
 	"github.com/kapetan-io/tackle/clock"
+	"github.com/kapetan-io/tackle/set"
 	"github.com/segmentio/ksuid"
 	"iter"
+	"log/slog"
 	"strings"
-	"time"
+	"sync"
 )
 
 // ---------------------------------------------
@@ -20,10 +22,15 @@ type MemoryPartition struct {
 	info types.PartitionInfo
 	conf StorageConfig
 	mem  []types.Item
+	mu   sync.RWMutex
+	log  *slog.Logger
 	uid  ksuid.KSUID
 }
 
 func (m *MemoryPartition) Produce(_ context.Context, batch types.Batch[types.ProduceRequest]) error {
+	defer m.mu.Unlock()
+	m.mu.Lock()
+
 	for _, r := range batch.Requests {
 		for _, item := range r.Items {
 			m.uid = m.uid.Next()
@@ -37,6 +44,9 @@ func (m *MemoryPartition) Produce(_ context.Context, batch types.Batch[types.Pro
 }
 
 func (m *MemoryPartition) Reserve(_ context.Context, batch types.ReserveBatch, opts ReserveOptions) error {
+	defer m.mu.Unlock()
+	m.mu.Lock()
+
 	batchIter := batch.Iterator()
 	var count int
 
@@ -66,6 +76,9 @@ func (m *MemoryPartition) Reserve(_ context.Context, batch types.ReserveBatch, o
 }
 
 func (m *MemoryPartition) Complete(_ context.Context, batch types.Batch[types.CompleteRequest]) error {
+	defer m.mu.Unlock()
+	m.mu.Lock()
+
 nextBatch:
 	for i := range batch.Requests {
 		for _, id := range batch.Requests[i].Ids {
@@ -101,7 +114,9 @@ func (m *MemoryPartition) validateID(id []byte) error {
 }
 
 func (m *MemoryPartition) List(_ context.Context, items *[]*types.Item, opts types.ListOptions) error {
+	defer m.mu.RUnlock()
 	var count, idx int
+	m.mu.RLock()
 
 	if opts.Pivot != nil {
 		if err := m.validateID(opts.Pivot); err != nil {
@@ -120,6 +135,9 @@ func (m *MemoryPartition) List(_ context.Context, items *[]*types.Item, opts typ
 }
 
 func (m *MemoryPartition) Add(_ context.Context, items []*types.Item) error {
+	defer m.mu.Unlock()
+	m.mu.Lock()
+
 	if len(items) == 0 {
 		return transport.NewInvalidOption("items is invalid; cannot be empty")
 	}
@@ -135,6 +153,9 @@ func (m *MemoryPartition) Add(_ context.Context, items []*types.Item) error {
 }
 
 func (m *MemoryPartition) Delete(_ context.Context, ids []types.ItemID) error {
+	defer m.mu.Unlock()
+	m.mu.Lock()
+
 	for _, id := range ids {
 		if err := m.validateID(id); err != nil {
 			return transport.NewInvalidOption("invalid storage id; '%s': %s", id, err)
@@ -152,6 +173,9 @@ func (m *MemoryPartition) Delete(_ context.Context, ids []types.ItemID) error {
 }
 
 func (m *MemoryPartition) Clear(_ context.Context, destructive bool) error {
+	defer m.mu.Unlock()
+	m.mu.Lock()
+
 	if destructive {
 		m.mem = make([]types.Item, 0, 1_000)
 		return nil
@@ -169,23 +193,84 @@ func (m *MemoryPartition) Clear(_ context.Context, destructive bool) error {
 }
 
 func (m *MemoryPartition) Info() types.PartitionInfo {
+	defer m.mu.RUnlock()
+	m.mu.RLock()
+
 	return m.info
 }
 
-// LifeCycleActions returns an iterator which iterates through actions which need to
-// be taken by the partition life cycle.
-func (m *MemoryPartition) LifeCycleActions(timeout time.Duration) iter.Seq[types.Action] {
+func (m *MemoryPartition) UpdateQueueInfo(info types.QueueInfo) {
+	defer m.mu.Unlock()
+	m.mu.Lock()
+	m.info.Queue = info
+}
+
+func (m *MemoryPartition) LifeCycleActions(_ clock.Duration, now clock.Time) iter.Seq[types.Action] {
+	defer m.mu.RUnlock()
+	m.mu.RLock()
+
 	return func(yield func(types.Action) bool) {
-		// TODO(lifecycle)
+		for _, item := range m.mem {
+			// Is the reserved item expired?
+			if item.IsReserved {
+				if now.After(item.ReserveDeadline) {
+					yield(types.Action{
+						Action:       types.ActionReserveExpired,
+						PartitionNum: m.info.PartitionNum,
+						Queue:        m.info.Queue.Name,
+						Item:         item,
+					})
+					continue
+				}
+			}
+			// Is the item expired?
+			if now.After(item.ExpireDeadline) {
+				yield(types.Action{
+					Action:       types.ActionItemExpired,
+					PartitionNum: m.info.PartitionNum,
+					Queue:        m.info.Queue.Name,
+					Item:         item,
+				})
+				continue
+			}
+			if item.Attempts >= m.info.Queue.MaxAttempts {
+				yield(types.Action{
+					Action:       types.ActionItemMaxAttempts,
+					PartitionNum: m.info.PartitionNum,
+					Queue:        m.info.Queue.Name,
+					Item:         item,
+				})
+				continue
+			}
+		}
 	}
 }
 
 func (m *MemoryPartition) LifeCycleInfo(ctx context.Context, info *types.LifeCycleInfo) error {
-	// TODO(lifecycle)
+	defer m.mu.RUnlock()
+	m.mu.RLock()
+	next := theFuture
+
+	// Find the item that will expire next
+	for _, item := range m.mem {
+		if item.ReserveDeadline.Before(next) {
+			next = item.ReserveDeadline
+		}
+	}
+
+	if next != theFuture {
+		info.NextReserveExpiry = next
+	}
+
+	m.log.LogAttrs(ctx, LevelDebugAll, "life cycle status",
+		slog.String("next-reserve-expire", info.NextReserveExpiry.String()))
 	return nil
 }
 
 func (m *MemoryPartition) Stats(_ context.Context, stats *types.PartitionStats) error {
+	defer m.mu.RUnlock()
+	m.mu.RLock()
+
 	now := m.conf.Clock.Now().UTC()
 	for _, item := range m.mem {
 		stats.Total++
@@ -205,6 +290,9 @@ func (m *MemoryPartition) Stats(_ context.Context, stats *types.PartitionStats) 
 }
 
 func (m *MemoryPartition) Close(_ context.Context) error {
+	defer m.mu.Unlock()
+	m.mu.Lock()
+
 	m.mem = nil
 	return nil
 }
@@ -233,13 +321,16 @@ func (m *MemoryPartition) findID(id []byte) (int, bool) {
 type MemoryQueueStore struct {
 	QueuesValidation
 	mem []types.QueueInfo
+	log *slog.Logger
 }
 
 var _ QueueStore = &MemoryQueueStore{}
 
-func NewMemoryQueueStore() *MemoryQueueStore {
+func NewMemoryQueueStore(log *slog.Logger) *MemoryQueueStore {
+	set.Default(&log, slog.Default())
 	return &MemoryQueueStore{
 		mem: make([]types.QueueInfo, 0, 1_000),
+		log: log,
 	}
 }
 
@@ -280,16 +371,16 @@ func (s *MemoryQueueStore) Update(_ context.Context, info types.QueueInfo) error
 		return ErrQueueNotExist
 	}
 
-	if info.DeadTimeout.Nanoseconds() != 0 {
-		if info.ReserveTimeout > info.DeadTimeout {
+	if info.ExpireTimeout.Nanoseconds() != 0 {
+		if info.ReserveTimeout > info.ExpireTimeout {
 			return transport.NewInvalidOption("reserve timeout is too long; %s cannot be greater than the "+
-				"dead timeout %s", info.ReserveTimeout.String(), info.DeadTimeout.String())
+				"expire timeout %s", info.ReserveTimeout.String(), info.ExpireTimeout.String())
 		}
 	}
 
-	if info.ReserveTimeout > s.mem[idx].DeadTimeout {
+	if info.ReserveTimeout > s.mem[idx].ExpireTimeout {
 		return transport.NewInvalidOption("reserve timeout is too long; %s cannot be greater than the "+
-			"dead timeout %s", info.ReserveTimeout.String(), s.mem[idx].DeadTimeout.String())
+			"expire timeout %s", info.ReserveTimeout.String(), s.mem[idx].ExpireTimeout.String())
 	}
 
 	found := s.mem[idx]
@@ -363,29 +454,34 @@ func (s *MemoryQueueStore) findQueue(name string) (int, bool) {
 // ---------------------------------------------
 
 type MemoryPartitionStore struct {
+	partitions map[types.PartitionHash]*MemoryPartition
 	conf       StorageConfig
-	partitions map[types.PartitionInfo]*MemoryPartition
+	log        *slog.Logger
 }
 
 var _ PartitionStore = &MemoryPartitionStore{}
 
-func NewMemoryPartitionStore(conf StorageConfig) *MemoryPartitionStore {
+func NewMemoryPartitionStore(conf StorageConfig, log *slog.Logger) *MemoryPartitionStore {
+	set.Default(&log, slog.Default())
+
 	return &MemoryPartitionStore{
-		partitions: make(map[types.PartitionInfo]*MemoryPartition),
+		partitions: make(map[types.PartitionHash]*MemoryPartition),
+		log:        log.With("store", "memory"),
 		conf:       conf,
 	}
 }
 
 func (m MemoryPartitionStore) Get(info types.PartitionInfo) Partition {
-	p, ok := m.partitions[info]
+	p, ok := m.partitions[info.HashKey()]
 	if !ok {
-		m.partitions[info] = &MemoryPartition{
+		m.partitions[info.HashKey()] = &MemoryPartition{
+			log:  m.log.With("queue", info.Queue.Name, "partition", info.PartitionNum),
 			mem:  make([]types.Item, 0, 1_000),
 			uid:  ksuid.New(),
 			conf: m.conf,
 			info: info,
 		}
-		return m.partitions[info]
+		return m.partitions[info.HashKey()]
 	}
 	return p
 }

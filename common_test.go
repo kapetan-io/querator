@@ -128,7 +128,7 @@ func (b *boltTestSetup) Setup(bc store.BoltConfig) store.StorageConfig {
 	bc.Log = log
 
 	var conf store.StorageConfig
-	conf.QueueStore = store.NewBoltQueueStore(bc)
+	conf.Queues = store.NewBoltQueues(bc)
 	conf.Backends = []store.Backend{
 		{
 			PartitionStore: store.NewBoltPartitionStore(bc),
@@ -167,7 +167,7 @@ func (b *badgerTestSetup) Setup(bc store.BadgerConfig) store.StorageConfig {
 	bc.Log = log
 
 	var conf store.StorageConfig
-	conf.QueueStore = store.NewBadgerQueueStore(bc)
+	conf.Queues = store.NewBadgerQueues(bc)
 	conf.Backends = []store.Backend{
 		{
 			PartitionStore: store.NewBadgerPartitionStore(bc),
@@ -216,7 +216,7 @@ func compareStorageItem(t *testing.T, l *pb.StorageItem, r *pb.StorageItem) {
 }
 
 func setupMemoryStorage(conf store.StorageConfig) store.StorageConfig {
-	conf.QueueStore = store.NewMemoryQueueStore(log)
+	conf.Queues = store.NewMemoryQueues(log)
 	conf.Backends = []store.Backend{
 		{
 			PartitionStore: store.NewMemoryPartitionStore(conf, log),

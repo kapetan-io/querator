@@ -60,8 +60,8 @@ func NewQueuesManager(conf QueuesManagerConfig) (*QueuesManager, error) {
 	set.Default(&conf.LogicalConfig.Clock, clock.NewProvider())
 	set.Default(&conf.Log, slog.Default())
 
-	if conf.StorageConfig.QueueStore == nil {
-		return nil, errors.New("conf.StorageConfig.QueueStore cannot be nil")
+	if conf.StorageConfig.Queues == nil {
+		return nil, errors.New("conf.StorageConfig.Queues cannot be nil")
 	}
 
 	if len(conf.StorageConfig.Backends) == 0 {
@@ -116,9 +116,9 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Que
 
 	info.CreatedAt = qm.conf.LogicalConfig.Clock.Now().UTC()
 	info.UpdatedAt = qm.conf.LogicalConfig.Clock.Now().UTC()
-	if err := qm.conf.StorageConfig.QueueStore.Add(ctx, info); err != nil {
+	if err := qm.conf.StorageConfig.Queues.Add(ctx, info); err != nil {
 		return nil, errors.With("queue", info.Name).
-			Errorf("QueueStore.Add(): %w", err)
+			Errorf("Queues.Add(): %w", err)
 	}
 
 	return qm.get(ctx, info.Name)
@@ -143,7 +143,7 @@ func (qm *QueuesManager) get(ctx context.Context, name string) (*Queue, error) {
 
 	// Look for the queue in storage
 	var queue types.QueueInfo
-	if err := qm.conf.StorageConfig.QueueStore.Get(ctx, name, &queue); err != nil {
+	if err := qm.conf.StorageConfig.Queues.Get(ctx, name, &queue); err != nil {
 		if errors.Is(err, store.ErrQueueNotExist) {
 			return nil, transport.NewInvalidOption("queue does not exist; no such queue named '%s'", name)
 		}
@@ -198,7 +198,7 @@ func (qm *QueuesManager) List(ctx context.Context, items *[]types.QueueInfo, opt
 	defer qm.mutex.Unlock()
 	qm.mutex.Lock()
 
-	return qm.conf.StorageConfig.QueueStore.List(ctx, items, opts)
+	return qm.conf.StorageConfig.Queues.List(ctx, items, opts)
 }
 
 func (qm *QueuesManager) Update(ctx context.Context, info types.QueueInfo) error {
@@ -210,8 +210,8 @@ func (qm *QueuesManager) Update(ctx context.Context, info types.QueueInfo) error
 
 	// Update the queue info in the data store
 	info.UpdatedAt = qm.conf.LogicalConfig.Clock.Now().UTC()
-	if err := qm.conf.StorageConfig.QueueStore.Update(ctx, info); err != nil {
-		return errors.Errorf("QueueStore.Update(): %w", err)
+	if err := qm.conf.StorageConfig.Queues.Update(ctx, info); err != nil {
+		return errors.Errorf("Queues.Update(): %w", err)
 	}
 
 	// If the queue is currently in use
@@ -241,8 +241,8 @@ func (qm *QueuesManager) Delete(ctx context.Context, name string) error {
 	qm.mutex.Lock()
 
 	// TODO: Delete should return transport.NewInvalidOption("queue does not exist; no such queue named '%s'", name)
-	if err := qm.conf.StorageConfig.QueueStore.Delete(ctx, name); err != nil {
-		return errors.Errorf("QueueStore.Delete(): %w", err)
+	if err := qm.conf.StorageConfig.Queues.Delete(ctx, name); err != nil {
+		return errors.Errorf("Queues.Delete(): %w", err)
 	}
 
 	// If the queue is currently in use
@@ -283,7 +283,7 @@ func (qm *QueuesManager) Shutdown(ctx context.Context) error {
 			}
 		}
 		qm.log.LogAttrs(ctx, LevelDebugAll, "close queue store")
-		if err := qm.conf.StorageConfig.QueueStore.Close(ctx); err != nil {
+		if err := qm.conf.StorageConfig.Queues.Close(ctx); err != nil {
 			wait <- err
 			return
 		}

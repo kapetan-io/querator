@@ -397,12 +397,16 @@ func (b *BoltPartition) UpdateQueueInfo(info types.QueueInfo) {
 	b.info.Queue = info
 }
 
-func (b *BoltPartition) LifeCycleActions(timeout clock.Duration, now clock.Time) iter.Seq[types.Action] {
+func (b *BoltPartition) ReadActions(timeout clock.Duration, now clock.Time) iter.Seq[types.Action] {
 	//info := b.Info()
 
 	return func(yield func(types.Action) bool) {
 		// TODO(lifecycle)
 	}
+}
+
+func (b *BoltPartition) WriteActions(ctx context.Context, batch types.Batch[types.LifeCycleRequest]) error {
+	return nil // TODO(lifecycle):
 }
 
 func (b *BoltPartition) LifeCycleInfo(ctx context.Context, info *types.LifeCycleInfo) error {
@@ -507,24 +511,24 @@ func (b *BoltPartition) getDB() (*bolt.DB, error) {
 }
 
 // ---------------------------------------------
-// QueueStore Implementation
+// Queues Implementation
 // ---------------------------------------------
 
-func NewBoltQueueStore(conf BoltConfig) QueueStore {
-	return &BoltQueueStore{
+func NewBoltQueues(conf BoltConfig) Queues {
+	return &BoltQueues{
 		conf: conf,
 	}
 }
 
-type BoltQueueStore struct {
+type BoltQueues struct {
 	QueuesValidation
 	db   *bolt.DB
 	conf BoltConfig
 }
 
-var _ QueueStore = &BoltQueueStore{}
+var _ Queues = &BoltQueues{}
 
-func (b *BoltQueueStore) getDB() (*bolt.DB, error) {
+func (b *BoltQueues) getDB() (*bolt.DB, error) {
 	if b.db != nil {
 		return b.db, nil
 	}
@@ -557,7 +561,7 @@ func (b *BoltQueueStore) getDB() (*bolt.DB, error) {
 	return db, nil
 }
 
-func (b *BoltQueueStore) Get(_ context.Context, name string, queue *types.QueueInfo) error {
+func (b *BoltQueues) Get(_ context.Context, name string, queue *types.QueueInfo) error {
 	if err := b.validateGet(name); err != nil {
 		return err
 	}
@@ -585,7 +589,7 @@ func (b *BoltQueueStore) Get(_ context.Context, name string, queue *types.QueueI
 	})
 }
 
-func (b *BoltQueueStore) Add(_ context.Context, info types.QueueInfo) error {
+func (b *BoltQueues) Add(_ context.Context, info types.QueueInfo) error {
 	if err := b.validateAdd(info); err != nil {
 		return err
 	}
@@ -618,7 +622,7 @@ func (b *BoltQueueStore) Add(_ context.Context, info types.QueueInfo) error {
 	})
 }
 
-func (b *BoltQueueStore) Update(_ context.Context, info types.QueueInfo) error {
+func (b *BoltQueues) Update(_ context.Context, info types.QueueInfo) error {
 	db, err := b.getDB()
 	if err != nil {
 		return err
@@ -667,7 +671,7 @@ func (b *BoltQueueStore) Update(_ context.Context, info types.QueueInfo) error {
 	})
 }
 
-func (b *BoltQueueStore) List(_ context.Context, queues *[]types.QueueInfo, opts types.ListOptions) error {
+func (b *BoltQueues) List(_ context.Context, queues *[]types.QueueInfo, opts types.ListOptions) error {
 	if err := b.validateList(opts); err != nil {
 		return err
 	}
@@ -724,7 +728,7 @@ func (b *BoltQueueStore) List(_ context.Context, queues *[]types.QueueInfo, opts
 	})
 }
 
-func (b *BoltQueueStore) Delete(_ context.Context, name string) error {
+func (b *BoltQueues) Delete(_ context.Context, name string) error {
 	if err := b.validateDelete(name); err != nil {
 		return err
 	}
@@ -747,7 +751,7 @@ func (b *BoltQueueStore) Delete(_ context.Context, name string) error {
 	})
 }
 
-func (b *BoltQueueStore) Close(_ context.Context) error {
+func (b *BoltQueues) Close(_ context.Context) error {
 	err := b.db.Close()
 	b.db = nil
 	return err

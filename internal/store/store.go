@@ -25,10 +25,10 @@ type ReserveOptions struct {
 	ReserveDeadline clock.Time
 }
 
-// QueueStore is storage for listing and storing information about queues.  The QueueStore should employ
+// Queues is storage for listing and storing information about queues.  The Queues should employ
 // lazy storage initialization such that it makes contact or creates underlying tables only
 // upon first invocation. See 0021-storage-lazy-initialization.md for details.
-type QueueStore interface {
+type Queues interface {
 	// Get returns a store.Partition from storage ready to be used. Returns ErrQueueNotExist if the
 	// queue requested does not exist
 	Get(ctx context.Context, name string, queue *types.QueueInfo) error
@@ -82,7 +82,7 @@ type Partition interface {
 	// Stats returns stats about the queue
 	Stats(ctx context.Context, stats *types.PartitionStats) error
 
-	// LifeCycleActions returns an iterator that traverses actions required for the partition life cycle.
+	// ReadActions returns an iterator of actions that should be preformed for the partition life cycle.
 	// This method must be thread safe as it will be called by a go routine that is separate from the
 	// main request loop.
 	//
@@ -90,8 +90,12 @@ type Partition interface {
 	// - `timeout`: The read timeout for each read operation to the underlying storage system.
 	// If a read exceeds this timeout, the iterator is aborted.
 	// - `now`: The time used by LifeCycleActions to determine which items need action.
-	LifeCycleActions(timeout clock.Duration, now clock.Time) iter.Seq[types.Action]
+	ReadActions(timeout clock.Duration, now clock.Time) iter.Seq[types.Action]
 
+	// WriteActions takes lifecycle requests and preforms the actions requested on the partition.
+	WriteActions(ctx context.Context, batch types.Batch[types.LifeCycleRequest]) error
+
+	// TODO: Rename this, this is too generic for what it currently does.
 	LifeCycleInfo(ctx context.Context, info *types.LifeCycleInfo) error
 
 	// Info returns the Partition Info for this partition. This call should be thread
@@ -122,7 +126,7 @@ func (b Backends) Find(name string) Backend {
 // and partitions.
 type StorageConfig struct {
 	// How Queues are stored can be separate from PartitionInfo and Scheduled stores
-	QueueStore QueueStore
+	Queues Queues
 	// The Backends configured for partitions to utilize
 	Backends Backends
 	// Clock is the clock provider the backend implementation should use

@@ -57,6 +57,26 @@ preformed will be delegated to the logical queue or queues manager.
     - If the queue has no dead letter, log the expired item and delete it.
 -  Find any items scheduled for enqueue and distribute them to the current Logical queue
 
+### Maintaining FIFO Integrity
+When an item exceeds its `reserved_deadline`, a straightforward solution might be to reset the
+`reserved_deadline` and mark the item as `is_reserved=false`. However, this approach compromises
+the First-In-First-Out (FIFO) nature of the queue. This is because un-reserved items typically have
+item IDs that place them at the end of the queue, after newly queued items. If these un-reserved
+items are NOT explicitly placed at the beginning of the queue, they will naturally take precedence over new
+or existing items in the queue, thus violating the FIFO nature of the queue.
+
+To maintain FIFO integrity, if an item fails to be completed before its `reserved_deadline` is exceeded, 
+it should be placed at the beginning of the FIFO queue when it is returned to an un-reserved status. This
+ensures that items already in the queue take precedence over such items and preserves FIFO behavior. 
+
+Consider a failure scenario where thousands of reserved items exceed their `reserved_deadline` and are
+returned to an un-reserved status by the lifecycle. If these previously reserved items are not placed
+at the beginning of the queue, the flood of un-reserved items which appear at the end of the queue
+could starve out items that exist further up the queue such that their processing is delayed. 
+This could also create a cycle where reserved items never complete processing, while also
+saturating all consumers, denying other items in the queue the chance to be processed and completed. 
+As a result, items that would normally be processed do not get the opportunity to be handled by 
+consumers and thus item processing is delayed.
 
 ## Consequences
 Because the life cycle runs its first phase in a separate Go routine, all querator storage systems
@@ -69,4 +89,24 @@ reservations. This means a reserved item may not be immediately available for de
 different consumer at the exact moment one might expect. However, I believe that the efficiency
 gained by this design outweighs any deficiencies incurred by the delayed handling of expired
 reservations.
+
+#### The appearance of compromised FIFO integrity
+The decision to force items which exceed the `reserved_deadline` to be re-queued at the beginning of the queue
+can have a negative impact on items which MUST be processed in a specific order.
+
+Consider a queue with 3 items which must be completed in order
+- Item 1 adds an item to a list in a database
+- Item 2 processes the list in the database
+- Item 3 deletes the item from the database
+
+If `Item 1` exceeds the `reserved_deadline`, `Item 1` will be re-queued to run after `Item 3` completes,
+which is likely not what the user wants. This behavior may appear to the user as if the FIFO integrity
+is compromised. In this scenario it may be acceptable that an item which fails to be processed as
+completed will block all other items from being processed until itself is processed to completion.
+
+In the future, we may want to support marking reserved items which exceed their `reserved_deadline` without
+placing them at the begining of the queue. Thus preserving their place at the end of the queue. This is
+currently not a priority as it is my opinion that such scenario can be avoided by having `Item 1` enqueue
+`Item 2` only when `Item 1` is complete, thus avoiding this problem, and ensuring order or user operation
+is preserved while not blocking other items in the queue waiting to be processed.
 

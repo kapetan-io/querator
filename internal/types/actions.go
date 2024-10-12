@@ -1,22 +1,25 @@
 package types
 
 const (
-	ActionMoveScheduledItem ActionKind = iota
+	ActionQueueScheduledItem ActionKind = iota
 	ActionReserveExpired
 	ActionItemExpired
 	ActionItemMaxAttempts
+	ActionDeleteItem
 )
 
 func ActionToString(a ActionKind) string {
 	switch a {
-	case ActionMoveScheduledItem:
-		return "MoveScheduledItem"
+	case ActionQueueScheduledItem:
+		return "QueueScheduledItem"
 	case ActionReserveExpired:
 		return "ReserveExpired"
 	case ActionItemExpired:
 		return "ItemExpired"
 	case ActionItemMaxAttempts:
 		return "ItemMaxAttempts"
+	case ActionDeleteItem:
+		return "DeleteItem"
 	default:
 		return "UnknownAction"
 	}

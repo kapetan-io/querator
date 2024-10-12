@@ -133,4 +133,5 @@ type PartitionStats struct {
 type LifeCycleRequest struct {
 	RequestTimeout clock.Duration
 	Actions        []Action
+	PartitionNum   int
 }

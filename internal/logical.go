@@ -525,6 +525,15 @@ func (l *Logical) prepareQueueState(state *QueueState) {
 // See doc/adr/0003-rw-sync-point.md for an explanation of this design
 // -------------------------------------------------
 
+type QueueState struct {
+	LifeCycles        types.Batch[types.LifeCycleRequest]
+	Completes         types.Batch[types.CompleteRequest]
+	Producers         types.Batch[types.ProduceRequest]
+	Reservations      types.ReserveBatch
+	NextMaintenanceCh <-chan clock.Time
+	Partitions        []*Partition
+}
+
 func (l *Logical) requestLoop() {
 	defer l.wg.Done()
 	var state QueueState
@@ -573,6 +582,8 @@ func (l *Logical) handleHotRequests(state *QueueState, req *Request) {
 		l.consumeHotCh(state, req)
 	}
 
+	// TODO: Perhaps we can move all of these into the same method?
+	l.distributeLifeCycles(state)
 	l.distributeProduceRequests(state)
 	// FUTURE: distributeReserveRequests() should inspect the produce requests, and
 	// attempt to assign produced items with waiting reserve requests if our
@@ -580,8 +591,8 @@ func (l *Logical) handleHotRequests(state *QueueState, req *Request) {
 	l.distributeReserveRequests(state)
 	l.distributeCompleteRequests(state)
 
-	// Distribute requests to partitions
-	_ = l.handleDistToPartitions(state)
+	// write distributed requests to each partition according to assignment.
+	_ = l.writeToPartitions(state)
 
 	// TODO: If an error occurred, and it's recoverable, then
 	//  attempt to re-distribute remaining requests to other partitions
@@ -654,6 +665,8 @@ func (l *Logical) consumeHotCh(state *QueueState, req *Request) {
 		state.Producers.Add(req.Request.(*types.ProduceRequest))
 	case MethodComplete:
 		state.Completes.Add(req.Request.(*types.CompleteRequest))
+	case MethodLifeCycle:
+		state.LifeCycles.Add(req.Request.(*types.LifeCycleRequest))
 	case MethodReserve:
 		addIfUnique(&state.Reservations, req.Request.(*types.ReserveRequest))
 	default:
@@ -672,6 +685,8 @@ EMPTY:
 				state.Producers.Add(req.Request.(*types.ProduceRequest))
 			case MethodComplete:
 				state.Completes.Add(req.Request.(*types.CompleteRequest))
+			case MethodLifeCycle:
+				state.LifeCycles.Add(req.Request.(*types.LifeCycleRequest))
 			case MethodReserve:
 				addIfUnique(&state.Reservations, req.Request.(*types.ReserveRequest))
 			default:
@@ -683,9 +698,16 @@ EMPTY:
 	}
 }
 
-func (l *Logical) handleLifeCycle(state *QueueState) {
-	//for _, req := range state.LifeCycle.Requests {
-	// TODO: Collect all the lifecycle changes into the state.Partitions according to partition
+func (l *Logical) distributeLifeCycles(state *QueueState) {
+	for _, req := range state.LifeCycles.Requests {
+		p := state.GetPartition(req.PartitionNum)
+		if p == nil {
+			l.log.Warn("LifeCycleRequest received for invalid partition; skipping request",
+				"req-partition", req.PartitionNum)
+			continue
+		}
+		p.LifeCycleRequests.Add(req)
+	}
 	// TODO: Write a new PartitionStore method to update the items
 }
 
@@ -767,7 +789,10 @@ nextRequest:
 // TODO: handleDist() needs to indicate if a partition failed, which one, and if we should re-distribute
 //	requests to other partitions.
 
-func (l *Logical) handleDistToPartitions(state *QueueState) error {
+// writeToPartitions is intended to be used as a place where we can optimise interacting with the
+// data store. If the data store supports batching multiple actions in a single round trip request
+// we should make that possible here.
+func (l *Logical) writeToPartitions(state *QueueState) error {
 	// TODO: Future: Querator should handle Partition failure by redistributing the batches to partitions which have
 	//  not failed. (note: make sure we reduce the Partitions[].Count when re-assigning)
 	// TODO: Identify a degradation vs a failure and set Partition[].Failures as appropriate.
@@ -787,7 +812,7 @@ func (l *Logical) handleDistToPartitions(state *QueueState) error {
 		// ----------------------------------------
 		if len(p.ProduceRequests.Requests) != 0 {
 			if err := p.Store.Produce(ctx, p.ProduceRequests); err != nil {
-				l.log.Error("while calling Partition.Produce()",
+				l.log.Error("while calling store.Partition.Produce()",
 					"partition", p.Store.Info().PartitionNum, "error", err)
 				// TODO: Handle degradation
 			}
@@ -803,7 +828,7 @@ func (l *Logical) handleDistToPartitions(state *QueueState) error {
 			if err := p.Store.Reserve(ctx, p.ReserveRequests, store.ReserveOptions{
 				ReserveDeadline: reserveDeadline,
 			}); err != nil {
-				l.log.Error("while calling Partition.Reserve()",
+				l.log.Error("while calling store.Partition.Reserve()",
 					"partition", p.Store.Info().PartitionNum,
 					"error", err)
 				// TODO: Handle degradation
@@ -816,7 +841,7 @@ func (l *Logical) handleDistToPartitions(state *QueueState) error {
 		// Complete
 		// ----------------------------------------
 		if err := p.Store.Complete(ctx, p.CompleteRequests); err != nil {
-			l.log.Error("while calling Partition.Complete()",
+			l.log.Error("while calling store.Partition.Complete()",
 				"partition", p.Store.Info().PartitionNum,
 				"queueName", l.conf.Name,
 				"error", err)
@@ -830,6 +855,16 @@ func (l *Logical) handleDistToPartitions(state *QueueState) error {
 				req.Err = ErrInternalRetry
 			}
 			// TODO: Handle degradation
+		}
+		// ----------------------------------------
+		// LifeCycle
+		// ----------------------------------------
+		if err := p.Store.WriteActions(ctx, p.LifeCycleRequests); err != nil {
+			l.log.Error("while calling store.Partition.WriteActions()",
+				"partition", p.Store.Info().PartitionNum,
+				"queueName", l.conf.Name,
+				"error", err)
+
 		}
 		cancel()
 	}

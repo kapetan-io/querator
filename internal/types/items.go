@@ -25,6 +25,7 @@ type Item struct {
 	// implementation, and does not include the queue name.
 	ID ItemID
 	// IsReserved is true if the item has been reserved by a client
+	// TODO: Change this to a time stamp, which if non zero is the timestamp when the item was reserved
 	IsReserved bool
 	// ReserveDeadline is the time in the future when the reservation is
 	// expired and can be reserved by another consumer

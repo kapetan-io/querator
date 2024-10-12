@@ -164,11 +164,14 @@ func (l *LifeCycle) handleNotify(state *lifeCycleState, notify clock.Time) {
 	state.timer.Reset(notify.Sub(now))
 }
 
+type handleActions func(state *lifeCycleState, actions []types.Action)
+
 func (l *LifeCycle) runLifeCycle(state *lifeCycleState) {
 	l.log.LogAttrs(context.Background(), LevelDebugAll, "runLifeCycle()")
 
 	// Attempt to get the partition out of a failed state
 	if l.conf.Partition.Failures.Load() != 0 {
+		// TODO: move this to a different method
 		ctx, cancel := context.WithTimeout(context.Background(), l.logical.conf.ReadTimeout)
 		var stats types.PartitionStats
 		defer cancel()
@@ -187,39 +190,47 @@ func (l *LifeCycle) runLifeCycle(state *lifeCycleState) {
 		}
 	}
 
+	add := func(a types.Action, actions []types.Action, f handleActions) []types.Action {
+		actions = append(actions, a)
+		if len(actions) >= 1_000 {
+			l.writeLogicalActions(state, actions)
+			actions = actions[:]
+		}
+		return actions
+	}
+
 	lActions := make([]types.Action, 0, 1_000)
 	mActions := make([]types.Action, 0, 1_000)
+
 	// Separate the events into separate slices handling them in batches
-	for a := range l.conf.Storage.LifeCycleActions(l.logical.conf.ReadTimeout, l.conf.Clock.Now().UTC()) {
+	for a := range l.conf.Storage.ReadActions(l.logical.conf.ReadTimeout, l.conf.Clock.Now().UTC()) {
 		l.log.LogAttrs(context.Background(), LevelDebugAll, "new action",
 			slog.String("reserve_deadline", a.Item.ReserveDeadline.String()),
 			slog.String("expire_deadline", a.Item.ExpireDeadline.String()),
 			slog.String("action", types.ActionToString(a.Action)),
 			slog.String("id", string(a.Item.ID)))
 		switch a.Action {
-		case types.ActionMoveScheduledItem, types.ActionReserveExpired:
-			lActions = append(lActions, a)
-			if len(lActions) >= 1_000 {
-				l.handleLogicalActions(state, lActions)
-				lActions = lActions[:]
+		case types.ActionQueueScheduledItem, types.ActionReserveExpired:
+			lActions = add(a, lActions, l.writeLogicalActions)
+		case types.ActionItemExpired, types.ActionItemMaxAttempts:
+			// If there is no dead letter queue defined
+			if l.conf.Partition.Info.Queue.DeadQueue == "" {
+				a.Action = types.ActionDeleteItem
+				lActions = add(a, lActions, l.writeLogicalActions)
+				continue
 			}
-		case types.ActionItemExpired:
-			mActions = append(mActions, a)
-			if len(mActions) >= 1_000 {
-				l.handleManagerEvents(state, mActions)
-				mActions = mActions[:]
-			}
+			mActions = add(a, mActions, l.writeManagerActions)
 		default:
 			panic(fmt.Sprintf("undefined action '%d'", a.Action))
 		}
 	}
 
 	if len(lActions) > 0 {
-		l.handleLogicalActions(state, lActions)
+		l.writeLogicalActions(state, lActions)
 	}
 
 	if len(mActions) > 0 {
-		l.handleManagerEvents(state, mActions)
+		l.writeManagerActions(state, mActions)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), l.logical.conf.ReadTimeout)
@@ -239,8 +250,9 @@ func (l *LifeCycle) runLifeCycle(state *lifeCycleState) {
 	}
 }
 
-func (l *LifeCycle) handleLogicalActions(state *lifeCycleState, actions []types.Action) {
+func (l *LifeCycle) writeLogicalActions(state *lifeCycleState, actions []types.Action) {
 	r := types.LifeCycleRequest{
+		PartitionNum:   l.conf.Partition.Info.PartitionNum,
 		RequestTimeout: l.logical.conf.WriteTimeout,
 		Actions:        actions,
 	}
@@ -258,8 +270,9 @@ func (l *LifeCycle) handleLogicalActions(state *lifeCycleState, actions []types.
 	}
 }
 
-func (l *LifeCycle) handleManagerEvents(state *lifeCycleState, actions []types.Action) {
+func (l *LifeCycle) writeManagerActions(state *lifeCycleState, actions []types.Action) {
 	r := types.LifeCycleRequest{
+		PartitionNum:   l.conf.Partition.Info.PartitionNum,
 		RequestTimeout: l.logical.conf.WriteTimeout,
 		Actions:        actions,
 	}

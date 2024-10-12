@@ -48,7 +48,7 @@ func (c *Config) SetDefaults() error {
 	set.Default(&c.MaxProduceBatchSize, internal.DefaultMaxProduceBatchSize)
 	set.Default(&c.MaxCompleteBatchSize, internal.DefaultMaxCompleteBatchSize)
 	set.Default(&c.MaxRequestsPerQueue, internal.DefaultMaxRequestsPerQueue)
-	set.Default(&c.StorageConfig.QueueStore, store.NewMemoryQueueStore(c.Log))
+	set.Default(&c.StorageConfig.Queues, store.NewMemoryQueues(c.Log))
 	set.Default(&c.StorageConfig.Backends, []store.Backend{
 		{
 			PartitionStore: store.NewMemoryPartitionStore(c.StorageConfig, c.Log),

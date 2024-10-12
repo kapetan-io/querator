@@ -205,7 +205,7 @@ func (m *MemoryPartition) UpdateQueueInfo(info types.QueueInfo) {
 	m.info.Queue = info
 }
 
-func (m *MemoryPartition) LifeCycleActions(_ clock.Duration, now clock.Time) iter.Seq[types.Action] {
+func (m *MemoryPartition) ReadActions(_ clock.Duration, now clock.Time) iter.Seq[types.Action] {
 	defer m.mu.RUnlock()
 	m.mu.RLock()
 
@@ -244,6 +244,34 @@ func (m *MemoryPartition) LifeCycleActions(_ clock.Duration, now clock.Time) ite
 			}
 		}
 	}
+}
+
+func (m *MemoryPartition) WriteActions(ctx context.Context, batch types.Batch[types.LifeCycleRequest]) error {
+	defer m.mu.RUnlock()
+	m.mu.RLock()
+
+	for _, req := range batch.Requests {
+		for _, a := range req.Actions {
+			switch a.Action {
+			case types.ActionQueueScheduledItem:
+				// TODO: Find the scheduled item and add it to the partition queue
+			case types.ActionReserveExpired:
+				idx, ok := m.findID(a.Item.ID)
+				if !ok {
+					m.log.Warn("unable to find item while processing action; ignoring action",
+						"id", a.Item.ID, "action", types.ActionToString(a.Action))
+				}
+				// TODO: Re-add this item to m.mem and give it a new id <---- DO THIS NEXT
+				m.mem[idx].ReserveDeadline = clock.Time{}
+				m.mem[idx].IsReserved = false
+			case types.ActionDeleteItem:
+				// TODO: Find the item and remove it
+			default:
+				m.log.Warn("undefined action", "action", types.ActionToString(a.Action))
+			}
+		}
+	}
+	return nil // TODO(lifecycle):
 }
 
 func (m *MemoryPartition) LifeCycleInfo(ctx context.Context, info *types.LifeCycleInfo) error {
@@ -315,26 +343,26 @@ func (m *MemoryPartition) findID(id []byte) (int, bool) {
 }
 
 // ---------------------------------------------
-// QueueStore Implementation
+// Queues Implementation
 // ---------------------------------------------
 
-type MemoryQueueStore struct {
+type MemoryQueues struct {
 	QueuesValidation
 	mem []types.QueueInfo
 	log *slog.Logger
 }
 
-var _ QueueStore = &MemoryQueueStore{}
+var _ Queues = &MemoryQueues{}
 
-func NewMemoryQueueStore(log *slog.Logger) *MemoryQueueStore {
+func NewMemoryQueues(log *slog.Logger) *MemoryQueues {
 	set.Default(&log, slog.Default())
-	return &MemoryQueueStore{
+	return &MemoryQueues{
 		mem: make([]types.QueueInfo, 0, 1_000),
 		log: log,
 	}
 }
 
-func (s *MemoryQueueStore) Get(_ context.Context, name string, queue *types.QueueInfo) error {
+func (s *MemoryQueues) Get(_ context.Context, name string, queue *types.QueueInfo) error {
 	if err := s.validateGet(name); err != nil {
 		return err
 	}
@@ -347,7 +375,7 @@ func (s *MemoryQueueStore) Get(_ context.Context, name string, queue *types.Queu
 	return nil
 }
 
-func (s *MemoryQueueStore) Add(_ context.Context, info types.QueueInfo) error {
+func (s *MemoryQueues) Add(_ context.Context, info types.QueueInfo) error {
 	if err := s.validateAdd(info); err != nil {
 		return err
 	}
@@ -361,7 +389,7 @@ func (s *MemoryQueueStore) Add(_ context.Context, info types.QueueInfo) error {
 	return nil
 }
 
-func (s *MemoryQueueStore) Update(_ context.Context, info types.QueueInfo) error {
+func (s *MemoryQueues) Update(_ context.Context, info types.QueueInfo) error {
 	if err := s.validateQueueName(info); err != nil {
 		return err
 	}
@@ -394,7 +422,7 @@ func (s *MemoryQueueStore) Update(_ context.Context, info types.QueueInfo) error
 
 }
 
-func (s *MemoryQueueStore) List(_ context.Context, queues *[]types.QueueInfo, opts types.ListOptions) error {
+func (s *MemoryQueues) List(_ context.Context, queues *[]types.QueueInfo, opts types.ListOptions) error {
 	if err := s.validateList(opts); err != nil {
 		return err
 	}
@@ -414,7 +442,7 @@ func (s *MemoryQueueStore) List(_ context.Context, queues *[]types.QueueInfo, op
 	return nil
 }
 
-func (s *MemoryQueueStore) Delete(_ context.Context, name string) error {
+func (s *MemoryQueues) Delete(_ context.Context, name string) error {
 	if err := s.validateDelete(name); err != nil {
 		return err
 	}
@@ -427,14 +455,14 @@ func (s *MemoryQueueStore) Delete(_ context.Context, name string) error {
 	return nil
 }
 
-func (s *MemoryQueueStore) Close(_ context.Context) error {
+func (s *MemoryQueues) Close(_ context.Context) error {
 	s.mem = nil
 	return nil
 }
 
 // findID attempts to find the provided queue in q.mem. If found returns the index and true.
 // If not found returns the next nearest item in the list.
-func (s *MemoryQueueStore) findQueue(name string) (int, bool) {
+func (s *MemoryQueues) findQueue(name string) (int, bool) {
 	var nearest, nearestIdx int
 	for i, queue := range s.mem {
 		lex := strings.Compare(queue.Name, name)

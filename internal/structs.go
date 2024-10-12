@@ -22,6 +22,8 @@ type Partition struct {
 	ReserveRequests types.ReserveBatch
 	// CompleteRequests is the batch of complete requests that are assigned to this partition
 	CompleteRequests types.Batch[types.CompleteRequest]
+	// LifeCycleRequests is a batch of lifecycle requests that are assigned to this partition
+	LifeCycleRequests types.Batch[types.LifeCycleRequest]
 	// Store is the storage for this partition
 	Store store.Partition
 	// Failures is a count of how many times the underlying storage has failed. Resets to
@@ -68,12 +70,13 @@ func (p *Partition) Reserve(req *types.ReserveRequest) {
 	p.ReserveRequests.Add(req)
 }
 
-type QueueState struct {
-	Reservations      types.ReserveBatch
-	Producers         types.Batch[types.ProduceRequest]
-	Completes         types.Batch[types.CompleteRequest]
-	Partitions        []*Partition
-	NextMaintenanceCh <-chan clock.Time
+func (q *QueueState) GetPartition(num int) *Partition {
+	for _, p := range q.Partitions {
+		if p.Info.PartitionNum == num {
+			return p
+		}
+	}
+	return nil
 }
 
 type Request struct {

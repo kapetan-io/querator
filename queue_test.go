@@ -16,6 +16,7 @@ import (
 	"math/rand"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestQueue(t *testing.T) {
@@ -1171,44 +1172,44 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		}))
 
 		t.Run("ReserveTimeout", func(t *testing.T) {
-			//t.Run("AttemptComplete", func(t *testing.T) {
-			//	require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
-			//		QueueName:      queueName,
-			//		RequestTimeout: "1m",
-			//		Items: []*pb.QueueProduceItem{
-			//			{
-			//				Reference: "flutter@shy.com",
-			//				Encoding:  "friendship",
-			//				Kind:      "yes",
-			//				Bytes:     []byte("Could I hold you against your will for a bit?"),
-			//			},
-			//		}}))
-			//
-			//	var reserve pb.QueueReserveResponse
-			//	require.NoError(t, c.QueueReserve(ctx, &pb.QueueReserveRequest{
-			//		ClientId:       random.String("client-", 10),
-			//		RequestTimeout: "5s",
-			//		QueueName:      queueName,
-			//		BatchSize:      1,
-			//	}, &reserve))
-			//
-			//	require.Equal(t, "friendship", reserve.Items[0].Encoding)
-			//
-			//	// Advance time til we meet the ReserveTime set by the queue
-			//	now.Advance(2 * clock.Minute)
-			//	// Allow time for LifeCycle to run
-			//	time.Sleep(time.Millisecond * 500)
-			//
-			//	err := c.QueueComplete(ctx, &pb.QueueCompleteRequest{
-			//		QueueName:      queueName,
-			//		RequestTimeout: "5s",
-			//		Ids: []string{
-			//			reserve.Items[0].Id,
-			//		},
-			//	})
-			//	require.Error(t, err)
-			//	assert.Equal(t, "some error", err.Error())
-			//})
+			t.Run("AttemptComplete", func(t *testing.T) {
+				require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+					QueueName:      queueName,
+					RequestTimeout: "1m",
+					Items: []*pb.QueueProduceItem{
+						{
+							Reference: "flutter@shy.com",
+							Encoding:  "friendship",
+							Kind:      "yes",
+							Bytes:     []byte("Could I hold you against your will for a bit?"),
+						},
+					}}))
+
+				var reserve pb.QueueReserveResponse
+				require.NoError(t, c.QueueReserve(ctx, &pb.QueueReserveRequest{
+					ClientId:       random.String("client-", 10),
+					RequestTimeout: "5s",
+					QueueName:      queueName,
+					BatchSize:      1,
+				}, &reserve))
+
+				require.Equal(t, "friendship", reserve.Items[0].Encoding)
+
+				// Advance time til we meet the ReserveTime set by the queue
+				now.Advance(2 * clock.Minute)
+				// Allow time for LifeCycle to run
+				time.Sleep(time.Millisecond * 500)
+
+				err := c.QueueComplete(ctx, &pb.QueueCompleteRequest{
+					QueueName:      queueName,
+					RequestTimeout: "5s",
+					Ids: []string{
+						reserve.Items[0].Id,
+					},
+				})
+				require.Error(t, err)
+				assert.Equal(t, "some error", err.Error())
+			})
 
 			t.Run("ReservableAgain", func(t *testing.T) {
 				// Produce an item

@@ -174,6 +174,7 @@ func (qm *QueuesManager) get(ctx context.Context, name string) (*Queue, error) {
 		MaxRequestsPerQueue:  qm.conf.LogicalConfig.MaxRequestsPerQueue,
 		WriteTimeout:         qm.conf.LogicalConfig.WriteTimeout,
 		ReadTimeout:          qm.conf.LogicalConfig.ReadTimeout,
+		Clock:                qm.conf.LogicalConfig.Clock,
 		Log:                  qm.conf.Log,
 		StoragePartitions:    partitions,
 		QueueInfo:            queue,

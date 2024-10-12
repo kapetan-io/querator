@@ -1152,14 +1152,14 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		})
 	})
 	t.Run("Timeout", func(t *testing.T) {
-		time := clock.NewProvider()
-		time.Freeze(clock.Now())
-		defer time.UnFreeze()
+		now := clock.NewProvider()
+		now.Freeze(clock.Now())
+		defer now.UnFreeze()
 
-		_store := setup(time)
+		_store := setup(now)
 		defer tearDown()
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: _store})
+		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: _store, Clock: now})
 		defer d.Shutdown(t)
 
 		// Create a queue
@@ -1195,7 +1195,9 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			//	require.Equal(t, "friendship", reserve.Items[0].Encoding)
 			//
 			//	// Advance time til we meet the ReserveTime set by the queue
-			//	time.Advance(2 * clock.Minute)
+			//	now.Advance(2 * clock.Minute)
+			//	// Allow time for LifeCycle to run
+			//	time.Sleep(time.Millisecond * 500)
 			//
 			//	err := c.QueueComplete(ctx, &pb.QueueCompleteRequest{
 			//		QueueName:      queueName,

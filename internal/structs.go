@@ -14,15 +14,16 @@ const (
 	LevelDebug    = slog.LevelDebug + 1
 )
 
-type PartitionDistribution struct {
+// Partition is the in memory representation of the state of a partition.
+type Partition struct {
 	// ProduceRequests is the batch of produce requests that are assigned to this partition
 	ProduceRequests types.Batch[types.ProduceRequest]
 	// ReserveRequests is the batch of reserve requests that are assigned to this partition
 	ReserveRequests types.ReserveBatch
 	// CompleteRequests is the batch of complete requests that are assigned to this partition
 	CompleteRequests types.Batch[types.CompleteRequest]
-	// Partition is the partition this distribution is for
-	Partition store.Partition
+	// Store is the storage for this partition
+	Store store.Partition
 	// Failures is a count of how many times the underlying storage has failed. Resets to
 	// zero when storage stops failing. If the value is zero, then the partition is considered
 	// active and has communication with the underlying storage.
@@ -31,26 +32,30 @@ type PartitionDistribution struct {
 	Count int
 	// NumReserved is the total number of items reserved during the most recent distribution
 	NumReserved int
-	// MostRecentDeadline is the most recent deadline of this distribution. This could be
+	// MostRecentDeadline is the most recent deadline of this partition. This could be
 	// the ReserveDeadline, or it could be the ExpireDeadline which ever is sooner. It is
-	// used to notify LifeCycle of changes to the partition made by this distribution
+	// used to notify LifeCycle of changes to the partition made by this partition
 	// as a hint for when an action might be needed on items in the partition.
 	MostRecentDeadline clock.Time
+	// LifeCycle is the active life cycle associated with this partition
+	LifeCycle *LifeCycle
+	// Info is the info associated with this partition
+	Info types.PartitionInfo // TODO: Stop using Store.Info().PartitionNum and use this instead
 }
 
-func (p *PartitionDistribution) Reset() {
+func (p *Partition) Reset() {
 	p.ProduceRequests.Reset()
 	p.ReserveRequests.Reset()
 	p.CompleteRequests.Reset()
 	p.NumReserved = 0
 }
 
-func (p *PartitionDistribution) Produce(req *types.ProduceRequest) {
+func (p *Partition) Produce(req *types.ProduceRequest) {
 	p.Count += len(req.Items)
 	p.ProduceRequests.Add(req)
 }
 
-func (p *PartitionDistribution) Reserve(req *types.ReserveRequest) {
+func (p *Partition) Reserve(req *types.ReserveRequest) {
 	// Use the Number of Requested items OR the count of items in the partition which ever is least.
 	reserved := min(p.Count, req.NumRequested)
 	// Increment the number of reserved items in this distribution.
@@ -58,7 +63,7 @@ func (p *PartitionDistribution) Reserve(req *types.ReserveRequest) {
 	// Decrement requested from the actual count
 	p.Count -= reserved
 	// Record which partition this request is assigned, so it can be retrieved by the client later.
-	req.Partition = p.Partition.Info().PartitionNum
+	req.Partition = p.Store.Info().PartitionNum
 	// Add the request to this partitions reserve batch
 	p.ReserveRequests.Add(req)
 }
@@ -67,8 +72,7 @@ type QueueState struct {
 	Reservations      types.ReserveBatch
 	Producers         types.Batch[types.ProduceRequest]
 	Completes         types.Batch[types.CompleteRequest]
-	Distributions     []*PartitionDistribution
-	LifeCycles        []*LifeCycle
+	Partitions        []*Partition
 	NextMaintenanceCh <-chan clock.Time
 }
 

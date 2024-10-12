@@ -38,7 +38,7 @@ func (q *Queue) AddLogical(ll ...*Logical) *Queue {
 	// return q.logical[10] // returns the logical that owns partition 10
 	for _, l := range ll {
 		for _, p := range l.conf.PartitionInfo {
-			q.logical[p.Partition] = l
+			q.logical[p.PartitionNum] = l
 		}
 	}
 

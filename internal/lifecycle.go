@@ -203,7 +203,7 @@ func (l *LifeCycle) runLifeCycle(state *lifeCycleState) {
 	mActions := make([]types.Action, 0, 1_000)
 
 	// Separate the events into separate slices handling them in batches
-	for a := range l.conf.Storage.ReadActions(l.logical.conf.ReadTimeout, l.conf.Clock.Now().UTC()) {
+	for a := range l.conf.Storage.ActionScan(l.logical.conf.ReadTimeout, l.conf.Clock.Now().UTC()) {
 		l.log.LogAttrs(context.Background(), LevelDebugAll, "new action",
 			slog.String("reserve_deadline", a.Item.ReserveDeadline.String()),
 			slog.String("expire_deadline", a.Item.ExpireDeadline.String()),

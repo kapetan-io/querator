@@ -90,10 +90,10 @@ type Partition interface {
 	// - `timeout`: The read timeout for each read operation to the underlying storage system.
 	// If a read exceeds this timeout, the iterator is aborted.
 	// - `now`: The time used by LifeCycleActions to determine which items need action.
-	ReadActions(timeout clock.Duration, now clock.Time) iter.Seq[types.Action]
+	ActionScan(timeout clock.Duration, now clock.Time) iter.Seq[types.Action]
 
 	// WriteActions takes lifecycle requests and preforms the actions requested on the partition.
-	WriteActions(ctx context.Context, batch types.Batch[types.LifeCycleRequest]) error
+	TakeAction(ctx context.Context, batch types.Batch[types.LifeCycleRequest]) error
 
 	// TODO: Rename this, this is too generic for what it currently does.
 	LifeCycleInfo(ctx context.Context, info *types.LifeCycleInfo) error

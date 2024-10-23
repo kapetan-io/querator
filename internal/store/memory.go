@@ -205,7 +205,7 @@ func (m *MemoryPartition) UpdateQueueInfo(info types.QueueInfo) {
 	m.info.Queue = info
 }
 
-func (m *MemoryPartition) ReadActions(_ clock.Duration, now clock.Time) iter.Seq[types.Action] {
+func (m *MemoryPartition) ActionScan(_ clock.Duration, now clock.Time) iter.Seq[types.Action] {
 	defer m.mu.RUnlock()
 	m.mu.RLock()
 
@@ -246,7 +246,7 @@ func (m *MemoryPartition) ReadActions(_ clock.Duration, now clock.Time) iter.Seq
 	}
 }
 
-func (m *MemoryPartition) WriteActions(ctx context.Context, batch types.Batch[types.LifeCycleRequest]) error {
+func (m *MemoryPartition) TakeAction(ctx context.Context, batch types.Batch[types.LifeCycleRequest]) error {
 	defer m.mu.RUnlock()
 	m.mu.RLock()
 

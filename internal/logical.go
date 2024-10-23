@@ -859,8 +859,8 @@ func (l *Logical) writeToPartitions(state *QueueState) error {
 		// ----------------------------------------
 		// LifeCycle
 		// ----------------------------------------
-		if err := p.Store.WriteActions(ctx, p.LifeCycleRequests); err != nil {
-			l.log.Error("while calling store.Partition.WriteActions()",
+		if err := p.Store.TakeAction(ctx, p.LifeCycleRequests); err != nil {
+			l.log.Error("while calling store.Partition.TakeAction()",
 				"partition", p.Store.Info().PartitionNum,
 				"queueName", l.conf.Name,
 				"error", err)

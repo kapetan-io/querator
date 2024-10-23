@@ -397,7 +397,7 @@ func (b *BoltPartition) UpdateQueueInfo(info types.QueueInfo) {
 	b.info.Queue = info
 }
 
-func (b *BoltPartition) ReadActions(timeout clock.Duration, now clock.Time) iter.Seq[types.Action] {
+func (b *BoltPartition) ActionScan(timeout clock.Duration, now clock.Time) iter.Seq[types.Action] {
 	//info := b.Info()
 
 	return func(yield func(types.Action) bool) {
@@ -405,7 +405,7 @@ func (b *BoltPartition) ReadActions(timeout clock.Duration, now clock.Time) iter
 	}
 }
 
-func (b *BoltPartition) WriteActions(ctx context.Context, batch types.Batch[types.LifeCycleRequest]) error {
+func (b *BoltPartition) TakeAction(ctx context.Context, batch types.Batch[types.LifeCycleRequest]) error {
 	return nil // TODO(lifecycle):
 }
 

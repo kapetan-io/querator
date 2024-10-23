@@ -373,7 +373,7 @@ func (b *BadgerPartition) UpdateQueueInfo(info types.QueueInfo) {
 	b.info.Queue = info
 }
 
-func (b *BadgerPartition) ReadActions(timeout clock.Duration, now clock.Time) iter.Seq[types.Action] {
+func (b *BadgerPartition) ActionScan(timeout clock.Duration, now clock.Time) iter.Seq[types.Action] {
 	//info := b.Info()
 
 	return func(yield func(types.Action) bool) {
@@ -381,7 +381,7 @@ func (b *BadgerPartition) ReadActions(timeout clock.Duration, now clock.Time) it
 	}
 }
 
-func (b *BadgerPartition) WriteActions(ctx context.Context, batch types.Batch[types.LifeCycleRequest]) error {
+func (b *BadgerPartition) TakeAction(ctx context.Context, batch types.Batch[types.LifeCycleRequest]) error {
 	return nil // TODO(lifecycle):
 }
 

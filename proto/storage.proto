@@ -53,7 +53,7 @@ message StorageItem {
   string id = 1;
   bool isReserved = 2  [json_name = "is_reserved"];
   google.protobuf.Timestamp reserveDeadline = 3 [json_name = "reserve_deadline"];
-  google.protobuf.Timestamp deadDeadline = 4 [json_name = "dead_deadline"];
+  google.protobuf.Timestamp expireDeadline = 4 [json_name = "expire_deadline"];
   google.protobuf.Timestamp createdAt = 5 [json_name = "created_at"];
   google.protobuf.Timestamp updatedAt = 6 [json_name = "updated_at"];
   int32 attempts = 7;

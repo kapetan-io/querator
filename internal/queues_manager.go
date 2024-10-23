@@ -60,8 +60,8 @@ func NewQueuesManager(conf QueuesManagerConfig) (*QueuesManager, error) {
 	set.Default(&conf.LogicalConfig.Clock, clock.NewProvider())
 	set.Default(&conf.Log, slog.Default())
 
-	if conf.StorageConfig.QueueStore == nil {
-		return nil, errors.New("conf.StorageConfig.QueueStore cannot be nil")
+	if conf.StorageConfig.Queues == nil {
+		return nil, errors.New("conf.StorageConfig.Queues cannot be nil")
 	}
 
 	if len(conf.StorageConfig.Backends) == 0 {
@@ -102,23 +102,23 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Que
 	for idx, count := range qm.assignPartitions(info.RequestedPartitions) {
 		for i := 0; i < count; i++ {
 			p := types.PartitionInfo{
-				StorageName: qm.conf.StorageConfig.Backends[idx].Name,
-				QueueName:   info.Name,
-				Partition:   partitionIdx,
+				StorageName:  qm.conf.StorageConfig.Backends[idx].Name,
+				PartitionNum: partitionIdx,
+				Queue:        info,
 			}
 			partitionIdx++
 			info.PartitionInfo = append(info.PartitionInfo, p)
-			qm.log.LogAttrs(ctx, slog.LevelDebug, "Partition Assigned",
-				slog.String("queue", p.QueueName), slog.String("storage", p.StorageName),
-				slog.Bool("read-only", p.ReadOnly), slog.Int("partition", p.Partition))
+			qm.log.LogAttrs(ctx, LevelDebug, "Partition Assigned",
+				slog.String("queue", p.Queue.Name), slog.String("storage", p.StorageName),
+				slog.Bool("read-only", p.ReadOnly), slog.Int("partition", p.PartitionNum))
 		}
 	}
 
 	info.CreatedAt = qm.conf.LogicalConfig.Clock.Now().UTC()
 	info.UpdatedAt = qm.conf.LogicalConfig.Clock.Now().UTC()
-	if err := qm.conf.StorageConfig.QueueStore.Add(ctx, info); err != nil {
+	if err := qm.conf.StorageConfig.Queues.Add(ctx, info); err != nil {
 		return nil, errors.With("queue", info.Name).
-			Errorf("QueueStore.Add(): %w", err)
+			Errorf("Queues.Add(): %w", err)
 	}
 
 	return qm.get(ctx, info.Name)
@@ -143,7 +143,7 @@ func (qm *QueuesManager) get(ctx context.Context, name string) (*Queue, error) {
 
 	// Look for the queue in storage
 	var queue types.QueueInfo
-	if err := qm.conf.StorageConfig.QueueStore.Get(ctx, name, &queue); err != nil {
+	if err := qm.conf.StorageConfig.Queues.Get(ctx, name, &queue); err != nil {
 		if errors.Is(err, store.ErrQueueNotExist) {
 			return nil, transport.NewInvalidOption("queue does not exist; no such queue named '%s'", name)
 		}
@@ -157,7 +157,7 @@ func (qm *QueuesManager) get(ctx context.Context, name string) (*Queue, error) {
 		b := qm.conf.StorageConfig.Backends.Find(info.StorageName)
 		if b.Name == "" {
 			return nil, errors.WithAttr(
-				slog.Int("partition", info.Partition),
+				slog.Int("partition", info.PartitionNum),
 				slog.String("storage-name", info.StorageName),
 				slog.String("queue", queue.Name),
 			).Error("queue partition references unknown storage name")
@@ -174,8 +174,9 @@ func (qm *QueuesManager) get(ctx context.Context, name string) (*Queue, error) {
 		MaxRequestsPerQueue:  qm.conf.LogicalConfig.MaxRequestsPerQueue,
 		WriteTimeout:         qm.conf.LogicalConfig.WriteTimeout,
 		ReadTimeout:          qm.conf.LogicalConfig.ReadTimeout,
+		Clock:                qm.conf.LogicalConfig.Clock,
 		Log:                  qm.conf.Log,
-		Partitions:           partitions,
+		StoragePartitions:    partitions,
 		QueueInfo:            queue,
 	})
 	if err != nil {
@@ -197,7 +198,7 @@ func (qm *QueuesManager) List(ctx context.Context, items *[]types.QueueInfo, opt
 	defer qm.mutex.Unlock()
 	qm.mutex.Lock()
 
-	return qm.conf.StorageConfig.QueueStore.List(ctx, items, opts)
+	return qm.conf.StorageConfig.Queues.List(ctx, items, opts)
 }
 
 func (qm *QueuesManager) Update(ctx context.Context, info types.QueueInfo) error {
@@ -209,8 +210,8 @@ func (qm *QueuesManager) Update(ctx context.Context, info types.QueueInfo) error
 
 	// Update the queue info in the data store
 	info.UpdatedAt = qm.conf.LogicalConfig.Clock.Now().UTC()
-	if err := qm.conf.StorageConfig.QueueStore.Update(ctx, info); err != nil {
-		return errors.Errorf("QueueStore.Update(): %w", err)
+	if err := qm.conf.StorageConfig.Queues.Update(ctx, info); err != nil {
+		return errors.Errorf("Queues.Update(): %w", err)
 	}
 
 	// If the queue is currently in use
@@ -228,6 +229,10 @@ func (qm *QueuesManager) Update(ctx context.Context, info types.QueueInfo) error
 	return nil
 }
 
+func (qm *QueuesManager) LifeCycle(ctx context.Context, req *types.LifeCycleRequest) error {
+	return nil // TODO(lifecycle)
+}
+
 func (qm *QueuesManager) Delete(ctx context.Context, name string) error {
 	if qm.inShutdown.Load() {
 		return ErrServiceShutdown
@@ -236,8 +241,8 @@ func (qm *QueuesManager) Delete(ctx context.Context, name string) error {
 	qm.mutex.Lock()
 
 	// TODO: Delete should return transport.NewInvalidOption("queue does not exist; no such queue named '%s'", name)
-	if err := qm.conf.StorageConfig.QueueStore.Delete(ctx, name); err != nil {
-		return errors.Errorf("QueueStore.Delete(): %w", err)
+	if err := qm.conf.StorageConfig.Queues.Delete(ctx, name); err != nil {
+		return errors.Errorf("Queues.Delete(): %w", err)
 	}
 
 	// If the queue is currently in use
@@ -268,7 +273,7 @@ func (qm *QueuesManager) Shutdown(ctx context.Context) error {
 	wait := make(chan error)
 	go func() {
 		for _, q := range qm.queues {
-			qm.log.LogAttrs(ctx, slog.LevelDebug, "shutdown logical",
+			qm.log.LogAttrs(ctx, LevelDebugAll, "shutdown logical",
 				slog.Int("num_queues", len(qm.queues)),
 				slog.String("queue", q.Info().Name))
 			for _, l := range q.GetAll() {
@@ -277,8 +282,8 @@ func (qm *QueuesManager) Shutdown(ctx context.Context) error {
 				}
 			}
 		}
-		qm.log.LogAttrs(ctx, slog.LevelDebug, "close queue store")
-		if err := qm.conf.StorageConfig.QueueStore.Close(ctx); err != nil {
+		qm.log.LogAttrs(ctx, LevelDebugAll, "close queue store")
+		if err := qm.conf.StorageConfig.Queues.Close(ctx); err != nil {
 			wait <- err
 			return
 		}
@@ -290,7 +295,7 @@ func (qm *QueuesManager) Shutdown(ctx context.Context) error {
 		qm.log.Warn("ctx cancelled while waiting for shutdown")
 		return errors.Wrap(ctx.Err())
 	case err := <-wait:
-		qm.log.LogAttrs(ctx, slog.LevelDebug, "Shutdown complete")
+		qm.log.LogAttrs(ctx, LevelDebugAll, "Shutdown complete")
 		return errors.Wrap(err)
 	}
 }

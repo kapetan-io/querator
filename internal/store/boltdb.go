@@ -11,8 +11,10 @@ import (
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/segmentio/ksuid"
 	bolt "go.etcd.io/bbolt"
+	"iter"
 	"log/slog"
 	"path/filepath"
+	"sync"
 )
 
 var bucketName = []byte("queue")
@@ -55,6 +57,7 @@ func (b BoltPartitionStore) Get(info types.PartitionInfo) Partition {
 
 type BoltPartition struct {
 	info types.PartitionInfo
+	mu   sync.RWMutex
 	uid  ksuid.KSUID
 	conf BoltConfig
 	db   *bolt.DB
@@ -114,7 +117,7 @@ func (b *BoltPartition) Reserve(_ context.Context, batch types.ReserveBatch, opt
 		// I might entertain using an index for this if Bolt becomes a popular choice
 		// in production.
 		for k, v := c.First(); k != nil; k, v = c.Next() {
-			if count >= batch.Total {
+			if count >= batch.TotalRequested {
 				break
 			}
 
@@ -383,7 +386,32 @@ func (b *BoltPartition) Clear(_ context.Context, destructive bool) error {
 }
 
 func (b *BoltPartition) Info() types.PartitionInfo {
+	defer b.mu.RUnlock()
+	b.mu.RLock()
 	return b.info
+}
+
+func (b *BoltPartition) UpdateQueueInfo(info types.QueueInfo) {
+	defer b.mu.Unlock()
+	b.mu.Lock()
+	b.info.Queue = info
+}
+
+func (b *BoltPartition) ActionScan(timeout clock.Duration, now clock.Time) iter.Seq[types.Action] {
+	//info := b.Info()
+
+	return func(yield func(types.Action) bool) {
+		// TODO(lifecycle)
+	}
+}
+
+func (b *BoltPartition) TakeAction(ctx context.Context, batch types.Batch[types.LifeCycleRequest]) error {
+	return nil // TODO(lifecycle):
+}
+
+func (b *BoltPartition) LifeCycleInfo(ctx context.Context, info *types.LifeCycleInfo) error {
+	// TODO(lifecycle)
+	return nil
 }
 
 func (b *BoltPartition) Stats(_ context.Context, stats *types.PartitionStats) error {
@@ -446,7 +474,7 @@ func (b *BoltPartition) getDB() (*bolt.DB, error) {
 		return b.db, nil
 	}
 
-	file := filepath.Join(b.conf.StorageDir, fmt.Sprintf("%s-%06d.db", b.info.QueueName, b.info.Partition))
+	file := filepath.Join(b.conf.StorageDir, fmt.Sprintf("%s-%06d.db", b.info.Queue.Name, b.info.PartitionNum))
 
 	opts := &bolt.Options{
 		FreelistType: bolt.FreelistArrayType,
@@ -457,7 +485,7 @@ func (b *BoltPartition) getDB() (*bolt.DB, error) {
 	db, err := bolt.Open(file, 0600, opts)
 	if err != nil {
 		return nil, errors.With(
-			"partition", b.info.Partition,
+			"partition", b.info.PartitionNum,
 			errors.OtelFileName, file).
 			Errorf("while opening db: %w", err)
 	}
@@ -473,7 +501,7 @@ func (b *BoltPartition) getDB() (*bolt.DB, error) {
 	})
 	if err != nil {
 		return nil, errors.With(
-			"partition", b.info.Partition,
+			"partition", b.info.PartitionNum,
 			errors.OtelFileName, file).
 			Errorf("while creating bucket: %w", err)
 	}
@@ -483,24 +511,24 @@ func (b *BoltPartition) getDB() (*bolt.DB, error) {
 }
 
 // ---------------------------------------------
-// QueueStore Implementation
+// Queues Implementation
 // ---------------------------------------------
 
-func NewBoltQueueStore(conf BoltConfig) QueueStore {
-	return &BoltQueueStore{
+func NewBoltQueues(conf BoltConfig) Queues {
+	return &BoltQueues{
 		conf: conf,
 	}
 }
 
-type BoltQueueStore struct {
+type BoltQueues struct {
 	QueuesValidation
 	db   *bolt.DB
 	conf BoltConfig
 }
 
-var _ QueueStore = &BoltQueueStore{}
+var _ Queues = &BoltQueues{}
 
-func (b *BoltQueueStore) getDB() (*bolt.DB, error) {
+func (b *BoltQueues) getDB() (*bolt.DB, error) {
 	if b.db != nil {
 		return b.db, nil
 	}
@@ -533,7 +561,7 @@ func (b *BoltQueueStore) getDB() (*bolt.DB, error) {
 	return db, nil
 }
 
-func (b *BoltQueueStore) Get(_ context.Context, name string, queue *types.QueueInfo) error {
+func (b *BoltQueues) Get(_ context.Context, name string, queue *types.QueueInfo) error {
 	if err := b.validateGet(name); err != nil {
 		return err
 	}
@@ -561,7 +589,7 @@ func (b *BoltQueueStore) Get(_ context.Context, name string, queue *types.QueueI
 	})
 }
 
-func (b *BoltQueueStore) Add(_ context.Context, info types.QueueInfo) error {
+func (b *BoltQueues) Add(_ context.Context, info types.QueueInfo) error {
 	if err := b.validateAdd(info); err != nil {
 		return err
 	}
@@ -594,7 +622,7 @@ func (b *BoltQueueStore) Add(_ context.Context, info types.QueueInfo) error {
 	})
 }
 
-func (b *BoltQueueStore) Update(_ context.Context, info types.QueueInfo) error {
+func (b *BoltQueues) Update(_ context.Context, info types.QueueInfo) error {
 	db, err := b.getDB()
 	if err != nil {
 		return err
@@ -626,9 +654,9 @@ func (b *BoltQueueStore) Update(_ context.Context, info types.QueueInfo) error {
 			return err
 		}
 
-		if found.ReserveTimeout > found.DeadTimeout {
+		if found.ReserveTimeout > found.ExpireTimeout {
 			return transport.NewInvalidOption("reserve timeout is too long; %s cannot be greater than the "+
-				"dead timeout %s", info.ReserveTimeout.String(), found.DeadTimeout.String())
+				"expire timeout %s", info.ReserveTimeout.String(), found.ExpireTimeout.String())
 		}
 
 		var buf bytes.Buffer
@@ -643,7 +671,7 @@ func (b *BoltQueueStore) Update(_ context.Context, info types.QueueInfo) error {
 	})
 }
 
-func (b *BoltQueueStore) List(_ context.Context, queues *[]types.QueueInfo, opts types.ListOptions) error {
+func (b *BoltQueues) List(_ context.Context, queues *[]types.QueueInfo, opts types.ListOptions) error {
 	if err := b.validateList(opts); err != nil {
 		return err
 	}
@@ -700,7 +728,7 @@ func (b *BoltQueueStore) List(_ context.Context, queues *[]types.QueueInfo, opts
 	})
 }
 
-func (b *BoltQueueStore) Delete(_ context.Context, name string) error {
+func (b *BoltQueues) Delete(_ context.Context, name string) error {
 	if err := b.validateDelete(name); err != nil {
 		return err
 	}
@@ -723,7 +751,7 @@ func (b *BoltQueueStore) Delete(_ context.Context, name string) error {
 	})
 }
 
-func (b *BoltQueueStore) Close(_ context.Context) error {
+func (b *BoltQueues) Close(_ context.Context) error {
 	err := b.db.Close()
 	b.db = nil
 	return err

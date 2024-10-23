@@ -35,23 +35,23 @@ func (r *Batch[T]) Reset() {
 // in that each request must be unique.
 // TODO(thrawn01): An array of requests might not be the most efficient, perhaps a SkipList
 type ReserveBatch struct {
-	Requests []*ReserveRequest
-	Total    int
+	Requests       []*ReserveRequest
+	TotalRequested int
 }
 
 func (r *ReserveBatch) Reset() {
 	r.Requests = r.Requests[:0]
-	r.Total = 0
+	r.TotalRequested = 0
 }
 
 func (r *ReserveBatch) Add(req *ReserveRequest) {
-	r.Total += req.NumRequested
+	r.TotalRequested += req.NumRequested
 	r.Requests = append(r.Requests, req)
 }
 
 // MarkNil marks the request as nil. See FilterNils for explanation
 func (r *ReserveBatch) MarkNil(idx int) {
-	r.Total -= r.Requests[idx].NumRequested
+	r.TotalRequested -= r.Requests[idx].NumRequested
 	r.Requests[idx] = nil
 }
 

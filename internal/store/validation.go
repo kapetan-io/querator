@@ -83,13 +83,13 @@ func (s QueuesValidation) validateAdd(info types.QueueInfo) error {
 		return transport.NewInvalidOption("reserve timeout is invalid; cannot be empty")
 	}
 
-	if info.DeadTimeout.Microseconds() == 0 {
-		return transport.NewInvalidOption("dead timeout is invalid; cannot be empty")
+	if info.ExpireTimeout.Microseconds() == 0 {
+		return transport.NewInvalidOption("expire timeout is invalid; cannot be empty")
 	}
 
-	if info.ReserveTimeout > info.DeadTimeout {
+	if info.ReserveTimeout > info.ExpireTimeout {
 		return transport.NewInvalidOption("reserve timeout is too long; %s cannot be greater than the "+
-			"dead timeout %s", info.ReserveTimeout.String(), info.DeadTimeout.String())
+			"expire timeout %s", info.ReserveTimeout.String(), info.ExpireTimeout.String())
 	}
 
 	return nil

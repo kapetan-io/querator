@@ -205,6 +205,7 @@ func (m *MemoryPartition) UpdateQueueInfo(info types.QueueInfo) {
 	m.info.Queue = info
 }
 
+// TODO: Consider renaming to ScanForActions
 func (m *MemoryPartition) ActionScan(_ clock.Duration, now clock.Time) iter.Seq[types.Action] {
 	defer m.mu.RUnlock()
 	m.mu.RLock()
@@ -261,9 +262,15 @@ func (m *MemoryPartition) TakeAction(ctx context.Context, batch types.Batch[type
 					m.log.Warn("unable to find item while processing action; ignoring action",
 						"id", a.Item.ID, "action", types.ActionToString(a.Action))
 				}
-				// TODO: Re-add this item to m.mem and give it a new id <---- DO THIS NEXT
-				m.mem[idx].ReserveDeadline = clock.Time{}
-				m.mem[idx].IsReserved = false
+				// make a copy of the item and mark as un-reserved
+				item := m.mem[idx]
+				item.ReserveDeadline = clock.Time{}
+				item.IsReserved = false
+				// Remove the item from the array
+				m.mem = append(m.mem[:idx], m.mem[idx+1:]...)
+				// Add the item to the beginning of the array
+				// See doc/adr/0022-managing-item-lifecycles.md for and explanation
+				m.mem = append(m.mem, item)
 			case types.ActionDeleteItem:
 				// TODO: Find the item and remove it
 			default:

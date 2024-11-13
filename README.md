@@ -130,7 +130,7 @@ See our [Architecture Decision Docs](doc/adr) for details on our current impleme
 
 ### Contributing 
 - See the [Querator Trello Board](https://trello.com/b/cey2cB3i/querator) for work status and progress and things to do
-- Join our [Discord](https://discord.gg/EpPwcX3b)
+- Join our [Discord](https://discord.gg/XwfBdN9wdg)
 - Checkout [querator.io](https://querator.io/api) for the HTML OpenAPI docs
 
 ### Similar Projects

@@ -25,15 +25,15 @@ type ReserveOptions struct {
 	ReserveDeadline clock.Time
 }
 
-// Queues is storage for listing and storing information about queues.  The Queues should employ
-// lazy storage initialization such that it makes contact or creates underlying tables only
+// Queues is storage for listing and storing information about queues. The Queues store implementations
+// should employ lazy storage initialization such that it makes contact or creates underlying tables only
 // upon first invocation. See 0021-storage-lazy-initialization.md for details.
 type Queues interface {
-	// Get returns a store.Partition from storage ready to be used. Returns ErrQueueNotExist if the
+	// Get fetches QueueInfo from storage. Returns ErrQueueNotExist if the
 	// queue requested does not exist
 	Get(ctx context.Context, name string, queue *types.QueueInfo) error
 
-	// Add a queue in the store. if the queue already exists returns an error
+	// Add a QueueInfo to the store. if the queue already exists returns an error
 	Add(ctx context.Context, info types.QueueInfo) error
 
 	// Update a queue in the store if the queue already exists it updates the existing QueueInfo
@@ -54,16 +54,16 @@ type Queues interface {
 // lazy storage initialization such that it makes contact or creates underlying tables only
 // upon first invocation. See 0021-storage-lazy-initialization.md for details.
 type Partition interface {
-	// Produce writes the items for each batch to the data store, assigning an error for each
-	// batch that fails.
+	// Produce writes the items in the batch to the data store.
 	Produce(ctx context.Context, batch types.Batch[types.ProduceRequest]) error
 
-	// Reserve attempts to reserve items for each request in the provided batch.
+	// Reserve attempts to reserve items for each request in the reserve batch. It uses the batch.Iterator()
+	// to evenly distribute items to all the waiting reserve requests represented in the batch.
 	Reserve(ctx context.Context, batch types.ReserveBatch, opts ReserveOptions) error
 
-	// Complete marks ids in the batch as complete, assigning an error for each batch that fails.
-	// If the underlying data storage fails for some reason, this call returns an error. In that case
-	// the caller should assume none of the batched items were marked as "complete"
+	// Complete marks item ids in the batch as complete. If the underlying data storage fails for some
+	// reason, this call returns an error. In that case the caller should assume none of the batched
+	// items were marked as "complete"
 	Complete(ctx context.Context, batch types.Batch[types.CompleteRequest]) error
 
 	// List lists items in a queue. limit and offset allow the user to page through all the items
@@ -76,13 +76,14 @@ type Partition interface {
 	// Delete removes the provided ids from the queue
 	Delete(ctx context.Context, ids []types.ItemID) error
 
-	// Clear removes all items from storage
+	// Clear removes all items from storage. If destructive is true it removes all items
+	// in the queue regardless of status
 	Clear(ctx context.Context, destructive bool) error
 
 	// Stats returns stats about the queue
 	Stats(ctx context.Context, stats *types.PartitionStats) error
 
-	// ReadActions returns an iterator of actions that should be preformed for the partition life cycle.
+	// ActionScan returns an iterator of actions that should be preformed for the partition life cycle.
 	// This method must be thread safe as it will be called by a go routine that is separate from the
 	// main request loop.
 	//
@@ -92,21 +93,24 @@ type Partition interface {
 	// - `now`: The time used by LifeCycleActions to determine which items need action.
 	ActionScan(timeout clock.Duration, now clock.Time) iter.Seq[types.Action]
 
-	// WriteActions takes lifecycle requests and preforms the actions requested on the partition.
+	// TakeAction takes lifecycle requests and preforms the actions requested on the partition.
 	TakeAction(ctx context.Context, batch types.Batch[types.LifeCycleRequest]) error
 
+	// LifeCycleInfo fills out the LifeCycleInfo struct which is used to decide when the
+	// next life cycle should run
 	// TODO: Rename this, this is too generic for what it currently does.
 	LifeCycleInfo(ctx context.Context, info *types.LifeCycleInfo) error
 
-	// Info returns the Partition Info for this partition. This call should be thread
+	// Info returns the Partition Info for this partition. This call needs to be thread
 	// safe as it may be called from a separate go routine.
 	Info() types.PartitionInfo
 
 	// UpdateQueueInfo updates the queue information for this partition. This is called when
-	// a user updates queue info that needs to take effect immediately. This call should be thread
-	// safe as it may be called from a separate go routine.
+	// a user updates queue info that needs to take effect immediately. This call needs to be
+	// thread safe as it may be called from a separate go routine.
 	UpdateQueueInfo(info types.QueueInfo)
 
+	// Close any open connections or files associated with the storage system
 	Close(ctx context.Context) error
 }
 

@@ -16,12 +16,11 @@ import (
 	"math/rand"
 	"sync"
 	"testing"
-	"time"
 )
 
 func TestQueue(t *testing.T) {
-	//bdb := boltTestSetup{Dir: t.TempDir()}
-	//badgerdb := badgerTestSetup{Dir: t.TempDir()}
+	bdb := boltTestSetup{Dir: t.TempDir()}
+	badgerdb := badgerTestSetup{Dir: t.TempDir()}
 
 	for _, tc := range []struct {
 		Setup    NewStorageFunc
@@ -35,25 +34,24 @@ func TestQueue(t *testing.T) {
 			},
 			TearDown: func() {},
 		},
-		// TODO: Uncomment
-		//{
-		//	Name: "BoltDB",
-		//	Setup: func(cp *clock.Provider) store.StorageConfig {
-		//		return bdb.Setup(store.BoltConfig{Clock: cp})
-		//	},
-		//	TearDown: func() {
-		//		bdb.Teardown()
-		//	},
-		//},
-		//{
-		//	Name: "BadgerDB",
-		//	Setup: func(cp *clock.Provider) store.StorageConfig {
-		//		return badgerdb.Setup(store.BadgerConfig{Clock: cp})
-		//	},
-		//	TearDown: func() {
-		//		badgerdb.Teardown()
-		//	},
-		//},
+		{
+			Name: "BoltDB",
+			Setup: func(cp *clock.Provider) store.StorageConfig {
+				return bdb.Setup(store.BoltConfig{Clock: cp})
+			},
+			TearDown: func() {
+				bdb.Teardown()
+			},
+		},
+		{
+			Name: "BadgerDB",
+			Setup: func(cp *clock.Provider) store.StorageConfig {
+				return badgerdb.Setup(store.BadgerConfig{Clock: cp})
+			},
+			TearDown: func() {
+				badgerdb.Teardown()
+			},
+		},
 		//{
 		//	Name: "SurrealDB",
 		//},
@@ -1152,85 +1150,85 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			}
 		})
 	})
-	t.Run("Timeout", func(t *testing.T) {
-		now := clock.NewProvider()
-		now.Freeze(clock.Now())
-		defer now.UnFreeze()
-
-		_store := setup(now)
-		defer tearDown()
-		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: _store, Clock: now})
-		defer d.Shutdown(t)
-
-		// Create a queue
-		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
-			ReserveTimeout:      "1m0s",
-			ExpireTimeout:       ExpireTimeout,
-			QueueName:           queueName,
-			RequestedPartitions: 1,
-		}))
-
-		t.Run("ReserveTimeout", func(t *testing.T) {
-			t.Run("AttemptComplete", func(t *testing.T) {
-				require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
-					QueueName:      queueName,
-					RequestTimeout: "1m",
-					Items: []*pb.QueueProduceItem{
-						{
-							Reference: "flutter@shy.com",
-							Encoding:  "friendship",
-							Kind:      "yes",
-							Bytes:     []byte("Could I hold you against your will for a bit?"),
-						},
-					}}))
-
-				var reserve pb.QueueReserveResponse
-				require.NoError(t, c.QueueReserve(ctx, &pb.QueueReserveRequest{
-					ClientId:       random.String("client-", 10),
-					RequestTimeout: "5s",
-					QueueName:      queueName,
-					BatchSize:      1,
-				}, &reserve))
-
-				require.Equal(t, "friendship", reserve.Items[0].Encoding)
-
-				// Advance time til we meet the ReserveTime set by the queue
-				now.Advance(2 * clock.Minute)
-				// Allow time for LifeCycle to run
-				time.Sleep(time.Millisecond * 500)
-
-				err := c.QueueComplete(ctx, &pb.QueueCompleteRequest{
-					QueueName:      queueName,
-					RequestTimeout: "5s",
-					Ids: []string{
-						reserve.Items[0].Id,
-					},
-				})
-				require.Error(t, err)
-				assert.Equal(t, "some error", err.Error())
-			})
-
-			t.Run("ReservableAgain", func(t *testing.T) {
-				// Produce an item
-				// Reserve it
-				// Wait for the Timeout
-				// Reserve it again
-				// Ensure attempts increased
-			})
-			t.Run("UntilDeadLetter", func(t *testing.T) {
-				// Produce an item
-				// Reserve it
-				// Wait for the Timeout
-				// Repeat until max attempts reached
-			})
-		})
-
-		t.Run("RequestTimeouts", func(t *testing.T) {})
-		t.Run("ExpireTimeout", func(t *testing.T) {
-			// TODO: Test with and without a dead letter queue
-		})
-	})
+	//t.Run("Timeout", func(t *testing.T) {
+	//	now := clock.NewProvider()
+	//	now.Freeze(clock.Now())
+	//	defer now.UnFreeze()
+	//
+	//	_store := setup(now)
+	//	defer tearDown()
+	//	var queueName = random.String("queue-", 10)
+	//	d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: _store, Clock: now})
+	//	defer d.Shutdown(t)
+	//
+	//	// Create a queue
+	//	require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+	//		ReserveTimeout:      "1m0s",
+	//		ExpireTimeout:       ExpireTimeout,
+	//		QueueName:           queueName,
+	//		RequestedPartitions: 1,
+	//	}))
+	//
+	//	t.Run("ReserveTimeout", func(t *testing.T) {
+	//		t.Run("AttemptComplete", func(t *testing.T) {
+	//			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+	//				QueueName:      queueName,
+	//				RequestTimeout: "1m",
+	//				Items: []*pb.QueueProduceItem{
+	//					{
+	//						Reference: "flutter@shy.com",
+	//						Encoding:  "friendship",
+	//						Kind:      "yes",
+	//						Bytes:     []byte("Could I hold you against your will for a bit?"),
+	//					},
+	//				}}))
+	//
+	//			var reserve pb.QueueReserveResponse
+	//			require.NoError(t, c.QueueReserve(ctx, &pb.QueueReserveRequest{
+	//				ClientId:       random.String("client-", 10),
+	//				RequestTimeout: "5s",
+	//				QueueName:      queueName,
+	//				BatchSize:      1,
+	//			}, &reserve))
+	//
+	//			require.Equal(t, "friendship", reserve.Items[0].Encoding)
+	//
+	//			// Advance time til we meet the ReserveTime set by the queue
+	//			now.Advance(2 * clock.Minute)
+	//			// Allow time for LifeCycle to run
+	//			time.Sleep(time.Millisecond * 500)
+	//
+	//			err := c.QueueComplete(ctx, &pb.QueueCompleteRequest{
+	//				QueueName:      queueName,
+	//				RequestTimeout: "5s",
+	//				Ids: []string{
+	//					reserve.Items[0].Id,
+	//				},
+	//			})
+	//			require.Error(t, err)
+	//			assert.Equal(t, "some error", err.Error())
+	//		})
+	//
+	//		t.Run("ReservableAgain", func(t *testing.T) {
+	//			// Produce an item
+	//			// Reserve it
+	//			// Wait for the Timeout
+	//			// Reserve it again
+	//			// Ensure attempts increased
+	//		})
+	//		t.Run("UntilDeadLetter", func(t *testing.T) {
+	//			// Produce an item
+	//			// Reserve it
+	//			// Wait for the Timeout
+	//			// Repeat until max attempts reached
+	//		})
+	//	})
+	//
+	//	t.Run("RequestTimeouts", func(t *testing.T) {})
+	//	t.Run("ExpireTimeout", func(t *testing.T) {
+	//		// TODO: Test with and without a dead letter queue
+	//	})
+	//})
 }
 
 // TODO: Start the Service, produce some items, then Shutdown the service

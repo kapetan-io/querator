@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"github.com/duh-rpc/duh-go"
 	"github.com/kapetan-io/querator"
+	"github.com/kapetan-io/querator/internal"
 	"github.com/kapetan-io/querator/transport"
 	"github.com/kapetan-io/tackle/set"
 	"github.com/prometheus/client_golang/prometheus"
@@ -100,7 +101,7 @@ func (d *Daemon) Shutdown(ctx context.Context) error {
 		d.conf.Log.Info("Shutting down server", "address", srv.Addr)
 		_ = srv.Shutdown(ctx)
 	}
-	d.conf.Log.LogAttrs(ctx, slog.LevelDebug, "Shutdown complete")
+	d.conf.Log.LogAttrs(ctx, internal.LevelDebugAll, "Shutdown complete")
 	d.servers = nil
 	return nil
 }

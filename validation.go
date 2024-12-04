@@ -96,14 +96,14 @@ func (s *Service) validateQueueOptionsProto(in *proto.QueueInfo, out *types.Queu
 		return transport.NewInvalidOption("reserve timeout is invalid; cannot be greater than '%d' characters", maxTimeoutLength)
 	}
 
-	if len(in.DeadTimeout) > maxTimeoutLength {
-		return transport.NewInvalidOption("dead timeout is invalid; cannot be greater than '%d' characters", maxTimeoutLength)
+	if len(in.ExpireTimeout) > maxTimeoutLength {
+		return transport.NewInvalidOption("expire timeout is invalid; cannot be greater than '%d' characters", maxTimeoutLength)
 	}
 
-	if in.DeadTimeout != "" {
-		out.DeadTimeout, err = clock.ParseDuration(in.DeadTimeout)
+	if in.ExpireTimeout != "" {
+		out.ExpireTimeout, err = clock.ParseDuration(in.ExpireTimeout)
 		if err != nil {
-			return transport.NewInvalidOption("dead timeout is invalid; %s - expected format: 60m, 2h or 24h", err.Error())
+			return transport.NewInvalidOption("expire timeout is invalid; %s - expected format: 60m, 2h or 24h", err.Error())
 		}
 	}
 

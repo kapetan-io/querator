@@ -5,8 +5,9 @@ go 1.23.1
 require (
 	github.com/dgraph-io/badger/v4 v4.3.0
 	github.com/duh-rpc/duh-go v0.9.1
+	github.com/dustin/go-humanize v1.0.1
 	github.com/kapetan-io/errors v0.4.0
-	github.com/kapetan-io/tackle v0.7.0
+	github.com/kapetan-io/tackle v0.9.0
 	github.com/prometheus/client_golang v1.19.1
 	github.com/segmentio/ksuid v1.0.4
 	github.com/stretchr/testify v1.9.0
@@ -20,7 +21,6 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dgraph-io/ristretto v0.1.2-0.20240116140435-c67e07994f91 // indirect
-	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/groupcache v0.0.0-20200121045136-8c9f03a8e57e // indirect
 	github.com/golang/protobuf v1.5.4 // indirect

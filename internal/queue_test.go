@@ -14,13 +14,13 @@ func TestNewQueue(t *testing.T) {
 	q := NewQueue(types.QueueInfo{
 		PartitionInfo: []types.PartitionInfo{
 			{
-				Partition: 0,
+				PartitionNum: 0,
 			},
 			{
-				Partition: 1,
+				PartitionNum: 1,
 			},
 			{
-				Partition: 2,
+				PartitionNum: 2,
 			},
 		},
 	})
@@ -29,7 +29,7 @@ func TestNewQueue(t *testing.T) {
 		QueueInfo: types.QueueInfo{
 			PartitionInfo: []types.PartitionInfo{
 				{
-					Partition: 0,
+					PartitionNum: 0,
 				},
 			},
 		},
@@ -40,7 +40,7 @@ func TestNewQueue(t *testing.T) {
 		QueueInfo: types.QueueInfo{
 			PartitionInfo: []types.PartitionInfo{
 				{
-					Partition: 1,
+					PartitionNum: 1,
 				},
 			},
 		},
@@ -51,7 +51,7 @@ func TestNewQueue(t *testing.T) {
 		QueueInfo: types.QueueInfo{
 			PartitionInfo: []types.PartitionInfo{
 				{
-					Partition: 2,
+					PartitionNum: 2,
 				},
 			},
 		},
@@ -64,28 +64,28 @@ func TestNewQueue(t *testing.T) {
 
 	_, l, err := q.GetByPartition(0)
 	require.NoError(t, err)
-	assert.Equal(t, 0, l.conf.PartitionInfo[0].Partition)
+	assert.Equal(t, 0, l.conf.PartitionInfo[0].PartitionNum)
 
 	_, l, err = q.GetByPartition(1)
 	require.NoError(t, err)
-	assert.Equal(t, 1, l.conf.PartitionInfo[0].Partition)
+	assert.Equal(t, 1, l.conf.PartitionInfo[0].PartitionNum)
 
 	_, l, err = q.GetByPartition(2)
 	require.NoError(t, err)
-	assert.Equal(t, 2, l.conf.PartitionInfo[0].Partition)
+	assert.Equal(t, 2, l.conf.PartitionInfo[0].PartitionNum)
 
 	_, n := q.GetNext()
-	assert.Equal(t, 0, n.conf.PartitionInfo[0].Partition)
+	assert.Equal(t, 0, n.conf.PartitionInfo[0].PartitionNum)
 	_, n = q.GetNext()
-	assert.Equal(t, 1, n.conf.PartitionInfo[0].Partition)
+	assert.Equal(t, 1, n.conf.PartitionInfo[0].PartitionNum)
 	_, n = q.GetNext()
-	assert.Equal(t, 2, n.conf.PartitionInfo[0].Partition)
+	assert.Equal(t, 2, n.conf.PartitionInfo[0].PartitionNum)
 	_, n = q.GetNext()
-	assert.Equal(t, 0, n.conf.PartitionInfo[0].Partition)
+	assert.Equal(t, 0, n.conf.PartitionInfo[0].PartitionNum)
 	_, n = q.GetNext()
-	assert.Equal(t, 1, n.conf.PartitionInfo[0].Partition)
+	assert.Equal(t, 1, n.conf.PartitionInfo[0].PartitionNum)
 	_, n = q.GetNext()
-	assert.Equal(t, 2, n.conf.PartitionInfo[0].Partition)
+	assert.Equal(t, 2, n.conf.PartitionInfo[0].PartitionNum)
 	_, n = q.GetNext()
-	assert.Equal(t, 0, n.conf.PartitionInfo[0].Partition)
+	assert.Equal(t, 0, n.conf.PartitionInfo[0].PartitionNum)
 }

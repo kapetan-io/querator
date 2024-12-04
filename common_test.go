@@ -9,6 +9,7 @@ import (
 	"github.com/duh-rpc/duh-go/retry"
 	que "github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/daemon"
+	"github.com/kapetan-io/querator/internal"
 	"github.com/kapetan-io/querator/internal/store"
 	pb "github.com/kapetan-io/querator/proto"
 	"github.com/kapetan-io/tackle/clock"
@@ -27,6 +28,15 @@ import (
 	"testing"
 )
 
+const (
+	ExpireTimeout  = "24h0m0s"
+	ReserveTimeout = "1m0s"
+)
+
+var RetryTenTimes = retry.Policy{Interval: retry.Sleep(100 * clock.Millisecond), Attempts: 20}
+
+type NewStorageFunc func(cp *clock.Provider) store.StorageConfig
+
 var log *slog.Logger
 
 func TestMain(m *testing.M) {
@@ -41,7 +51,7 @@ func TestMain(m *testing.M) {
 		log = slog.New(color.NewLog(&color.LogOptions{
 			HandlerOptions: slog.HandlerOptions{
 				ReplaceAttr: color.SuppressAttrs(slog.TimeKey),
-				Level:       slog.LevelDebug,
+				Level:       internal.LevelDebugAll,
 			},
 		}))
 	case "ci":
@@ -118,7 +128,7 @@ func (b *boltTestSetup) Setup(bc store.BoltConfig) store.StorageConfig {
 	bc.Log = log
 
 	var conf store.StorageConfig
-	conf.QueueStore = store.NewBoltQueueStore(bc)
+	conf.Queues = store.NewBoltQueues(bc)
 	conf.Backends = []store.Backend{
 		{
 			PartitionStore: store.NewBoltPartitionStore(bc),
@@ -157,7 +167,7 @@ func (b *badgerTestSetup) Setup(bc store.BadgerConfig) store.StorageConfig {
 	bc.Log = log
 
 	var conf store.StorageConfig
-	conf.QueueStore = store.NewBadgerQueueStore(bc)
+	conf.Queues = store.NewBadgerQueues(bc)
 	conf.Backends = []store.Backend{
 		{
 			PartitionStore: store.NewBadgerPartitionStore(bc),
@@ -196,7 +206,7 @@ func compareStorageItem(t *testing.T, l *pb.StorageItem, r *pb.StorageItem) {
 	t.Helper()
 	require.Equal(t, l.Id, r.Id)
 	require.Equal(t, l.IsReserved, r.IsReserved)
-	require.Equal(t, l.DeadDeadline.AsTime(), r.DeadDeadline.AsTime())
+	require.Equal(t, l.ExpireDeadline.AsTime(), r.ExpireDeadline.AsTime())
 	require.Equal(t, l.ReserveDeadline.AsTime(), r.ReserveDeadline.AsTime())
 	require.Equal(t, l.Attempts, r.Attempts)
 	require.Equal(t, l.Reference, r.Reference)
@@ -206,10 +216,10 @@ func compareStorageItem(t *testing.T, l *pb.StorageItem, r *pb.StorageItem) {
 }
 
 func setupMemoryStorage(conf store.StorageConfig) store.StorageConfig {
-	conf.QueueStore = store.NewMemoryQueueStore()
+	conf.Queues = store.NewMemoryQueues(log)
 	conf.Backends = []store.Backend{
 		{
-			PartitionStore: store.NewMemoryPartitionStore(conf),
+			PartitionStore: store.NewMemoryPartitionStore(conf, log),
 			Name:           "memory-0",
 			Affinity:       1,
 		},
@@ -250,12 +260,12 @@ func writeRandomItems(t *testing.T, ctx context.Context, c *que.Client,
 	var items []*pb.StorageItem
 	for i := 0; i < count; i++ {
 		items = append(items, &pb.StorageItem{
-			DeadDeadline: timestamppb.New(expire),
-			Attempts:     int32(rand.Intn(10)),
-			Reference:    random.String("ref-", 10),
-			Encoding:     random.String("enc-", 10),
-			Kind:         random.String("kind-", 10),
-			Payload:      []byte(fmt.Sprintf("message-%d", i)),
+			ExpireDeadline: timestamppb.New(expire),
+			Attempts:       int32(rand.Intn(10)),
+			Reference:      random.String("ref-", 10),
+			Encoding:       random.String("enc-", 10),
+			Kind:           random.String("kind-", 10),
+			Payload:        []byte(fmt.Sprintf("message-%d", i)),
 		})
 	}
 
@@ -358,7 +368,7 @@ func untilReserveClientWaiting(t *testing.T, c *que.Client, queueName string, nu
 func compareQueueInfo(t *testing.T, expected *pb.QueueInfo, actual *pb.QueueInfo) {
 	t.Helper()
 	require.Equal(t, expected.QueueName, actual.QueueName)
-	require.Equal(t, expected.DeadTimeout, actual.DeadTimeout)
+	require.Equal(t, expected.ExpireTimeout, actual.ExpireTimeout)
 	require.Equal(t, expected.ReserveTimeout, actual.ReserveTimeout)
 	require.Equal(t, expected.MaxAttempts, actual.MaxAttempts)
 	require.Equal(t, expected.DeadQueue, actual.DeadQueue)
@@ -402,7 +412,7 @@ func createRandomQueues(t *testing.T, ctx context.Context, c *que.Client, count 
 			Reference:           random.String("ref-", 10),
 			MaxAttempts:         int32(rand.Intn(100)),
 			ReserveTimeout:      timeOuts.Reserve,
-			DeadTimeout:         timeOuts.Dead,
+			ExpireTimeout:       timeOuts.Dead,
 			RequestedPartitions: 1,
 		}
 		idx++

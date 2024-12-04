@@ -13,6 +13,14 @@ $(LINT): ## Download Go linter
 test:
 	go test -timeout 10m -v -p=1 -count=1 -race -logging=ci ./...
 
+.PHONY: cover
+cover:
+	-rm coverage.html coverage.out
+	go test -timeout 10m -v -p=1 -count=1 -logging=ci --coverprofile=coverage.out -covermode=atomic -coverpkg=./... ./...
+	go tool cover -html=coverage.out -o coverage.html
+	open coverage.html
+
+
 .PHONY: lint
 lint: $(LINT) ## Run Go linter
 	$(LINT) run -v ./...

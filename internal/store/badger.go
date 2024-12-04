@@ -12,9 +12,11 @@ import (
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/set"
 	"github.com/segmentio/ksuid"
+	"iter"
 	"log/slog"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 type BadgerConfig struct {
@@ -56,6 +58,7 @@ func (b *BadgerPartitionStore) Get(info types.PartitionInfo) Partition {
 type BadgerPartition struct {
 	info types.PartitionInfo
 	conf BadgerConfig
+	mu   sync.RWMutex
 	uid  ksuid.KSUID
 	db   *badger.DB
 }
@@ -80,7 +83,7 @@ func (b *BadgerPartition) Produce(_ context.Context, batch types.Batch[types.Pro
 				}
 
 				if err := txn.Set(item.ID, buf.Bytes()); err != nil {
-					return errors.Errorf("during Put(): %w", err)
+					return errors.Errorf("during Set(): %w", err)
 				}
 			}
 		}
@@ -102,7 +105,7 @@ func (b *BadgerPartition) Reserve(_ context.Context, batch types.ReserveBatch, o
 		defer iter.Close()
 
 		for iter.Rewind(); iter.Valid(); iter.Next() {
-			if count >= batch.Total {
+			if count >= batch.TotalRequested {
 				break
 			}
 
@@ -359,7 +362,32 @@ func (b *BadgerPartition) Clear(_ context.Context, destructive bool) error {
 }
 
 func (b *BadgerPartition) Info() types.PartitionInfo {
+	defer b.mu.RUnlock()
+	b.mu.RLock()
 	return b.info
+}
+
+func (b *BadgerPartition) UpdateQueueInfo(info types.QueueInfo) {
+	defer b.mu.Unlock()
+	b.mu.Lock()
+	b.info.Queue = info
+}
+
+func (b *BadgerPartition) ActionScan(timeout clock.Duration, now clock.Time) iter.Seq[types.Action] {
+	//info := b.Info()
+
+	return func(yield func(types.Action) bool) {
+		// TODO(lifecycle)
+	}
+}
+
+func (b *BadgerPartition) TakeAction(ctx context.Context, batch types.Batch[types.LifeCycleRequest]) error {
+	return nil // TODO(lifecycle):
+}
+
+func (b *BadgerPartition) LifeCycleInfo(ctx context.Context, info *types.LifeCycleInfo) error {
+	// TODO(lifecycle)
+	return nil
 }
 
 func (b *BadgerPartition) Stats(_ context.Context, stats *types.PartitionStats) error {
@@ -425,7 +453,7 @@ func (b *BadgerPartition) getDB() (*badger.DB, error) {
 		return b.db, nil
 	}
 
-	dir := filepath.Join(b.conf.StorageDir, fmt.Sprintf("%s-%06d-%s", b.info.QueueName, b.info.Partition, bucketName))
+	dir := filepath.Join(b.conf.StorageDir, fmt.Sprintf("%s-%06d-%s", b.info.Queue.Name, b.info.PartitionNum, bucketName))
 
 	opts := badger.DefaultOptions(dir)
 	opts.Logger = newBadgerLogger(b.conf.Log)
@@ -439,25 +467,25 @@ func (b *BadgerPartition) getDB() (*badger.DB, error) {
 }
 
 // ---------------------------------------------
-// QueueStore Implementation
+// Queues Implementation
 // ---------------------------------------------
 
-func NewBadgerQueueStore(conf BadgerConfig) QueueStore {
+func NewBadgerQueues(conf BadgerConfig) Queues {
 	set.Default(conf.Log, slog.Default())
-	return &BadgerQueueStore{
+	return &BadgerQueues{
 		conf: conf,
 	}
 }
 
-type BadgerQueueStore struct {
+type BadgerQueues struct {
 	QueuesValidation
 	db   *badger.DB
 	conf BadgerConfig
 }
 
-var _ QueueStore = &BadgerQueueStore{}
+var _ Queues = &BadgerQueues{}
 
-func (b *BadgerQueueStore) getDB() (*badger.DB, error) {
+func (b *BadgerQueues) getDB() (*badger.DB, error) {
 	if b.db != nil {
 		return b.db, nil
 	}
@@ -477,7 +505,7 @@ func (b *BadgerQueueStore) getDB() (*badger.DB, error) {
 	return db, nil
 }
 
-func (b *BadgerQueueStore) Get(_ context.Context, name string, queue *types.QueueInfo) error {
+func (b *BadgerQueues) Get(_ context.Context, name string, queue *types.QueueInfo) error {
 	if err := b.validateGet(name); err != nil {
 		return err
 	}
@@ -510,7 +538,7 @@ func (b *BadgerQueueStore) Get(_ context.Context, name string, queue *types.Queu
 	})
 }
 
-func (b *BadgerQueueStore) Add(_ context.Context, info types.QueueInfo) error {
+func (b *BadgerQueues) Add(_ context.Context, info types.QueueInfo) error {
 	if err := b.validateAdd(info); err != nil {
 		return err
 	}
@@ -540,7 +568,7 @@ func (b *BadgerQueueStore) Add(_ context.Context, info types.QueueInfo) error {
 	})
 }
 
-func (b *BadgerQueueStore) Update(_ context.Context, info types.QueueInfo) error {
+func (b *BadgerQueues) Update(_ context.Context, info types.QueueInfo) error {
 	db, err := b.getDB()
 	if err != nil {
 		return err
@@ -577,9 +605,9 @@ func (b *BadgerQueueStore) Update(_ context.Context, info types.QueueInfo) error
 			return err
 		}
 
-		if found.ReserveTimeout > found.DeadTimeout {
+		if found.ReserveTimeout > found.ExpireTimeout {
 			return transport.NewInvalidOption("reserve timeout is too long; %s cannot be greater than the "+
-				"dead timeout %s", info.ReserveTimeout.String(), found.DeadTimeout.String())
+				"expire timeout %s", info.ReserveTimeout.String(), found.ExpireTimeout.String())
 		}
 
 		var buf bytes.Buffer
@@ -594,7 +622,7 @@ func (b *BadgerQueueStore) Update(_ context.Context, info types.QueueInfo) error
 	})
 }
 
-func (b *BadgerQueueStore) List(_ context.Context, queues *[]types.QueueInfo, opts types.ListOptions) error {
+func (b *BadgerQueues) List(_ context.Context, queues *[]types.QueueInfo, opts types.ListOptions) error {
 	if err := b.validateList(opts); err != nil {
 		return err
 	}
@@ -640,7 +668,7 @@ func (b *BadgerQueueStore) List(_ context.Context, queues *[]types.QueueInfo, op
 	})
 }
 
-func (b *BadgerQueueStore) Delete(_ context.Context, name string) error {
+func (b *BadgerQueues) Delete(_ context.Context, name string) error {
 	if err := b.validateDelete(name); err != nil {
 		return err
 	}
@@ -659,7 +687,7 @@ func (b *BadgerQueueStore) Delete(_ context.Context, name string) error {
 	})
 }
 
-func (b *BadgerQueueStore) Close(_ context.Context) error {
+func (b *BadgerQueues) Close(_ context.Context) error {
 	err := b.db.Close()
 	b.db = nil
 	return err

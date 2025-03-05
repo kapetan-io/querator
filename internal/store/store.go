@@ -17,7 +17,7 @@ const (
 
 var (
 	ErrQueueNotExist = transport.NewRequestFailed("queue does not exist")
-	theFuture        = time.Date(2800, 1, 1, 1, 1, 1, 1, time.UTC)
+	theFuture        = time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.UTC)
 )
 
 type ReserveOptions struct {
@@ -83,15 +83,16 @@ type Partition interface {
 	// Stats returns stats about the queue
 	Stats(ctx context.Context, stats *types.PartitionStats) error
 
-	// ActionScan returns an iterator of actions that should be preformed for the partition life cycle.
+	// ScanForActions returns an iterator of actions that should be preformed for the partition life cycle.
 	// This method must be thread safe as it will be called by a go routine that is separate from the
-	// main request loop.
+	// main request loop. If an error is encountered. returns an empty iterator. Issues with the
+	// underlying storage system are reported by LifeCycleInfo()
 	//
 	// ### Parameters
 	// - `timeout`: The read timeout for each read operation to the underlying storage system.
 	// If a read exceeds this timeout, the iterator is aborted.
 	// - `now`: The time used by LifeCycleActions to determine which items need action.
-	ActionScan(timeout clock.Duration, now clock.Time) iter.Seq[types.Action]
+	ScanForActions(timeout clock.Duration, now clock.Time) iter.Seq[types.Action]
 
 	// TakeAction takes lifecycle requests and preforms the actions requested on the partition.
 	TakeAction(ctx context.Context, batch types.Batch[types.LifeCycleRequest]) error

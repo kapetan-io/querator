@@ -433,6 +433,17 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					Code: duh.CodeBadRequest,
 				},
 				{
+					Name: "QueueWhiteSpace",
+					Req: &pb.QueueInfo{
+						ReserveTimeout:      ReserveTimeout,
+						ExpireTimeout:       ExpireTimeout,
+						QueueName:           "Friendship is Magic",
+						RequestedPartitions: 1,
+					},
+					Msg:  "queue name is invalid; 'Friendship is Magic' cannot contain whitespace",
+					Code: duh.CodeBadRequest,
+				},
+				{
 					Name: "AlreadyExists",
 					Req: &pb.QueueInfo{
 						ReserveTimeout:      ReserveTimeout,
@@ -652,6 +663,17 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					Code: duh.CodeBadRequest,
 				},
 				{
+					Name: "QueueWhiteSpace",
+					Req: &pb.QueueInfo{
+						ReserveTimeout:      ReserveTimeout,
+						ExpireTimeout:       ExpireTimeout,
+						QueueName:           "Friendship is Magic",
+						RequestedPartitions: 1,
+					},
+					Msg:  "queue name is invalid; 'Friendship is Magic' cannot contain whitespace",
+					Code: duh.CodeBadRequest,
+				},
+				{
 					Name: "ReferenceMaxLength",
 					Req: &pb.QueueInfo{
 						QueueName: queueName,
@@ -773,6 +795,14 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 						QueueName: random.String("", 2_001),
 					},
 					Msg:  "queue name is invalid; cannot be greater than '512' characters",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "QueueWhiteSpace",
+					Req: &pb.QueuesDeleteRequest{
+						QueueName: "Friendship is Magic",
+					},
+					Msg:  "queue name is invalid; 'Friendship is Magic' cannot contain whitespace",
 					Code: duh.CodeBadRequest,
 				},
 			} {

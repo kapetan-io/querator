@@ -98,10 +98,10 @@ func (d *Daemon) Shutdown(ctx context.Context) error {
 		return err
 	}
 	for _, srv := range d.servers {
-		d.conf.Log.Info("Shutting down server", "address", srv.Addr)
+		d.conf.Log.LogAttrs(ctx, internal.LevelDebugAll, "Shutting down HTTP server", slog.String("address", srv.Addr))
 		_ = srv.Shutdown(ctx)
+		d.conf.Log.Info("HTTP Server shutdown", "address", srv.Addr)
 	}
-	d.conf.Log.LogAttrs(ctx, internal.LevelDebugAll, "Shutdown complete")
 	d.servers = nil
 	return nil
 }
@@ -182,7 +182,6 @@ func (d *Daemon) spawnHTTP(ctx context.Context, h http.Handler) error {
 	d.wg.Add(1)
 	go func() {
 		defer d.wg.Done()
-		d.conf.Log.Info("HTTP Listening ...", "address", d.Listener.Addr().String())
 		if err := srv.Serve(d.Listener); err != nil {
 			if !errors.Is(err, http.ErrServerClosed) {
 				d.conf.Log.Error("while starting HTTP server", "error", err)
@@ -194,6 +193,7 @@ func (d *Daemon) spawnHTTP(ctx context.Context, h http.Handler) error {
 		return err
 	}
 
+	d.conf.Log.Info("HTTP Server Started", "address", d.Listener.Addr().String())
 	d.servers = append(d.servers, srv)
 	return nil
 }

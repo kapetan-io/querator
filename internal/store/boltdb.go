@@ -397,7 +397,7 @@ func (b *BoltPartition) UpdateQueueInfo(info types.QueueInfo) {
 	b.info.Queue = info
 }
 
-func (b *BoltPartition) ActionScan(timeout clock.Duration, now clock.Time) iter.Seq[types.Action] {
+func (b *BoltPartition) ScanForActions(timeout clock.Duration, now clock.Time) iter.Seq[types.Action] {
 	//info := b.Info()
 
 	return func(yield func(types.Action) bool) {

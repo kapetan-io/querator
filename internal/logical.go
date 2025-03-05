@@ -509,10 +509,10 @@ func (l *Logical) prepareQueueState(state *QueueState) {
 	}
 
 	slices.SortFunc(state.Partitions, func(a, b *Partition) int {
-		if a.Count < b.Count {
+		if a.Count.Load() < b.Count.Load() {
 			return -1
 		}
-		if a.Count > b.Count {
+		if a.Count.Load() > b.Count.Load() {
 			return +1
 		}
 		return 0
@@ -534,6 +534,15 @@ type QueueState struct {
 	Partitions        []*Partition
 }
 
+func (q *QueueState) GetPartition(num int) *Partition {
+	for _, p := range q.Partitions {
+		if p.Info.PartitionNum == num {
+			return p
+		}
+	}
+	return nil
+}
+
 func (l *Logical) requestLoop() {
 	defer l.wg.Done()
 	var state QueueState
@@ -544,11 +553,12 @@ func (l *Logical) requestLoop() {
 	//  of the new items via state.Maintenance.NotifyScheduledItem(date)
 
 	for {
-		l.log.LogAttrs(context.Background(), LevelDebugAll, "requestLoop()",
+		l.log.LogAttrs(context.Background(), LevelDebugAll, "Logical.requestLoop()",
 			slog.Int("InChannel", len(l.hotRequestCh)),
-			slog.Int("RBlocked", len(state.Reservations.Requests)),
-			slog.Int("PBlocked", len(state.Producers.Requests)),
-			slog.Int("CBlocked", len(state.Completes.Requests)),
+			slog.Int("Reservations", len(state.Reservations.Requests)),
+			slog.Int("Producers", len(state.Producers.Requests)),
+			slog.Int("Completes", len(state.Completes.Requests)),
+			slog.Int("LifeCycles", len(state.LifeCycles.Requests)),
 			slog.Int("InFlight", int(l.inFlight.Load())),
 		)
 
@@ -599,7 +609,7 @@ func (l *Logical) handleHotRequests(state *QueueState, req *Request) {
 
 	// TODO: Some time may have passed while talking to the partition.
 	//  If a partition has failed, and we can't re-distribute to other partitions
-	//  we need to let clients know they  are timed out.
+	//  we need to let clients know they are timed out.
 	//  Perhaps scheduled maint should do this or just let `handleRequestTimeouts()` do it?
 
 	// ----------------------------------------
@@ -625,13 +635,14 @@ func (l *Logical) handleHotRequests(state *QueueState, req *Request) {
 	// Reset the partition assignments
 	for _, p := range state.Partitions {
 		if p.NumReserved != 0 {
-			// Indexing LifeCycles here only works because LifeCycles and Partitions have the
+			// NOTE: Indexing LifeCycles here only works because LifeCycles and Partitions have the
 			// same number of entries, consider merging them in the future.
 			p.LifeCycle.Notify(p.MostRecentDeadline)
 		}
 		p.Reset()
 	}
 
+	state.LifeCycles.Reset()
 	state.Reservations.FilterNils()
 	state.Producers.Reset()
 	state.Completes.Reset()
@@ -667,6 +678,7 @@ func (l *Logical) consumeHotCh(state *QueueState, req *Request) {
 		state.Completes.Add(req.Request.(*types.CompleteRequest))
 	case MethodLifeCycle:
 		state.LifeCycles.Add(req.Request.(*types.LifeCycleRequest))
+		close(req.ReadyCh)
 	case MethodReserve:
 		addIfUnique(&state.Reservations, req.Request.(*types.ReserveRequest))
 	default:
@@ -687,6 +699,7 @@ EMPTY:
 				state.Completes.Add(req.Request.(*types.CompleteRequest))
 			case MethodLifeCycle:
 				state.LifeCycles.Add(req.Request.(*types.LifeCycleRequest))
+				close(req.ReadyCh)
 			case MethodReserve:
 				addIfUnique(&state.Reservations, req.Request.(*types.ReserveRequest))
 			default:
@@ -703,12 +716,11 @@ func (l *Logical) distributeLifeCycles(state *QueueState) {
 		p := state.GetPartition(req.PartitionNum)
 		if p == nil {
 			l.log.Warn("LifeCycleRequest received for invalid partition; skipping request",
-				"req-partition", req.PartitionNum)
+				"partition", req.PartitionNum)
 			continue
 		}
 		p.LifeCycleRequests.Add(req)
 	}
-	// TODO: Write a new PartitionStore method to update the items
 }
 
 func (l *Logical) distributeProduceRequests(state *QueueState) {
@@ -726,10 +738,10 @@ func (l *Logical) distributeProduceRequests(state *QueueState) {
 		// See doc/adr/0019-partition-items-distribution.md for details
 		state.Partitions[0].Produce(req)
 		slices.SortFunc(state.Partitions, func(a, b *Partition) int {
-			if a.Count < b.Count {
+			if a.Count.Load() < b.Count.Load() {
 				return -1
 			}
-			if a.Count > b.Count {
+			if a.Count.Load() > b.Count.Load() {
 				return +1
 			}
 			return 0
@@ -749,10 +761,10 @@ func (l *Logical) distributeReserveRequests(state *QueueState) {
 		// See doc/adr/0019-partition-items-distribution.md for details
 		state.Partitions[len(state.Partitions)-1].Reserve(req)
 		slices.SortFunc(state.Partitions, func(a, b *Partition) int {
-			if a.Count < b.Count {
+			if a.Count.Load() < b.Count.Load() {
 				return -1
 			}
-			if a.Count > b.Count {
+			if a.Count.Load() > b.Count.Load() {
 				return +1
 			}
 			return 0
@@ -1073,6 +1085,10 @@ func (l *Logical) handleShutdown(state *QueueState, req *types.ShutdownRequest) 
 					close(o.ReadyCh)
 				case MethodComplete:
 					o := r.Request.(*types.CompleteRequest)
+					o.Err = ErrQueueShutdown
+					close(o.ReadyCh)
+				case MethodLifeCycle:
+					o := r.Request.(*Request)
 					o.Err = ErrQueueShutdown
 					close(o.ReadyCh)
 				default:

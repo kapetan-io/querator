@@ -236,9 +236,6 @@ func (b *BadgerPartition) List(_ context.Context, items *[]*types.Item, opts typ
 
 		if opts.Pivot != nil {
 			iter.Seek(opts.Pivot)
-			if !iter.Valid() {
-				return transport.NewInvalidOption("invalid pivot; '%s' does not exist", opts.Pivot)
-			}
 		} else {
 			iter.Rewind()
 		}
@@ -373,21 +370,181 @@ func (b *BadgerPartition) UpdateQueueInfo(info types.QueueInfo) {
 	b.info.Queue = info
 }
 
-func (b *BadgerPartition) ActionScan(timeout clock.Duration, now clock.Time) iter.Seq[types.Action] {
-	//info := b.Info()
-
+func (b *BadgerPartition) ScanForActions(_ clock.Duration, now clock.Time) iter.Seq[types.Action] {
 	return func(yield func(types.Action) bool) {
-		// TODO(lifecycle)
+		db, err := b.getDB()
+		if err != nil {
+			return
+		}
+
+		err = db.View(func(txn *badger.Txn) error {
+			iter := txn.NewIterator(badger.DefaultIteratorOptions)
+			defer iter.Close()
+
+			for iter.Rewind(); iter.Valid(); iter.Next() {
+				var v []byte
+				v, err := iter.Item().ValueCopy(v)
+				if err != nil {
+					return err
+				}
+
+				item := new(types.Item)
+				if err := gob.NewDecoder(bytes.NewReader(v)).Decode(item); err != nil {
+					return errors.Errorf("during Decode(): %w", err)
+				}
+
+				// Is the reserved item expired?
+				if item.IsReserved {
+					if now.After(item.ReserveDeadline) {
+						if !yield(types.Action{
+							Action:       types.ActionReserveExpired,
+							PartitionNum: b.info.PartitionNum,
+							Queue:        b.info.Queue.Name,
+							Item:         *item,
+						}) {
+							return nil
+						}
+						continue
+					}
+				}
+				// Is the item expired?
+				if now.After(item.ExpireDeadline) {
+					if !yield(types.Action{
+						Action:       types.ActionItemExpired,
+						PartitionNum: b.info.PartitionNum,
+						Queue:        b.info.Queue.Name,
+						Item:         *item,
+					}) {
+						return nil
+					}
+					continue
+				}
+				if item.Attempts >= b.info.Queue.MaxAttempts {
+					if !yield(types.Action{
+						Action:       types.ActionItemMaxAttempts,
+						PartitionNum: b.info.PartitionNum,
+						Queue:        b.info.Queue.Name,
+						Item:         *item,
+					}) {
+						return nil
+					}
+					continue
+				}
+			}
+			return nil
+		})
+
+		if err != nil {
+			b.conf.Log.Error("Error scanning for actions", "error", err)
+		}
 	}
 }
 
-func (b *BadgerPartition) TakeAction(ctx context.Context, batch types.Batch[types.LifeCycleRequest]) error {
-	return nil // TODO(lifecycle):
+func (b *BadgerPartition) TakeAction(_ context.Context, batch types.Batch[types.LifeCycleRequest]) error {
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.Update(func(txn *badger.Txn) error {
+		for _, req := range batch.Requests {
+			for _, a := range req.Actions {
+				switch a.Action {
+				case types.ActionReserveExpired:
+					item := new(types.Item)
+					kvItem, err := txn.Get(a.Item.ID)
+					if err != nil {
+						if errors.Is(err, badger.ErrKeyNotFound) {
+							b.conf.Log.Warn("unable to find item while processing action; ignoring action",
+								"id", a.Item.ID, "action", types.ActionToString(a.Action))
+							continue
+						}
+						return err
+					}
+
+					err = kvItem.Value(func(val []byte) error {
+						return gob.NewDecoder(bytes.NewReader(val)).Decode(item)
+					})
+					if err != nil {
+						return err
+					}
+
+					// Update the item
+					item.ReserveDeadline = clock.Time{}
+					item.IsReserved = false
+					item.Attempts += 1
+
+					// Assign a new ID to the item, as it is placed at the start of the queue
+					b.uid = b.uid.Next()
+					item.ID = []byte(b.uid.String())
+
+					// Encode and store the updated item
+					var buf bytes.Buffer
+					if err := gob.NewEncoder(&buf).Encode(item); err != nil {
+						return err
+					}
+
+					if err := txn.Set(item.ID, buf.Bytes()); err != nil {
+						return err
+					}
+
+					// Delete the old item
+					if err := txn.Delete(a.Item.ID); err != nil {
+						return err
+					}
+
+				case types.ActionDeleteItem:
+					// TODO(lifecycle): Find the item and remove it
+					if err := txn.Delete(a.Item.ID); err != nil {
+						return err
+					}
+
+				case types.ActionQueueScheduledItem:
+					// TODO: Find the scheduled item and add it to the partition queue
+
+				default:
+					b.conf.Log.Warn("undefined action", "action", fmt.Sprintf("%d", int(a.Action)))
+				}
+			}
+		}
+		return nil
+	})
 }
 
-func (b *BadgerPartition) LifeCycleInfo(ctx context.Context, info *types.LifeCycleInfo) error {
-	// TODO(lifecycle)
-	return nil
+func (b *BadgerPartition) LifeCycleInfo(_ context.Context, info *types.LifeCycleInfo) error {
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.View(func(txn *badger.Txn) error {
+		next := theFuture
+
+		iter := txn.NewIterator(badger.DefaultIteratorOptions)
+		defer iter.Close()
+
+		for iter.Rewind(); iter.Valid(); iter.Next() {
+			var v []byte
+			v, err := iter.Item().ValueCopy(v)
+			if err != nil {
+				return err
+			}
+
+			item := new(types.Item)
+			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(item); err != nil {
+				return err
+			}
+
+			if item.ReserveDeadline.Before(next) {
+				next = item.ReserveDeadline
+			}
+		}
+
+		if next != theFuture {
+			info.NextReserveExpiry = next
+		}
+		return nil
+	})
 }
 
 func (b *BadgerPartition) Stats(_ context.Context, stats *types.PartitionStats) error {
@@ -640,9 +797,6 @@ func (b *BadgerQueues) List(_ context.Context, queues *[]types.QueueInfo, opts t
 
 		if opts.Pivot != nil {
 			iter.Seek(opts.Pivot)
-			if !iter.Valid() {
-				return transport.NewInvalidOption("invalid pivot; '%s' does not exist", opts.Pivot)
-			}
 		} else {
 			iter.Rewind()
 		}

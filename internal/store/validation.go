@@ -5,6 +5,7 @@ import (
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/transport"
 	"strings"
+	"unicode"
 )
 
 var ErrEmptyQueueName = transport.NewInvalidOption("queue name is invalid; queue name cannot be empty")
@@ -35,6 +36,10 @@ func (s QueuesValidation) validateQueueName(info types.QueueInfo) error {
 		return ErrEmptyQueueName
 	}
 
+	if strings.ContainsFunc(info.Name, unicode.IsSpace) {
+		return transport.NewInvalidOption("queue name is invalid; '%s' cannot contain whitespace", info.Name)
+	}
+
 	if strings.Contains(info.Name, "~") {
 		return transport.NewInvalidOption("queue name is invalid; '%s' cannot contain '~' character", info.Name)
 	}
@@ -48,6 +53,10 @@ func (s QueuesValidation) validateQueueInfo(info types.QueueInfo) error {
 
 	if len(info.DeadQueue) > maxQueueNameLength {
 		return transport.NewInvalidOption("dead queue is invalid; cannot be greater than '%d' characters", maxQueueNameLength)
+	}
+
+	if strings.ContainsFunc(info.DeadQueue, unicode.IsSpace) {
+		return transport.NewInvalidOption("dead queue is invalid; '%s' cannot contain whitespace", info.DeadQueue)
 	}
 
 	if strings.Contains(info.DeadQueue, "~") {
@@ -123,6 +132,10 @@ func (s QueuesValidation) validateDelete(name string) error {
 
 	if strings.TrimSpace(name) == "" {
 		return ErrEmptyQueueName
+	}
+
+	if strings.ContainsFunc(name, unicode.IsSpace) {
+		return transport.NewInvalidOption("queue name is invalid; '%s' cannot contain whitespace", name)
 	}
 
 	if strings.Contains(name, "~") {

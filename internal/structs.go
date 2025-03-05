@@ -28,10 +28,12 @@ type Partition struct {
 	Store store.Partition
 	// Failures is a count of how many times the underlying storage has failed. Resets to
 	// zero when storage stops failing. If the value is zero, then the partition is considered
-	// active and has communication with the underlying storage.
+	// active and has communication with the underlying storage. It is updated by the
+	// partition LifeCycle
 	Failures atomic.Int32
-	// Count is the total number of un-reserved items in the partition
-	Count int
+	// Count is the total number of un-reserved items in the partition. It is updated by
+	// the partition LifeCycle
+	Count atomic.Int32
 	// NumReserved is the total number of items reserved during the most recent distribution
 	NumReserved int
 	// MostRecentDeadline is the most recent deadline of this partition. This could be
@@ -49,34 +51,26 @@ func (p *Partition) Reset() {
 	p.ProduceRequests.Reset()
 	p.ReserveRequests.Reset()
 	p.CompleteRequests.Reset()
+	p.LifeCycleRequests.Reset()
 	p.NumReserved = 0
 }
 
 func (p *Partition) Produce(req *types.ProduceRequest) {
-	p.Count += len(req.Items)
+	p.Count.Add(int32(len(req.Items)))
 	p.ProduceRequests.Add(req)
 }
 
 func (p *Partition) Reserve(req *types.ReserveRequest) {
 	// Use the Number of Requested items OR the count of items in the partition which ever is least.
-	reserved := min(p.Count, req.NumRequested)
+	reserved := min(int(p.Count.Load()), req.NumRequested)
 	// Increment the number of reserved items in this distribution.
 	p.NumReserved += reserved
 	// Decrement requested from the actual count
-	p.Count -= reserved
+	p.Count.Add(int32(-reserved))
 	// Record which partition this request is assigned, so it can be retrieved by the client later.
 	req.Partition = p.Store.Info().PartitionNum
 	// Add the request to this partitions reserve batch
 	p.ReserveRequests.Add(req)
-}
-
-func (q *QueueState) GetPartition(num int) *Partition {
-	for _, p := range q.Partitions {
-		if p.Info.PartitionNum == num {
-			return p
-		}
-	}
-	return nil
 }
 
 type Request struct {

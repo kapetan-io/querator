@@ -238,17 +238,34 @@ func dirExists(path string) bool {
 	return info.IsDir()
 }
 
-func findInResponses(t *testing.T, responses []*pb.QueueReserveResponse, id string) bool {
-	t.Helper()
+func findInResponses(responses []*pb.QueueReserveResponse, ref string) bool {
 
 	for _, item := range responses {
 		for _, idItem := range item.Items {
-			if idItem.Id == id {
+			if idItem.Reference == ref {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+func findInStorageList(ref string, resp *pb.StorageItemsListResponse) *pb.StorageItem {
+	for _, i := range resp.Items {
+		if i.Reference == ref {
+			return i
+		}
+	}
+	return nil
+}
+
+func findInReserveResp(ref string, resp *pb.QueueReserveResponse) *pb.QueueReserveItem {
+	for _, i := range resp.Items {
+		if i.Reference == ref {
+			return i
+		}
+	}
+	return nil
 }
 
 func writeRandomItems(t *testing.T, ctx context.Context, c *que.Client,

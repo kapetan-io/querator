@@ -6,3 +6,5 @@ __pycache__
 coverage.out
 coverage.html
 *test-data*
+.aider*
+.env

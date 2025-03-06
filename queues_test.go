@@ -374,6 +374,17 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				})
 			})
 		})
+
+		t.Run("PivotNotFound", func(t *testing.T) {
+			var page pb.QueuesListResponse
+			require.NoError(t, c.QueuesList(ctx, &page,
+				&que.ListOptions{Pivot: "pueue-00000", Limit: 1}))
+
+			// Should return the first queue in the list
+			assert.Equal(t, 1, len(page.Items))
+
+			assert.Equal(t, queues[0].QueueName, page.Items[0].QueueName)
+		})
 	})
 
 	t.Run("Errors", func(t *testing.T) {

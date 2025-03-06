@@ -21,7 +21,6 @@ import (
 
 func BenchmarkProduce(b *testing.B) {
 	fmt.Printf("Current Operating System has '%d' CPUs\n", runtime.NumCPU())
-	//bdb := boltTestSetup{Dir: b.TempDir()}
 	//badgerdb := badgerTestSetup{Dir: b.TempDir()}
 
 	log = slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError}))

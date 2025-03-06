@@ -8,6 +8,7 @@ import (
 	pb "github.com/kapetan-io/querator/proto"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/random"
+	"github.com/segmentio/ksuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
@@ -189,6 +190,24 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 				require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &limit, &que.ListOptions{Limit: 1}))
 
 				assert.Equal(t, 1, len(limit.Items))
+				assert.Equal(t, items[0].Id, limit.Items[0].Id)
+			})
+
+			t.Run("PivotNotFound", func(t *testing.T) {
+				var limit pb.StorageItemsListResponse
+				// Take the first KSUID in the list and get the previous id in the sequence
+				// which is not an ID that exists in the data store.
+				uid, err := ksuid.Parse(items[0].Id)
+				require.NoError(t, err)
+				require.NotEqual(t, items[0].Id, uid.Prev().String())
+
+				// Attempt to use that id as a pivot
+				require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &limit,
+					&que.ListOptions{Pivot: uid.Prev().String(), Limit: 1}))
+
+				// Should return the first item in the queue
+				assert.Equal(t, 1, len(limit.Items))
+
 				assert.Equal(t, items[0].Id, limit.Items[0].Id)
 			})
 

@@ -36,6 +36,7 @@ type LifeCycleConfig struct {
 // - Decides if a partition is available or not
 // - Sets the initial partition counts if none exist
 type LifeCycle struct {
+	state      types.PartitionState
 	conf       LifeCycleConfig
 	wg         sync.WaitGroup
 	manager    *QueuesManager
@@ -121,39 +122,49 @@ func (l *LifeCycle) Notify(t clock.Time) {
 func (l *LifeCycle) run() {
 	defer l.wg.Done()
 	state := lifeCycleState{
-		timer: l.conf.Clock.NewTimer(humanize.LongTime),
+		timer:           l.conf.Clock.NewTimer(humanize.LongTime),
+		nextRunDeadline: l.conf.Clock.Now().UTC().Add(humanize.LongTime),
 	}
 
 	// nolint
 	for {
-		l.log.LogAttrs(context.Background(), LevelDebugAll, "LifeCycle.run()")
 		// NOTE: Separate channels avoids missing a shutdown or run cycle requests
 		// in the case where we have a ton of notify requests.
 		select {
 		case req := <-l.runCh:
+			l.log.LogAttrs(context.Background(), LevelDebugAll, "life cycle run - requested")
 			l.runLifeCycle(&state)
 			close(req.ReadyCh)
 		case req := <-l.notifyCh:
 			l.handleNotify(&state, req.Request.(clock.Time))
 		case req := <-l.shutdownCh:
 			close(req.ReadyCh)
+			state.timer.Stop()
 			return
 		case <-state.timer.C():
+			l.log.LogAttrs(context.Background(), LevelDebugAll, "life cycle run - timer")
 			l.runLifeCycle(&state)
 		}
+
+		now := l.conf.Clock.Now().UTC()
+		state.timer.Reset(state.nextRunDeadline.Sub(now))
+		l.log.LogAttrs(context.Background(), LevelDebugAll, "timer reset",
+			slog.String("nextRunDeadline", state.nextRunDeadline.String()),
+			slog.String("duration", state.nextRunDeadline.Sub(now).String()))
 	}
 }
 
 func (l *LifeCycle) handleNotify(state *lifeCycleState, notify clock.Time) {
 	now := l.conf.Clock.Now().UTC()
+	fmt.Printf("handleNotify now '%s'\n", now.String())
 	// Ignore notify times from the past
 	if now.After(notify) {
 		return
 	}
 
-	// Ignore if we already have a life cycle run scheduled that is before
-	// the notify time.
-	if !state.nextRunDeadline.IsZero() && notify.After(state.nextRunDeadline) {
+	// Ignore if we already have a life cycle run scheduled that is before the notify time.
+	if state.nextRunDeadline.After(now) && state.nextRunDeadline.Before(notify) {
+		fmt.Printf("handleNotify deadline ignore '%s' - '%s'\n", state.nextRunDeadline.String(), notify.String())
 		return
 	}
 	l.log.LogAttrs(context.Background(), LevelDebugAll, "life cycle notified",
@@ -161,13 +172,14 @@ func (l *LifeCycle) handleNotify(state *lifeCycleState, notify clock.Time) {
 		slog.String("now", now.String()),
 		slog.String("timer_reset", notify.Sub(now).String()))
 	state.nextRunDeadline = notify
-	state.timer.Reset(notify.Sub(now))
 }
 
 type handleActions func(state *lifeCycleState, actions []types.Action)
 
 func (l *LifeCycle) runLifeCycle(state *lifeCycleState) {
-	l.log.LogAttrs(context.Background(), LevelDebugAll, "life cycle run")
+	now := l.conf.Clock.Now().UTC()
+	l.log.LogAttrs(context.Background(), LevelDebugAll, "life cycle run",
+		slog.String("now", now.String()))
 
 	defer func() {
 		l.log.LogAttrs(context.Background(), LevelDebugAll, "life cycle run complete",
@@ -175,7 +187,7 @@ func (l *LifeCycle) runLifeCycle(state *lifeCycleState) {
 	}()
 
 	// Attempt to get the partition out of a failed state
-	if l.conf.Partition.Failures.Load() != 0 {
+	if l.state.Failures != 0 {
 		if !l.recoverPartition(state) {
 			return
 		}
@@ -194,7 +206,7 @@ func (l *LifeCycle) runLifeCycle(state *lifeCycleState) {
 	mActions := make([]types.Action, 0, 1_000)
 
 	// Separate the events into separate slices handling them in batches
-	for a := range l.conf.Storage.ScanForActions(l.logical.conf.ReadTimeout, l.conf.Clock.Now().UTC()) {
+	for a := range l.conf.Storage.ScanForActions(l.logical.conf.ReadTimeout, now) {
 		l.log.LogAttrs(context.Background(), LevelDebugAll, "new life cycle action",
 			slog.String("reserve_deadline", a.Item.ReserveDeadline.String()),
 			slog.String("expire_deadline", a.Item.ExpireDeadline.String()),
@@ -229,17 +241,46 @@ func (l *LifeCycle) runLifeCycle(state *lifeCycleState) {
 	defer cancel()
 
 	if err := l.conf.Storage.LifeCycleInfo(ctx, &info); err != nil {
-		retryIn := retry.DefaultBackOff.Next(int(l.conf.Partition.Failures.Add(1)))
-		state.nextRunDeadline = l.conf.Clock.Now().UTC().Add(retryIn)
+		// TODO(no-write): Update the Logical of the Failures count
+		l.state.Failures++
+		retryIn := retry.DefaultBackOff.Next(l.state.Failures)
+		state.nextRunDeadline = now.Add(retryIn)
 		l.log.Warn("while fetching life cycle info from partition; retrying...",
 			"retry", retryIn,
 			"error", err)
+		return
 	}
 
-	if info.NextReserveExpiry.After(state.nextRunDeadline) {
+	// TODO: if there is nothing in the queue, we need to set a new nextRunDeadline to some time
+	//  in the future? Actually this will happen when the next thing comes in... right?
+	if info.NextReserveExpiry.After(now) && info.NextReserveExpiry.Before(state.nextRunDeadline) {
 		state.nextRunDeadline = info.NextReserveExpiry
+		fmt.Printf("NextReseveExpiry: %s\n", info.NextReserveExpiry)
 	}
 
+	// If there is no known future run then set the time to some time in the future
+	// This can happen when the queue becomes empty or all reserved items in the queue are
+	// expired.
+	if state.nextRunDeadline.Before(now) {
+		state.nextRunDeadline = now.Add(humanize.LongTime)
+	}
+}
+
+func (l *LifeCycle) partitionStateChange(failures int, numReserved int) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), l.logical.conf.WriteTimeout+time.Second)
+	defer cancel()
+	if err := l.logical.PartitionStateChange(ctx, l.conf.Partition.Info.PartitionNum,
+		types.PartitionState{
+			Failures:    failures,
+			NumReserved: numReserved,
+		}); err != nil {
+		if errors.Is(err, ErrQueueShutdown) {
+			return false
+		}
+		l.log.Warn("while updating partition state; continuing...", "error", err)
+		return false
+	}
+	return true
 }
 
 func (l *LifeCycle) writeLogicalActions(state *lifeCycleState, actions []types.Action) {
@@ -256,11 +297,13 @@ func (l *LifeCycle) writeLogicalActions(state *lifeCycleState, actions []types.A
 		}
 		// Log a warning, a failure here isn't a big deal as the next life cycle run will find the same
 		// items and attempt to handle them in the same way.
-		retryIn := retry.DefaultBackOff.Next(int(l.conf.Partition.Failures.Add(1)))
+		l.state.Failures++
+		retryIn := retry.DefaultBackOff.Next(l.state.Failures)
 		state.nextRunDeadline = l.conf.Clock.Now().UTC().Add(retryIn)
 		l.log.Warn("storage failure during logical life cycle; retrying...",
 			"retry", retryIn,
 			"error", err)
+		l.partitionStateChange(l.state.Failures, types.UnSet)
 	}
 }
 
@@ -278,11 +321,14 @@ func (l *LifeCycle) writeManagerActions(state *lifeCycleState, actions []types.A
 		}
 		// It's possible the item was written, but we lost contact with a remote logical queue
 		// in either case, we must assume it wasn't written and try again.
-		retryIn := retry.DefaultBackOff.Next(int(l.conf.Partition.Failures.Add(1)))
+		l.state.Failures++
+		retryIn := retry.DefaultBackOff.Next(l.state.Failures)
 		state.nextRunDeadline = l.conf.Clock.Now().UTC().Add(retryIn)
 		l.log.Warn("storage failure during manager life cycle; retrying...",
 			"retry", retryIn,
 			"error", err)
+
+		l.partitionStateChange(l.state.Failures, types.UnSet)
 	}
 }
 
@@ -291,19 +337,32 @@ func (l *LifeCycle) recoverPartition(state *lifeCycleState) bool {
 	var stats types.PartitionStats
 	defer cancel()
 
+	// TODO(next): The state.Failures is not getting set to ZERO so the partition never comes up
+
 	if err := l.conf.Storage.Stats(ctx, &stats); err != nil {
-		retryIn := retry.DefaultBackOff.Next(int(l.conf.Partition.Failures.Add(1)))
+		l.state.Failures++
+		retryIn := retry.DefaultBackOff.Next(l.state.Failures)
 		state.nextRunDeadline = l.conf.Clock.Now().UTC().Add(retryIn)
 		l.log.Warn("while fetching partition stats; retrying...",
 			"retry", retryIn,
 			"error", err)
+
+		l.partitionStateChange(l.state.Failures, types.UnSet)
 		return false
 	}
+
 	l.log.LogAttrs(context.Background(), LevelDebug, "partition available",
-		slog.Int("partition", l.conf.Partition.Store.Info().PartitionNum))
-	l.conf.Partition.Count.Store(int32(stats.Total - stats.TotalReserved))
-	l.conf.Partition.Failures.Store(0)
-	return true
+		slog.Int("partition", l.conf.Partition.Info.PartitionNum))
+
+	if stats.Total-stats.TotalReserved < 0 {
+		l.log.Error("assertion failed; total count of items in the partition "+
+			"cannot be more than the total reserved count", "total", stats.Total,
+			"reserved", stats.TotalReserved)
+		return false
+	}
+
+	l.state.Failures = 0
+	return l.partitionStateChange(0, stats.Total-stats.TotalReserved)
 }
 
 func (l *LifeCycle) Shutdown(ctx context.Context) error {

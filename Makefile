@@ -33,3 +33,8 @@ tidy:
 ci: tidy lint test
 	@echo
 	@echo "\033[32mEVERYTHING PASSED!\033[0m"
+
+.PHONY: vet
+vet:
+	go vet ./...
+

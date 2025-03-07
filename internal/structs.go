@@ -2,11 +2,10 @@ package internal
 
 import (
 	"context"
+	"fmt"
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
-	"github.com/kapetan-io/tackle/clock"
 	"log/slog"
-	"sync/atomic"
 )
 
 const (
@@ -26,21 +25,8 @@ type Partition struct {
 	LifeCycleRequests types.Batch[types.LifeCycleRequest]
 	// Store is the storage for this partition
 	Store store.Partition
-	// Failures is a count of how many times the underlying storage has failed. Resets to
-	// zero when storage stops failing. If the value is zero, then the partition is considered
-	// active and has communication with the underlying storage. It is updated by the
-	// partition LifeCycle
-	Failures atomic.Int32
-	// Count is the total number of un-reserved items in the partition. It is updated by
-	// the partition LifeCycle
-	Count atomic.Int32
-	// NumReserved is the total number of items reserved during the most recent distribution
-	NumReserved int
-	// MostRecentDeadline is the most recent deadline of this partition. This could be
-	// the ReserveDeadline, or it could be the ExpireDeadline which ever is sooner. It is
-	// used to notify LifeCycle of changes to the partition made by this partition
-	// as a hint for when an action might be needed on items in the partition.
-	MostRecentDeadline clock.Time
+	// State is the current state of the partition. It is updated by LifeCycle and storage backends
+	State types.PartitionState
 	// LifeCycle is the active life cycle associated with this partition
 	LifeCycle *LifeCycle
 	// Info is the info associated with this partition
@@ -52,21 +38,23 @@ func (p *Partition) Reset() {
 	p.ReserveRequests.Reset()
 	p.CompleteRequests.Reset()
 	p.LifeCycleRequests.Reset()
-	p.NumReserved = 0
+	p.State.NumReserved = 0
 }
 
 func (p *Partition) Produce(req *types.ProduceRequest) {
-	p.Count.Add(int32(len(req.Items)))
+	p.State.UnReserved += len(req.Items)
 	p.ProduceRequests.Add(req)
 }
 
 func (p *Partition) Reserve(req *types.ReserveRequest) {
 	// Use the Number of Requested items OR the count of items in the partition which ever is least.
-	reserved := min(int(p.Count.Load()), req.NumRequested)
+	fmt.Printf("UnReserved: %d Requested: %d\n", p.State.UnReserved, req.NumRequested)
+	reserved := min(p.State.UnReserved, req.NumRequested)
+	fmt.Printf("Reserved: %d\n", reserved)
 	// Increment the number of reserved items in this distribution.
-	p.NumReserved += reserved
+	p.State.NumReserved += reserved
 	// Decrement requested from the actual count
-	p.Count.Add(int32(-reserved))
+	p.State.UnReserved -= reserved
 	// Record which partition this request is assigned, so it can be retrieved by the client later.
 	req.Partition = p.Store.Info().PartitionNum
 	// Add the request to this partitions reserve batch

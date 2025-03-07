@@ -65,6 +65,8 @@ message QueueProduceItem {
   // be dropped.
   // Example: 'Hello, I am a UTF-8 payload' , '{"key", "value"}'
   string utf8 = 5;
+
+  // TODO: Consider adding user provided metadata as a map of values
 }
 
 message QueueReserveRequest {

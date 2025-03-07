@@ -2,9 +2,9 @@ package internal
 
 import (
 	"context"
+	"fmt"
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
-	"github.com/kapetan-io/tackle/clock"
 	"log/slog"
 	"sync/atomic"
 )
@@ -26,57 +26,53 @@ type Partition struct {
 	LifeCycleRequests types.Batch[types.LifeCycleRequest]
 	// Store is the storage for this partition
 	Store store.Partition
-	// Failures is a count of how many times the underlying storage has failed. Resets to
-	// zero when storage stops failing. If the value is zero, then the partition is considered
-	// active and has communication with the underlying storage.
-	Failures atomic.Int32
-	// Count is the total number of un-reserved items in the partition
-	Count int
-	// NumReserved is the total number of items reserved during the most recent distribution
-	NumReserved int
-	// MostRecentDeadline is the most recent deadline of this partition. This could be
-	// the ReserveDeadline, or it could be the ExpireDeadline which ever is sooner. It is
-	// used to notify LifeCycle of changes to the partition made by this partition
-	// as a hint for when an action might be needed on items in the partition.
-	MostRecentDeadline clock.Time
+	// State is the current state of the partition. It is updated by LifeCycle and storage backends
+	State types.PartitionState
 	// LifeCycle is the active life cycle associated with this partition
 	LifeCycle *LifeCycle
 	// Info is the info associated with this partition
 	Info types.PartitionInfo // TODO: Stop using Store.Info().PartitionNum and use this instead
 }
 
+type PartitionState struct {
+	// Failures is a count of how many times the underlying storage has failed. Resets to
+	// zero when storage stops failing. If the value is zero, then the partition is considered
+	// active and has communication with the underlying storage. It is updated by the
+	// partition LifeCycle
+	Failures atomic.Int32
+	// UnReserved is the total number of un-reserved items in the partition. It is updated by
+	// the partition LifeCycle
+	UnReserved atomic.Int32
+	// NumReserved is the total number of items reserved during the most recent distribution
+	NumReserved int
+}
+
 func (p *Partition) Reset() {
 	p.ProduceRequests.Reset()
 	p.ReserveRequests.Reset()
 	p.CompleteRequests.Reset()
-	p.NumReserved = 0
+	p.LifeCycleRequests.Reset()
+	p.State.NumReserved = 0
 }
 
 func (p *Partition) Produce(req *types.ProduceRequest) {
-	p.Count += len(req.Items)
+	p.State.UnReserved.Add(int32(len(req.Items)))
 	p.ProduceRequests.Add(req)
 }
 
 func (p *Partition) Reserve(req *types.ReserveRequest) {
 	// Use the Number of Requested items OR the count of items in the partition which ever is least.
-	reserved := min(p.Count, req.NumRequested)
+	fmt.Printf("UnReserved: %d Requested: %d\n", p.State.UnReserved.Load(), req.NumRequested)
+	reserved := min(int(p.State.UnReserved.Load()), req.NumRequested)
+	fmt.Printf("Reserved: %d\n", reserved)
 	// Increment the number of reserved items in this distribution.
-	p.NumReserved += reserved
+	p.State.NumReserved += reserved
 	// Decrement requested from the actual count
-	p.Count -= reserved
+	p.State.UnReserved.Add(int32(-reserved))
 	// Record which partition this request is assigned, so it can be retrieved by the client later.
 	req.Partition = p.Store.Info().PartitionNum
 	// Add the request to this partitions reserve batch
 	p.ReserveRequests.Add(req)
-}
-
-func (q *QueueState) GetPartition(num int) *Partition {
-	for _, p := range q.Partitions {
-		if p.Info.PartitionNum == num {
-			return p
-		}
-	}
-	return nil
 }
 
 type Request struct {

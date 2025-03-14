@@ -5,6 +5,8 @@ import (
 	"github.com/kapetan-io/tackle/clock"
 )
 
+const UnSet = -1
+
 // TODO(thrawn01): Consider creating a pool of Request structs and Item to avoid GC
 
 type ReserveRequest struct {
@@ -134,4 +136,9 @@ type LifeCycleRequest struct {
 	RequestTimeout clock.Duration
 	Actions        []Action
 	PartitionNum   int
+}
+
+type PartitionStateChange struct {
+	State        PartitionState
+	PartitionNum int
 }

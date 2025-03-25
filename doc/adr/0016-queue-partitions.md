@@ -147,6 +147,8 @@ Notes about storage backends
 - `partition_affinity=1.0` - Partitions should be created here
 - `partition_affinity=0.5` - Partitions should be created here half of the time
 
+See [Partition Maintenance](0023-partition-maintenance.md) for details on reload and migration
+
 ## Consequences
 
 This proposal both complicates and in some ways simplifies the design. This design is very similar

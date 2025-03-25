@@ -630,15 +630,22 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		d, c, ctx := newDaemon(t, 30*clock.Second, que.ServiceConfig{StorageConfig: _store})
 		defer d.Shutdown(t)
 
-		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 			ReserveTimeout:      ReserveTimeout,
 			ExpireTimeout:       ExpireTimeout,
 			QueueName:           queueName,
 			RequestedPartitions: 1,
-		}))
+		})
 
-		items := writeRandomItems(t, ctx, c, queueName, 500)
-		require.Len(t, items, 500)
+		produce := pb.QueueProduceRequest{
+			Items:          produceRandomItems(500),
+			QueueName:      queueName,
+			RequestTimeout: "1m",
+		}
+		require.NoError(t, c.QueueProduce(ctx, &produce))
+
+		// TODO: Reload the partition now that new items have been added to the underlying storage.
+		//c.QueueReload(ctx, queueName)
 
 		req := pb.QueueReserveRequest{
 			ClientId:       clientID,
@@ -658,6 +665,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		p := stat.Partitions[0]
 		assert.Equal(t, int32(500), p.Total)
 		assert.Equal(t, int32(15), p.TotalReserved)
+		assert.Equal(t, int32(0), p.Failures)
 		assert.NotEmpty(t, p.AverageAge)
 		assert.NotEmpty(t, p.AverageReservedAge)
 		t.Logf("total: %d average-age: %s reserved %d average-reserved: %s",
@@ -743,7 +751,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			var queueName = random.String("queue-", 10)
 			d, c, ctx := newDaemon(t, 5*clock.Second, que.ServiceConfig{StorageConfig: _store})
 			defer d.Shutdown(t)
-			maxItems := randomProduceItems(1_001)
+			maxItems := produceRandomItems(1_001)
 
 			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
 				ReserveTimeout:      ReserveTimeout,

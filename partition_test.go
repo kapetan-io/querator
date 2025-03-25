@@ -63,7 +63,7 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		var queueName = random.String("queue-", 10)
 		ClientID := random.String("client-", 10)
 
-		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 			QueueName:           queueName,
 			DeadQueue:           queueName + "-dead",
 			Reference:           "CreateTestRef",
@@ -71,10 +71,10 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			ExpireTimeout:       "10m",
 			MaxAttempts:         10,
 			RequestedPartitions: 2,
-		}))
+		})
 
 		// Should be queued into partition 0
-		partitionZeroItems := randomProduceItems(10)
+		partitionZeroItems := produceRandomItems(10)
 		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
 			Items:          partitionZeroItems,
 			QueueName:      queueName,
@@ -86,7 +86,7 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		assert.Equal(t, partitionZeroItems[0].Bytes, list.Items[0].Payload)
 
 		// Should be queued into partition 1
-		partitionOneItems := randomProduceItems(11)
+		partitionOneItems := produceRandomItems(11)
 		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
 			Items:          partitionOneItems,
 			QueueName:      queueName,
@@ -145,7 +145,7 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	t.Run("OpportunisticReservation", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
 
-		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 			QueueName:           queueName,
 			DeadQueue:           queueName + "-dead",
 			Reference:           "CreateTestRef",
@@ -153,11 +153,11 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			ExpireTimeout:       "10m",
 			MaxAttempts:         10,
 			RequestedPartitions: 2,
-		}))
+		})
 
 		// Produce 50 items
 		for i := 0; i < 5; i++ {
-			items := randomProduceItems(10)
+			items := produceRandomItems(10)
 			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
 				Items:          items,
 				QueueName:      queueName,
@@ -242,7 +242,7 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	t.Run("OnePartitionManyConsumers", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
 
-		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 			QueueName:           queueName,
 			DeadQueue:           queueName + "-dead",
 			Reference:           "CreateTestMany",
@@ -250,11 +250,11 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			ExpireTimeout:       "10m",
 			MaxAttempts:         10,
 			RequestedPartitions: 1,
-		}))
+		})
 
 		// Produce 50 items
 		for i := 0; i < 5; i++ {
-			items := randomProduceItems(10)
+			items := produceRandomItems(10)
 			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
 				Items:          items,
 				QueueName:      queueName,
@@ -308,19 +308,20 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	t.Run("ManyPartitionsOneConsumer", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
 
-		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 			QueueName:           queueName,
 			DeadQueue:           queueName + "-dead",
 			Reference:           "CreateTestMany",
-			ReserveTimeout:      "1m",
+			ReserveTimeout:      "10m",
 			ExpireTimeout:       "10m",
 			MaxAttempts:         10,
 			RequestedPartitions: 10,
-		}))
+		})
 
 		// Produce 50 items
 		for i := 0; i < 10; i++ {
-			items := randomProduceItems(5)
+			items := produceRandomItems(5)
+			fmt.Printf("Producing items: %d\n", len(items))
 			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
 				Items:          items,
 				QueueName:      queueName,
@@ -338,6 +339,8 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				BatchSize:      5,
 				RequestTimeout: "1m",
 			}, &resp))
+			fmt.Printf("Got: %d\n", len(resp.Items))
+			fmt.Printf("count: %d\n", count)
 			count += len(resp.Items)
 		}
 		assertPartition(t, ctx, c, queueName, Partition{Partition: 0, Reserved: 5, NotReserved: 0})
@@ -355,7 +358,7 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	t.Run("WaitingConsumers", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
 
-		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 			QueueName:           queueName,
 			DeadQueue:           queueName + "-dead",
 			Reference:           "WaitingConsumers",
@@ -363,7 +366,7 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			ExpireTimeout:       "10m",
 			MaxAttempts:         10,
 			RequestedPartitions: 5,
-		}))
+		})
 
 		requests := []*pb.QueueReserveRequest{
 			{
@@ -415,7 +418,7 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		require.NoError(t, err)
 
 		// Now produce 10 items
-		items := randomProduceItems(10)
+		items := produceRandomItems(10)
 		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
 			Items:          items,
 			QueueName:      queueName,
@@ -453,4 +456,24 @@ func assertPartition(t *testing.T, ctx context.Context, c *que.Client, name stri
 	}
 	assert.Equal(t, expected.Reserved, reserved)
 	assert.Equal(t, expected.NotReserved, notReserved)
+}
+
+// createQueueAndWait creates a queue and returns when all the partitions in the queue are ready
+func createQueueAndWait(t *testing.T, ctx context.Context, c *que.Client, info *pb.QueueInfo) {
+	t.Helper()
+
+	require.NoError(t, c.QueuesCreate(ctx, info))
+
+	// Wait for the partitions to become available
+	err := retry.On(ctx, RetryTenTimes, func(ctx context.Context, i int) error {
+		var resp pb.QueueStatsResponse
+		require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: info.QueueName}, &resp))
+		for _, p := range resp.LogicalQueues[0].Partitions {
+			if p.Failures != 0 {
+				return fmt.Errorf("partition '%d' never became available", p.Partition)
+			}
+		}
+		return nil
+	})
+	require.NoError(t, err)
 }

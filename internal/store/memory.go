@@ -318,14 +318,14 @@ func (m *MemoryPartition) Stats(_ context.Context, stats *types.PartitionStats) 
 		stats.AverageAge += now.Sub(item.CreatedAt)
 		if item.IsReserved {
 			stats.AverageReservedAge += item.ReserveDeadline.Sub(now)
-			stats.TotalReserved++
+			stats.NumReserved++
 		}
 	}
 	if stats.Total != 0 {
 		stats.AverageAge = clock.Duration(int64(stats.AverageAge) / int64(stats.Total))
 	}
-	if stats.TotalReserved != 0 {
-		stats.AverageReservedAge = clock.Duration(int64(stats.AverageReservedAge) / int64(stats.TotalReserved))
+	if stats.NumReserved != 0 {
+		stats.AverageReservedAge = clock.Duration(int64(stats.AverageReservedAge) / int64(stats.NumReserved))
 	}
 	return nil
 }

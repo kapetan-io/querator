@@ -52,7 +52,7 @@ func (p *Partition) Reserve(req *types.ReserveRequest) {
 	reserved := min(p.State.UnReserved, req.NumRequested)
 	fmt.Printf("Reserved: %d\n", reserved)
 	// Increment the number of reserved items in this distribution.
-	p.State.NumReserved += reserved
+	p.State.NumReserved += reserved // TODO: This assignment is getting clobbered somehow
 	// Decrement requested from the actual count
 	p.State.UnReserved -= reserved
 	// Record which partition this request is assigned, so it can be retrieved by the client later.

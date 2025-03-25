@@ -149,7 +149,7 @@ func (b *badgerTestSetup) Teardown() {
 // Test Helpers
 // ---------------------------------------------
 
-func randomProduceItems(count int) []*pb.QueueProduceItem {
+func produceRandomItems(count int) []*pb.QueueProduceItem {
 	batch := random.String("", 5)
 	var items []*pb.QueueProduceItem
 	for i := 0; i < count; i++ {

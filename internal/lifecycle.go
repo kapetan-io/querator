@@ -40,7 +40,7 @@ type LifeCycle struct {
 	conf       LifeCycleConfig
 	wg         sync.WaitGroup
 	manager    *QueuesManager
-	runCh      chan Request
+	startCh    chan Request
 	notifyCh   chan Request
 	shutdownCh chan Request
 	log        *slog.Logger
@@ -56,56 +56,33 @@ func NewLifeCycle(conf LifeCycleConfig) *LifeCycle {
 			"queue", conf.Logical.conf.Name),
 		manager:    conf.Logical.conf.Manager,
 		notifyCh:   make(chan Request),
-		runCh:      make(chan Request),
+		startCh:    make(chan Request),
 		shutdownCh: make(chan Request),
-		logical:    conf.Logical,
-		conf:       conf,
+		state: types.PartitionState{
+			Failures: types.UnSet,
+		},
+		logical: conf.Logical,
+		conf:    conf,
 	}
 }
 
-// Start starts the life cycle by running a read phase upon the partition storage.
-// If successful, the life cycle marks the LifeCycle.Distribution as available.
-// Start() will block until the read phase is complete, if the context is cancelled
-// before the read phase is complete, Start() returns, but the read phase continues
-// until completion and the LifeCycle.Distribution is marked as available.
-func (l *LifeCycle) Start(ctx context.Context) error {
+// Start starts the partition life cycle kicking off a partition recovery if necessary.
+// Partition recovery might take a while, as such the LifeCycle will signal the *Logical
+// when the partition becomes available. The *Logical won't allow interaction with the
+// partition until recovery has completed.
+func (l *LifeCycle) Start() error {
 	if !l.running.CompareAndSwap(false, true) {
 		return ErrLifeCycleRunning
 	}
 
 	l.wg.Add(1)
-	go l.run()
+	go l.requestLoop()
 
-	select {
-	case <-l.start():
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-func (l *LifeCycle) start() chan struct{} {
-	for {
-		// Continues to call Run() until the requestLoop() go routine
-		// is up and running and accepting requests.
-		if ch := l.Run(); ch != nil {
-			return ch
-		}
-		time.Sleep(clock.Microsecond)
-	}
-}
-
-// Run runs the lifecycle immediately, returning a channel that when closed indicates the run has completed.
-func (l *LifeCycle) Run() chan struct{} {
-	req := Request{
+	// Signal the LifeCycle to start it's first run
+	l.startCh <- Request{
 		ReadyCh: make(chan struct{}),
 	}
-	select {
-	case l.runCh <- req:
-	default:
-		return nil
-	}
-	return req.ReadyCh
+	return nil
 }
 
 // Notify proposes a time for the life cycle to consider when determining the next execution cycle.
@@ -119,7 +96,7 @@ func (l *LifeCycle) Notify(t clock.Time) {
 	}
 }
 
-func (l *LifeCycle) run() {
+func (l *LifeCycle) requestLoop() {
 	defer l.wg.Done()
 	state := lifeCycleState{
 		timer:           l.conf.Clock.NewTimer(humanize.LongTime),
@@ -128,11 +105,11 @@ func (l *LifeCycle) run() {
 
 	// nolint
 	for {
-		// NOTE: Separate channels avoids missing a shutdown or run cycle requests
-		// in the case where we have a ton of notify requests.
+		// NOTE: Separate channels avoids missing a shutdown in case we
+		// have a ton of notify requests.
 		select {
-		case req := <-l.runCh:
-			l.log.LogAttrs(context.Background(), LevelDebugAll, "life cycle run - requested")
+		case req := <-l.startCh:
+			l.log.LogAttrs(context.Background(), LevelDebugAll, "LifeCycle.requestLoop() - start")
 			l.runLifeCycle(&state)
 			close(req.ReadyCh)
 		case req := <-l.notifyCh:
@@ -142,13 +119,13 @@ func (l *LifeCycle) run() {
 			state.timer.Stop()
 			return
 		case <-state.timer.C():
-			l.log.LogAttrs(context.Background(), LevelDebugAll, "life cycle run - timer")
+			l.log.LogAttrs(context.Background(), LevelDebugAll, "LifeCycle.requestLoop() - timer fired")
 			l.runLifeCycle(&state)
 		}
 
 		now := l.conf.Clock.Now().UTC()
 		state.timer.Reset(state.nextRunDeadline.Sub(now))
-		l.log.LogAttrs(context.Background(), LevelDebugAll, "timer reset",
+		l.log.LogAttrs(context.Background(), LevelDebugAll, "LifeCycle.requestLoop() - timer reset",
 			slog.String("nextRunDeadline", state.nextRunDeadline.String()),
 			slog.String("duration", state.nextRunDeadline.Sub(now).String()))
 	}
@@ -354,15 +331,15 @@ func (l *LifeCycle) recoverPartition(state *lifeCycleState) bool {
 	l.log.LogAttrs(context.Background(), LevelDebug, "partition available",
 		slog.Int("partition", l.conf.Partition.Info.PartitionNum))
 
-	if stats.Total-stats.TotalReserved < 0 {
+	if stats.Total-stats.NumReserved < 0 {
 		l.log.Error("assertion failed; total count of items in the partition "+
 			"cannot be more than the total reserved count", "total", stats.Total,
-			"reserved", stats.TotalReserved)
+			"reserved", stats.NumReserved)
 		return false
 	}
 
 	l.state.Failures = 0
-	return l.partitionStateChange(0, stats.Total-stats.TotalReserved)
+	return l.partitionStateChange(0, stats.Total-stats.NumReserved)
 }
 
 func (l *LifeCycle) Shutdown(ctx context.Context) error {

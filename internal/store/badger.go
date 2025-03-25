@@ -576,15 +576,15 @@ func (b *BadgerPartition) Stats(_ context.Context, stats *types.PartitionStats) 
 			stats.AverageAge += now.Sub(item.CreatedAt)
 			if item.IsReserved {
 				stats.AverageReservedAge += item.ReserveDeadline.Sub(now)
-				stats.TotalReserved++
+				stats.NumReserved++
 			}
 		}
 
 		if stats.Total != 0 {
 			stats.AverageAge = clock.Duration(int64(stats.AverageAge) / int64(stats.Total))
 		}
-		if stats.TotalReserved != 0 {
-			stats.AverageReservedAge = clock.Duration(int64(stats.AverageReservedAge) / int64(stats.TotalReserved))
+		if stats.NumReserved != 0 {
+			stats.AverageReservedAge = clock.Duration(int64(stats.AverageReservedAge) / int64(stats.NumReserved))
 		}
 		return nil
 	})
@@ -606,7 +606,9 @@ func (b *BadgerPartition) validateID(id []byte) error {
 }
 
 func (b *BadgerPartition) getDB() (*badger.DB, error) {
+	b.mu.Lock()
 	if b.db != nil {
+		b.mu.Unlock()
 		return b.db, nil
 	}
 
@@ -616,10 +618,11 @@ func (b *BadgerPartition) getDB() (*badger.DB, error) {
 	opts.Logger = newBadgerLogger(b.conf.Log)
 	db, err := badger.Open(opts)
 	if err != nil {
+		b.mu.Unlock()
 		return nil, errors.Errorf("while opening db '%s': %w", dir, err)
 	}
-
 	b.db = db
+	b.mu.Unlock()
 	return db, nil
 }
 

@@ -190,6 +190,29 @@ func (s *Service) QueueComplete(ctx context.Context, req *proto.QueueCompleteReq
 	return nil
 }
 
+// TODO(reload)
+func (s *Service) QueueReload(ctx context.Context, req *proto.QueueClearRequest) error {
+	queue, err := s.queues.Get(ctx, req.QueueName)
+	if err != nil {
+		return err
+	}
+
+	// Clear all the logical queues on this instance
+	for _, logical := range queue.GetAll() {
+		r := types.ReloadRequest{
+			Partitions: make([]int, 0), // TODO
+		}
+
+		if err := logical.ReloadPartitions(ctx, &r); err != nil {
+			// If a logical queue goes away while we are clearing
+			// return the error to the client, so they know the clear request didn't complete.
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (s *Service) QueueClear(ctx context.Context, req *proto.QueueClearRequest) error {
 	queue, err := s.queues.Get(ctx, req.QueueName)
 	if err != nil {
@@ -422,7 +445,8 @@ func (s *Service) QueueStats(ctx context.Context, req *proto.QueueStatsRequest,
 				&proto.QueuePartitionStats{
 					AverageReservedAge: stat.AverageReservedAge.String(),
 					Partition:          int32(stat.Partition),
-					TotalReserved:      int32(stat.TotalReserved),
+					TotalReserved:      int32(stat.NumReserved),
+					Failures:           int32(stat.Failures),
 					AverageAge:         stat.AverageAge.String(),
 					Total:              int32(stat.Total),
 				})

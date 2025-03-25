@@ -64,6 +64,10 @@ type CompleteRequest struct {
 	// The error to be returned to the caller
 	Err error
 }
+type ReloadRequest struct {
+	// Partitions is a list of partitions to reload
+	Partitions []int
+}
 
 type ClearRequest struct {
 	// Defer indicates the 'defer' queue will be cleared. If true, any items
@@ -124,8 +128,10 @@ type PartitionStats struct {
 	Partition int
 	// Total is the number of items in the queue
 	Total int
-	// TotalReserved is the number of items in the queue that are in reserved state
-	TotalReserved int
+	// NumReserved is the number of items in the queue that are in reserved state
+	NumReserved int
+	// Failures is the number of failures the partition has encountered
+	Failures int
 	// AverageAge is the average age of all items in the queue
 	AverageAge clock.Duration
 	// AverageReservedAge is the average age of reserved items in the queue

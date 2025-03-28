@@ -55,7 +55,7 @@ type Queues interface {
 // upon first invocation. See 0021-storage-lazy-initialization.md for details.
 type Partition interface {
 	// Produce writes the items in the batch to the data store.
-	Produce(ctx context.Context, batch types.Batch[types.ProduceRequest]) error
+	Produce(ctx context.Context, batch types.ProduceBatch) error
 
 	// Reserve attempts to reserve items for each request in the reserve batch. It uses the batch.Iterator()
 	// to evenly distribute items to all the waiting reserve requests represented in the batch.

@@ -328,7 +328,7 @@ func (l *LifeCycle) recoverPartition(state *lifeCycleState) bool {
 		return false
 	}
 
-	l.log.LogAttrs(context.Background(), LevelDebug, "partition available",
+	l.log.LogAttrs(context.Background(), LevelDebugAll, "partition available",
 		slog.Int("partition", l.conf.Partition.Info.PartitionNum))
 
 	if stats.Total-stats.NumReserved < 0 {

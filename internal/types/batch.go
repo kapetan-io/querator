@@ -27,8 +27,30 @@ func (r *Batch[T]) Remove(req *T) {
 }
 
 func (r *Batch[T]) Reset() {
-	// TODO: Do I need to nil out all the items in the request array before GC will collect them?
 	r.Requests = r.Requests[:0]
+}
+
+type ProduceBatch struct {
+	Requests []*ProduceRequest
+}
+
+func (r *ProduceBatch) Add(req *ProduceRequest) {
+	if req == nil {
+		return
+	}
+	r.Requests = append(r.Requests, req)
+}
+
+func (r *ProduceBatch) Reset() {
+	// Remove all requests that have Assigned == true
+	n := 0
+	for _, req := range r.Requests {
+		if !req.Assigned {
+			r.Requests[n] = req
+			n++
+		}
+	}
+	r.Requests = r.Requests[:n]
 }
 
 // ReserveBatch is a batch of reserve requests. It is unique from other Batch requests

@@ -63,7 +63,7 @@ type BadgerPartition struct {
 	db   *badger.DB
 }
 
-func (b *BadgerPartition) Produce(_ context.Context, batch types.Batch[types.ProduceRequest]) error {
+func (b *BadgerPartition) Produce(_ context.Context, batch types.ProduceBatch) error {
 	db, err := b.getDB()
 	if err != nil {
 		return err
@@ -867,9 +867,9 @@ func (l *badgerLogger) Warningf(f string, v ...interface{}) {
 }
 
 func (l *badgerLogger) Infof(f string, v ...interface{}) {
-	l.log.Debug(fmt.Sprintf(strings.Trim(f, "\n"), v...))
+	l.log.LogAttrs(context.Background(), LevelDebug, fmt.Sprintf(strings.Trim(f, "\n"), v...))
 }
 
 func (l *badgerLogger) Debugf(f string, v ...interface{}) {
-	l.log.Debug(fmt.Sprintf(strings.Trim(f, "\n"), v...))
+	l.log.LogAttrs(context.Background(), LevelDebug, fmt.Sprintf(strings.Trim(f, "\n"), v...))
 }

@@ -75,6 +75,13 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			RequestedPartitions: 1,
 		}))
 
+		//createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+		//	ReserveTimeout:      ReserveTimeout,
+		//	ExpireTimeout:       ExpireTimeout,
+		//	QueueName:           queueName,
+		//	RequestedPartitions: 1,
+		//})
+
 		// Produce a single message
 		ref := random.String("ref-", 10)
 		enc := random.String("enc-", 10)

@@ -30,7 +30,7 @@ type MemoryPartition struct {
 	uid  ksuid.KSUID
 }
 
-func (m *MemoryPartition) Produce(_ context.Context, batch types.Batch[types.ProduceRequest]) error {
+func (m *MemoryPartition) Produce(_ context.Context, batch types.ProduceBatch) error {
 	defer m.mu.Unlock()
 	m.mu.Lock()
 

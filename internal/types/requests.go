@@ -46,6 +46,8 @@ type ProduceRequest struct {
 	ReadyCh chan struct{}
 	// The error to be returned to the caller
 	Err error
+	// True if the Request was assigned a partition
+	Assigned bool
 }
 
 type CompleteRequest struct {

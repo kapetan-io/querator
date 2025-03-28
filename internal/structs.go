@@ -2,7 +2,6 @@ package internal
 
 import (
 	"context"
-	"fmt"
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
 	"log/slog"
@@ -16,7 +15,7 @@ const (
 // Partition is the in memory representation of the state of a partition.
 type Partition struct {
 	// ProduceRequests is the batch of produce requests that are assigned to this partition
-	ProduceRequests types.Batch[types.ProduceRequest]
+	ProduceRequests types.ProduceBatch
 	// ReserveRequests is the batch of reserve requests that are assigned to this partition
 	ReserveRequests types.ReserveBatch
 	// CompleteRequests is the batch of complete requests that are assigned to this partition
@@ -38,21 +37,19 @@ func (p *Partition) Reset() {
 	p.ReserveRequests.Reset()
 	p.CompleteRequests.Reset()
 	p.LifeCycleRequests.Reset()
-	p.State.NumReserved = 0
 }
 
 func (p *Partition) Produce(req *types.ProduceRequest) {
 	p.State.UnReserved += len(req.Items)
 	p.ProduceRequests.Add(req)
+	req.Assigned = true
 }
 
 func (p *Partition) Reserve(req *types.ReserveRequest) {
 	// Use the Number of Requested items OR the count of items in the partition which ever is least.
-	fmt.Printf("UnReserved: %d Requested: %d\n", p.State.UnReserved, req.NumRequested)
 	reserved := min(p.State.UnReserved, req.NumRequested)
-	fmt.Printf("Reserved: %d\n", reserved)
 	// Increment the number of reserved items in this distribution.
-	p.State.NumReserved += reserved // TODO: This assignment is getting clobbered somehow
+	p.State.NumReserved += reserved
 	// Decrement requested from the actual count
 	p.State.UnReserved -= reserved
 	// Record which partition this request is assigned, so it can be retrieved by the client later.

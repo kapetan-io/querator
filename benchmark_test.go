@@ -9,6 +9,7 @@ import (
 	pb "github.com/kapetan-io/querator/proto"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/random"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"io"
 	"log/slog"
@@ -20,8 +21,7 @@ import (
 )
 
 func BenchmarkProduce(b *testing.B) {
-	fmt.Printf("Current Operating System has '%d' CPUs\n", runtime.NumCPU())
-	//bdb := boltTestSetup{Dir: b.TempDir()}
+	b.Logf("Current Operating System has '%d' CPUs\n", runtime.NumCPU())
 	//badgerdb := badgerTestSetup{Dir: b.TempDir()}
 
 	log = slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError}))
@@ -38,15 +38,6 @@ func BenchmarkProduce(b *testing.B) {
 			},
 			TearDown: func() {},
 		},
-		//{
-		//	Name: "BoltDB",
-		//	Setup: func(cp *clock.Provider) store.StorageConfig {
-		//		return bdb.Setup(store.BoltConfig{Clock: cp})
-		//	},
-		//	TearDown: func() {
-		//		bdb.Teardown()
-		//	},
-		//},
 		//{
 		//	Name: "BadgerDB",
 		//	Setup: func(cp *clock.Provider) store.StorageConfig {
@@ -217,14 +208,59 @@ func BubbleSortPartition(n []BenchPartition) {
 
 type MethodCount interface {
 	MethodCount() int64
+	Failures() int64
 }
 
 type method struct {
-	count int64
+	count    int64
+	failures int64
 }
 
 func (m *method) MethodCount() int64 {
 	return m.count
+}
+
+func (m *method) Failures() int64 {
+	return m.failures
+}
+
+// Ensure sorts items with failures last
+func TestSort(t *testing.T) {
+	o := []MethodCount{
+		&method{count: -1},
+		&method{count: 2},
+		&method{count: 0},
+		&method{count: 1},
+		&method{count: 43},
+		&method{count: 14},
+		&method{count: 85},
+		&method{count: 16},
+		&method{count: 7, failures: 10},
+		&method{count: 58},
+		&method{count: 9},
+		&method{count: 10},
+		&method{count: 21},
+		&method{count: 42},
+		&method{count: 73},
+		&method{count: 4},
+		&method{count: 5},
+	}
+
+	slices.SortFunc(o, func(a, b MethodCount) int {
+		if a.Failures() < b.Failures() {
+			return -1
+		}
+
+		if a.MethodCount() < b.MethodCount() {
+			return -1
+		}
+		if a.MethodCount() > b.MethodCount() {
+			return +1
+		}
+		return 0
+	})
+
+	assert.Equal(t, int64(7), o[len(o)-1].MethodCount())
 }
 
 func BenchmarkSort(b *testing.B) {
@@ -252,6 +288,10 @@ func BenchmarkSort(b *testing.B) {
 			}
 
 			slices.SortFunc(o, func(a, b MethodCount) int {
+				if a.Failures() < b.Failures() {
+					return -1
+				}
+
 				if a.MethodCount() < b.MethodCount() {
 					return -1
 				}

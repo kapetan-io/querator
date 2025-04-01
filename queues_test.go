@@ -16,8 +16,7 @@ import (
 )
 
 func TestQueuesStorage(t *testing.T) {
-	bdb := boltTestSetup{Dir: t.TempDir()}
-	badgerdb := badgerTestSetup{Dir: t.TempDir()}
+	badger := badgerTestSetup{Dir: t.TempDir()}
 
 	for _, tc := range []struct {
 		Setup    NewStorageFunc
@@ -32,21 +31,12 @@ func TestQueuesStorage(t *testing.T) {
 			TearDown: func() {},
 		},
 		{
-			Name: "BoltDB",
-			Setup: func(cp *clock.Provider) store.StorageConfig {
-				return bdb.Setup(store.BoltConfig{Clock: cp})
-			},
-			TearDown: func() {
-				bdb.Teardown()
-			},
-		},
-		{
 			Name: "BadgerDB",
 			Setup: func(cp *clock.Provider) store.StorageConfig {
-				return badgerdb.Setup(store.BadgerConfig{Clock: cp})
+				return badger.Setup(store.BadgerConfig{Clock: cp})
 			},
 			TearDown: func() {
-				badgerdb.Teardown()
+				badger.Teardown()
 			},
 		},
 		//{
@@ -384,6 +374,17 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				})
 			})
 		})
+
+		t.Run("PivotNotFound", func(t *testing.T) {
+			var page pb.QueuesListResponse
+			require.NoError(t, c.QueuesList(ctx, &page,
+				&que.ListOptions{Pivot: "pueue-00000", Limit: 1}))
+
+			// Should return the first queue in the list
+			assert.Equal(t, 1, len(page.Items))
+
+			assert.Equal(t, queues[0].QueueName, page.Items[0].QueueName)
+		})
 	})
 
 	t.Run("Errors", func(t *testing.T) {
@@ -430,6 +431,17 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 						QueueName: random.String("", 2_001),
 					},
 					Msg:  "queue name is invalid; cannot be greater than '512' characters",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "QueueWhiteSpace",
+					Req: &pb.QueueInfo{
+						ReserveTimeout:      ReserveTimeout,
+						ExpireTimeout:       ExpireTimeout,
+						QueueName:           "Friendship is Magic",
+						RequestedPartitions: 1,
+					},
+					Msg:  "queue name is invalid; 'Friendship is Magic' cannot contain whitespace",
 					Code: duh.CodeBadRequest,
 				},
 				{
@@ -538,7 +550,6 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					Code: duh.CodeBadRequest,
 				},
 				{
-					// TODO: We may want to allow -1 to indicate infinite retries, or just use 0
 					Name: "InvalidNegativeMaxAttempts",
 					Req: &pb.QueueInfo{
 						QueueName:   "InvalidMaxAttempts",
@@ -649,6 +660,17 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 						QueueName: random.String("", 2_001),
 					},
 					Msg:  "queue name is invalid; cannot be greater than '512' characters",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "QueueWhiteSpace",
+					Req: &pb.QueueInfo{
+						ReserveTimeout:      ReserveTimeout,
+						ExpireTimeout:       ExpireTimeout,
+						QueueName:           "Friendship is Magic",
+						RequestedPartitions: 1,
+					},
+					Msg:  "queue name is invalid; 'Friendship is Magic' cannot contain whitespace",
 					Code: duh.CodeBadRequest,
 				},
 				{
@@ -773,6 +795,14 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 						QueueName: random.String("", 2_001),
 					},
 					Msg:  "queue name is invalid; cannot be greater than '512' characters",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "QueueWhiteSpace",
+					Req: &pb.QueuesDeleteRequest{
+						QueueName: "Friendship is Magic",
+					},
+					Msg:  "queue name is invalid; 'Friendship is Magic' cannot contain whitespace",
 					Code: duh.CodeBadRequest,
 				},
 			} {

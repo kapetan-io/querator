@@ -211,6 +211,12 @@ func (c *Client) QueuesDelete(ctx context.Context, req *pb.QueuesDeleteRequest) 
 
 // TODO: Write an iterator we can use to iterate through list APIs
 
+// StorageItemsList lists current items in the queue.
+// # NOTE
+// If the pivot does not exist when calling StoreItemsList(), the endpoint will return the
+// nearest next item in the list to the pivot provided. It is up to the caller to verify the
+// list of items returned begins with the id specified in the pivot. This allows users to iterate
+// through a constantly moving list without constantly running into "pivot not found" errors.
 func (c *Client) StorageItemsList(ctx context.Context, name string, partition int, res *pb.StorageItemsListResponse,
 	opts *ListOptions) error {
 

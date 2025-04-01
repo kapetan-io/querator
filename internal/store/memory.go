@@ -3,6 +3,7 @@ package store
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/transport"
 	"github.com/kapetan-io/tackle/clock"
@@ -13,6 +14,8 @@ import (
 	"strings"
 	"sync"
 )
+
+var bucketName = []byte("queue")
 
 // ---------------------------------------------
 // Partition Implementation
@@ -27,7 +30,7 @@ type MemoryPartition struct {
 	uid  ksuid.KSUID
 }
 
-func (m *MemoryPartition) Produce(_ context.Context, batch types.Batch[types.ProduceRequest]) error {
+func (m *MemoryPartition) Produce(_ context.Context, batch types.ProduceBatch) error {
 	defer m.mu.Unlock()
 	m.mu.Lock()
 
@@ -57,6 +60,7 @@ func (m *MemoryPartition) Reserve(_ context.Context, batch types.ReserveBatch, o
 
 		item.ReserveDeadline = opts.ReserveDeadline
 		item.IsReserved = true
+		item.Attempts++
 		count++
 
 		// Item returned gets the public StorageID
@@ -205,8 +209,7 @@ func (m *MemoryPartition) UpdateQueueInfo(info types.QueueInfo) {
 	m.info.Queue = info
 }
 
-// TODO: Consider renaming to ScanForActions
-func (m *MemoryPartition) ActionScan(_ clock.Duration, now clock.Time) iter.Seq[types.Action] {
+func (m *MemoryPartition) ScanForActions(_ clock.Duration, now clock.Time) iter.Seq[types.Action] {
 	defer m.mu.RUnlock()
 	m.mu.RLock()
 
@@ -217,6 +220,19 @@ func (m *MemoryPartition) ActionScan(_ clock.Duration, now clock.Time) iter.Seq[
 				if now.After(item.ReserveDeadline) {
 					yield(types.Action{
 						Action:       types.ActionReserveExpired,
+						PartitionNum: m.info.PartitionNum,
+						Queue:        m.info.Queue.Name,
+						Item:         item,
+					})
+					continue
+				}
+				// NOTE: This wll catch any items which may have been left in the data store
+				// due to a failed /queue.defer call. This could happen if there is a dead letter queue
+				// defined and defer inserted the item into the dead letter, but failed to remove it
+				// due to partition error or catastrophic failure of querator before it could be removed.
+				if m.info.Queue.MaxAttempts != 0 && item.Attempts >= m.info.Queue.MaxAttempts {
+					yield(types.Action{
+						Action:       types.ActionItemMaxAttempts,
 						PartitionNum: m.info.PartitionNum,
 						Queue:        m.info.Queue.Name,
 						Item:         item,
@@ -234,51 +250,53 @@ func (m *MemoryPartition) ActionScan(_ clock.Duration, now clock.Time) iter.Seq[
 				})
 				continue
 			}
-			if item.Attempts >= m.info.Queue.MaxAttempts {
-				yield(types.Action{
-					Action:       types.ActionItemMaxAttempts,
-					PartitionNum: m.info.PartitionNum,
-					Queue:        m.info.Queue.Name,
-					Item:         item,
-				})
-				continue
-			}
 		}
 	}
 }
 
-func (m *MemoryPartition) TakeAction(ctx context.Context, batch types.Batch[types.LifeCycleRequest]) error {
-	defer m.mu.RUnlock()
-	m.mu.RLock()
+func (m *MemoryPartition) TakeAction(_ context.Context, batch types.Batch[types.LifeCycleRequest]) error {
+	if len(batch.Requests) == 0 {
+		return nil
+	}
+
+	defer m.mu.Unlock()
+	m.mu.Lock()
 
 	for _, req := range batch.Requests {
 		for _, a := range req.Actions {
 			switch a.Action {
-			case types.ActionQueueScheduledItem:
-				// TODO: Find the scheduled item and add it to the partition queue
 			case types.ActionReserveExpired:
 				idx, ok := m.findID(a.Item.ID)
 				if !ok {
 					m.log.Warn("unable to find item while processing action; ignoring action",
 						"id", a.Item.ID, "action", types.ActionToString(a.Action))
+					continue
 				}
 				// make a copy of the item and mark as un-reserved
 				item := m.mem[idx]
 				item.ReserveDeadline = clock.Time{}
 				item.IsReserved = false
+				item.Attempts += 1
+
+				// Assign a new ID to the item, as it is placed at the start of the queue
+				m.uid = m.uid.Next()
+				item.ID = []byte(m.uid.String())
+
 				// Remove the item from the array
 				m.mem = append(m.mem[:idx], m.mem[idx+1:]...)
 				// Add the item to the beginning of the array
 				// See doc/adr/0022-managing-item-lifecycles.md for and explanation
 				m.mem = append(m.mem, item)
 			case types.ActionDeleteItem:
-				// TODO: Find the item and remove it
+				// TODO(lifecycle): Find the item and remove it
+			case types.ActionQueueScheduledItem:
+				// TODO: Find the scheduled item and add it to the partition queue
 			default:
-				m.log.Warn("undefined action", "action", types.ActionToString(a.Action))
+				m.log.Warn("undefined action", "action", fmt.Sprintf("%d", int(a.Action)))
 			}
 		}
 	}
-	return nil // TODO(lifecycle):
+	return nil
 }
 
 func (m *MemoryPartition) LifeCycleInfo(ctx context.Context, info *types.LifeCycleInfo) error {
@@ -296,9 +314,6 @@ func (m *MemoryPartition) LifeCycleInfo(ctx context.Context, info *types.LifeCyc
 	if next != theFuture {
 		info.NextReserveExpiry = next
 	}
-
-	m.log.LogAttrs(ctx, LevelDebugAll, "life cycle status",
-		slog.String("next-reserve-expire", info.NextReserveExpiry.String()))
 	return nil
 }
 
@@ -312,14 +327,14 @@ func (m *MemoryPartition) Stats(_ context.Context, stats *types.PartitionStats) 
 		stats.AverageAge += now.Sub(item.CreatedAt)
 		if item.IsReserved {
 			stats.AverageReservedAge += item.ReserveDeadline.Sub(now)
-			stats.TotalReserved++
+			stats.NumReserved++
 		}
 	}
 	if stats.Total != 0 {
 		stats.AverageAge = clock.Duration(int64(stats.AverageAge) / int64(stats.Total))
 	}
-	if stats.TotalReserved != 0 {
-		stats.AverageReservedAge = clock.Duration(int64(stats.AverageReservedAge) / int64(stats.TotalReserved))
+	if stats.NumReserved != 0 {
+		stats.AverageReservedAge = clock.Duration(int64(stats.AverageReservedAge) / int64(stats.NumReserved))
 	}
 	return nil
 }

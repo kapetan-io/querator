@@ -5,6 +5,8 @@ import (
 	"github.com/kapetan-io/tackle/clock"
 )
 
+const UnSet = -1
+
 // TODO(thrawn01): Consider creating a pool of Request structs and Item to avoid GC
 
 type ReserveRequest struct {
@@ -44,6 +46,8 @@ type ProduceRequest struct {
 	ReadyCh chan struct{}
 	// The error to be returned to the caller
 	Err error
+	// True if the Request was assigned a partition
+	Assigned bool
 }
 
 type CompleteRequest struct {
@@ -61,6 +65,10 @@ type CompleteRequest struct {
 	ReadyCh chan struct{}
 	// The error to be returned to the caller
 	Err error
+}
+type ReloadRequest struct {
+	// Partitions is a list of partitions to reload
+	Partitions []int
 }
 
 type ClearRequest struct {
@@ -122,8 +130,10 @@ type PartitionStats struct {
 	Partition int
 	// Total is the number of items in the queue
 	Total int
-	// TotalReserved is the number of items in the queue that are in reserved state
-	TotalReserved int
+	// NumReserved is the number of items in the queue that are in reserved state
+	NumReserved int
+	// Failures is the number of failures the partition has encountered
+	Failures int
 	// AverageAge is the average age of all items in the queue
 	AverageAge clock.Duration
 	// AverageReservedAge is the average age of reserved items in the queue
@@ -134,4 +144,9 @@ type LifeCycleRequest struct {
 	RequestTimeout clock.Duration
 	Actions        []Action
 	PartitionNum   int
+}
+
+type PartitionStateChange struct {
+	State        PartitionState
+	PartitionNum int
 }

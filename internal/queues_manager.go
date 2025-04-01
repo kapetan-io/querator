@@ -108,7 +108,7 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Que
 			}
 			partitionIdx++
 			info.PartitionInfo = append(info.PartitionInfo, p)
-			qm.log.LogAttrs(ctx, LevelDebug, "Partition Assigned",
+			qm.log.LogAttrs(ctx, LevelDebugAll, "Partition Assigned",
 				slog.String("queue", p.Queue.Name), slog.String("storage", p.StorageName),
 				slog.Bool("read-only", p.ReadOnly), slog.Int("partition", p.PartitionNum))
 		}

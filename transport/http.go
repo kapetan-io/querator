@@ -53,6 +53,11 @@ const (
 	//  wish to iterate through all the items page by page should account for this. Also clients must check if the
 	//  pivot is the first item, because if the pivot is missing from the data store the API will return the next
 	//  item after the pivot. This is an extremely efficient way to iterate through a SQL RDBMS `primary_key > pivot`
+	//
+	// DOC: If the pivot does not exist when calling StoreItemsList(), the endpoint will return
+	// the nearest next item in the list to the pivot provided. It is up to the caller to verify the list of
+	// items returned begins with the id specified in the pivot. This allows users to iterate through a constantly
+	// moving list without constantly running into "pivot not found" errors.
 
 	// TODO: We should define a maximum payload size and now allow clients to send or receive larger than expected
 	//   payloads. I think DUH should do this for us when via duh.ReadRequest(r, &req, maxSize)

@@ -63,7 +63,7 @@ type BadgerPartition struct {
 	db   *badger.DB
 }
 
-func (b *BadgerPartition) Produce(_ context.Context, batch types.Batch[types.ProduceRequest]) error {
+func (b *BadgerPartition) Produce(_ context.Context, batch types.ProduceBatch) error {
 	db, err := b.getDB()
 	if err != nil {
 		return err
@@ -101,7 +101,13 @@ func (b *BadgerPartition) Reserve(_ context.Context, batch types.ReserveBatch, o
 
 		batchIter := batch.Iterator()
 		var count int
-		iter := txn.NewIterator(badger.DefaultIteratorOptions)
+		iter := txn.NewIterator(badger.IteratorOptions{
+			PrefetchValues: false,
+			PrefetchSize:   100,
+			Reverse:        false,
+			AllVersions:    false,
+		})
+
 		defer iter.Close()
 
 		for iter.Rewind(); iter.Valid(); iter.Next() {
@@ -126,6 +132,7 @@ func (b *BadgerPartition) Reserve(_ context.Context, batch types.ReserveBatch, o
 
 			item.ReserveDeadline = opts.ReserveDeadline
 			item.IsReserved = true
+			item.Attempts++
 			count++
 
 			// Assign the item to the next waiting reservation in the batch,
@@ -236,9 +243,6 @@ func (b *BadgerPartition) List(_ context.Context, items *[]*types.Item, opts typ
 
 		if opts.Pivot != nil {
 			iter.Seek(opts.Pivot)
-			if !iter.Valid() {
-				return transport.NewInvalidOption("invalid pivot; '%s' does not exist", opts.Pivot)
-			}
 		} else {
 			iter.Rewind()
 		}
@@ -373,21 +377,185 @@ func (b *BadgerPartition) UpdateQueueInfo(info types.QueueInfo) {
 	b.info.Queue = info
 }
 
-func (b *BadgerPartition) ActionScan(timeout clock.Duration, now clock.Time) iter.Seq[types.Action] {
-	//info := b.Info()
-
+func (b *BadgerPartition) ScanForActions(_ clock.Duration, now clock.Time) iter.Seq[types.Action] {
 	return func(yield func(types.Action) bool) {
-		// TODO(lifecycle)
+		db, err := b.getDB()
+		if err != nil {
+			return
+		}
+
+		err = db.View(func(txn *badger.Txn) error {
+			iter := txn.NewIterator(badger.DefaultIteratorOptions)
+			defer iter.Close()
+
+			for iter.Rewind(); iter.Valid(); iter.Next() {
+				var v []byte
+				v, err := iter.Item().ValueCopy(v)
+				if err != nil {
+					return err
+				}
+
+				item := new(types.Item)
+				if err := gob.NewDecoder(bytes.NewReader(v)).Decode(item); err != nil {
+					return errors.Errorf("during Decode(): %w", err)
+				}
+
+				// Is the reserved item expired?
+				if item.IsReserved {
+					if now.After(item.ReserveDeadline) {
+						if !yield(types.Action{
+							Action:       types.ActionReserveExpired,
+							PartitionNum: b.info.PartitionNum,
+							Queue:        b.info.Queue.Name,
+							Item:         *item,
+						}) {
+							return nil
+						}
+						continue
+					}
+					if b.info.Queue.MaxAttempts != 0 && item.Attempts >= b.info.Queue.MaxAttempts {
+						if !yield(types.Action{
+							Action:       types.ActionItemMaxAttempts,
+							PartitionNum: b.info.PartitionNum,
+							Queue:        b.info.Queue.Name,
+							Item:         *item,
+						}) {
+							return nil
+						}
+						continue
+					}
+				}
+				// Is the item expired?
+				if now.After(item.ExpireDeadline) {
+					if !yield(types.Action{
+						Action:       types.ActionItemExpired,
+						PartitionNum: b.info.PartitionNum,
+						Queue:        b.info.Queue.Name,
+						Item:         *item,
+					}) {
+						return nil
+					}
+					continue
+				}
+			}
+			return nil
+		})
+
+		if err != nil {
+			b.conf.Log.Error("Error scanning for actions", "error", err)
+		}
 	}
 }
 
-func (b *BadgerPartition) TakeAction(ctx context.Context, batch types.Batch[types.LifeCycleRequest]) error {
-	return nil // TODO(lifecycle):
+func (b *BadgerPartition) TakeAction(_ context.Context, batch types.Batch[types.LifeCycleRequest]) error {
+	if len(batch.Requests) == 0 {
+		return nil
+	}
+
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.Update(func(txn *badger.Txn) error {
+		for _, req := range batch.Requests {
+			for _, a := range req.Actions {
+				switch a.Action {
+				case types.ActionReserveExpired:
+					item := new(types.Item)
+					kvItem, err := txn.Get(a.Item.ID)
+					if err != nil {
+						if errors.Is(err, badger.ErrKeyNotFound) {
+							b.conf.Log.Warn("unable to find item while processing action; ignoring action",
+								"id", a.Item.ID, "action", types.ActionToString(a.Action))
+							continue
+						}
+						return err
+					}
+
+					err = kvItem.Value(func(val []byte) error {
+						return gob.NewDecoder(bytes.NewReader(val)).Decode(item)
+					})
+					if err != nil {
+						return err
+					}
+
+					// Update the item
+					item.ReserveDeadline = clock.Time{}
+					item.IsReserved = false
+					item.Attempts += 1
+
+					// Assign a new ID to the item, as it is placed at the start of the queue
+					b.uid = b.uid.Next()
+					item.ID = []byte(b.uid.String())
+
+					// Encode and store the updated item
+					var buf bytes.Buffer
+					if err := gob.NewEncoder(&buf).Encode(item); err != nil {
+						return err
+					}
+
+					if err := txn.Set(item.ID, buf.Bytes()); err != nil {
+						return err
+					}
+
+					// Delete the old item
+					if err := txn.Delete(a.Item.ID); err != nil {
+						return err
+					}
+
+				case types.ActionDeleteItem:
+					// TODO(lifecycle): Find the item and remove it
+					if err := txn.Delete(a.Item.ID); err != nil {
+						return err
+					}
+
+				case types.ActionQueueScheduledItem:
+					// TODO: Find the scheduled item and add it to the partition queue
+
+				default:
+					b.conf.Log.Warn("undefined action", "action", fmt.Sprintf("%d", int(a.Action)))
+				}
+			}
+		}
+		return nil
+	})
 }
 
-func (b *BadgerPartition) LifeCycleInfo(ctx context.Context, info *types.LifeCycleInfo) error {
-	// TODO(lifecycle)
-	return nil
+func (b *BadgerPartition) LifeCycleInfo(_ context.Context, info *types.LifeCycleInfo) error {
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.View(func(txn *badger.Txn) error {
+		next := theFuture
+
+		iter := txn.NewIterator(badger.DefaultIteratorOptions)
+		defer iter.Close()
+
+		for iter.Rewind(); iter.Valid(); iter.Next() {
+			var v []byte
+			v, err := iter.Item().ValueCopy(v)
+			if err != nil {
+				return err
+			}
+
+			item := new(types.Item)
+			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(item); err != nil {
+				return err
+			}
+
+			if item.ReserveDeadline.Before(next) {
+				next = item.ReserveDeadline
+			}
+		}
+
+		if next != theFuture {
+			info.NextReserveExpiry = next
+		}
+		return nil
+	})
 }
 
 func (b *BadgerPartition) Stats(_ context.Context, stats *types.PartitionStats) error {
@@ -419,15 +587,15 @@ func (b *BadgerPartition) Stats(_ context.Context, stats *types.PartitionStats) 
 			stats.AverageAge += now.Sub(item.CreatedAt)
 			if item.IsReserved {
 				stats.AverageReservedAge += item.ReserveDeadline.Sub(now)
-				stats.TotalReserved++
+				stats.NumReserved++
 			}
 		}
 
 		if stats.Total != 0 {
 			stats.AverageAge = clock.Duration(int64(stats.AverageAge) / int64(stats.Total))
 		}
-		if stats.TotalReserved != 0 {
-			stats.AverageReservedAge = clock.Duration(int64(stats.AverageReservedAge) / int64(stats.TotalReserved))
+		if stats.NumReserved != 0 {
+			stats.AverageReservedAge = clock.Duration(int64(stats.AverageReservedAge) / int64(stats.NumReserved))
 		}
 		return nil
 	})
@@ -449,7 +617,9 @@ func (b *BadgerPartition) validateID(id []byte) error {
 }
 
 func (b *BadgerPartition) getDB() (*badger.DB, error) {
+	b.mu.Lock()
 	if b.db != nil {
+		b.mu.Unlock()
 		return b.db, nil
 	}
 
@@ -459,10 +629,11 @@ func (b *BadgerPartition) getDB() (*badger.DB, error) {
 	opts.Logger = newBadgerLogger(b.conf.Log)
 	db, err := badger.Open(opts)
 	if err != nil {
+		b.mu.Unlock()
 		return nil, errors.Errorf("while opening db '%s': %w", dir, err)
 	}
-
 	b.db = db
+	b.mu.Unlock()
 	return db, nil
 }
 
@@ -640,9 +811,6 @@ func (b *BadgerQueues) List(_ context.Context, queues *[]types.QueueInfo, opts t
 
 		if opts.Pivot != nil {
 			iter.Seek(opts.Pivot)
-			if !iter.Valid() {
-				return transport.NewInvalidOption("invalid pivot; '%s' does not exist", opts.Pivot)
-			}
 		} else {
 			iter.Rewind()
 		}
@@ -710,9 +878,9 @@ func (l *badgerLogger) Warningf(f string, v ...interface{}) {
 }
 
 func (l *badgerLogger) Infof(f string, v ...interface{}) {
-	l.log.Debug(fmt.Sprintf(strings.Trim(f, "\n"), v...))
+	l.log.LogAttrs(context.Background(), LevelDebug, fmt.Sprintf(strings.Trim(f, "\n"), v...))
 }
 
 func (l *badgerLogger) Debugf(f string, v ...interface{}) {
-	l.log.Debug(fmt.Sprintf(strings.Trim(f, "\n"), v...))
+	l.log.LogAttrs(context.Background(), LevelDebug, fmt.Sprintf(strings.Trim(f, "\n"), v...))
 }

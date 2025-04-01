@@ -1192,13 +1192,13 @@ components:
           type: integer
           description: >-
             The maximum number of times an item can be defered by a consumer
-            before it is placed in the dead letter queue. This includes cases
-            where the 'deadline' was exceeded and the item was retried. 
+            before it is placed in the dead letter queue or removed. 
+            Infinite attempts if max_attempts is set to '0'
         requested_partitions:
           type: integer
           description: >-
-            The number of partitions this queue hasrequested. This might be
-            different than the number of currently active partitionsas the
+            The number of partitions this queue has requested. This might be
+            different than the number of currently active partitions as the
             system grows or contracts the number of partitions.
       required:
         - name

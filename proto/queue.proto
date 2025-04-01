@@ -65,6 +65,8 @@ message QueueProduceItem {
   // be dropped.
   // Example: 'Hello, I am a UTF-8 payload' , '{"key", "value"}'
   string utf8 = 5;
+
+  // TODO: Consider adding user provided metadata as a map of values
 }
 
 message QueueReserveRequest {
@@ -201,7 +203,7 @@ message QueueInfo {
   string expireTimeout = 7 [json_name = "expire_timeout"];
 
   // The maximum number of times this item can be deferred by a consumer before it is
-  // placed in the dead letter queue.
+  // placed in the dead letter queue or removed. Infinite attempts if max_attempts is set to '0'
   int32 maxAttempts = 8 [json_name = "max_attempts"];
 
   // The number of partitions the queue is requesting. This might be different than the
@@ -212,7 +214,8 @@ message QueueInfo {
 }
 
 message PartitionInfo {
-
+  // TODO: Information on the partitions availability, migration or rebalance status.
+  int32 partition = 1;
 }
 
 message QueueClearRequest {
@@ -253,10 +256,13 @@ message QueuePartitionStats {
   int32 total = 2;
   // TotalReserved is the number of items in the partition that are in reserved state
   int32 totalReserved = 3 [json_name = "total_reserved"];
+  // Failures is the total number of failures the partitions has encountered, which is
+  // Reset when the partition becomes available. -1 means the partition isn't ready
+  int32 failures = 4;
   // AverageAge is the average age of all items in the partition
-  string averageAge = 4 [json_name = "average_age"];
+  string averageAge = 5 [json_name = "average_age"];
   // AverageReservedAge is the average age of reserved items in the partition
-  string averageReservedAge = 5 [json_name = "average_reserved_age"];
+  string averageReservedAge = 6 [json_name = "average_reserved_age"];
 }
 
 message QueueLogicalStats {

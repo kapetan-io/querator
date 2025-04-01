@@ -34,6 +34,8 @@ const (
 	MethodReserve
 	MethodComplete
 	MethodLifeCycle
+	MethodPartitionStateChange
+	MethodReloadPartitions
 
 	DefaultMaxReserveBatchSize  = 1_000
 	DefaultMaxProduceBatchSize  = 1_000
@@ -306,6 +308,36 @@ func (l *Logical) Complete(ctx context.Context, req *types.CompleteRequest) erro
 	return req.Err
 }
 
+// PartitionStateChange is called by LifeCycle to update the state of the partition
+func (l *Logical) PartitionStateChange(ctx context.Context, partitionNum int, state types.PartitionState) error {
+	if l.inShutdown.Load() {
+		return ErrQueueShutdown
+	}
+
+	r := Request{
+		ReadyCh: make(chan struct{}),
+		Method:  MethodPartitionStateChange,
+		Context: ctx,
+		Request: types.PartitionStateChange{
+			PartitionNum: partitionNum,
+			State:        state,
+		},
+	}
+
+	select {
+	case l.coldRequestCh <- &r:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
+	select {
+	case <-r.ReadyCh:
+		return r.Err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func (l *Logical) LifeCycle(ctx context.Context, req *types.LifeCycleRequest) error {
 	if l.inShutdown.Load() {
 		return ErrQueueShutdown
@@ -351,6 +383,20 @@ func (l *Logical) QueueStats(ctx context.Context, stats *types.LogicalStats) err
 func (l *Logical) Pause(ctx context.Context, req *types.PauseRequest) error {
 	r := Request{
 		Method:  MethodQueuePause,
+		Request: req,
+	}
+	return l.queueRequest(ctx, &r)
+}
+
+// ReloadPartitions reloads all partitions from storage. Queue operation
+// is paused while reload completes.
+func (l *Logical) ReloadPartitions(ctx context.Context, req *types.ReloadRequest) error {
+	if l.inShutdown.Load() {
+		return ErrQueueShutdown
+	}
+
+	r := Request{
+		Method:  MethodReloadPartitions,
 		Request: req,
 	}
 	return l.queueRequest(ctx, &r)
@@ -471,10 +517,10 @@ func (l *Logical) prepareQueueState(state *QueueState) {
 
 	// TODO: Validate each partition hasn't been modified since last loaded by a Logical queue.
 	//  we do this by saving he last item id in the partition into QueueInfo.StoragePartitions along with
-	//  the the QueueInfo.StoragePartitions.Count of items in the partition. When loading the partition,
+	//  the the QueueInfo.StoragePartitions.UnReserved of items in the partition. When loading the partition,
 	//  If the last item id saved in QueueInfo.StoragePartitions agrees with what is in the actual partition,
 	//  we should trust that the partition was not modified and the count saved in
-	//  QueueInfo.StoragePartitions.Count is accurate. If it's not accurate, we MUST re-count all the items
+	//  QueueInfo.StoragePartitions.UnReserved is accurate. If it's not accurate, we MUST re-count all the items
 	//  in the partition in order to accurately distribute items.
 
 	// TODO(rebalance): This needs to preserve partitions counts and current in flight reserve requests
@@ -493,26 +539,26 @@ func (l *Logical) prepareQueueState(state *QueueState) {
 			Storage:   p,
 			Logical:   l,
 		})
-		o.Failures.Store(-1)
+		o.State.Failures = types.UnSet
 		state.Partitions[i] = o
 
 		// TODO(rebalance): We need to shutdown existing life cycles when partitions are added or removed
 
-		ctx, cancel := context.WithTimeout(context.Background(), l.conf.ReadTimeout)
-		if err := o.LifeCycle.Start(ctx); err != nil {
-			l.log.Warn("partition unavailable; while waiting for life cycle to start",
-				"partition", p.Info().PartitionNum,
-				"timeout", l.conf.ReadTimeout,
+		if err := o.LifeCycle.Start(); err != nil {
+			l.log.Warn("partition unavailable; life cycle refused to start",
 				"error", err.Error())
 		}
-		cancel()
 	}
 
 	slices.SortFunc(state.Partitions, func(a, b *Partition) int {
-		if a.Count < b.Count {
+		// Ensure failed Partitions are sorted last
+		if a.State.Failures < b.State.Failures {
 			return -1
 		}
-		if a.Count > b.Count {
+		if a.State.UnReserved < b.State.UnReserved {
+			return -1
+		}
+		if a.State.UnReserved > b.State.UnReserved {
 			return +1
 		}
 		return 0
@@ -528,10 +574,19 @@ func (l *Logical) prepareQueueState(state *QueueState) {
 type QueueState struct {
 	LifeCycles        types.Batch[types.LifeCycleRequest]
 	Completes         types.Batch[types.CompleteRequest]
-	Producers         types.Batch[types.ProduceRequest]
+	Producers         types.ProduceBatch
 	Reservations      types.ReserveBatch
 	NextMaintenanceCh <-chan clock.Time
 	Partitions        []*Partition
+}
+
+func (q *QueueState) GetPartition(num int) *Partition {
+	for _, p := range q.Partitions {
+		if p.Info.PartitionNum == num {
+			return p
+		}
+	}
+	return nil
 }
 
 func (l *Logical) requestLoop() {
@@ -544,11 +599,13 @@ func (l *Logical) requestLoop() {
 	//  of the new items via state.Maintenance.NotifyScheduledItem(date)
 
 	for {
-		l.log.LogAttrs(context.Background(), LevelDebugAll, "requestLoop()",
-			slog.Int("InChannel", len(l.hotRequestCh)),
-			slog.Int("RBlocked", len(state.Reservations.Requests)),
-			slog.Int("PBlocked", len(state.Producers.Requests)),
-			slog.Int("CBlocked", len(state.Completes.Requests)),
+		l.log.LogAttrs(context.Background(), LevelDebugAll, "Logical.requestLoop()",
+			slog.Int("HotRequests", len(l.hotRequestCh)),
+			slog.Int("ColdRequests", len(l.coldRequestCh)),
+			slog.Int("Reservations", len(state.Reservations.Requests)),
+			slog.Int("Producers", len(state.Producers.Requests)),
+			slog.Int("Completes", len(state.Completes.Requests)),
+			slog.Int("LifeCycles", len(state.LifeCycles.Requests)),
 			slog.Int("InFlight", int(l.inFlight.Load())),
 		)
 
@@ -574,6 +631,8 @@ func (l *Logical) requestLoop() {
 }
 
 func (l *Logical) handleHotRequests(state *QueueState, req *Request) {
+	//fmt.Println(l.dumpPartitionOrder(state))
+
 	// If request is empty, do not consume more requests, the caller wants us to
 	// only process requests currently waiting in 'state'
 	if req != nil {
@@ -592,20 +651,23 @@ func (l *Logical) handleHotRequests(state *QueueState, req *Request) {
 	l.distributeCompleteRequests(state)
 
 	// write distributed requests to each partition according to assignment.
-	_ = l.writeToPartitions(state)
+	_ = l.updatePartitions(state)
 
 	// TODO: If an error occurred, and it's recoverable, then
 	//  attempt to re-distribute remaining requests to other partitions
 
 	// TODO: Some time may have passed while talking to the partition.
 	//  If a partition has failed, and we can't re-distribute to other partitions
-	//  we need to let clients know they  are timed out.
+	//  we need to let clients know they are timed out.
 	//  Perhaps scheduled maint should do this or just let `handleRequestTimeouts()` do it?
 
 	// ----------------------------------------
 	// Inform clients their requests are done
 	// ----------------------------------------
 	for _, req := range state.Producers.Requests {
+		if !req.Assigned {
+			continue
+		}
 		close(req.ReadyCh)
 	}
 	for _, req := range state.Completes.Requests {
@@ -624,14 +686,15 @@ func (l *Logical) handleHotRequests(state *QueueState, req *Request) {
 
 	// Reset the partition assignments
 	for _, p := range state.Partitions {
-		if p.NumReserved != 0 {
-			// Indexing LifeCycles here only works because LifeCycles and Partitions have the
+		if p.State.NumReserved != 0 {
+			// NOTE: Indexing LifeCycles here only works because LifeCycles and Partitions have the
 			// same number of entries, consider merging them in the future.
-			p.LifeCycle.Notify(p.MostRecentDeadline)
+			p.LifeCycle.Notify(p.State.MostRecentDeadline)
 		}
 		p.Reset()
 	}
 
+	state.LifeCycles.Reset()
 	state.Reservations.FilterNils()
 	state.Producers.Reset()
 	state.Completes.Reset()
@@ -667,8 +730,14 @@ func (l *Logical) consumeHotCh(state *QueueState, req *Request) {
 		state.Completes.Add(req.Request.(*types.CompleteRequest))
 	case MethodLifeCycle:
 		state.LifeCycles.Add(req.Request.(*types.LifeCycleRequest))
+		close(req.ReadyCh)
 	case MethodReserve:
 		addIfUnique(&state.Reservations, req.Request.(*types.ReserveRequest))
+	case MethodPartitionStateChange:
+		// Do nothing. This request is intended to force requestLoop to cycle
+		// when a partition state changes, so any waiting produce or reserve
+		// requests have a chance consider the changed partition in order to
+		// fulfill their waiting requests.
 	default:
 		panic(fmt.Sprintf("undefined request method '%d'", req.Method))
 	}
@@ -687,8 +756,14 @@ EMPTY:
 				state.Completes.Add(req.Request.(*types.CompleteRequest))
 			case MethodLifeCycle:
 				state.LifeCycles.Add(req.Request.(*types.LifeCycleRequest))
+				close(req.ReadyCh)
 			case MethodReserve:
 				addIfUnique(&state.Reservations, req.Request.(*types.ReserveRequest))
+			case MethodPartitionStateChange:
+				// Do nothing. This request is intended to force requestLoop to cycle
+				// when a partition state changes, so any waiting produce or reserve
+				// requests have a chance consider the changed partition in order to
+				// fulfill their waiting requests.
 			default:
 				panic(fmt.Sprintf("undefined request method '%d'", req.Method))
 			}
@@ -703,12 +778,11 @@ func (l *Logical) distributeLifeCycles(state *QueueState) {
 		p := state.GetPartition(req.PartitionNum)
 		if p == nil {
 			l.log.Warn("LifeCycleRequest received for invalid partition; skipping request",
-				"req-partition", req.PartitionNum)
+				"partition", req.PartitionNum)
 			continue
 		}
 		p.LifeCycleRequests.Add(req)
 	}
-	// TODO: Write a new PartitionStore method to update the items
 }
 
 func (l *Logical) distributeProduceRequests(state *QueueState) {
@@ -718,18 +792,32 @@ func (l *Logical) distributeProduceRequests(state *QueueState) {
 			item.ExpireDeadline = l.conf.Clock.Now().UTC().Add(l.conf.ExpireTimeout)
 		}
 
-		l.log.LogAttrs(req.Context, LevelDebug, "Produce",
+		l.log.LogAttrs(req.Context, LevelDebugAll, "Produce",
 			slog.Int("partition", state.Partitions[0].Store.Info().PartitionNum),
 			slog.Int("items", len(req.Items)))
+
+		// TODO: This should check the Status of the Partition, not just the failures
+		//  See doc/adr/0023-partition-maintenance.md
+		if state.Partitions[0].State.Failures != 0 {
+			// If the chosen sorted partition has failed, then all partitions have failed, as
+			// partition sorting ensures failed partitions are sorted last.
+			l.log.Warn("no healthy partitions, produce request not assigned",
+				"num_items", len(req.Items))
+			return
+		}
 
 		// Preform Opportunistic Partition Distribution
 		// See doc/adr/0019-partition-items-distribution.md for details
 		state.Partitions[0].Produce(req)
 		slices.SortFunc(state.Partitions, func(a, b *Partition) int {
-			if a.Count < b.Count {
+			// Ensure failed Partitions are sorted last
+			if a.State.Failures < b.State.Failures {
 				return -1
 			}
-			if a.Count > b.Count {
+			if a.State.UnReserved < b.State.UnReserved {
+				return -1
+			}
+			if a.State.UnReserved > b.State.UnReserved {
 				return +1
 			}
 			return 0
@@ -740,26 +828,48 @@ func (l *Logical) distributeProduceRequests(state *QueueState) {
 func (l *Logical) distributeReserveRequests(state *QueueState) {
 	// Assign Reservation Requests to StoragePartitions
 	for _, req := range state.Reservations.Requests {
-		l.log.LogAttrs(req.Context, LevelDebug, "Reserve",
-			slog.Int("partition", state.Partitions[len(state.Partitions)-1].Store.Info().PartitionNum),
+		// Perform a reverse search through state.Partitions finding the first partition where b.State.Failures == 0
+		var assigned *Partition
+		for i := len(state.Partitions) - 1; i >= 0; i-- {
+			// TODO: This should check for partition availability see doc/adr/0023-partition-maintenance.md
+			if state.Partitions[i].State.Failures == 0 {
+				assigned = state.Partitions[i]
+				break
+			}
+		}
+
+		if assigned == nil {
+			l.log.Warn("no healthy partitions, reserve request not assigned",
+				"client_id", req.ClientID,
+				"num_requested", req.NumRequested)
+			continue
+		}
+
+		l.log.LogAttrs(req.Context, LevelDebugAll, "reserve partition assignment",
+			slog.Int("partition", assigned.Store.Info().PartitionNum),
 			slog.Int("num_requested", req.NumRequested),
 			slog.String("client_id", req.ClientID))
 
-		// Preform Opportunistic Partition Distribution
+		// Assign the request to the chosen partition
+		assigned.Reserve(req)
+
+		// Perform Opportunistic Partition Distribution
 		// See doc/adr/0019-partition-items-distribution.md for details
-		state.Partitions[len(state.Partitions)-1].Reserve(req)
 		slices.SortFunc(state.Partitions, func(a, b *Partition) int {
-			if a.Count < b.Count {
+			// Ensure failed Partitions are sorted last
+			if a.State.Failures < b.State.Failures {
 				return -1
 			}
-			if a.Count > b.Count {
+			if a.State.UnReserved < b.State.UnReserved {
+				return -1
+			}
+			if a.State.UnReserved > b.State.UnReserved {
 				return +1
 			}
 			return 0
 		})
 	}
 }
-
 func (l *Logical) distributeCompleteRequests(state *QueueState) {
 nextRequest:
 	for _, req := range state.Completes.Requests {
@@ -768,7 +878,7 @@ nextRequest:
 		for i, p := range state.Partitions {
 			// Assign the request to the partition
 			if req.Partition == p.Store.Info().PartitionNum {
-				if p.Failures.Load() != 0 {
+				if p.State.Failures != 0 {
 					req.Err = transport.NewRetryRequest("partition not available;"+
 						" partition '%d' is failing, retry again", req.Partition)
 					//close(req.ReadyCh)
@@ -789,13 +899,13 @@ nextRequest:
 // TODO: handleDist() needs to indicate if a partition failed, which one, and if we should re-distribute
 //	requests to other partitions.
 
-// writeToPartitions is intended to be used as a place where we can optimise interacting with the
+// updatePartitions is intended to be used as a place where we can optimise interacting with the
 // data store. If the data store supports batching multiple actions in a single round trip request
 // we should make that possible here.
-func (l *Logical) writeToPartitions(state *QueueState) error {
+func (l *Logical) updatePartitions(state *QueueState) error {
 	// TODO: Future: Querator should handle Partition failure by redistributing the batches to partitions which have
-	//  not failed. (note: make sure we reduce the Partitions[].Count when re-assigning)
-	// TODO: Identify a degradation vs a failure and set Partition[].Failures as appropriate.
+	//  not failed. (note: make sure we reduce the Partitions[].State.UnReserved when re-assigning)
+	// TODO: Identify a degradation vs a failure and set Partition[].Failures as appropriate. (Tell LifeCycle)
 	// TODO: Adjust the item count in state.Partitions for failed partitions
 	// TODO: If no new produce requests come in, this may never try again. We need the maintenance
 	//  handler to poke the partition again at some reasonable time in the future, in case it recovered
@@ -817,7 +927,7 @@ func (l *Logical) writeToPartitions(state *QueueState) error {
 				// TODO: Handle degradation
 			}
 			// Only if Produce was successful
-			p.MostRecentDeadline = l.conf.Clock.Now().UTC().Add(l.conf.ExpireTimeout)
+			p.State.MostRecentDeadline = l.conf.Clock.Now().UTC().Add(l.conf.ExpireTimeout)
 		}
 
 		// ----------------------------------------
@@ -834,7 +944,17 @@ func (l *Logical) writeToPartitions(state *QueueState) error {
 				// TODO: Handle degradation
 			}
 			// Only if Reserve was successful
-			p.MostRecentDeadline = reserveDeadline
+			p.State.MostRecentDeadline = reserveDeadline
+
+			if l.log.Enabled(ctx, LevelDebugAll) {
+				for _, req := range p.ReserveRequests.Requests {
+					l.log.LogAttrs(req.Context, LevelDebugAll, "Reserved",
+						slog.Int("partition", req.Partition),
+						slog.Int("num_requested", req.NumRequested),
+						slog.String("client_id", req.ClientID),
+						slog.Int("items_reserved", len(req.Items)))
+				}
+			}
 		}
 
 		// ----------------------------------------
@@ -951,6 +1071,32 @@ func (l *Logical) handleColdRequests(state *QueueState, req *Request) {
 		p := req.Request.([]store.Partition)
 		l.conf.StoragePartitions = p
 		close(req.ReadyCh)
+	case MethodPartitionStateChange:
+		p := req.Request.(types.PartitionStateChange)
+		if p.State.Failures != types.UnSet {
+			state.Partitions[p.PartitionNum].State.Failures = p.State.Failures
+		}
+		if p.State.UnReserved != types.UnSet {
+			state.Partitions[p.PartitionNum].State.UnReserved = p.State.UnReserved
+		}
+		if p.State.NumReserved != types.UnSet {
+			state.Partitions[p.PartitionNum].State.NumReserved = p.State.NumReserved
+		}
+		l.log.LogAttrs(context.Background(), LevelDebugAll, "partition state changed",
+			slog.Int("num_reserved", state.Partitions[p.PartitionNum].State.NumReserved),
+			slog.Int("unreserved", state.Partitions[p.PartitionNum].State.UnReserved),
+			slog.Int("failures", state.Partitions[p.PartitionNum].State.Failures),
+			slog.Int("partition", p.PartitionNum))
+		close(req.ReadyCh)
+		// Ensure the hot path handler runs on the chance there is a produce or
+		// reserve request waiting for a partition to become available.
+		select {
+		case l.hotRequestCh <- req:
+		default:
+		}
+	case MethodReloadPartitions:
+		// TODO(reload) Reload the partitions
+		// TODO: Move all the inline code into handleXXX methods
 	default:
 		panic(fmt.Sprintf("undefined request method '%d'", req.Method))
 	}
@@ -1005,8 +1151,15 @@ func (l *Logical) handleStats(state *QueueState, r *Request) {
 		if err := p.Stats(r.Context, &ps); err != nil {
 			r.Err = err
 		}
+		s := state.Partitions[p.Info().PartitionNum]
+		// TODO Override the on disk stats with in-memory stats. We should
+		//  warn if these stats do not match, or avoid querying the disk, or
+		//  make fetching on disk stats a separate call.
+		ps.Failures = s.State.Failures
+		ps.NumReserved = s.State.NumReserved
 		qs.Partitions = append(qs.Partitions, ps)
 	}
+
 	close(r.ReadyCh)
 }
 
@@ -1073,6 +1226,10 @@ func (l *Logical) handleShutdown(state *QueueState, req *types.ShutdownRequest) 
 					close(o.ReadyCh)
 				case MethodComplete:
 					o := r.Request.(*types.CompleteRequest)
+					o.Err = ErrQueueShutdown
+					close(o.ReadyCh)
+				case MethodLifeCycle:
+					o := r.Request.(*Request)
 					o.Err = ErrQueueShutdown
 					close(o.ReadyCh)
 				default:
@@ -1162,6 +1319,18 @@ func (l *Logical) nextTimeout(r *types.ReserveBatch) clock.Duration {
 	// How soon is it? =)
 	return soon.RequestDeadline.Sub(l.conf.Clock.Now().UTC())
 }
+
+// Useful for debugging, do not remove thrawn(2025-03-31)
+//func (l *Logical) dumpPartitionOrder(state *QueueState) string {
+//	out := strings.Builder{}
+//	out.WriteString("Partition Order:\n")
+//	for _, req := range state.Partitions {
+//		fmt.Fprintf(&out, "  %02d - UnReserved: %d NumReserved: %d Failures: %d\n",
+//			req.Info.PartitionNum, req.State.UnReserved, req.State.NumReserved,
+//			req.State.Failures)
+//	}
+//	return out.String()
+//}
 
 // addIfUnique adds a ReserveRequest to the batch. Returns false if the ReserveRequest.ClientID is a duplicate
 // and the request was not added to the batch

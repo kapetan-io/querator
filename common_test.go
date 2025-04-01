@@ -107,45 +107,6 @@ func newDaemon(t *testing.T, duration clock.Duration, conf que.ServiceConfig) (*
 }
 
 // ---------------------------------------------------------------------
-// Bolt test setup
-// ---------------------------------------------------------------------
-
-type boltTestSetup struct {
-	Dir string
-}
-
-func (b *boltTestSetup) Setup(bc store.BoltConfig) store.StorageConfig {
-	if !dirExists(b.Dir) {
-		if err := os.Mkdir(b.Dir, 0777); err != nil {
-			panic(err)
-		}
-	}
-	b.Dir = filepath.Join(b.Dir, random.String("test-data-", 10))
-	if err := os.Mkdir(b.Dir, 0777); err != nil {
-		panic(err)
-	}
-	bc.StorageDir = b.Dir
-	bc.Log = log
-
-	var conf store.StorageConfig
-	conf.Queues = store.NewBoltQueues(bc)
-	conf.Backends = []store.Backend{
-		{
-			PartitionStore: store.NewBoltPartitionStore(bc),
-			Name:           "bolt-0",
-			Affinity:       1,
-		},
-	}
-	return conf
-}
-
-func (b *boltTestSetup) Teardown() {
-	if err := os.RemoveAll(b.Dir); err != nil {
-		panic(err)
-	}
-}
-
-// ---------------------------------------------------------------------
 // Badger test setup
 // ---------------------------------------------------------------------
 
@@ -188,7 +149,7 @@ func (b *badgerTestSetup) Teardown() {
 // Test Helpers
 // ---------------------------------------------
 
-func randomProduceItems(count int) []*pb.QueueProduceItem {
+func produceRandomItems(count int) []*pb.QueueProduceItem {
 	batch := random.String("", 5)
 	var items []*pb.QueueProduceItem
 	for i := 0; i < count; i++ {
@@ -238,17 +199,34 @@ func dirExists(path string) bool {
 	return info.IsDir()
 }
 
-func findInResponses(t *testing.T, responses []*pb.QueueReserveResponse, id string) bool {
-	t.Helper()
+func findInResponses(responses []*pb.QueueReserveResponse, ref string) bool {
 
 	for _, item := range responses {
 		for _, idItem := range item.Items {
-			if idItem.Id == id {
+			if idItem.Reference == ref {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+func findInStorageList(ref string, resp *pb.StorageItemsListResponse) *pb.StorageItem {
+	for _, i := range resp.Items {
+		if i.Reference == ref {
+			return i
+		}
+	}
+	return nil
+}
+
+func findInReserveResp(ref string, resp *pb.QueueReserveResponse) *pb.QueueReserveItem {
+	for _, i := range resp.Items {
+		if i.Reference == ref {
+			return i
+		}
+	}
+	return nil
 }
 
 func writeRandomItems(t *testing.T, ctx context.Context, c *que.Client,

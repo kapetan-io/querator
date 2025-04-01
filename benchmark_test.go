@@ -21,7 +21,7 @@ import (
 )
 
 func BenchmarkProduce(b *testing.B) {
-	fmt.Printf("Current Operating System has '%d' CPUs\n", runtime.NumCPU())
+	b.Logf("Current Operating System has '%d' CPUs\n", runtime.NumCPU())
 	//badgerdb := badgerTestSetup{Dir: b.TempDir()}
 
 	log = slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError}))
@@ -38,15 +38,6 @@ func BenchmarkProduce(b *testing.B) {
 			},
 			TearDown: func() {},
 		},
-		//{
-		//	Name: "BoltDB",
-		//	Setup: func(cp *clock.Provider) store.StorageConfig {
-		//		return bdb.Setup(store.BoltConfig{Clock: cp})
-		//	},
-		//	TearDown: func() {
-		//		bdb.Teardown()
-		//	},
-		//},
 		//{
 		//	Name: "BadgerDB",
 		//	Setup: func(cp *clock.Provider) store.StorageConfig {

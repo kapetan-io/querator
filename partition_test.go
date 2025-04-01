@@ -321,7 +321,6 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		// Produce 50 items
 		for i := 0; i < 10; i++ {
 			items := produceRandomItems(5)
-			fmt.Printf("Producing items: %d\n", len(items))
 			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
 				Items:          items,
 				QueueName:      queueName,
@@ -339,8 +338,6 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				BatchSize:      5,
 				RequestTimeout: "1m",
 			}, &resp))
-			fmt.Printf("Got: %d\n", len(resp.Items))
-			fmt.Printf("count: %d\n", count)
 			count += len(resp.Items)
 		}
 		assertPartition(t, ctx, c, queueName, Partition{Partition: 0, Reserved: 5, NotReserved: 0})

@@ -550,7 +550,6 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					Code: duh.CodeBadRequest,
 				},
 				{
-					// TODO: We may want to allow -1 to indicate infinite retries, or just use 0
 					Name: "InvalidNegativeMaxAttempts",
 					Req: &pb.QueueInfo{
 						QueueName:   "InvalidMaxAttempts",

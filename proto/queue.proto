@@ -203,7 +203,7 @@ message QueueInfo {
   string expireTimeout = 7 [json_name = "expire_timeout"];
 
   // The maximum number of times this item can be deferred by a consumer before it is
-  // placed in the dead letter queue.
+  // placed in the dead letter queue or removed. Infinite attempts if max_attempts is set to '0'
   int32 maxAttempts = 8 [json_name = "max_attempts"];
 
   // The number of partitions the queue is requesting. This might be different than the

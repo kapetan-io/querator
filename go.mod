@@ -12,7 +12,6 @@ require (
 	github.com/segmentio/ksuid v1.0.4
 	github.com/stretchr/testify v1.9.0
 	go.uber.org/goleak v1.3.0
-	golang.org/x/sync v0.10.0
 	google.golang.org/protobuf v1.34.2
 )
 

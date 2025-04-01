@@ -665,7 +665,7 @@ func (l *Logical) handleHotRequests(state *QueueState, req *Request) {
 	// Inform clients their requests are done
 	// ----------------------------------------
 	for _, req := range state.Producers.Requests {
-		if req.Assigned != true {
+		if !req.Assigned {
 			continue
 		}
 		close(req.ReadyCh)
@@ -680,16 +680,12 @@ func (l *Logical) handleHotRequests(state *QueueState, req *Request) {
 		}
 		if len(req.Items) != 0 || req.Err != nil {
 			state.Reservations.MarkNil(i)
-			fmt.Printf("CLOSED!!!!\n") // TODO(next): <-- The reservation client isn't getting closed
 			close(req.ReadyCh)
 		}
 	}
 
 	// Reset the partition assignments
-	fmt.Printf("Reset Partitions\n")
 	for _, p := range state.Partitions {
-		fmt.Printf("- Partition %d NumReserved: %d UnReserved: %d\n",
-			p.Info.PartitionNum, p.State.NumReserved, p.State.UnReserved)
 		if p.State.NumReserved != 0 {
 			// NOTE: Indexing LifeCycles here only works because LifeCycles and Partitions have the
 			// same number of entries, consider merging them in the future.
@@ -763,6 +759,11 @@ EMPTY:
 				close(req.ReadyCh)
 			case MethodReserve:
 				addIfUnique(&state.Reservations, req.Request.(*types.ReserveRequest))
+			case MethodPartitionStateChange:
+				// Do nothing. This request is intended to force requestLoop to cycle
+				// when a partition state changes, so any waiting produce or reserve
+				// requests have a chance consider the changed partition in order to
+				// fulfill their waiting requests.
 			default:
 				panic(fmt.Sprintf("undefined request method '%d'", req.Method))
 			}
@@ -933,7 +934,6 @@ func (l *Logical) updatePartitions(state *QueueState) error {
 		// Reserve
 		// ----------------------------------------
 		if len(p.ReserveRequests.Requests) != 0 {
-			fmt.Printf("RESERVE!====\n")
 			reserveDeadline := l.conf.Clock.Now().UTC().Add(l.conf.ReserveTimeout)
 			if err := p.Store.Reserve(ctx, p.ReserveRequests, store.ReserveOptions{
 				ReserveDeadline: reserveDeadline,
@@ -1320,16 +1320,17 @@ func (l *Logical) nextTimeout(r *types.ReserveBatch) clock.Duration {
 	return soon.RequestDeadline.Sub(l.conf.Clock.Now().UTC())
 }
 
-func (l *Logical) dumpPartitionOrder(state *QueueState) string {
-	out := strings.Builder{}
-	out.WriteString("Partition Order:\n")
-	for _, req := range state.Partitions {
-		fmt.Fprintf(&out, "  %02d - UnReserved: %d NumReserved: %d Failures: %d\n",
-			req.Info.PartitionNum, req.State.UnReserved, req.State.NumReserved,
-			req.State.Failures)
-	}
-	return out.String()
-}
+// Useful for debugging, do not remove thrawn(2025-03-31)
+//func (l *Logical) dumpPartitionOrder(state *QueueState) string {
+//	out := strings.Builder{}
+//	out.WriteString("Partition Order:\n")
+//	for _, req := range state.Partitions {
+//		fmt.Fprintf(&out, "  %02d - UnReserved: %d NumReserved: %d Failures: %d\n",
+//			req.Info.PartitionNum, req.State.UnReserved, req.State.NumReserved,
+//			req.State.Failures)
+//	}
+//	return out.String()
+//}
 
 // addIfUnique adds a ReserveRequest to the batch. Returns false if the ReserveRequest.ClientID is a duplicate
 // and the request was not added to the batch

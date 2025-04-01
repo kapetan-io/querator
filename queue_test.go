@@ -115,7 +115,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		assert.Equal(t, ref, item.Reference)
 		assert.Equal(t, enc, item.Encoding)
 		assert.Equal(t, kind, item.Kind)
-		assert.Equal(t, int32(0), item.Attempts)
+		assert.Equal(t, int32(1), item.Attempts)
 		assert.Equal(t, payload, item.Bytes)
 
 		// Partition storage should have only one item
@@ -126,7 +126,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		inspect := list.Items[0]
 		assert.Equal(t, ref, inspect.Reference)
 		assert.Equal(t, kind, inspect.Kind)
-		assert.Equal(t, int32(0), inspect.Attempts)
+		assert.Equal(t, int32(1), inspect.Attempts)
 		assert.Equal(t, payload, inspect.Payload)
 		assert.Equal(t, item.Id, inspect.Id)
 		assert.Equal(t, true, inspect.IsReserved)
@@ -1047,12 +1047,12 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			d, c, ctx := newDaemon(t, 5*clock.Second, que.ServiceConfig{StorageConfig: _store})
 			defer d.Shutdown(t)
 
-			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 				ReserveTimeout:      ReserveTimeout,
 				ExpireTimeout:       ExpireTimeout,
 				QueueName:           queueName,
 				RequestedPartitions: 1,
-			}))
+			})
 
 			// TODO: Produce and Reserve some items to create actual ids
 			listOfValidIds := []string{"valid-id"}
@@ -1230,9 +1230,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			}
 
 			// Advance time til we meet the ReserveTime set by the queue
-			fmt.Printf("Advance 2 minutes (%s)\n", now.Now().UTC().String())
 			now.Advance(2 * clock.Minute)
-			fmt.Printf("Now (%s)\n", now.Now().UTC().String())
 
 			// Wait until the item is no longer reserved
 			err = retry.On(ctx, RetryTenTimes, func(ctx context.Context, i int) error {
@@ -1260,7 +1258,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			assert.Equal(t, "friendship", reserved.Encoding)
 			assert.True(t, item.ReserveDeadline.AsTime().Before(now.Now()))
 			require.Equal(t, false, item.IsReserved)
-			assert.Equal(t, int32(1), item.Attempts)
+			assert.Equal(t, int32(2), item.Attempts)
 
 			t.Run("AttemptComplete", func(t *testing.T) {
 				// Attempt to complete the reserved id using the original id

@@ -60,6 +60,7 @@ func (m *MemoryPartition) Reserve(_ context.Context, batch types.ReserveBatch, o
 
 		item.ReserveDeadline = opts.ReserveDeadline
 		item.IsReserved = true
+		item.Attempts++
 		count++
 
 		// Item returned gets the public StorageID
@@ -225,6 +226,19 @@ func (m *MemoryPartition) ScanForActions(_ clock.Duration, now clock.Time) iter.
 					})
 					continue
 				}
+				// NOTE: This wll catch any items which may have been left in the data store
+				// due to a failed /queue.defer call. This could happen if there is a dead letter queue
+				// defined and defer inserted the item into the dead letter, but failed to remove it
+				// due to partition error or catastrophic failure of querator before it could be removed.
+				if m.info.Queue.MaxAttempts != 0 && item.Attempts >= m.info.Queue.MaxAttempts {
+					yield(types.Action{
+						Action:       types.ActionItemMaxAttempts,
+						PartitionNum: m.info.PartitionNum,
+						Queue:        m.info.Queue.Name,
+						Item:         item,
+					})
+					continue
+				}
 			}
 			// Is the item expired?
 			if now.After(item.ExpireDeadline) {
@@ -236,20 +250,15 @@ func (m *MemoryPartition) ScanForActions(_ clock.Duration, now clock.Time) iter.
 				})
 				continue
 			}
-			if item.Attempts >= m.info.Queue.MaxAttempts {
-				yield(types.Action{
-					Action:       types.ActionItemMaxAttempts,
-					PartitionNum: m.info.PartitionNum,
-					Queue:        m.info.Queue.Name,
-					Item:         item,
-				})
-				continue
-			}
 		}
 	}
 }
 
 func (m *MemoryPartition) TakeAction(_ context.Context, batch types.Batch[types.LifeCycleRequest]) error {
+	if len(batch.Requests) == 0 {
+		return nil
+	}
+
 	defer m.mu.Unlock()
 	m.mu.Lock()
 

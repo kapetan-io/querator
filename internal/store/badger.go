@@ -101,7 +101,13 @@ func (b *BadgerPartition) Reserve(_ context.Context, batch types.ReserveBatch, o
 
 		batchIter := batch.Iterator()
 		var count int
-		iter := txn.NewIterator(badger.DefaultIteratorOptions)
+		iter := txn.NewIterator(badger.IteratorOptions{
+			PrefetchValues: false,
+			PrefetchSize:   100,
+			Reverse:        false,
+			AllVersions:    false,
+		})
+
 		defer iter.Close()
 
 		for iter.Rewind(); iter.Valid(); iter.Next() {
@@ -126,6 +132,7 @@ func (b *BadgerPartition) Reserve(_ context.Context, batch types.ReserveBatch, o
 
 			item.ReserveDeadline = opts.ReserveDeadline
 			item.IsReserved = true
+			item.Attempts++
 			count++
 
 			// Assign the item to the next waiting reservation in the batch,
@@ -406,22 +413,22 @@ func (b *BadgerPartition) ScanForActions(_ clock.Duration, now clock.Time) iter.
 						}
 						continue
 					}
+					if b.info.Queue.MaxAttempts != 0 && item.Attempts >= b.info.Queue.MaxAttempts {
+						if !yield(types.Action{
+							Action:       types.ActionItemMaxAttempts,
+							PartitionNum: b.info.PartitionNum,
+							Queue:        b.info.Queue.Name,
+							Item:         *item,
+						}) {
+							return nil
+						}
+						continue
+					}
 				}
 				// Is the item expired?
 				if now.After(item.ExpireDeadline) {
 					if !yield(types.Action{
 						Action:       types.ActionItemExpired,
-						PartitionNum: b.info.PartitionNum,
-						Queue:        b.info.Queue.Name,
-						Item:         *item,
-					}) {
-						return nil
-					}
-					continue
-				}
-				if item.Attempts >= b.info.Queue.MaxAttempts {
-					if !yield(types.Action{
-						Action:       types.ActionItemMaxAttempts,
 						PartitionNum: b.info.PartitionNum,
 						Queue:        b.info.Queue.Name,
 						Item:         *item,
@@ -441,6 +448,10 @@ func (b *BadgerPartition) ScanForActions(_ clock.Duration, now clock.Time) iter.
 }
 
 func (b *BadgerPartition) TakeAction(_ context.Context, batch types.Batch[types.LifeCycleRequest]) error {
+	if len(batch.Requests) == 0 {
+		return nil
+	}
+
 	db, err := b.getDB()
 	if err != nil {
 		return err

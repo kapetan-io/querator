@@ -133,7 +133,6 @@ func (l *LifeCycle) requestLoop() {
 
 func (l *LifeCycle) handleNotify(state *lifeCycleState, notify clock.Time) {
 	now := l.conf.Clock.Now().UTC()
-	fmt.Printf("handleNotify now '%s'\n", now.String())
 	// Ignore notify times from the past
 	if now.After(notify) {
 		return
@@ -141,7 +140,6 @@ func (l *LifeCycle) handleNotify(state *lifeCycleState, notify clock.Time) {
 
 	// Ignore if we already have a life cycle run scheduled that is before the notify time.
 	if state.nextRunDeadline.After(now) && state.nextRunDeadline.Before(notify) {
-		fmt.Printf("handleNotify deadline ignore '%s' - '%s'\n", state.nextRunDeadline.String(), notify.String())
 		return
 	}
 	l.log.LogAttrs(context.Background(), LevelDebugAll, "life cycle notified",
@@ -232,7 +230,6 @@ func (l *LifeCycle) runLifeCycle(state *lifeCycleState) {
 	//  in the future? Actually this will happen when the next thing comes in... right?
 	if info.NextReserveExpiry.After(now) && info.NextReserveExpiry.Before(state.nextRunDeadline) {
 		state.nextRunDeadline = info.NextReserveExpiry
-		fmt.Printf("NextReseveExpiry: %s\n", info.NextReserveExpiry)
 	}
 
 	// If there is no known future run then set the time to some time in the future

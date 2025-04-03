@@ -483,7 +483,6 @@ func (b *BadgerPartition) TakeAction(_ context.Context, batch types.Batch[types.
 					// Update the item
 					item.ReserveDeadline = clock.Time{}
 					item.IsReserved = false
-					item.Attempts += 1
 
 					// Assign a new ID to the item, as it is placed at the start of the queue
 					b.uid = b.uid.Next()

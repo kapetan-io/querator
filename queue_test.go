@@ -1176,13 +1176,13 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer d.Shutdown(t)
 
 		// Create a queue
-		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 			ReserveTimeout:      "1m0s",
 			ExpireTimeout:       ExpireTimeout,
 			QueueName:           queueName,
 			RequestedPartitions: 1,
 			MaxAttempts:         2,
-		}))
+		})
 
 		t.Run("ReserveTimeout", func(t *testing.T) {
 			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
@@ -1258,7 +1258,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			assert.Equal(t, "friendship", reserved.Encoding)
 			assert.True(t, item.ReserveDeadline.AsTime().Before(now.Now()))
 			require.Equal(t, false, item.IsReserved)
-			assert.Equal(t, int32(2), item.Attempts)
+			assert.Equal(t, int32(1), item.Attempts)
 
 			t.Run("AttemptComplete", func(t *testing.T) {
 				// Attempt to complete the reserved id using the original id
@@ -1322,58 +1322,93 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				require.NoError(t, err)
 				require.Nil(t, findInStorageList("flutter@shy.com", &resp))
 			})
-			//t.Run("MaxAttempts", func(t *testing.T) {
-			//	for i := 0; i < 2; i++ {
-			//		fmt.Printf("Reserve 5 Items\n")
-			//		var reserve pb.QueueReserveResponse
-			//		require.NoError(t, c.QueueReserve(ctx, &pb.QueueReserveRequest{
-			//			ClientId:       random.String("client-", 10),
-			//			RequestTimeout: "5s",
-			//			QueueName:      queueName,
-			//			BatchSize:      5,
-			//		}, &reserve))
-			//
-			//		// Advance time til we meet the ReserveTime set by the queue
-			//		fmt.Printf("Advance 2 minutes (%s)\n", now.Now().UTC().String())
-			//		now.Advance(2 * clock.Minute)
-			//		fmt.Printf("Now (%s)\n", now.Now().UTC().String())
-			//
-			//		// Wait until the item is no longer reserved
-			//		fmt.Printf("Should become un-reserved\n")
-			//		err = retry.On(ctx, RetryTenTimes, func(ctx context.Context, i int) error {
-			//			var resp pb.StorageItemsListResponse
-			//			err := c.StorageItemsList(ctx, queueName, 0, &resp, nil)
-			//			if err != nil {
-			//				return err
-			//			}
-			//			item := findInStorageList("rainbow@dash.com", &resp)
-			//			require.NotNil(t, item)
-			//			if item.IsReserved == false {
-			//				return nil
-			//			}
-			//			return fmt.Errorf("expected reserved item to be false, for '%s'", resp.Items[0].Id)
-			//		})
-			//		require.NoError(t, err)
-			//	}
-			//
-			//	var resp pb.StorageItemsListResponse
-			//	require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &resp, nil))
-			//	assert.Len(t, resp.Items, 0)
-			//})
-
-			//t.Run("UntilDeadLetter", func(t *testing.T) {
-			//	// Produce an item
-			//	// Reserve it
-			//	// Wait for the Timeout
-			//	// Repeat until max attempts reached
-			//})
 		})
 
-		//t.Run("RequestTimeouts", func(t *testing.T) {})
-		//t.Run("ExpireTimeout", func(t *testing.T) {
-		//	// TODO: Test with and without a dead letter queue
+		// Create a queue
+		queueName = random.String("queue-", 10)
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			ReserveTimeout:      "1m0s",
+			ExpireTimeout:       ExpireTimeout,
+			QueueName:           queueName,
+			RequestedPartitions: 1,
+			MaxAttempts:         2,
+		})
+
+		t.Run("MaxAttempts", func(t *testing.T) {
+			// Produce an item
+			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+				QueueName:      queueName,
+				RequestTimeout: "1m",
+				Items: []*pb.QueueProduceItem{
+					{
+						Reference: "durp@pony.com",
+						Encoding:  "friendship",
+						Kind:      "dum",
+						Bytes:     []byte("stares ground and sky simultaneously...."),
+					},
+				}}))
+
+			for i := 0; i < 2; i++ {
+				// Reserve the item produced
+				var reserve pb.QueueReserveResponse
+				require.NoError(t, c.QueueReserve(ctx, &pb.QueueReserveRequest{
+					ClientId:       random.String("client-", 10),
+					RequestTimeout: "5s",
+					QueueName:      queueName,
+					BatchSize:      1,
+				}, &reserve))
+
+				reserved := reserve.Items[0]
+				assert.Equal(t, "durp@pony.com", reserved.Reference)
+
+				// Advance time til we meet the ReserveTime set by the queue
+				now.Advance(2 * clock.Minute)
+
+				// If this isn't the final attempt
+				if reserved.Attempts != 2 {
+					// Wait until the item is no longer reserved
+					err := retry.On(ctx, RetryTenTimes, func(ctx context.Context, i int) error {
+						var resp pb.StorageItemsListResponse
+						if err := c.StorageItemsList(ctx, queueName, 0, &resp, nil); err != nil {
+							return err
+						}
+						item := findInStorageList("durp@pony.com", &resp)
+						require.NotNil(t, item)
+						if item.IsReserved == false {
+							return nil
+						}
+						return fmt.Errorf("expected reserved item to be false, for '%s'", resp.Items[0].Id)
+					})
+					require.NoError(t, err)
+				}
+			}
+
+			// Wait until the item is deleted
+			err := retry.On(ctx, RetryTenTimes, func(ctx context.Context, i int) error {
+				var resp pb.StorageItemsListResponse
+				if err := c.StorageItemsList(ctx, queueName, 0, &resp, nil); err != nil {
+					return err
+				}
+				if item := findInStorageList("durp@pony.com", &resp); item != nil {
+					return fmt.Errorf("expected reserved item to be deleted, for '%s'", resp.Items[0].Reference)
+				}
+				return nil
+			})
+			require.NoError(t, err)
+		})
+
+		//t.Run("UntilDeadLetter", func(t *testing.T) {
+		//	// Produce an item
+		//	// Reserve it
+		//	// Wait for the Timeout
+		//	// Repeat until max attempts reached
 		//})
 	})
+
+	//t.Run("RequestTimeouts", func(t *testing.T) {})
+	//t.Run("ExpireTimeout", func(t *testing.T) {
+	//	// TODO: Test with and without a dead letter queue
+	//})
 }
 
 // TODO: Start the Service, produce some items, then Shutdown the service

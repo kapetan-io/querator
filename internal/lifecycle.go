@@ -20,6 +20,8 @@ var (
 	ErrLifeCycleShutdown = errors.New("life cycle is already shutdown")
 )
 
+type handleActions func(state *lifeCycleState, actions []types.Action)
+
 type LifeCycleConfig struct {
 	Partition *Partition
 	Storage   store.Partition
@@ -51,7 +53,7 @@ type LifeCycle struct {
 func NewLifeCycle(conf LifeCycleConfig) *LifeCycle {
 	return &LifeCycle{
 		log: conf.Logical.conf.Log.With(errors.OtelCodeNamespace, "LifeCycle",
-			"partition", conf.Partition.Store.Info().PartitionNum,
+			"partition", conf.Partition.Info.PartitionNum,
 			"instance-id", conf.Logical.instanceID,
 			"queue", conf.Logical.conf.Name),
 		manager:    conf.Logical.conf.Manager,
@@ -87,11 +89,8 @@ func (l *LifeCycle) Start() error {
 
 // Notify proposes a time for the life cycle to consider when determining the next execution cycle.
 func (l *LifeCycle) Notify(t clock.Time) {
-	req := Request{
-		Request: t,
-	}
 	select {
-	case l.notifyCh <- req:
+	case l.notifyCh <- Request{Request: t}:
 	default:
 	}
 }
@@ -103,13 +102,10 @@ func (l *LifeCycle) requestLoop() {
 		nextRunDeadline: l.conf.Clock.Now().UTC().Add(humanize.LongTime),
 	}
 
-	// nolint
 	for {
-		// NOTE: Separate channels avoids missing a shutdown in case we
-		// have a ton of notify requests.
 		select {
 		case req := <-l.startCh:
-			l.log.LogAttrs(context.Background(), LevelDebugAll, "LifeCycle.requestLoop() - start")
+			l.log.LogAttrs(context.Background(), LevelDebugAll, "life cycle run - start")
 			l.runLifeCycle(&state)
 			close(req.ReadyCh)
 		case req := <-l.notifyCh:
@@ -119,13 +115,13 @@ func (l *LifeCycle) requestLoop() {
 			state.timer.Stop()
 			return
 		case <-state.timer.C():
-			l.log.LogAttrs(context.Background(), LevelDebugAll, "LifeCycle.requestLoop() - timer fired")
+			l.log.LogAttrs(context.Background(), LevelDebugAll, "life cycle run - timer fired")
 			l.runLifeCycle(&state)
 		}
 
 		now := l.conf.Clock.Now().UTC()
 		state.timer.Reset(state.nextRunDeadline.Sub(now))
-		l.log.LogAttrs(context.Background(), LevelDebugAll, "LifeCycle.requestLoop() - timer reset",
+		l.log.LogAttrs(context.Background(), LevelDebugAll, "life cycle timer reset",
 			slog.String("nextRunDeadline", state.nextRunDeadline.String()),
 			slog.String("duration", state.nextRunDeadline.Sub(now).String()))
 	}
@@ -149,12 +145,8 @@ func (l *LifeCycle) handleNotify(state *lifeCycleState, notify clock.Time) {
 	state.nextRunDeadline = notify
 }
 
-type handleActions func(state *lifeCycleState, actions []types.Action)
-
 func (l *LifeCycle) runLifeCycle(state *lifeCycleState) {
 	now := l.conf.Clock.Now().UTC()
-	l.log.LogAttrs(context.Background(), LevelDebugAll, "life cycle run",
-		slog.String("now", now.String()))
 
 	defer func() {
 		l.log.LogAttrs(context.Background(), LevelDebugAll, "life cycle run complete",
@@ -168,36 +160,29 @@ func (l *LifeCycle) runLifeCycle(state *lifeCycleState) {
 		}
 	}
 
-	add := func(a types.Action, actions []types.Action, handle handleActions) []types.Action {
-		actions = append(actions, a)
-		if len(actions) >= 1_000 {
-			handle(state, actions)
-			actions = actions[:]
-		}
-		return actions
-	}
-
 	lActions := make([]types.Action, 0, 1_000)
 	mActions := make([]types.Action, 0, 1_000)
 
-	// Separate the events into separate slices handling them in batches
+	// ScanForActions() returns an iterator which allows us to batch actions together
+	// before writing the actions to the logical or manager.
 	for a := range l.conf.Storage.ScanForActions(l.logical.conf.ReadTimeout, now) {
-		l.log.LogAttrs(context.Background(), LevelDebugAll, "new life cycle action",
-			slog.String("reserve_deadline", a.Item.ReserveDeadline.String()),
-			slog.String("expire_deadline", a.Item.ExpireDeadline.String()),
-			slog.String("action", types.ActionToString(a.Action)),
-			slog.String("id", string(a.Item.ID)))
 		switch a.Action {
-		case types.ActionQueueScheduledItem, types.ActionReserveExpired:
-			lActions = add(a, lActions, l.writeLogicalActions)
+		case types.ActionReserveExpired:
+			// If attempts exhausted, then convert to a delete action
+			if a.Item.Attempts >= l.conf.Partition.Info.Queue.MaxAttempts {
+				a.Action = types.ActionDeleteItem
+			}
+			lActions = l.batchAction(state, a, lActions, l.writeLogicalActions)
+		case types.ActionQueueScheduledItem:
+			lActions = l.batchAction(state, a, lActions, l.writeLogicalActions)
 		case types.ActionItemExpired, types.ActionItemMaxAttempts:
-			// If there is no dead letter queue defined
+			// If there is no dead letter queue defined then convert to delete action
 			if l.conf.Partition.Info.Queue.DeadQueue == "" {
 				a.Action = types.ActionDeleteItem
-				lActions = add(a, lActions, l.writeLogicalActions)
+				lActions = l.batchAction(state, a, lActions, l.writeLogicalActions)
 				continue
 			}
-			mActions = add(a, mActions, l.writeManagerActions)
+			mActions = l.batchAction(state, a, mActions, l.writeManagerActions)
 		default:
 			panic(fmt.Sprintf("undefined action '%d' received from partition storage", a.Action))
 		}
@@ -216,8 +201,8 @@ func (l *LifeCycle) runLifeCycle(state *lifeCycleState) {
 	defer cancel()
 
 	if err := l.conf.Storage.LifeCycleInfo(ctx, &info); err != nil {
-		// TODO(no-write): Update the Logical of the Failures count
 		l.state.Failures++
+		l.partitionStateChange(l.state.Failures, types.UnSet)
 		retryIn := retry.DefaultBackOff.Next(l.state.Failures)
 		state.nextRunDeadline = now.Add(retryIn)
 		l.log.Warn("while fetching life cycle info from partition; retrying...",
@@ -240,6 +225,21 @@ func (l *LifeCycle) runLifeCycle(state *lifeCycleState) {
 	}
 }
 
+func (l *LifeCycle) batchAction(state *lifeCycleState, a types.Action, actions []types.Action, handle handleActions) []types.Action {
+	l.log.LogAttrs(context.Background(), LevelDebugAll, "new life cycle action",
+		slog.String("action", types.ActionToString(a.Action)),
+		slog.String("reserve_deadline", a.Item.ReserveDeadline.String()),
+		slog.String("expire_deadline", a.Item.ExpireDeadline.String()),
+		slog.String("id", string(a.Item.ID)))
+	actions = append(actions, a)
+	if len(actions) >= 1_000 {
+		handle(state, actions)
+		actions = actions[:]
+	}
+	return actions
+}
+
+// partitionStateChange notifies the logical that a partition changed state
 func (l *LifeCycle) partitionStateChange(failures int, numReserved int) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), l.logical.conf.WriteTimeout+time.Second)
 	defer cancel()
@@ -269,15 +269,16 @@ func (l *LifeCycle) writeLogicalActions(state *lifeCycleState, actions []types.A
 		if errors.Is(err, ErrQueueShutdown) {
 			return
 		}
-		// Log a warning, a failure here isn't a big deal as the next life cycle run will find the same
-		// items and attempt to handle them in the same way.
 		l.state.Failures++
+		l.partitionStateChange(l.state.Failures, types.UnSet)
 		retryIn := retry.DefaultBackOff.Next(l.state.Failures)
 		state.nextRunDeadline = l.conf.Clock.Now().UTC().Add(retryIn)
+
+		// Only log a warning as a failure here isn't a big deal as the next life cycle
+		// run will find the same items and attempt to handle them in the same way.
 		l.log.Warn("storage failure during logical life cycle; retrying...",
 			"retry", retryIn,
 			"error", err)
-		l.partitionStateChange(l.state.Failures, types.UnSet)
 	}
 }
 
@@ -293,16 +294,16 @@ func (l *LifeCycle) writeManagerActions(state *lifeCycleState, actions []types.A
 		if errors.Is(err, ErrQueueShutdown) {
 			return
 		}
-		// It's possible the item was written, but we lost contact with a remote logical queue
-		// in either case, we must assume it wasn't written and try again.
 		l.state.Failures++
+		l.partitionStateChange(l.state.Failures, types.UnSet)
 		retryIn := retry.DefaultBackOff.Next(l.state.Failures)
 		state.nextRunDeadline = l.conf.Clock.Now().UTC().Add(retryIn)
+
+		// It's possible the item was written, but there was some issue with the manager.
+		// In either case, we must assume it wasn't written and try again.
 		l.log.Warn("storage failure during manager life cycle; retrying...",
 			"retry", retryIn,
 			"error", err)
-
-		l.partitionStateChange(l.state.Failures, types.UnSet)
 	}
 }
 
@@ -311,22 +312,17 @@ func (l *LifeCycle) recoverPartition(state *lifeCycleState) bool {
 	var stats types.PartitionStats
 	defer cancel()
 
-	// TODO(next): The state.Failures is not getting set to ZERO so the partition never comes up
-
 	if err := l.conf.Storage.Stats(ctx, &stats); err != nil {
 		l.state.Failures++
+		l.partitionStateChange(l.state.Failures, types.UnSet)
 		retryIn := retry.DefaultBackOff.Next(l.state.Failures)
 		state.nextRunDeadline = l.conf.Clock.Now().UTC().Add(retryIn)
-		l.log.Warn("while fetching partition stats; retrying...",
+
+		l.log.Warn("recover partition attempt failed; retrying...",
 			"retry", retryIn,
 			"error", err)
-
-		l.partitionStateChange(l.state.Failures, types.UnSet)
 		return false
 	}
-
-	l.log.LogAttrs(context.Background(), LevelDebugAll, "partition available",
-		slog.Int("partition", l.conf.Partition.Info.PartitionNum))
 
 	if stats.Total-stats.NumReserved < 0 {
 		l.log.Error("assertion failed; total count of items in the partition "+
@@ -335,7 +331,11 @@ func (l *LifeCycle) recoverPartition(state *lifeCycleState) bool {
 		return false
 	}
 
+	l.log.LogAttrs(context.Background(), slog.LevelWarn, "partition recovered",
+		slog.Int("partition", l.conf.Partition.Info.PartitionNum))
+
 	l.state.Failures = 0
+	l.state.NumReserved = stats.NumReserved
 	return l.partitionStateChange(0, stats.Total-stats.NumReserved)
 }
 

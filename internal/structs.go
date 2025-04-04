@@ -29,7 +29,7 @@ type Partition struct {
 	// LifeCycle is the active life cycle associated with this partition
 	LifeCycle *LifeCycle
 	// Info is the info associated with this partition
-	Info types.PartitionInfo // TODO: Stop using Store.Info().PartitionNum and use this instead
+	Info types.PartitionInfo
 }
 
 func (p *Partition) Reset() {
@@ -53,7 +53,7 @@ func (p *Partition) Reserve(req *types.ReserveRequest) {
 	// Decrement requested from the actual count
 	p.State.UnReserved -= reserved
 	// Record which partition this request is assigned, so it can be retrieved by the client later.
-	req.Partition = p.Store.Info().PartitionNum
+	req.Partition = p.Info.PartitionNum
 	// Add the request to this partitions reserve batch
 	p.ReserveRequests.Add(req)
 }

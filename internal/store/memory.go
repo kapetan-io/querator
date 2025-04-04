@@ -276,7 +276,6 @@ func (m *MemoryPartition) TakeAction(_ context.Context, batch types.Batch[types.
 				item := m.mem[idx]
 				item.ReserveDeadline = clock.Time{}
 				item.IsReserved = false
-				item.Attempts += 1
 
 				// Assign a new ID to the item, as it is placed at the start of the queue
 				m.uid = m.uid.Next()
@@ -288,7 +287,12 @@ func (m *MemoryPartition) TakeAction(_ context.Context, batch types.Batch[types.
 				// See doc/adr/0022-managing-item-lifecycles.md for and explanation
 				m.mem = append(m.mem, item)
 			case types.ActionDeleteItem:
-				// TODO(lifecycle): Find the item and remove it
+				idx, ok := m.findID(a.Item.ID)
+				if !ok {
+					continue
+				}
+				// Remove the item from the array
+				m.mem = append(m.mem[:idx], m.mem[idx+1:]...)
 			case types.ActionQueueScheduledItem:
 				// TODO: Find the scheduled item and add it to the partition queue
 			default:

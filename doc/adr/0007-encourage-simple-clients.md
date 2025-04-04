@@ -19,7 +19,7 @@ to encourage client implementations and users to [Fall into the pit of success](
 
 ##### Queue Name Required
 We require clients to provide the name of the queue for the `/queue.produce`, `/queue.complete`, and
-`/queue.retry` APIs. This decision is made despite the fact that the item `id` retrieved during `/queue.lease`
+`/queue.retry` APIs. This decision is made despite the fact that the item `id` retrieved during `/queue.reserve`
 may include information about the item's storage location, likely including the name of the queue.
 
 ##### Unique Clients

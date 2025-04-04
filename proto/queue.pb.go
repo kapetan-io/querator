@@ -471,7 +471,7 @@ func (x *QueueLeaseResponse) GetItems() []*QueueLeaseItem {
 	return nil
 }
 
-type QueueDeferRequest struct {
+type QueueRetryRequest struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
@@ -480,11 +480,11 @@ type QueueDeferRequest struct {
 	QueueName string `protobuf:"bytes,1,opt,name=queueName,json=queue_name,proto3" json:"queueName,omitempty"`
 	// Partition the leased items are from
 	Partition int32             `protobuf:"varint,2,opt,name=partition,proto3" json:"partition,omitempty"`
-	Items     []*QueueDeferItem `protobuf:"bytes,3,rep,name=items,proto3" json:"items,omitempty"`
+	Items     []*QueueRetryItem `protobuf:"bytes,3,rep,name=items,proto3" json:"items,omitempty"`
 }
 
-func (x *QueueDeferRequest) Reset() {
-	*x = QueueDeferRequest{}
+func (x *QueueRetryRequest) Reset() {
+	*x = QueueRetryRequest{}
 	if protoimpl.UnsafeEnabled {
 		mi := &file_proto_queue_proto_msgTypes[5]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -492,13 +492,13 @@ func (x *QueueDeferRequest) Reset() {
 	}
 }
 
-func (x *QueueDeferRequest) String() string {
+func (x *QueueRetryRequest) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*QueueDeferRequest) ProtoMessage() {}
+func (*QueueRetryRequest) ProtoMessage() {}
 
-func (x *QueueDeferRequest) ProtoReflect() protoreflect.Message {
+func (x *QueueRetryRequest) ProtoReflect() protoreflect.Message {
 	mi := &file_proto_queue_proto_msgTypes[5]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -510,33 +510,33 @@ func (x *QueueDeferRequest) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use QueueDeferRequest.ProtoReflect.Descriptor instead.
-func (*QueueDeferRequest) Descriptor() ([]byte, []int) {
+// Deprecated: Use QueueRetryRequest.ProtoReflect.Descriptor instead.
+func (*QueueRetryRequest) Descriptor() ([]byte, []int) {
 	return file_proto_queue_proto_rawDescGZIP(), []int{5}
 }
 
-func (x *QueueDeferRequest) GetQueueName() string {
+func (x *QueueRetryRequest) GetQueueName() string {
 	if x != nil {
 		return x.QueueName
 	}
 	return ""
 }
 
-func (x *QueueDeferRequest) GetPartition() int32 {
+func (x *QueueRetryRequest) GetPartition() int32 {
 	if x != nil {
 		return x.Partition
 	}
 	return 0
 }
 
-func (x *QueueDeferRequest) GetItems() []*QueueDeferItem {
+func (x *QueueRetryRequest) GetItems() []*QueueRetryItem {
 	if x != nil {
 		return x.Items
 	}
 	return nil
 }
 
-type QueueDeferItem struct {
+type QueueRetryItem struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
@@ -546,15 +546,15 @@ type QueueDeferItem struct {
 	// The timestamp after which the item will be added to the queue specified.
 	// The date can be empty, the current time or a past date/time, in which
 	// case the item will be immediately added to the queue.
-	EnqueueAt *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=enqueueAt,json=enqueue_at,proto3" json:"enqueueAt,omitempty"` // TODO: OpenAPI
+	RetryAt *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=retryAt,json=retry_at,proto3" json:"retryAt,omitempty"`
 	// Indicates the item is dead, will not be retried regardless of the number of attempts
 	// remaining. If set to true the retry will place the item in the dead letter queue for
 	// the specified queue.
 	Dead bool `protobuf:"varint,3,opt,name=dead,proto3" json:"dead,omitempty"`
 }
 
-func (x *QueueDeferItem) Reset() {
-	*x = QueueDeferItem{}
+func (x *QueueRetryItem) Reset() {
+	*x = QueueRetryItem{}
 	if protoimpl.UnsafeEnabled {
 		mi := &file_proto_queue_proto_msgTypes[6]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -562,13 +562,13 @@ func (x *QueueDeferItem) Reset() {
 	}
 }
 
-func (x *QueueDeferItem) String() string {
+func (x *QueueRetryItem) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*QueueDeferItem) ProtoMessage() {}
+func (*QueueRetryItem) ProtoMessage() {}
 
-func (x *QueueDeferItem) ProtoReflect() protoreflect.Message {
+func (x *QueueRetryItem) ProtoReflect() protoreflect.Message {
 	mi := &file_proto_queue_proto_msgTypes[6]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -580,26 +580,26 @@ func (x *QueueDeferItem) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use QueueDeferItem.ProtoReflect.Descriptor instead.
-func (*QueueDeferItem) Descriptor() ([]byte, []int) {
+// Deprecated: Use QueueRetryItem.ProtoReflect.Descriptor instead.
+func (*QueueRetryItem) Descriptor() ([]byte, []int) {
 	return file_proto_queue_proto_rawDescGZIP(), []int{6}
 }
 
-func (x *QueueDeferItem) GetId() string {
+func (x *QueueRetryItem) GetId() string {
 	if x != nil {
 		return x.Id
 	}
 	return ""
 }
 
-func (x *QueueDeferItem) GetEnqueueAt() *timestamppb.Timestamp {
+func (x *QueueRetryItem) GetRetryAt() *timestamppb.Timestamp {
 	if x != nil {
-		return x.EnqueueAt
+		return x.RetryAt
 	}
 	return nil
 }
 
-func (x *QueueDeferItem) GetDead() bool {
+func (x *QueueRetryItem) GetDead() bool {
 	if x != nil {
 		return x.Dead
 	}
@@ -708,6 +708,7 @@ type QueueInfo struct {
 	ExpireTimeout string `protobuf:"bytes,7,opt,name=expireTimeout,json=expire_timeout,proto3" json:"expireTimeout,omitempty"`
 	// The maximum number of times this item can be retried by a consumer before it is
 	// placed in the dead letter queue or removed. Infinite attempts if max_attempts is set to '0'
+	// `reserve_timeout` violations are included as attempts
 	MaxAttempts int32 `protobuf:"varint,8,opt,name=maxAttempts,json=max_attempts,proto3" json:"maxAttempts,omitempty"`
 	// The number of partitions the queue is requesting. This might be different than the
 	// actual partitions if the requested partition count was recently changed via rebalance request.
@@ -1524,7 +1525,7 @@ func file_proto_queue_proto_init() {
 			}
 		}
 		file_proto_queue_proto_msgTypes[5].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*QueueDeferRequest); i {
+			switch v := v.(*QueueRetryRequest); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -1536,7 +1537,7 @@ func file_proto_queue_proto_init() {
 			}
 		}
 		file_proto_queue_proto_msgTypes[6].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*QueueDeferItem); i {
+			switch v := v.(*QueueRetryItem); i {
 			case 0:
 				return &v.state
 			case 1:

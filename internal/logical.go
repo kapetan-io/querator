@@ -1091,7 +1091,7 @@ func (l *Logical) handleClear(_ *QueueState, req *Request) {
 			req.Err = err
 		}
 	}
-	// TODO(thrawn01): Support clearing retry and scheduled
+	// TODO(thrawn01): Support clearing retry and scheduled queues
 	close(req.ReadyCh)
 }
 

@@ -15,8 +15,6 @@ paths:
         items to produce. The call will not return until all items provided have
         been written to storage.
 
-
-
         ### Timeout Semantics
 
         The call will return when the item(s) provided are written to storage or
@@ -131,11 +129,11 @@ paths:
       security: []
   /v1/queue.retry:
     post:
-      summary: items to be retried
+      summary: Retry a message
       deprecated: false
       description: >
         Retry an item to be processed again at a later date/time. Once the
-        `enqueue_at` time is reached, querator will enqueue this item into the
+        `retry_at` time is reached, querator will enqueue this item into the
         specified queue and the `attempted` counter for this item will increment
         by 1. 
 
@@ -162,13 +160,13 @@ paths:
               partition: 0
               items:
                 - id: 2m75RTp9PBx69hw1Q7mjoB0F73Q
-                  enqueue_at: '2024-01-01 12:00:00.0000'
+                  retry_at: '2024-01-01 12:00:00.0000'
                   dead: false
                 - id: 2m75RTp9PBx69hw1Q7mjoB0F73R
-                  enqueue_at: '2024-01-01 12:00:00.0000'
+                  retry_at: '2024-01-01 12:00:00.0000'
                   dead: false
                 - id: 2m75RTp9PBx69hw1Q7mjoB0F73S
-                  enqueue_at: '2024-01-01 12:00:00.0000'
+                  retry_at: '2024-01-01 12:00:00.0000'
                   dead: false
       responses:
         '200':
@@ -723,9 +721,8 @@ components:
         destructive:
           type: boolean
           description: >-
-            Indicates the Retry,Scheduled,Queue operations should be destructive
+            Indicates the Retry, Scheduled, Queue operations should be destructive
             in that all data regardless of status will be removed.
-
 
             For example, if used with ClearRequest.Queue = true, then ALL items
             in the queue regardless of lease status will be removed. This
@@ -1074,7 +1071,7 @@ components:
             the item in the dead letter queue for the specified queue.
       required:
         - id
-        - enqueue_at
+        - retry_at
         - dead
     QueuePartitionStats:
       type: object
@@ -1193,7 +1190,8 @@ components:
           description: >-
             The maximum number of times an item can be retried by a consumer
             before it is placed in the dead letter queue or removed. 
-            Infinite attempts if max_attempts is set to '0'
+            Infinite attempts if max_attempts is set to '0'. `lease_timeout`
+            violations are included as attempts
         requested_partitions:
           type: integer
           description: >-

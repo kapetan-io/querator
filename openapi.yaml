@@ -15,8 +15,6 @@ paths:
         items to produce. The call will not return until all items provided have
         been written to storage.
 
-
-
         ### Timeout Semantics
 
         The call will return when the item(s) provided are written to storage or
@@ -71,7 +69,7 @@ paths:
         `reserve_deadline` has expired 
 
         and the consumer with the reservation has not marked the message via 
-        `/queue.complete` or `/queue.defer`
+        `/queue.complete` or `/queue.retry`
 
 
         If a message is not acknowledge via `/queue.complete` within the
@@ -129,13 +127,13 @@ paths:
                     partition: 0
           headers: {}
       security: []
-  /v1/queue.defer:
+  /v1/queue.retry:
     post:
-      summary: Defer a message to be retried
+      summary: Retry a message
       deprecated: false
       description: >
-        Defer an item to be processed again at a later date/time. Once the
-        `enqueue_at` time is reached, querator will enqueue this item into the
+        Retry an item to be processed again at a later date/time. Once the
+        `retry_at` time is reached, querator will enqueue this item into the
         specified queue and the `attempted` counter for this item will increment
         by 1. 
 
@@ -148,7 +146,7 @@ paths:
         If you wish to fail a message such that it is deleted from the queue and
         never offered to another consumer, nor placed into the dead letter
         queue, then call `/queue.complete` instead.
-      operationId: post-v1-queue.defer
+      operationId: post-v1-queue.retry
       tags:
         - Querator V1
       parameters: []
@@ -156,19 +154,19 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/QueueDeferRequest'
+              $ref: '#/components/schemas/QueueRetryRequest'
             example:
               queue_name: queue-name
               partition: 0
               items:
                 - id: 2m75RTp9PBx69hw1Q7mjoB0F73Q
-                  enqueue_at: '2024-01-01 12:00:00.0000'
+                  retry_at: '2024-01-01 12:00:00.0000'
                   dead: false
                 - id: 2m75RTp9PBx69hw1Q7mjoB0F73R
-                  enqueue_at: '2024-01-01 12:00:00.0000'
+                  retry_at: '2024-01-01 12:00:00.0000'
                   dead: false
                 - id: 2m75RTp9PBx69hw1Q7mjoB0F73S
-                  enqueue_at: '2024-01-01 12:00:00.0000'
+                  retry_at: '2024-01-01 12:00:00.0000'
                   dead: false
       responses:
         '200':
@@ -176,7 +174,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/QueueDeferResponse'
+                $ref: '#/components/schemas/QueueRetryResponse'
               examples:
                 '1':
                   summary: Success
@@ -466,7 +464,7 @@ paths:
       summary: Clear a queue
       deprecated: false
       description: >-
-        Clears all data from a queue, optionally clears all defer and scheduled
+        Clears all data from a queue, optionally clears all retry and scheduled
         items
       tags:
         - Querator V1
@@ -478,7 +476,7 @@ paths:
               $ref: '#/components/schemas/QueueClearRequest'
             example:
               queue_name: queue-name
-              defer: false
+              retry: false
               scheduled: false
               queue: true
               destructive: true
@@ -665,7 +663,7 @@ components:
         - request_timeout
         - ids
         - partition
-    QueueDeferRequest:
+    QueueRetryRequest:
       type: object
       properties:
         queue_name:
@@ -673,19 +671,19 @@ components:
           description: >-
             The queue name provided when the item was reserved. If the
             `queue_name` does not match the original `queue_name` provided when
-            the item was reserved, then the defer request will return a non 200
+            the item was reserved, then the retry request will return a non 200
             status code.
         partition:
           type: integer
           description: >-
             The partition provided when the item was reserved. If the
             `partition` does not match the original `partition` provided when
-            the item was reserved, then the defer request will return a non 200
+            the item was reserved, then the retry request will return a non 200
             status code.
         items:
           type: array
           items:
-            $ref: '#/components/schemas/QueueDeferItem'
+            $ref: '#/components/schemas/QueueRetryItem'
       required:
         - queue_name
         - partition
@@ -703,10 +701,10 @@ components:
         queue_name:
           type: string
           description: The name of the queue to clear
-        defer:
+        retry:
           type: boolean
           description: >-
-            Indicates the 'defer' queue will be cleared. If true, any items
+            Indicates the 'retry' queue will be cleared. If true, any items
             scheduled to be retried at a future date will be removed.
         scheduled:
           type: boolean
@@ -723,9 +721,8 @@ components:
         destructive:
           type: boolean
           description: >-
-            Indicates the Defer,Scheduled,Queue operations should be destructive
+            Indicates the Retry, Scheduled, Queue operations should be destructive
             in that all data regardless of status will be removed.
-
 
             For example, if used with ClearRequest.Queue = true, then ALL items
             in the queue regardless of reserve status will be removed. This
@@ -734,7 +731,7 @@ components:
             knowledge of those items.
       required:
         - queue_name
-        - defer
+        - retry
         - scheduled
         - queue
         - destructive
@@ -824,7 +821,7 @@ components:
         queued:
           type: integer
           format: int64
-        defered:
+        retried:
           type: integer
           format: int64
         scheduled:
@@ -872,13 +869,13 @@ components:
           description: The response code
         code_text:
           type: string
-          description: The text explaination of the code
+          description: The text explanation of the code
         message:
           type: string
           description: The message that contains details explaining the reason for the code
       required:
         - code
-    QueueDeferResponse:
+    QueueRetryResponse:
       type: object
       properties:
         code:
@@ -886,7 +883,7 @@ components:
           description: The response code
         code_text:
           type: string
-          description: The text explaination of the code
+          description: The text explanation of the code
         message:
           type: string
           description: The message that contains details explaining the reason for the code
@@ -1024,7 +1021,7 @@ components:
         attempts:
           type: integer
           description: >-
-            The number of times this item has been deferred or reservation timed
+            The number of times this item has been retried or reservation timed
             out during processing by a consumer
         reserve_deadline:
           type: string
@@ -1049,7 +1046,7 @@ components:
       required:
         - id
         - reserve_deadline
-    QueueDeferItem:
+    QueueRetryItem:
       type: object
       properties:
         id:
@@ -1057,24 +1054,24 @@ components:
           description: >-
             The item id provided when the message was reserved. If the item id
             provided does not match an item id already in `reserve` status, then
-            the defer request will return a non 200 status code.
-        enqueue_at:
+            the retry request will return a non 200 status code.
+        retry_at:
           type: string
           format: date-time
           description: >-
             The timestamp after which the message will be queued to the
-            queue/partition specified. If `offer_at` is empty the item will be
+            queue specified. If `offer_at` is empty the item will be
             immediately re-added to the queue and the attempts counter
             incremented.
         dead:
           type: boolean
           description: >-
             Indicates the item is dead, will not be retried regardless of the
-            number of attempts remaining. If set to `true` the defer will  place
+            number of attempts remaining. If set to `true` the retry will place
             the item in the dead letter queue for the specified queue.
       required:
         - id
-        - enqueue_at
+        - retry_at
         - dead
     QueuePartitionStats:
       type: object
@@ -1191,9 +1188,10 @@ components:
         max_attempts:
           type: integer
           description: >-
-            The maximum number of times an item can be defered by a consumer
+            The maximum number of times an item can be retried by a consumer
             before it is placed in the dead letter queue or removed. 
-            Infinite attempts if max_attempts is set to '0'
+            Infinite attempts if max_attempts is set to '0'. `reserve_timeout`
+            violations are included as attempts
         requested_partitions:
           type: integer
           description: >-

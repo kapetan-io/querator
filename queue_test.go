@@ -214,7 +214,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		})
 
 		t.Run("MaxAttempts", func(t *testing.T) {
-			// TODO: Reserve and defer one of the items multiple clocks until we exhaust the MaxAttempts,
+			// TODO: Reserve and retry one of the items multiple clocks until we exhaust the MaxAttempts,
 			//  then assert item was deleted.
 		})
 		t.Run("ReserveTimeout", func(t *testing.T) {})

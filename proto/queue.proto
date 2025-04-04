@@ -104,7 +104,7 @@ message QueueReserveItem {
   // A unique id which identifies an item in a queue
   string id = 4;
 
-  // The number of times this item has been deferred or reservation timed out during
+  // The number of times this item has been retried or reservation timed out during
   // processing by a consumer.
   int32  attempts = 5;
 
@@ -135,27 +135,27 @@ message QueueReserveResponse {
   repeated QueueReserveItem items = 3;
 }
 
-message QueueDeferRequest {
+message QueueRetryRequest {
   // The name of the queue the reservation items are from
   string queueName = 1  [json_name = "queue_name"];
 
   // Partition the reserved items are from
   int32 partition = 2;
 
-  repeated QueueDeferItem items = 3;
+  repeated QueueRetryItem items = 3;
 }
 
-message QueueDeferItem {
+message QueueRetryItem {
   // A unique id which identifies a unique item in a queue.
   string id = 1;
 
   // The timestamp after which the item will be added to the queue specified.
   // The date can be empty, the current time or a past date/time, in which
   // case the item will be immediately added to the queue.
-  google.protobuf.Timestamp enqueueAt = 2 [json_name = "enqueue_at"]; // TODO: OpenAPI
+  google.protobuf.Timestamp retryAt = 2 [json_name = "retry_at"];
 
   // Indicates the item is dead, will not be retried regardless of the number of attempts
-  // remaining. If set to true the defer will place the item in the dead letter queue for
+  // remaining. If set to true the retry will place the item in the dead letter queue for
   // the specified queue.
   bool dead = 3;
 }
@@ -202,8 +202,9 @@ message QueueInfo {
   // to the dead letter queue. Example: '24h', '60m', '10s'
   string expireTimeout = 7 [json_name = "expire_timeout"];
 
-  // The maximum number of times this item can be deferred by a consumer before it is
+  // The maximum number of times this item can be retried by a consumer before it is
   // placed in the dead letter queue or removed. Infinite attempts if max_attempts is set to '0'
+  // `reserve_timeout` violations are included as attempts
   int32 maxAttempts = 8 [json_name = "max_attempts"];
 
   // The number of partitions the queue is requesting. This might be different than the
@@ -221,9 +222,9 @@ message PartitionInfo {
 message QueueClearRequest {
   // The name of the queue
   string queueName = 1  [json_name = "queue_name"];
-  // Defer indicates the 'defer' queue will be cleared. If true, any items
+  // Retry indicates the 'retry' queue will be cleared. If true, any items
   // scheduled to be retried at a future date will be removed.
-  bool defer = 2; // TODO: Implement
+  bool retry = 2; // TODO: Implement
   // Scheduled indicates any 'scheduled' items in the queue will be
   // cleared. If true, any items scheduled to be enqueued at a future date
   // will be removed.
@@ -232,7 +233,7 @@ message QueueClearRequest {
   // clear. If true, any items in the queue which have NOT been reserved
   // will be removed.
   bool Queue = 4;
-  // Destructive indicates the Defer,Scheduled,Queue operations should be
+  // Destructive indicates the Retry, Scheduled, Queue operations should be
   // destructive in that all data regardless of status will be removed.
   // For example, if used with ClearRequest.Queue = true, then ALL items
   // in the queue regardless of reserve status will be removed. This means

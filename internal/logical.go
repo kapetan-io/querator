@@ -377,8 +377,8 @@ func (l *Logical) QueueStats(ctx context.Context, stats *types.LogicalStats) err
 	return l.queueRequest(ctx, &r)
 }
 
-// Pause pauses processing of produce, reserve, complete and defer operations until the pause is cancelled.
-// It is only used for testing and not exposed to the user via API, as such it is not considered apart of
+// Pause pauses processing of produce, reserve, complete and retry operations until the pause is cancelled.
+// It is only used for testing and not exposed to the user via API, as such it is not considered a part of
 // the public API.
 func (l *Logical) Pause(ctx context.Context, req *types.PauseRequest) error {
 	r := Request{
@@ -1091,7 +1091,7 @@ func (l *Logical) handleClear(_ *QueueState, req *Request) {
 			req.Err = err
 		}
 	}
-	// TODO(thrawn01): Support clearing defer and scheduled
+	// TODO(thrawn01): Support clearing retry and scheduled queues
 	close(req.ReadyCh)
 }
 
@@ -1142,7 +1142,7 @@ func (l *Logical) handleStats(state *QueueState, r *Request) {
 }
 
 // handlePause places Logical into a special loop where operations none of the // produce,
-// reserve, complete, defer operations will be processed until we leave the loop.
+// reserve, complete, retry operations will be processed until we leave the loop.
 func (l *Logical) handlePause(state *QueueState, r *Request) {
 	pr := r.Request.(*types.PauseRequest)
 

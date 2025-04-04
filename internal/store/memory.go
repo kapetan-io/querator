@@ -227,8 +227,8 @@ func (m *MemoryPartition) ScanForActions(_ clock.Duration, now clock.Time) iter.
 					continue
 				}
 				// NOTE: This wll catch any items which may have been left in the data store
-				// due to a failed /queue.defer call. This could happen if there is a dead letter queue
-				// defined and defer inserted the item into the dead letter, but failed to remove it
+				// due to a failed /queue.retry call. This could happen if there is a dead letter queue
+				// defined and retry inserted the item into the dead letter, but failed to remove it
 				// due to partition error or catastrophic failure of querator before it could be removed.
 				if m.info.Queue.MaxAttempts != 0 && item.Attempts >= m.info.Queue.MaxAttempts {
 					yield(types.Action{

@@ -19,7 +19,7 @@ to encourage client implementations and users to [Fall into the pit of success](
 
 ##### Queue Name Required
 We require clients to provide the name of the queue for the `/queue.produce`, `/queue.complete`, and
-`/queue.defer` APIs. This decision is made despite the fact that the item `id` retrieved during `/queue.reserve`
+`/queue.retry` APIs. This decision is made despite the fact that the item `id` retrieved during `/queue.reserve`
 may include information about the item's storage location, likely including the name of the queue.
 
 ##### Unique Clients
@@ -44,7 +44,7 @@ This has several implications:
   `/queue.complete`.
 * The client must write additional code to handle parsing a complex response structure for items that failed to
   complete. In addition, it must handle each item separately to determine which of the failed ids can be retried via
-  `/queue.complete` and which should be `/queue.defer` if any.
+  `/queue.complete` and which should be `/queue.retry` if any.
 * The client must track which of the failed items are at risk of exceeding their `reserve_timeout` such that they
   can be handled appropriately.
 * If the client has implemented such a batching optimization, it is likely the client has done so in an async

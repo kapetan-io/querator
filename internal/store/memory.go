@@ -15,7 +15,7 @@ import (
 	"sync"
 )
 
-var bucketName = []byte("queue")
+var bucketName = []byte("partition")
 
 // ---------------------------------------------
 // Partition Implementation

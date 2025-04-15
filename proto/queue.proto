@@ -44,7 +44,9 @@ message QueueProduceItem {
   // This is a user specified field that can be used by the consumer to determine handling
   // of the message without needing to unmarshall the payload.
   // Examples: 'account-0001', 'john.smith'
-  string reference = 3;
+  string reference = 3; // TODO: This should be removed in favor of a workflow id.
+  // Indicates the item is to be enqueued at a future timestamp specified.
+  google.protobuf.Timestamp scheduledAt = 4 [json_name = "enqueue_at"];
   // The payload of the item as an array of raw bytes with no predetermined character set.
   // Clients who communicate with Querator with `Content-Type: application/protobuf`
   // (which is the default for golang clients) should use this field instead of `strings`.
@@ -53,7 +55,7 @@ message QueueProduceItem {
   // 'bytes' field will be encoded as base64. This is because byte fields (unlike string fields)
   // can contain non-UTF8 binary data, and since that cannot be directly represented in JSON, we
   // have to base64 encode it.
-  bytes bytes = 4;
+  bytes bytes = 5;
   // This is an a convenience field useful for clients that are communicating with Querator via
   // `Content-Type: application/json`. This field assumes a utf8 encoded payload and does not
   // require the payload to be encoded as base64. As such is is an excellent choice for clients
@@ -62,11 +64,11 @@ message QueueProduceItem {
   // NOTE: Both `bytes` and `utf8` can be set, but `bytes` takes precedence. If `bytes` is set,
   // then that will be used as the payload. If `utf8` is set and `bytes` is empty, then `utf8`
   // will be used. If both `bytes` and `utf8` are set, then `bytes` will be used and `utf8` will
-  // be dropped.
+  // be ignored.
   // Example: 'Hello, I am a UTF-8 payload' , '{"key", "value"}'
-  string utf8 = 5;
+  string utf8 = 6;
 
-  // TODO: Consider adding user provided metadata as a map of values
+  // TODO: Consider adding user provided metadata as a map of values, for instance "reference"
 }
 
 message QueueReserveRequest {

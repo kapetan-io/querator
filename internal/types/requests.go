@@ -136,8 +136,10 @@ type PartitionStats struct {
 	Failures int
 	// AverageAge is the average age of all items in the queue
 	AverageAge clock.Duration
-	// AverageLeasedAge is the average age of leased items in the queue
+	// AverageLeasedAge is the average age of reserved items in the queue
 	AverageLeasedAge clock.Duration
+	// Scheduled is the total number of scheduled items in the partition
+	Scheduled int
 }
 
 type LifeCycleRequest struct {

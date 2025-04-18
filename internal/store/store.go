@@ -91,16 +91,23 @@ type Partition interface {
 	// ### Parameters
 	// - `timeout`: The read timeout for each read operation to the underlying storage system.
 	// If a read exceeds this timeout, the iterator is aborted.
-	// - `now`: The time used by LifeCycleActions to determine which items need action.
+	// - `now`: The time used to determine which items need action.
 	ScanForActions(timeout clock.Duration, now clock.Time) iter.Seq[types.Action]
 
+	// ScanForScheduled returns an iterator of ONLY scheduled actions. This allows more efficient
+	// handling of scheduled items, which operate on different timers and schedule times.
+	//
+	// ### Parameters
+	// - `timeout`: The read timeout for each read operation to the underlying storage system.
+	// If a read exceeds this timeout, the iterator is aborted.
+	// - `now`: The time used to determine which items are ready to be queued.
+	ScanForScheduled(timeout clock.Duration, now clock.Time) iter.Seq[types.Action]
+
 	// TakeAction takes lifecycle requests and preforms the actions requested on the partition.
-	// TODO(thrawn01): Update this sig to accept types.PartitionState
 	TakeAction(ctx context.Context, batch types.Batch[types.LifeCycleRequest]) error
 
 	// LifeCycleInfo fills out the LifeCycleInfo struct which is used to decide when the
 	// next life cycle should run
-	// TODO: Rename this, this is too generic for what it currently does.
 	LifeCycleInfo(ctx context.Context, info *types.LifeCycleInfo) error
 
 	// Info returns the Partition Info for this partition. This call needs to be thread

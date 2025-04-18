@@ -377,6 +377,11 @@ func (b *BadgerPartition) UpdateQueueInfo(info types.QueueInfo) {
 	b.info.Queue = info
 }
 
+func (b *BadgerPartition) ScanForScheduled(_ clock.Duration, now clock.Time) iter.Seq[types.Action] {
+	// TODO(NEXT):
+	return nil
+}
+
 func (b *BadgerPartition) ScanForActions(_ clock.Duration, now clock.Time) iter.Seq[types.Action] {
 	return func(yield func(types.Action) bool) {
 		db, err := b.getDB()

@@ -95,7 +95,7 @@ type Partition interface {
 	ScanForActions(timeout clock.Duration, now clock.Time) iter.Seq[types.Action]
 
 	// TakeAction takes lifecycle requests and preforms the actions requested on the partition.
-	// TODO(NEXT): Update this sig to accept types.PartitionState
+	// TODO(thrawn01): Update this sig to accept types.PartitionState
 	TakeAction(ctx context.Context, batch types.Batch[types.LifeCycleRequest]) error
 
 	// LifeCycleInfo fills out the LifeCycleInfo struct which is used to decide when the

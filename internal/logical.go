@@ -36,6 +36,8 @@ const (
 	MethodLifeCycle
 	MethodPartitionStateChange
 	MethodReloadPartitions
+	MethodNotify
+	MethodNotifyScheduled
 
 	DefaultMaxLeaseBatchSize        = 1_000
 	DefaultMaxProduceBatchSize      = 1_000

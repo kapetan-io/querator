@@ -37,10 +37,11 @@ const (
 	MethodPartitionStateChange
 	MethodReloadPartitions
 
-	DefaultMaxReserveBatchSize  = 1_000
-	DefaultMaxProduceBatchSize  = 1_000
-	DefaultMaxCompleteBatchSize = 1_000
-	DefaultMaxRequestsPerQueue  = 500
+	DefaultMaxReserveBatchSize      = 1_000
+	DefaultMaxProduceBatchSize      = 1_000
+	DefaultMaxCompleteBatchSize     = 1_000
+	DefaultMaxRequestsPerQueue      = 100
+	DefaultMaxConcurrentConnections = 1_000
 
 	MsgRequestTimeout    = "request timeout; no items are in the queue, try again"
 	MsgDuplicateClientID = "duplicate client id; a client cannot make multiple reserve requests to the same queue"
@@ -408,7 +409,7 @@ func (l *Logical) Clear(ctx context.Context, req *types.ClearRequest) error {
 		return ErrQueueShutdown
 	}
 
-	if !req.Queue && !req.Defer && !req.Scheduled {
+	if !req.Queue && !req.Retry && !req.Scheduled {
 		return transport.NewInvalidOption("invalid clear request; one of 'queue', 'defer'," +
 			" 'scheduled' must be true")
 	}

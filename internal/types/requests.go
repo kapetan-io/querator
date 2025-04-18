@@ -72,9 +72,9 @@ type ReloadRequest struct {
 }
 
 type ClearRequest struct {
-	// Defer indicates the 'defer' queue will be cleared. If true, any items
+	// Retry indicates the 'retry' queue will be cleared. If true, any items
 	// scheduled to be retried at a future date will be removed.
-	Defer bool // TODO: Implement
+	Retry bool // TODO: Implement
 	// Scheduled indicates any 'scheduled' items in the queue will be
 	// cleared. If true, any items scheduled to be enqueued at a future date
 	// will be removed.
@@ -83,7 +83,7 @@ type ClearRequest struct {
 	// clear. If true, any items in the queue which have NOT been reserved
 	// will be removed.
 	Queue bool
-	// Destructive indicates the Defer,Scheduled,Queue operations should be
+	// Destructive indicates the Retry,Scheduled,Queue operations should be
 	// destructive in that all data regardless of status will be removed.
 	// For example, if used with ClearRequest.Queue = true, then ALL items
 	// in the queue regardless of reserve status will be removed. This means

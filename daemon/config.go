@@ -40,14 +40,14 @@ func (c *Config) ServerTLS() *tls.Config {
 	return nil
 }
 
-func (c *Config) SetDefaults() error {
-	var err error
+func (c *Config) SetDefaults() {
 	set.Default(&c.Clock, clock.NewProvider())
 	set.Default(&c.Log, slog.Default())
 	set.Default(&c.MaxReserveBatchSize, internal.DefaultMaxReserveBatchSize)
 	set.Default(&c.MaxProduceBatchSize, internal.DefaultMaxProduceBatchSize)
 	set.Default(&c.MaxCompleteBatchSize, internal.DefaultMaxCompleteBatchSize)
 	set.Default(&c.MaxRequestsPerQueue, internal.DefaultMaxRequestsPerQueue)
+	set.Default(&c.MaxConcurrentRequests, internal.DefaultMaxConcurrentConnections)
 	set.Default(&c.StorageConfig.Queues, store.NewMemoryQueues(c.Log))
 	set.Default(&c.StorageConfig.Backends, []store.Backend{
 		{
@@ -56,7 +56,6 @@ func (c *Config) SetDefaults() error {
 			Affinity:       1,
 		},
 	})
-	return err
 }
 
 // TODO: Load from config system

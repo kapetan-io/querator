@@ -37,10 +37,11 @@ const (
 	MethodPartitionStateChange
 	MethodReloadPartitions
 
-	DefaultMaxLeaseBatchSize    = 1_000
-	DefaultMaxProduceBatchSize  = 1_000
-	DefaultMaxCompleteBatchSize = 1_000
-	DefaultMaxRequestsPerQueue  = 500
+	DefaultMaxLeaseBatchSize        = 1_000
+	DefaultMaxProduceBatchSize      = 1_000
+	DefaultMaxCompleteBatchSize     = 1_000
+	DefaultMaxRequestsPerQueue      = 100
+	DefaultMaxConcurrentConnections = 1_000
 
 	MsgRequestTimeout    = "request timeout; no items are in the queue, try again"
 	MsgDuplicateClientID = "duplicate client id; a client cannot make multiple leased requests to the same queue"

@@ -53,6 +53,8 @@ type ServiceConfig struct {
 	// MaxRequestsPerQueue is the maximum number of client requests a queue can handle before it returns an
 	// queue overloaded message
 	MaxRequestsPerQueue int
+	// MaxConcurrentConnections is the maximum number of connections allowed. Default is 1,000
+	MaxConcurrentRequests int
 	// Clock is a time provider used to preform time related calculations. It is configurable so that it can
 	// be overridden for testing.
 	Clock *clock.Provider

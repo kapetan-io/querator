@@ -33,6 +33,8 @@ type Item struct {
 	// ExpireDeadline is the time in the future the item must be consumed,
 	// before it is considered dead and moved to the dead letter queue if configured.
 	ExpireDeadline clock.Time
+	// EnqueueAt if this is not empty, then clock.Time indicates when this item should be enqueued.
+	EnqueueAt clock.Time
 	// CreatedAt is the time stamp when this item was added to the database.
 	CreatedAt clock.Time
 	// Attempts is how many attempts this item has seen

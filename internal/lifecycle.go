@@ -163,17 +163,24 @@ func (l *LifeCycle) handleScheduledNotify(state *lifeCycleState, notify clock.Ti
 }
 
 func (l *LifeCycle) runScheduled(state *lifeCycleState) {
-
 	defer func() {
 		l.log.LogAttrs(context.Background(), LevelDebugAll, "scheduled run complete",
 			slog.String("next-run", state.nextScheduleDeadline.String()))
 	}()
 
-	//now := l.conf.Clock.Now().UTC()
-	// TODO(NEXT): Find items which are scheduled to be queued and tell Logical about them.
-	//  Logical will move them which ensures we don't lose any if catastrophic failure happens
-	//for sch := range l.conf.Storage.ScanForScheduled(l.logical.conf.ReadTimeout, now) {
-	//
+	now := l.conf.Clock.Now().UTC()
+	actions := make([]types.Action, 0, 1_000)
+
+	// ScanForScheduled() returns an iterator which allows us to batch the scheduled actions together
+	// before writing the actions to the logical.
+	for a := range l.conf.Storage.ScanForScheduled(l.logical.conf.ReadTimeout, now) {
+		Assert(a.Action != types.ActionQueueScheduledItem, "must only return scheduled items")
+		actions = l.batchAction(state, a, actions, l.writeLogicalActions)
+	}
+
+	if len(actions) > 0 {
+		l.writeLogicalActions(state, actions)
+	}
 }
 
 func (l *LifeCycle) handleNotify(state *lifeCycleState, notify clock.Time) {
@@ -322,9 +329,9 @@ func (l *LifeCycle) writeLogicalActions(state *lifeCycleState, actions []types.A
 		retryIn := retry.DefaultBackOff.Next(l.state.Failures)
 		state.nextRunDeadline = l.conf.Clock.Now().UTC().Add(retryIn)
 
-		// Only log a warning as a failure here isn't a big deal as the next life cycle
+		// Only log a warning as a failure here isn't a big deal. The next life cycle
 		// run will find the same items and attempt to handle them in the same way.
-		l.log.Warn("storage failure during logical life cycle; retrying...",
+		l.log.Warn("partition storage failure; retrying...",
 			"retry", retryIn,
 			"error", err)
 	}

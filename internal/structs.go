@@ -81,3 +81,9 @@ type StorageRequest struct {
 	// Partition is the partition this request is for
 	Partition int
 }
+
+func Assert(condition bool, message string) {
+	if !condition {
+		panic(message)
+	}
+}

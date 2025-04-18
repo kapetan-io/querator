@@ -54,7 +54,8 @@ func (m *MemoryPartition) Reserve(_ context.Context, batch types.ReserveBatch, o
 	var count int
 
 	for i, item := range m.mem {
-		if item.IsReserved {
+		// If the item is reserved, or is a scheduled item
+		if item.IsReserved || !item.EnqueueAt.IsZero() {
 			continue
 		}
 
@@ -79,7 +80,7 @@ func (m *MemoryPartition) Reserve(_ context.Context, batch types.ReserveBatch, o
 	return nil
 }
 
-func (m *MemoryPartition) Complete(_ context.Context, batch types.Batch[types.CompleteRequest]) error {
+func (m *MemoryPartition) Complete(ctx context.Context, batch types.Batch[types.CompleteRequest]) error {
 	defer m.mu.Unlock()
 	m.mu.Lock()
 
@@ -93,6 +94,14 @@ nextBatch:
 
 			idx, ok := m.findID(id)
 			if !ok {
+				batch.Requests[i].Err = transport.NewInvalidOption("invalid storage id; '%s' does not exist", id)
+				continue nextBatch
+			}
+
+			// This should not happen, but we need to handle it anyway.
+			if !m.mem[idx].EnqueueAt.IsZero() {
+				m.log.LogAttrs(ctx, slog.LevelWarn, "attempted to complete a scheduled item; reported does not exist",
+					slog.String("id", string(m.mem[idx].ID)))
 				batch.Requests[i].Err = transport.NewInvalidOption("invalid storage id; '%s' does not exist", id)
 				continue nextBatch
 			}
@@ -132,6 +141,12 @@ func (m *MemoryPartition) List(_ context.Context, items *[]*types.Item, opts typ
 		if count >= opts.Limit {
 			return nil
 		}
+
+		// Do not report scheduled items in the queued items list
+		if !item.EnqueueAt.IsZero() {
+			continue
+		}
+
 		*items = append(*items, &item)
 		count++
 	}
@@ -209,12 +224,21 @@ func (m *MemoryPartition) UpdateQueueInfo(info types.QueueInfo) {
 	m.info.Queue = info
 }
 
+func (m *MemoryPartition) ScanForScheduled(_ clock.Duration, now clock.Time) iter.Seq[types.Action] {
+	// TODO(NEXT):
+	return nil
+}
+
 func (m *MemoryPartition) ScanForActions(_ clock.Duration, now clock.Time) iter.Seq[types.Action] {
 	defer m.mu.RUnlock()
 	m.mu.RLock()
 
 	return func(yield func(types.Action) bool) {
 		for _, item := range m.mem {
+			// Skip scheduled items
+			if !item.EnqueueAt.IsZero() {
+				continue
+			}
 			// Is the reserved item expired?
 			if item.IsReserved {
 				if now.After(item.ReserveDeadline) {
@@ -294,7 +318,7 @@ func (m *MemoryPartition) TakeAction(_ context.Context, batch types.Batch[types.
 				// Remove the item from the array
 				m.mem = append(m.mem[:idx], m.mem[idx+1:]...)
 			case types.ActionQueueScheduledItem:
-				// TODO: Find the scheduled item and add it to the partition queue
+				// TODO(NEXT): Find the scheduled item and add it to the partition queue
 			default:
 				m.log.Warn("undefined action", "action", fmt.Sprintf("%d", int(a.Action)))
 			}
@@ -310,6 +334,11 @@ func (m *MemoryPartition) LifeCycleInfo(ctx context.Context, info *types.LifeCyc
 
 	// Find the item that will expire next
 	for _, item := range m.mem {
+		// Skip scheduled items
+		if !item.EnqueueAt.IsZero() {
+			continue
+		}
+
 		if item.ReserveDeadline.Before(next) {
 			next = item.ReserveDeadline
 		}
@@ -327,9 +356,15 @@ func (m *MemoryPartition) Stats(_ context.Context, stats *types.PartitionStats) 
 
 	now := m.conf.Clock.Now().UTC()
 	for _, item := range m.mem {
+		// Count scheduled and do not include them in other stats
+		if !item.EnqueueAt.IsZero() {
+			stats.Scheduled++
+			continue
+		}
+
 		stats.Total++
 		stats.AverageAge += now.Sub(item.CreatedAt)
-		if item.IsReserved {
+		if item.IsReserved && item.EnqueueAt.IsZero() {
 			stats.AverageReservedAge += item.ReserveDeadline.Sub(now)
 			stats.NumReserved++
 		}

@@ -82,14 +82,14 @@ func (c *Client) QueueProduce(ctx context.Context, req *pb.QueueProduceRequest) 
 	return c.client.Do(r, &res)
 }
 
-func (c *Client) QueueReserve(ctx context.Context, req *pb.QueueReserveRequest, res *pb.QueueReserveResponse) error {
+func (c *Client) QueueLease(ctx context.Context, req *pb.QueueLeaseRequest, res *pb.QueueLeaseResponse) error {
 	payload, err := proto.Marshal(req)
 	if err != nil {
 		return duh.NewClientError("while marshaling request payload: %w", err, nil)
 	}
 
 	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		fmt.Sprintf("%s%s", c.conf.Endpoint, transport.RPCQueueReserve), bytes.NewReader(payload))
+		fmt.Sprintf("%s%s", c.conf.Endpoint, transport.RPCQueueLease), bytes.NewReader(payload))
 	if err != nil {
 		return duh.NewClientError("", err, nil)
 	}

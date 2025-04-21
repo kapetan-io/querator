@@ -33,7 +33,7 @@ type LifeCycleConfig struct {
 
 // LifeCycle manages the life cycle of items in a partition.
 // A life cycle:
-// - Handles reserved items that are past their completion deadline
+// - Handles leased items that are past their completion deadline
 // - Moves expired items out of the queue into the dead letter
 // - Decides if a partition is available or not
 // - Sets the initial partition counts if none exist
@@ -167,7 +167,7 @@ func (l *LifeCycle) runLifeCycle(state *lifeCycleState) {
 	// before writing the actions to the logical or manager.
 	for a := range l.conf.Storage.ScanForActions(l.logical.conf.ReadTimeout, now) {
 		switch a.Action {
-		case types.ActionReserveExpired:
+		case types.ActionLeaseExpired:
 			// If attempts exhausted, then convert to a delete action
 			if a.Item.Attempts >= l.conf.Partition.Info.Queue.MaxAttempts {
 				a.Action = types.ActionDeleteItem
@@ -213,12 +213,12 @@ func (l *LifeCycle) runLifeCycle(state *lifeCycleState) {
 
 	// TODO: if there is nothing in the queue, we need to set a new nextRunDeadline to some time
 	//  in the future? Actually this will happen when the next thing comes in... right?
-	if info.NextReserveExpiry.After(now) && info.NextReserveExpiry.Before(state.nextRunDeadline) {
-		state.nextRunDeadline = info.NextReserveExpiry
+	if info.NextLeaseExpiry.After(now) && info.NextLeaseExpiry.Before(state.nextRunDeadline) {
+		state.nextRunDeadline = info.NextLeaseExpiry
 	}
 
 	// If there is no known future run then set the time to some time in the future
-	// This can happen when the queue becomes empty or all reserved items in the queue are
+	// This can happen when the queue becomes empty or all leased items in the queue are
 	// expired.
 	if state.nextRunDeadline.Before(now) {
 		state.nextRunDeadline = now.Add(humanize.LongTime)
@@ -228,7 +228,7 @@ func (l *LifeCycle) runLifeCycle(state *lifeCycleState) {
 func (l *LifeCycle) batchAction(state *lifeCycleState, a types.Action, actions []types.Action, handle handleActions) []types.Action {
 	l.log.LogAttrs(context.Background(), LevelDebugAll, "new life cycle action",
 		slog.String("action", types.ActionToString(a.Action)),
-		slog.String("reserve_deadline", a.Item.ReserveDeadline.String()),
+		slog.String("lease_deadline", a.Item.LeaseDeadline.String()),
 		slog.String("expire_deadline", a.Item.ExpireDeadline.String()),
 		slog.String("id", string(a.Item.ID)))
 	actions = append(actions, a)
@@ -240,13 +240,13 @@ func (l *LifeCycle) batchAction(state *lifeCycleState, a types.Action, actions [
 }
 
 // partitionStateChange notifies the logical that a partition changed state
-func (l *LifeCycle) partitionStateChange(failures int, numReserved int) bool {
+func (l *LifeCycle) partitionStateChange(failures int, numLeased int) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), l.logical.conf.WriteTimeout+time.Second)
 	defer cancel()
 	if err := l.logical.PartitionStateChange(ctx, l.conf.Partition.Info.PartitionNum,
 		types.PartitionState{
-			Failures:    failures,
-			NumReserved: numReserved,
+			Failures:  failures,
+			NumLeased: numLeased,
 		}); err != nil {
 		if errors.Is(err, ErrQueueShutdown) {
 			return false
@@ -324,10 +324,10 @@ func (l *LifeCycle) recoverPartition(state *lifeCycleState) bool {
 		return false
 	}
 
-	if stats.Total-stats.NumReserved < 0 {
+	if stats.Total-stats.NumLeased < 0 {
 		l.log.Error("assertion failed; total count of items in the partition "+
-			"cannot be more than the total reserved count", "total", stats.Total,
-			"reserved", stats.NumReserved)
+			"cannot be more than the total leased count", "total", stats.Total,
+			"leased", stats.NumLeased)
 		return false
 	}
 
@@ -335,8 +335,8 @@ func (l *LifeCycle) recoverPartition(state *lifeCycleState) bool {
 		slog.Int("partition", l.conf.Partition.Info.PartitionNum))
 
 	l.state.Failures = 0
-	l.state.NumReserved = stats.NumReserved
-	return l.partitionStateChange(0, stats.Total-stats.NumReserved)
+	l.state.NumLeased = stats.NumLeased
+	return l.partitionStateChange(0, stats.Total-stats.NumLeased)
 }
 
 func (l *LifeCycle) Shutdown(ctx context.Context) error {

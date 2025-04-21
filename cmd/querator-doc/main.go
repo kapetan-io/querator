@@ -107,13 +107,13 @@ func Produce() {
 	fmt.Println(out)
 }
 
-func Reserve() {
+func Leased() {
 	var out string
 
 	fmt.Println("---------------------------")
-	fmt.Println("QueueReserveRequest")
+	fmt.Println("QueueLeaseRequest")
 	fmt.Println("---------------------------")
-	onError(toString(&out, &pb.QueueReserveRequest{
+	onError(toString(&out, &pb.QueueLeaseRequest{
 		QueueName:      "queue-name",
 		ClientId:       "client-01",
 		BatchSize:      1_000,
@@ -122,18 +122,18 @@ func Reserve() {
 	fmt.Println(out)
 
 	fmt.Println("---------------------------")
-	fmt.Println("QueueReserveResponse")
+	fmt.Println("QueueLeaseResponse")
 	fmt.Println("---------------------------")
-	onError(toString(&out, &pb.QueueReserveResponse{
-		Items: []*pb.QueueReserveItem{
+	onError(toString(&out, &pb.QueueLeaseResponse{
+		Items: []*pb.QueueLeaseItem{
 			{
-				Encoding:        "application/json",
-				Kind:            "webhook-v2",
-				Reference:       "account-1234",
-				Id:              "queue-name~1234",
-				Attempts:        0,
-				ReserveDeadline: timestamppb.New(clock.Now().UTC()),
-				Bytes:           []byte("{\"key\":\"value\"}"),
+				Encoding:      "application/json",
+				Kind:          "webhook-v2",
+				Reference:     "account-1234",
+				Id:            "queue-name~1234",
+				Attempts:      0,
+				LeaseDeadline: timestamppb.New(clock.Now().UTC()),
+				Bytes:         []byte("{\"key\":\"value\"}"),
 			},
 		},
 	}))
@@ -167,6 +167,6 @@ func Complete() {
 func main() {
 	Replies()
 	//Produce()
-	//Reserve()
+	//Leased()
 	Complete()
 }

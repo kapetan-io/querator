@@ -44,7 +44,7 @@ func (c *Config) SetDefaults() error {
 	var err error
 	set.Default(&c.Clock, clock.NewProvider())
 	set.Default(&c.Log, slog.Default())
-	set.Default(&c.MaxReserveBatchSize, internal.DefaultMaxReserveBatchSize)
+	set.Default(&c.MaxLeaseBatchSize, internal.DefaultMaxLeaseBatchSize)
 	set.Default(&c.MaxProduceBatchSize, internal.DefaultMaxProduceBatchSize)
 	set.Default(&c.MaxCompleteBatchSize, internal.DefaultMaxCompleteBatchSize)
 	set.Default(&c.MaxRequestsPerQueue, internal.DefaultMaxRequestsPerQueue)

@@ -31,19 +31,19 @@ const (
 	MethodUpdateInfo
 	MethodUpdatePartitions
 	MethodProduce
-	MethodReserve
+	MethodLease
 	MethodComplete
 	MethodLifeCycle
 	MethodPartitionStateChange
 	MethodReloadPartitions
 
-	DefaultMaxReserveBatchSize  = 1_000
+	DefaultMaxLeaseBatchSize    = 1_000
 	DefaultMaxProduceBatchSize  = 1_000
 	DefaultMaxCompleteBatchSize = 1_000
 	DefaultMaxRequestsPerQueue  = 500
 
 	MsgRequestTimeout    = "request timeout; no items are in the queue, try again"
-	MsgDuplicateClientID = "duplicate client id; a client cannot make multiple reserve requests to the same queue"
+	MsgDuplicateClientID = "duplicate client id; a client cannot make multiple leased requests to the same queue"
 	MsgQueueInShutdown   = "queue is shutting down"
 	MsgQueueOverLoaded   = "queue is overloaded; try again later"
 )
@@ -64,8 +64,8 @@ type LogicalConfig struct {
 	WriteTimeout clock.Duration
 	// ReadTimeout The time it should take for a single batched read to complete
 	ReadTimeout clock.Duration
-	// MaxReserveBatchSize is the maximum number of items a client can request in a single reserve request
-	MaxReserveBatchSize int
+	// MaxLeaseBatchSize is the maximum number of items a client can request in a single lease request
+	MaxLeaseBatchSize int
 	// MaxProduceBatchSize is the maximum number of items a client can produce in a single produce request
 	MaxProduceBatchSize int
 	// MaxCompleteBatchSize is the maximum number of ids a client can mark complete in a single complete request
@@ -109,7 +109,7 @@ type Logical struct {
 
 func SpawnLogicalQueue(conf LogicalConfig) (*Logical, error) {
 	set.Default(&conf.Log, slog.Default())
-	set.Default(&conf.MaxReserveBatchSize, DefaultMaxReserveBatchSize)
+	set.Default(&conf.MaxLeaseBatchSize, DefaultMaxLeaseBatchSize)
 	set.Default(&conf.MaxProduceBatchSize, DefaultMaxProduceBatchSize)
 	set.Default(&conf.MaxCompleteBatchSize, DefaultMaxCompleteBatchSize)
 	set.Default(&conf.MaxRequestsPerQueue, DefaultMaxRequestsPerQueue)
@@ -195,22 +195,22 @@ func (l *Logical) Produce(ctx context.Context, req *types.ProduceRequest) error 
 	return req.Err
 }
 
-// Reserve is called by clients wanting to reserve a new item from the queue. This call
+// Lease is called by clients wanting to lease a new item from the queue. This call
 // will block until the request is cancelled via the passed context or the RequestTimeout
 // is reached.
 //
 // # Context Cancellation
-// IT IS NOT recommend to cancel wit context.WithTimeout() or context.WithDeadline() on Reserve() since
-// Reserve() will block until the duration provided via ReserveRequest.RequestTimeout has been reached.
-// Callers SHOULD cancel the context if the client has gone away, in this case Logical will abort the reservation
-// request. If the context is cancelled after reservation has been written to the data store
-// then those reservations will remain reserved until they can be offered to another client after the
-// ReserveDeadline has been reached. See doc/adr/0009-client-timeouts.md
+// IT IS NOT recommend to cancel wit context.WithTimeout() or context.WithDeadline() on Lease() since
+// Lease() will block until the duration provided via LeaseRequest.RequestTimeout has been reached.
+// Callers SHOULD cancel the context if the client has gone away, in this case Logical will abort the lease
+// request. If the context is cancelled after lease has been written to the data store
+// then those leases will remain leased until they can be offered to another client after the
+// LeaseDeadline has been reached. See doc/adr/0009-client-timeouts.md
 //
 // # Unique Requests
 // ClientID must NOT be empty and each request must be unique, Non-unique requests will be rejected with
 // MsgDuplicateClientID. See doc/adr/0007-encourage-simple-clients.md for an explanation.
-func (l *Logical) Reserve(ctx context.Context, req *types.ReserveRequest) error {
+func (l *Logical) Lease(ctx context.Context, req *types.LeaseRequest) error {
 	if l.inShutdown.Load() {
 		return ErrQueueShutdown
 	}
@@ -225,8 +225,8 @@ func (l *Logical) Reserve(ctx context.Context, req *types.ReserveRequest) error 
 		return transport.NewInvalidOption("invalid batch size; must be greater than zero")
 	}
 
-	if req.NumRequested > l.conf.MaxReserveBatchSize {
-		return transport.NewInvalidOption("invalid batch size; max_reserve_batch_size is %d, "+
+	if req.NumRequested > l.conf.MaxLeaseBatchSize {
+		return transport.NewInvalidOption("invalid batch size; max_lease_batch_size is %d, "+
 			"but %d was requested", l.conf.MaxProduceBatchSize, req.NumRequested)
 	}
 
@@ -250,7 +250,7 @@ func (l *Logical) Reserve(ctx context.Context, req *types.ReserveRequest) error 
 
 	select {
 	case l.hotRequestCh <- &Request{
-		Method:  MethodReserve,
+		Method:  MethodLease,
 		Request: req,
 	}:
 	default:
@@ -377,7 +377,7 @@ func (l *Logical) QueueStats(ctx context.Context, stats *types.LogicalStats) err
 	return l.queueRequest(ctx, &r)
 }
 
-// Pause pauses processing of produce, reserve, complete and defer operations until the pause is cancelled.
+// Pause pauses processing of produce, lease, complete and retry operations until the pause is cancelled.
 // It is only used for testing and not exposed to the user via API, as such it is not considered apart of
 // the public API.
 func (l *Logical) Pause(ctx context.Context, req *types.PauseRequest) error {
@@ -408,8 +408,8 @@ func (l *Logical) Clear(ctx context.Context, req *types.ClearRequest) error {
 		return ErrQueueShutdown
 	}
 
-	if !req.Queue && !req.Defer && !req.Scheduled {
-		return transport.NewInvalidOption("invalid clear request; one of 'queue', 'defer'," +
+	if !req.Queue && !req.Retry && !req.Scheduled {
+		return transport.NewInvalidOption("invalid clear request; one of 'queue', 'retry'," +
 			" 'scheduled' must be true")
 	}
 
@@ -528,8 +528,8 @@ func (l *Logical) prepareQueueState(state *QueueState) {
 		state.Producers.Requests = make([]*types.ProduceRequest, 0, 5_000)
 	}
 
-	if state.Reservations.Requests == nil {
-		state.Reservations.Requests = make([]*types.ReserveRequest, 0, 5_000)
+	if state.Leases.Requests == nil {
+		state.Leases.Requests = make([]*types.LeaseRequest, 0, 5_000)
 	}
 
 	if state.Completes.Requests == nil {
@@ -538,13 +538,13 @@ func (l *Logical) prepareQueueState(state *QueueState) {
 
 	// TODO: Validate each partition hasn't been modified since last loaded by a Logical queue.
 	//  we do this by saving he last item id in the partition into QueueInfo.StoragePartitions along with
-	//  the the QueueInfo.StoragePartitions.UnReserved of items in the partition. When loading the partition,
+	//  the the QueueInfo.StoragePartitions.UnLeased of items in the partition. When loading the partition,
 	//  If the last item id saved in QueueInfo.StoragePartitions agrees with what is in the actual partition,
 	//  we should trust that the partition was not modified and the count saved in
-	//  QueueInfo.StoragePartitions.UnReserved is accurate. If it's not accurate, we MUST re-count all the items
+	//  QueueInfo.StoragePartitions.UnLeased is accurate. If it's not accurate, we MUST re-count all the items
 	//  in the partition in order to accurately distribute items.
 
-	// TODO(rebalance): This needs to preserve partitions counts and current in flight reserve requests
+	// TODO(rebalance): This needs to please partitions counts and current in flight lease requests
 	//  when a partition is added or removed. Do the simple thing right now, in case this all changes
 	//  later.
 	state.Partitions = make([]*Partition, len(l.conf.StoragePartitions))
@@ -577,10 +577,10 @@ func (l *Logical) prepareQueueState(state *QueueState) {
 		if a.State.Failures < b.State.Failures {
 			return -1
 		}
-		if a.State.UnReserved < b.State.UnReserved {
+		if a.State.UnLeased < b.State.UnLeased {
 			return -1
 		}
-		if a.State.UnReserved > b.State.UnReserved {
+		if a.State.UnLeased > b.State.UnLeased {
 			return +1
 		}
 		return 0
@@ -597,7 +597,7 @@ type QueueState struct {
 	LifeCycles        types.Batch[types.LifeCycleRequest]
 	Completes         types.Batch[types.CompleteRequest]
 	Producers         types.ProduceBatch
-	Reservations      types.ReserveBatch
+	Leases            types.LeaseBatch
 	NextMaintenanceCh <-chan clock.Time
 	Partitions        []*Partition
 }
@@ -624,7 +624,7 @@ func (l *Logical) requestLoop() {
 		l.log.LogAttrs(context.Background(), LevelDebugAll, "Logical.requestLoop()",
 			slog.Int("HotRequests", len(l.hotRequestCh)),
 			slog.Int("ColdRequests", len(l.coldRequestCh)),
-			slog.Int("Reservations", len(state.Reservations.Requests)),
+			slog.Int("Leases", len(state.Leases.Requests)),
 			slog.Int("Producers", len(state.Producers.Requests)),
 			slog.Int("Completes", len(state.Completes.Requests)),
 			slog.Int("LifeCycles", len(state.LifeCycles.Requests)),
@@ -653,8 +653,8 @@ func (l *Logical) requestLoop() {
 }
 
 func (l *Logical) handleRequestTimeouts(state *QueueState) {
-	// TODO: Consider state.nextDeadLine which should be the next time a reservation will expire
-	next := l.nextTimeout(&state.Reservations)
+	// TODO: Consider state.nextDeadLine which should be the next time a lease will expire
+	next := l.nextTimeout(&state.Leases)
 	if next.Nanoseconds() != 0 {
 		l.log.LogAttrs(context.Background(), LevelDebug, "next maintenance",
 			slog.String("duration", next.String()))
@@ -691,13 +691,13 @@ func (l *Logical) handleHotRequests(state *QueueState, req *Request) {
 
 	// Reset the partition assignments
 	for _, p := range state.Partitions {
-		if p.State.NumReserved != 0 {
+		if p.State.NumLeased != 0 {
 			// NOTE: Indexing LifeCycles here only works because LifeCycles and
 			// Partitions have the same number of entries, consider merging them
 			// in the future.
 			//
-			// MostRecentDeadline is updated when we apply reservations to our
-			// partitions. Notify the life cycle so it knows when a reservation
+			// MostRecentDeadline is updated when we apply leases to our
+			// partitions. Notify the life cycle so it knows when a lease
 			// is likely to expire next.
 			p.LifeCycle.Notify(p.State.MostRecentDeadline)
 		}
@@ -705,7 +705,7 @@ func (l *Logical) handleHotRequests(state *QueueState, req *Request) {
 	}
 
 	state.LifeCycles.Reset()
-	state.Reservations.FilterNils()
+	state.Leases.FilterNils()
 	state.Producers.Reset()
 	state.Completes.Reset()
 
@@ -746,11 +746,11 @@ func (l *Logical) reqToState(req *Request, state *QueueState) {
 	case MethodLifeCycle:
 		state.LifeCycles.Add(req.Request.(*types.LifeCycleRequest))
 		close(req.ReadyCh)
-	case MethodReserve:
-		addIfUnique(&state.Reservations, req.Request.(*types.ReserveRequest))
+	case MethodLease:
+		addIfUnique(&state.Leases, req.Request.(*types.LeaseRequest))
 	case MethodPartitionStateChange:
 		// Do nothing. This request is intended to force requestLoop to cycle
-		// when a partition state changes, so any waiting produce or reserve
+		// when a partition state changes, so any waiting produce or lease
 		// requests have a chance consider the changed partition in order to
 		// fulfill their waiting requests.
 	default:
@@ -774,11 +774,11 @@ func (l *Logical) assignToPartitions(state *QueueState) {
 	l.assignProduceRequests(state)
 
 	// TODO: We should inspect the produce requests, and attempt to assign produced
-	//  items with waiting reserve requests if our queue is caught up.
-	//  (Check for cancel or expire reserve requests first)
+	//  items with waiting lease requests if our queue is caught up.
+	//  (Check for cancel or expire lease requests first)
 
-	// ==== Reserve ====
-	l.assignReserveRequests(state)
+	// ==== Lease ====
+	l.assignLeaseRequests(state)
 	// ==== Complete ====
 	l.assignCompleteRequests(state)
 }
@@ -812,10 +812,10 @@ func (l *Logical) assignProduceRequests(state *QueueState) {
 			if a.State.Failures < b.State.Failures {
 				return -1
 			}
-			if a.State.UnReserved < b.State.UnReserved {
+			if a.State.UnLeased < b.State.UnLeased {
 				return -1
 			}
-			if a.State.UnReserved > b.State.UnReserved {
+			if a.State.UnLeased > b.State.UnLeased {
 				return +1
 			}
 			return 0
@@ -823,9 +823,9 @@ func (l *Logical) assignProduceRequests(state *QueueState) {
 	}
 }
 
-func (l *Logical) assignReserveRequests(state *QueueState) {
-	// Assign Reservation Requests to StoragePartitions
-	for _, req := range state.Reservations.Requests {
+func (l *Logical) assignLeaseRequests(state *QueueState) {
+	// Assign lease requests to StoragePartitions
+	for _, req := range state.Leases.Requests {
 		// Perform a reverse search through state.Partitions finding the first partition where b.State.Failures == 0
 		var assigned *Partition
 		for i := len(state.Partitions) - 1; i >= 0; i-- {
@@ -837,19 +837,19 @@ func (l *Logical) assignReserveRequests(state *QueueState) {
 		}
 
 		if assigned == nil {
-			l.log.Warn("no healthy partitions, reserve request not assigned",
+			l.log.Warn("no healthy partitions, lease request not assigned",
 				"client_id", req.ClientID,
 				"num_requested", req.NumRequested)
 			continue
 		}
 
-		l.log.LogAttrs(req.Context, LevelDebugAll, "reserve partition assignment",
+		l.log.LogAttrs(req.Context, LevelDebugAll, "lease partition assignment",
 			slog.Int("partition", assigned.Info.PartitionNum),
 			slog.Int("num_requested", req.NumRequested),
 			slog.String("client_id", req.ClientID))
 
 		// Assign the request to the chosen partition
-		assigned.Reserve(req)
+		assigned.Lease(req)
 
 		// Perform Opportunistic Partition Distribution
 		// See doc/adr/0019-partition-items-distribution.md for details
@@ -858,10 +858,10 @@ func (l *Logical) assignReserveRequests(state *QueueState) {
 			if a.State.Failures < b.State.Failures {
 				return -1
 			}
-			if a.State.UnReserved < b.State.UnReserved {
+			if a.State.UnLeased < b.State.UnLeased {
 				return -1
 			}
-			if a.State.UnReserved > b.State.UnReserved {
+			if a.State.UnLeased > b.State.UnLeased {
 				return +1
 			}
 			return 0
@@ -904,12 +904,12 @@ func (l *Logical) finalizeRequests(state *QueueState) {
 		close(req.ReadyCh)
 	}
 
-	for i, req := range state.Reservations.Requests {
+	for i, req := range state.Leases.Requests {
 		if req == nil {
 			continue
 		}
 		if len(req.Items) != 0 || req.Err != nil {
-			state.Reservations.MarkNil(i)
+			state.Leases.MarkNil(i)
 			close(req.ReadyCh)
 		}
 	}
@@ -923,7 +923,7 @@ func (l *Logical) applyToPartitions(state *QueueState) {
 
 	// TODO: Future: Querator should handle Partition failure by redistributing the batches
 	//  to partitions which have not failed. (note: make sure we reduce the
-	//  Partitions[].State.UnReserved when re-assigning)
+	//  Partitions[].State.UnLeased when re-assigning)
 
 	// TODO: Identify a degradation vs a failure and set Partition[].Failures as appropriate,
 	//  and tell LifeCycle and Adjust the item count in state.Partitions for failed partitions
@@ -946,27 +946,27 @@ func (l *Logical) applyToPartitions(state *QueueState) {
 			p.State.MostRecentDeadline = l.conf.Clock.Now().UTC().Add(l.conf.ExpireTimeout)
 		}
 
-		// ==== Reserve ====
-		if len(p.ReserveRequests.Requests) != 0 {
-			reserveDeadline := l.conf.Clock.Now().UTC().Add(l.conf.ReserveTimeout)
-			if err := p.Store.Reserve(ctx, p.ReserveRequests, store.ReserveOptions{
-				ReserveDeadline: reserveDeadline,
+		// ==== Lease ====
+		if len(p.LeaseRequests.Requests) != 0 {
+			leaseDeadline := l.conf.Clock.Now().UTC().Add(l.conf.LeaseTimeout)
+			if err := p.Store.Lease(ctx, p.LeaseRequests, store.LeaseOptions{
+				LeaseDeadline: leaseDeadline,
 			}); err != nil {
-				l.log.Error("while calling store.Partition.Reserve()",
+				l.log.Error("while calling store.Partition.Lease()",
 					"partition", p.Info.PartitionNum,
 					"error", err)
 				// TODO: Handle degradation
 			}
-			// Only if Reserve was successful
-			p.State.MostRecentDeadline = reserveDeadline
+			// Only if Lease was successful
+			p.State.MostRecentDeadline = leaseDeadline
 
 			if l.log.Enabled(ctx, LevelDebugAll) {
-				for _, req := range p.ReserveRequests.Requests {
-					l.log.LogAttrs(req.Context, LevelDebugAll, "Reserved",
+				for _, req := range p.LeaseRequests.Requests {
+					l.log.LogAttrs(req.Context, LevelDebugAll, "Leased",
 						slog.Int("partition", req.Partition),
 						slog.Int("num_requested", req.NumRequested),
 						slog.String("client_id", req.ClientID),
-						slog.Int("items_reserved", len(req.Items)))
+						slog.Int("items_leased", len(req.Items)))
 				}
 			}
 		}
@@ -1032,20 +1032,20 @@ func (l *Logical) handleColdRequests(state *QueueState, req *Request) {
 		if p.State.Failures != types.UnSet {
 			state.Partitions[p.PartitionNum].State.Failures = p.State.Failures
 		}
-		if p.State.UnReserved != types.UnSet {
-			state.Partitions[p.PartitionNum].State.UnReserved = p.State.UnReserved
+		if p.State.UnLeased != types.UnSet {
+			state.Partitions[p.PartitionNum].State.UnLeased = p.State.UnLeased
 		}
-		if p.State.NumReserved != types.UnSet {
-			state.Partitions[p.PartitionNum].State.NumReserved = p.State.NumReserved
+		if p.State.NumLeased != types.UnSet {
+			state.Partitions[p.PartitionNum].State.NumLeased = p.State.NumLeased
 		}
 		l.log.LogAttrs(context.Background(), LevelDebugAll, "partition state changed",
-			slog.Int("num_reserved", state.Partitions[p.PartitionNum].State.NumReserved),
-			slog.Int("unreserved", state.Partitions[p.PartitionNum].State.UnReserved),
+			slog.Int("num_leased", state.Partitions[p.PartitionNum].State.NumLeased),
+			slog.Int("unleased", state.Partitions[p.PartitionNum].State.UnLeased),
 			slog.Int("failures", state.Partitions[p.PartitionNum].State.Failures),
 			slog.Int("partition", p.PartitionNum))
 		close(req.ReadyCh)
 		// Ensure the hot path handler runs on the chance there is a produce or
-		// reserve request waiting for a partition to become available.
+		// lease request waiting for a partition to become available.
 		select {
 		case l.hotRequestCh <- req:
 		default:
@@ -1086,12 +1086,12 @@ func (l *Logical) handleClear(_ *QueueState, req *Request) {
 	cr := req.Request.(*types.ClearRequest)
 
 	if cr.Queue {
-		// Ask the store to clean up any items in the data store which are not currently out for reservation
+		// Ask the store to clean up any items in the data store which are not currently out for lease
 		if err := l.conf.StoragePartitions[0].Clear(req.Context, cr.Destructive); err != nil {
 			req.Err = err
 		}
 	}
-	// TODO(thrawn01): Support clearing defer and scheduled
+	// TODO(thrawn01): Support clearing retry and scheduled
 	close(req.ReadyCh)
 }
 
@@ -1119,7 +1119,7 @@ func (l *Logical) handleStorageRequests(req *Request) {
 
 func (l *Logical) handleStats(state *QueueState, r *Request) {
 	qs := r.Request.(*types.LogicalStats)
-	qs.ReserveWaiting = len(state.Reservations.Requests)
+	qs.LeaseWaiting = len(state.Leases.Requests)
 	qs.ProduceWaiting = len(state.Producers.Requests)
 	qs.CompleteWaiting = len(state.Completes.Requests)
 	qs.InFlight = int(l.inFlight.Load())
@@ -1134,7 +1134,7 @@ func (l *Logical) handleStats(state *QueueState, r *Request) {
 		//  warn if these stats do not match, or avoid querying the disk, or
 		//  make fetching on disk stats a separate call.
 		ps.Failures = s.State.Failures
-		ps.NumReserved = s.State.NumReserved
+		ps.NumLeased = s.State.NumLeased
 		qs.Partitions = append(qs.Partitions, ps)
 	}
 
@@ -1142,7 +1142,7 @@ func (l *Logical) handleStats(state *QueueState, r *Request) {
 }
 
 // handlePause places Logical into a special loop where operations none of the // produce,
-// reserve, complete, defer operations will be processed until we leave the loop.
+// lease, complete, retry operations will be processed until we leave the loop.
 func (l *Logical) handlePause(state *QueueState, r *Request) {
 	pr := r.Request.(*types.PauseRequest)
 
@@ -1180,8 +1180,8 @@ func (l *Logical) handlePause(state *QueueState, r *Request) {
 	}
 }
 func (l *Logical) handleShutdown(state *QueueState, req *types.ShutdownRequest) {
-	// Cancel any open reservations
-	for _, r := range state.Reservations.Requests {
+	// Cancel any open leases
+	for _, r := range state.Leases.Requests {
 		if r != nil {
 			r.Err = ErrQueueShutdown
 			close(r.ReadyCh)
@@ -1198,8 +1198,8 @@ func (l *Logical) handleShutdown(state *QueueState, req *types.ShutdownRequest) 
 					o := r.Request.(*types.ProduceRequest)
 					o.Err = ErrQueueShutdown
 					close(o.ReadyCh)
-				case MethodReserve:
-					o := r.Request.(*types.ReserveRequest)
+				case MethodLease:
+					o := r.Request.(*types.LeaseRequest)
 					o.Err = ErrQueueShutdown
 					close(o.ReadyCh)
 				case MethodComplete:
@@ -1247,8 +1247,8 @@ func (l *Logical) handleShutdown(state *QueueState, req *types.ShutdownRequest) 
 }
 
 // TODO: I don't think we should pass by ref. We should use escape analysis to decide
-func (l *Logical) nextTimeout(r *types.ReserveBatch) clock.Duration {
-	var soon *types.ReserveRequest
+func (l *Logical) nextTimeout(r *types.LeaseBatch) clock.Duration {
+	var soon *types.LeaseRequest
 
 	for i, req := range r.Requests {
 		if req == nil {
@@ -1299,16 +1299,16 @@ func (l *Logical) nextTimeout(r *types.ReserveBatch) clock.Duration {
 //	out := strings.Builder{}
 //	out.WriteString("Partition Order:\n")
 //	for _, req := range state.Partitions {
-//		fmt.Fprintf(&out, "  %02d - UnReserved: %d NumReserved: %d Failures: %d\n",
-//			req.Info.PartitionNum, req.State.UnReserved, req.State.NumReserved,
+//		fmt.Fprintf(&out, "  %02d - UnLeased: %d NumLeased: %d Failures: %d\n",
+//			req.Info.PartitionNum, req.State.UnLeased, req.State.NumLeased,
 //			req.State.Failures)
 //	}
 //	return out.String()
 //}
 
-// addIfUnique adds a ReserveRequest to the batch. Returns false if the ReserveRequest.ClientID is a duplicate
+// addIfUnique adds a LeaseRequest to the batch. Returns false if the LeaseRequest.ClientID is a duplicate
 // and the request was not added to the batch
-func addIfUnique(r *types.ReserveBatch, req *types.ReserveRequest) {
+func addIfUnique(r *types.LeaseBatch, req *types.LeaseRequest) {
 	if req == nil {
 		return
 	}

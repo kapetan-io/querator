@@ -49,7 +49,7 @@ func (s *Service) validateQueueProduceProto(in *proto.QueueProduceRequest, out *
 	return nil
 }
 
-func (s *Service) validateQueueReserveProto(in *proto.QueueReserveRequest, out *types.ReserveRequest) error {
+func (s *Service) validateQueueLeaseProto(in *proto.QueueLeaseRequest, out *types.LeaseRequest) error {
 	var err error
 
 	if in.RequestTimeout != "" {
@@ -92,8 +92,8 @@ func (s *Service) validateQueueCompleteProto(in *proto.QueueCompleteRequest, out
 func (s *Service) validateQueueOptionsProto(in *proto.QueueInfo, out *types.QueueInfo) error {
 	var err error
 
-	if len(in.ReserveTimeout) > maxTimeoutLength {
-		return transport.NewInvalidOption("reserve timeout is invalid; cannot be greater than '%d' characters", maxTimeoutLength)
+	if len(in.LeaseTimeout) > maxTimeoutLength {
+		return transport.NewInvalidOption("lease timeout is invalid; cannot be greater than '%d' characters", maxTimeoutLength)
 	}
 
 	if len(in.ExpireTimeout) > maxTimeoutLength {
@@ -107,10 +107,10 @@ func (s *Service) validateQueueOptionsProto(in *proto.QueueInfo, out *types.Queu
 		}
 	}
 
-	if in.ReserveTimeout != "" {
-		out.ReserveTimeout, err = clock.ParseDuration(in.ReserveTimeout)
+	if in.LeaseTimeout != "" {
+		out.LeaseTimeout, err = clock.ParseDuration(in.LeaseTimeout)
 		if err != nil {
-			return transport.NewInvalidOption("reserve timeout is invalid; %s -  expected format: 8m, 15m or 1h", err.Error())
+			return transport.NewInvalidOption("lease timeout is invalid; %s -  expected format: 8m, 15m or 1h", err.Error())
 		}
 	}
 

@@ -19,11 +19,11 @@ to encourage client implementations and users to [Fall into the pit of success](
 
 ##### Queue Name Required
 We require clients to provide the name of the queue for the `/queue.produce`, `/queue.complete`, and
-`/queue.defer` APIs. This decision is made despite the fact that the item `id` retrieved during `/queue.reserve`
+`/queue.retry` APIs. This decision is made despite the fact that the item `id` retrieved during `/queue.lease`
 may include information about the item's storage location, likely including the name of the queue.
 
 ##### Unique Clients
-The `/queue.reserve` API will require clients to provide a client id which uniquely identifies a client to Querator.
+The `/queue.lease` API will require clients to provide a client id which uniquely identifies a client to Querator.
 
 ##### Avoid Large Payloads
 Querator will have a maximum payload requirement which is enforced via the HTTP API since the current protobuf 
@@ -44,12 +44,12 @@ This has several implications:
   `/queue.complete`.
 * The client must write additional code to handle parsing a complex response structure for items that failed to
   complete. In addition, it must handle each item separately to determine which of the failed ids can be retried via
-  `/queue.complete` and which should be `/queue.defer` if any.
-* The client must track which of the failed items are at risk of exceeding their `reserve_timeout` such that they
+  `/queue.complete` and which should be `/queue.retry` if any.
+* The client must track which of the failed items are at risk of exceeding their `lease_timeout` such that they
   can be handled appropriately.
 * If the client has implemented such a batching optimization, it is likely the client has done so in an async
   manner separating the item from it's processing handler. In such a case, it is likely the item processed will be
-  processed again if a successful `/queue.complete` cannot be preformed before `reserve_timeout` is reached and
+  processed again if a successful `/queue.complete` cannot be preformed before `lease_timeout` is reached and
   the handler is likely not aware of an item batched to `/queue.complete` had a failure.
 
 All of this client complexity is discouraged by requiring the `queue_name` on several API calls. The design does
@@ -80,7 +80,7 @@ less of a concern as both of these protocols can make use of multiple channels o
 
 ##### Unique Clients
 In the case where clients are producing and consuming very large item payloads, the client may wish to overcome the
-payload size limitations by making more than one reserve request per client. The API does not deny clients this 
+payload size limitations by making more than one lease request per client. The API does not deny clients this 
 option, but instead encourages clients to consider the most efficient path first. See `Avoid Large Payloads`
 
 ##### Avoid Large Payloads

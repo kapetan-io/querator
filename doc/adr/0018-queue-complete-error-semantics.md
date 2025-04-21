@@ -21,9 +21,9 @@ completion.
 
 #### Complexity Introduced by Partitions
 Introducing partitions as full-class citizens adds complexity to the `/queue.complete` request.
-Although we aim to lump partitions together when a client reserves items from a queue, it is possible
+Although we aim to lump partitions together when a client leases items from a queue, it is possible
 that a `/queue.complete` request may include item IDs from multiple partitions. These partitions
-might have been rebalanced or moved to a different Querator instance during the reservation period.
+might have been rebalanced or moved to a different Querator instance during the lease period.
 Consequently, the `/queue.complete` request may need to proxy the complete request to the owning
 Querator instance.
 

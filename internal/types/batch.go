@@ -12,7 +12,7 @@ func (r *Batch[T]) Add(req *T) {
 	r.Requests = append(r.Requests, req)
 }
 
-// Remove removes the reserve request from the batch
+// Remove removes the request from the batch
 func (r *Batch[T]) Remove(req *T) {
 	// Filter in place algorithm. Removes the request and moves all
 	// items up the slice then resizes the slice
@@ -53,26 +53,26 @@ func (r *ProduceBatch) Reset() {
 	r.Requests = r.Requests[:n]
 }
 
-// ReserveBatch is a batch of reserve requests. It is unique from other Batch requests
+// LeaseBatch is a batch of lease requests. It is unique from other Batch requests
 // in that each request must be unique.
 // TODO(thrawn01): An array of requests might not be the most efficient, perhaps a SkipList
-type ReserveBatch struct {
-	Requests       []*ReserveRequest
+type LeaseBatch struct {
+	Requests       []*LeaseRequest
 	TotalRequested int
 }
 
-func (r *ReserveBatch) Reset() {
+func (r *LeaseBatch) Reset() {
 	r.Requests = r.Requests[:0]
 	r.TotalRequested = 0
 }
 
-func (r *ReserveBatch) Add(req *ReserveRequest) {
+func (r *LeaseBatch) Add(req *LeaseRequest) {
 	r.TotalRequested += req.NumRequested
 	r.Requests = append(r.Requests, req)
 }
 
 // MarkNil marks the request as nil. See FilterNils for explanation
-func (r *ReserveBatch) MarkNil(idx int) {
+func (r *LeaseBatch) MarkNil(idx int) {
 	r.TotalRequested -= r.Requests[idx].NumRequested
 	r.Requests[idx] = nil
 }
@@ -80,7 +80,7 @@ func (r *ReserveBatch) MarkNil(idx int) {
 // FilterNils filters out any nils in the Batch by using a filter in place algorithm which
 // resizes the slice without altering the capacity. We filter out nils as it's more efficient
 // and safer to mark requests as nil during iteration, then clean up the nils after.
-func (r *ReserveBatch) FilterNils() {
+func (r *LeaseBatch) FilterNils() {
 	// Filter in place algorithm. Removes the request and moves all
 	// items up the slice then resizes the slice
 	n := 0
@@ -93,17 +93,17 @@ func (r *ReserveBatch) FilterNils() {
 	r.Requests = r.Requests[:n]
 }
 
-func (r *ReserveBatch) Iterator() ReserveBatchIterator {
-	return ReserveBatchIterator{b: r}
+func (r *LeaseBatch) Iterator() LeaseBatchIterator {
+	return LeaseBatchIterator{b: r}
 }
 
-// ReserveBatchIterator distributes items to the requests in the batch in an iterative fashion
-type ReserveBatchIterator struct {
-	b   *ReserveBatch
+// LeaseBatchIterator distributes items to the requests in the batch in an iterative fashion
+type LeaseBatchIterator struct {
+	b   *LeaseBatch
 	pos int
 }
 
-func (it *ReserveBatchIterator) Next(item *Item) bool {
+func (it *LeaseBatchIterator) Next(item *Item) bool {
 	count := len(it.b.Requests)
 	// Find the next request in the batch which has not met its NumRequested limit
 	for count != 0 {

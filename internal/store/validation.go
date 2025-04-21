@@ -88,17 +88,17 @@ func (s QueuesValidation) validateAdd(info types.QueueInfo) error {
 		return err
 	}
 
-	if info.ReserveTimeout.Microseconds() == 0 {
-		return transport.NewInvalidOption("reserve timeout is invalid; cannot be empty")
+	if info.LeaseTimeout.Microseconds() == 0 {
+		return transport.NewInvalidOption("lease timeout is invalid; cannot be empty")
 	}
 
 	if info.ExpireTimeout.Microseconds() == 0 {
 		return transport.NewInvalidOption("expire timeout is invalid; cannot be empty")
 	}
 
-	if info.ReserveTimeout > info.ExpireTimeout {
-		return transport.NewInvalidOption("reserve timeout is too long; %s cannot be greater than the "+
-			"expire timeout %s", info.ReserveTimeout.String(), info.ExpireTimeout.String())
+	if info.LeaseTimeout > info.ExpireTimeout {
+		return transport.NewInvalidOption("lease timeout is too long; %s cannot be greater than the "+
+			"expire timeout %s", info.LeaseTimeout.String(), info.ExpireTimeout.String())
 	}
 
 	return nil

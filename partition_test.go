@@ -67,7 +67,7 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			QueueName:           queueName,
 			DeadQueue:           queueName + "-dead",
 			Reference:           "CreateTestRef",
-			ReserveTimeout:      "1m",
+			LeaseTimeout:        "1m",
 			ExpireTimeout:       "10m",
 			MaxAttempts:         10,
 			RequestedPartitions: 2,
@@ -97,59 +97,59 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		assert.Equal(t, len(list.Items), 11)
 		assert.Equal(t, partitionOneItems[0].Bytes, list.Items[0].Payload)
 
-		var reserve pb.QueueReserveResponse
-		require.NoError(t, c.QueueReserve(ctx, &pb.QueueReserveRequest{
+		var lease pb.QueueLeaseResponse
+		require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
 			QueueName:      queueName,
 			ClientId:       ClientID,
 			RequestTimeout: "5s",
 			BatchSize:      10,
-		}, &reserve))
+		}, &lease))
 
-		assert.Equal(t, queueName, reserve.QueueName)
-		assert.Equal(t, 10, len(reserve.Items))
+		assert.Equal(t, queueName, lease.QueueName)
+		assert.Equal(t, 10, len(lease.Items))
 
-		require.NoError(t, c.QueueReserve(ctx, &pb.QueueReserveRequest{
+		require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
 			QueueName:      queueName,
 			ClientId:       ClientID,
 			RequestTimeout: "5s",
 			BatchSize:      10,
-		}, &reserve))
+		}, &lease))
 
-		assert.Equal(t, queueName, reserve.QueueName)
-		assert.Equal(t, 10, len(reserve.Items))
+		assert.Equal(t, queueName, lease.QueueName)
+		assert.Equal(t, 10, len(lease.Items))
 
 		require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, nil))
-		var reserved, notReserved int
+		var leased, notLeased int
 		for _, item := range list.Items {
-			if item.IsReserved {
-				reserved++
+			if item.IsLeased {
+				leased++
 			} else {
-				notReserved++
+				notLeased++
 			}
 		}
-		assert.Equal(t, 10, reserved)
+		assert.Equal(t, 10, leased)
 
 		require.NoError(t, c.StorageItemsList(ctx, queueName, 1, &list, nil))
 		for _, item := range list.Items {
-			if item.IsReserved {
-				reserved++
+			if item.IsLeased {
+				leased++
 			} else {
-				notReserved++
+				notLeased++
 			}
 		}
-		// All the items in both partitions should be in reserved status except 1
-		assert.Equal(t, 20, reserved)
-		assert.Equal(t, 1, notReserved)
+		// All the items in both partitions should be in leased status except 1
+		assert.Equal(t, 20, leased)
+		assert.Equal(t, 1, notLeased)
 	})
 
-	t.Run("OpportunisticReservation", func(t *testing.T) {
+	t.Run("OpportunisticLease", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
 
 		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 			QueueName:           queueName,
 			DeadQueue:           queueName + "-dead",
 			Reference:           "CreateTestRef",
-			ReserveTimeout:      "1m",
+			LeaseTimeout:        "1m",
 			ExpireTimeout:       "10m",
 			MaxAttempts:         10,
 			RequestedPartitions: 2,
@@ -170,36 +170,36 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		// Partition 1 - 10 10     (20 items)
 
 		var list pb.StorageItemsListResponse
-		var reserved, notReserved int
+		var leased, notLeased int
 		require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, nil))
 		for _, item := range list.Items {
-			if item.IsReserved {
-				reserved++
+			if item.IsLeased {
+				leased++
 			} else {
-				notReserved++
+				notLeased++
 			}
 		}
-		assert.Equal(t, 0, reserved)
-		assert.Equal(t, 30, notReserved)
+		assert.Equal(t, 0, leased)
+		assert.Equal(t, 30, notLeased)
 
-		reserved, notReserved = 0, 0
+		leased, notLeased = 0, 0
 		require.NoError(t, c.StorageItemsList(ctx, queueName, 1, &list, nil))
 		for _, item := range list.Items {
-			if item.IsReserved {
-				reserved++
+			if item.IsLeased {
+				leased++
 			} else {
-				notReserved++
+				notLeased++
 			}
 		}
-		assert.Equal(t, 0, reserved)
-		assert.Equal(t, 20, notReserved)
+		assert.Equal(t, 0, leased)
+		assert.Equal(t, 20, notLeased)
 
 		for _, tc := range []struct {
-			req      *pb.QueueReserveRequest
+			req      *pb.QueueLeaseRequest
 			expected int
 		}{
 			{
-				req: &pb.QueueReserveRequest{
+				req: &pb.QueueLeaseRequest{
 					ClientId:       random.String("client-", 10),
 					QueueName:      queueName,
 					BatchSize:      5,
@@ -208,7 +208,7 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				expected: 5,
 			},
 			{
-				req: &pb.QueueReserveRequest{
+				req: &pb.QueueLeaseRequest{
 					ClientId:       random.String("client-", 10),
 					QueueName:      queueName,
 					BatchSize:      10,
@@ -217,7 +217,7 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				expected: 10,
 			},
 			{
-				req: &pb.QueueReserveRequest{
+				req: &pb.QueueLeaseRequest{
 					ClientId:       random.String("client-", 10),
 					QueueName:      queueName,
 					BatchSize:      20,
@@ -226,17 +226,17 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				expected: 20,
 			},
 		} {
-			var resp pb.QueueReserveResponse
-			require.NoError(t, c.QueueReserve(ctx, tc.req, &resp))
+			var resp pb.QueueLeaseResponse
+			require.NoError(t, c.QueueLease(ctx, tc.req, &resp))
 			assert.Equal(t, tc.expected, len(resp.Items))
 		}
 
-		// Reservation of items should look like this
+		// Lease of items should look like this
 		// Partition 0 - 5 10 (15 remain)
 		// Partition 1 - 20   (0 remain)
 
-		assertPartition(t, ctx, c, queueName, Partition{Partition: 0, Reserved: 15, NotReserved: 15})
-		assertPartition(t, ctx, c, queueName, Partition{Partition: 1, Reserved: 20, NotReserved: 0})
+		assertPartition(t, ctx, c, queueName, Partition{Partition: 0, Leased: 15, NotLeased: 15})
+		assertPartition(t, ctx, c, queueName, Partition{Partition: 1, Leased: 20, NotLeased: 0})
 	})
 
 	t.Run("OnePartitionManyConsumers", func(t *testing.T) {
@@ -246,7 +246,7 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			QueueName:           queueName,
 			DeadQueue:           queueName + "-dead",
 			Reference:           "CreateTestMany",
-			ReserveTimeout:      "1m",
+			LeaseTimeout:        "1m",
 			ExpireTimeout:       "10m",
 			MaxAttempts:         10,
 			RequestedPartitions: 1,
@@ -262,7 +262,7 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			}))
 		}
 
-		requests := []*pb.QueueReserveRequest{
+		requests := []*pb.QueueLeaseRequest{
 			{
 				ClientId:       random.String("client-", 10),
 				QueueName:      queueName,
@@ -297,12 +297,12 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		// 10 concurrent requests, made 5 times to consume all 50 items
 		for i := 0; i < 5; i++ {
-			responses := pauseAndReserve(t, ctx, d.Service(), c, queueName, requests)
+			responses := pauseAndLease(t, ctx, d.Service(), c, queueName, requests)
 			for _, resp := range responses {
 				assert.Equal(t, 2, len(resp.Items))
 			}
 		}
-		assertPartition(t, ctx, c, queueName, Partition{Partition: 0, Reserved: 50, NotReserved: 0})
+		assertPartition(t, ctx, c, queueName, Partition{Partition: 0, Leased: 50, NotLeased: 0})
 	})
 
 	t.Run("ManyPartitionsOneConsumer", func(t *testing.T) {
@@ -312,7 +312,7 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			QueueName:           queueName,
 			DeadQueue:           queueName + "-dead",
 			Reference:           "CreateTestMany",
-			ReserveTimeout:      "10m",
+			LeaseTimeout:        "10m",
 			ExpireTimeout:       "10m",
 			MaxAttempts:         10,
 			RequestedPartitions: 10,
@@ -331,8 +331,8 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		// A single consumer reserving all items from all partitions
 		var count int
 		for count < 50 {
-			var resp pb.QueueReserveResponse
-			require.NoError(t, c.QueueReserve(ctx, &pb.QueueReserveRequest{
+			var resp pb.QueueLeaseResponse
+			require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
 				ClientId:       random.String("client-", 10),
 				QueueName:      queueName,
 				BatchSize:      5,
@@ -340,16 +340,16 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			}, &resp))
 			count += len(resp.Items)
 		}
-		assertPartition(t, ctx, c, queueName, Partition{Partition: 0, Reserved: 5, NotReserved: 0})
-		assertPartition(t, ctx, c, queueName, Partition{Partition: 1, Reserved: 5, NotReserved: 0})
-		assertPartition(t, ctx, c, queueName, Partition{Partition: 2, Reserved: 5, NotReserved: 0})
-		assertPartition(t, ctx, c, queueName, Partition{Partition: 3, Reserved: 5, NotReserved: 0})
-		assertPartition(t, ctx, c, queueName, Partition{Partition: 4, Reserved: 5, NotReserved: 0})
-		assertPartition(t, ctx, c, queueName, Partition{Partition: 5, Reserved: 5, NotReserved: 0})
-		assertPartition(t, ctx, c, queueName, Partition{Partition: 6, Reserved: 5, NotReserved: 0})
-		assertPartition(t, ctx, c, queueName, Partition{Partition: 7, Reserved: 5, NotReserved: 0})
-		assertPartition(t, ctx, c, queueName, Partition{Partition: 8, Reserved: 5, NotReserved: 0})
-		assertPartition(t, ctx, c, queueName, Partition{Partition: 9, Reserved: 5, NotReserved: 0})
+		assertPartition(t, ctx, c, queueName, Partition{Partition: 0, Leased: 5, NotLeased: 0})
+		assertPartition(t, ctx, c, queueName, Partition{Partition: 1, Leased: 5, NotLeased: 0})
+		assertPartition(t, ctx, c, queueName, Partition{Partition: 2, Leased: 5, NotLeased: 0})
+		assertPartition(t, ctx, c, queueName, Partition{Partition: 3, Leased: 5, NotLeased: 0})
+		assertPartition(t, ctx, c, queueName, Partition{Partition: 4, Leased: 5, NotLeased: 0})
+		assertPartition(t, ctx, c, queueName, Partition{Partition: 5, Leased: 5, NotLeased: 0})
+		assertPartition(t, ctx, c, queueName, Partition{Partition: 6, Leased: 5, NotLeased: 0})
+		assertPartition(t, ctx, c, queueName, Partition{Partition: 7, Leased: 5, NotLeased: 0})
+		assertPartition(t, ctx, c, queueName, Partition{Partition: 8, Leased: 5, NotLeased: 0})
+		assertPartition(t, ctx, c, queueName, Partition{Partition: 9, Leased: 5, NotLeased: 0})
 	})
 
 	t.Run("WaitingConsumers", func(t *testing.T) {
@@ -359,13 +359,13 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			QueueName:           queueName,
 			DeadQueue:           queueName + "-dead",
 			Reference:           "WaitingConsumers",
-			ReserveTimeout:      "1m",
+			LeaseTimeout:        "1m",
 			ExpireTimeout:       "10m",
 			MaxAttempts:         10,
 			RequestedPartitions: 5,
 		})
 
-		requests := []*pb.QueueReserveRequest{
+		requests := []*pb.QueueLeaseRequest{
 			{
 				ClientId:       random.String("client-", 10),
 				QueueName:      queueName,
@@ -398,17 +398,17 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			},
 		}
 
-		reserveCh := make(chan []*pb.QueueReserveResponse)
+		leaseCh := make(chan []*pb.QueueLeaseResponse)
 		go func() {
-			reserveCh <- pauseAndReserve(t, ctx, d.Service(), c, queueName, requests)
+			leaseCh <- pauseAndLease(t, ctx, d.Service(), c, queueName, requests)
 		}()
 
-		// Wait until the reserve requests are all waiting
+		// Wait until the lease requests are all waiting
 		err := retry.On(ctx, RetryTenTimes, func(ctx context.Context, i int) error {
 			var resp pb.QueueStatsResponse
 			require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &resp))
-			if int(resp.LogicalQueues[0].ReserveWaiting) != len(requests) {
-				return fmt.Errorf("ReserveWaiting never reached expected %d", len(requests))
+			if int(resp.LogicalQueues[0].LeaseWaiting) != len(requests) {
+				return fmt.Errorf("LeaseWaiting never reached expected %d", len(requests))
 			}
 			return nil
 		})
@@ -422,8 +422,8 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			RequestTimeout: "1m",
 		}))
 
-		// The 10 items produced are distributed amongst all the waiting reserve requests.
-		resp := <-reserveCh
+		// The 10 items produced are distributed amongst all the waiting lease requests.
+		resp := <-leaseCh
 		for _, r := range resp {
 			assert.Equal(t, 2, len(r.Items))
 		}
@@ -433,26 +433,26 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 }
 
 type Partition struct {
-	Name        string
-	Partition   int
-	Reserved    int
-	NotReserved int
+	Name      string
+	Partition int
+	Leased    int
+	NotLeased int
 }
 
 func assertPartition(t *testing.T, ctx context.Context, c *que.Client, name string, expected Partition) {
 	t.Helper()
 	var list pb.StorageItemsListResponse
-	var reserved, notReserved int
+	var leased, notLeased int
 	require.NoError(t, c.StorageItemsList(ctx, name, expected.Partition, &list, nil))
 	for _, item := range list.Items {
-		if item.IsReserved {
-			reserved++
+		if item.IsLeased {
+			leased++
 		} else {
-			notReserved++
+			notLeased++
 		}
 	}
-	assert.Equal(t, expected.Reserved, reserved)
-	assert.Equal(t, expected.NotReserved, notReserved)
+	assert.Equal(t, expected.Leased, leased)
+	assert.Equal(t, expected.NotLeased, notLeased)
 }
 
 // createQueueAndWait creates a queue and returns when all the partitions in the queue are ready

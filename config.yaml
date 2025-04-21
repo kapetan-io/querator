@@ -7,7 +7,7 @@
 
 queues: # is of type 'QueueInfo'
   - name: queue-1
-    reserve-timeout: 10m
+    lease-timeout: 10m
     dead-queue: queue-1-dead
     max-attempts: 10
     partitions:

@@ -27,7 +27,7 @@ type QueuesManagerConfig struct {
 
 // Remote represents a remote instance of querator. Implementations proxy requests to the remote instance
 type Remote interface {
-	QueueReserve(ctx context.Context, req *proto.QueueReserveRequest, res *proto.QueueReserveResponse) error
+	QueueLease(ctx context.Context, req *proto.QueueLeaseRequest, res *proto.QueueLeaseResponse) error
 	QueueProduce(ctx context.Context, req *proto.QueueProduceRequest) error
 	QueueComplete(ctx context.Context, req *proto.QueueCompleteRequest) error
 	StorageItemsList(ctx context.Context, req *proto.StorageItemsListRequest,
@@ -45,7 +45,7 @@ type Remote interface {
 //  similar to https://www.usenix.org/conference/nsdi19/presentation/ousterhout
 
 // TODO: We need to figure out how clients register themselves as consumers before allowing
-//  reservation calls.
+//  lease calls.
 
 // QueuesManager manages queues in use, and information about that queue.
 type QueuesManager struct {
@@ -169,7 +169,7 @@ func (qm *QueuesManager) get(ctx context.Context, name string) (*Queue, error) {
 	// number of logical queues as consumers join.
 	l, err := SpawnLogicalQueue(LogicalConfig{
 		MaxProduceBatchSize:  qm.conf.LogicalConfig.MaxProduceBatchSize,
-		MaxReserveBatchSize:  qm.conf.LogicalConfig.MaxReserveBatchSize,
+		MaxLeaseBatchSize:    qm.conf.LogicalConfig.MaxLeaseBatchSize,
 		MaxCompleteBatchSize: qm.conf.LogicalConfig.MaxCompleteBatchSize,
 		MaxRequestsPerQueue:  qm.conf.LogicalConfig.MaxRequestsPerQueue,
 		WriteTimeout:         qm.conf.LogicalConfig.WriteTimeout,

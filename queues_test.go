@@ -68,7 +68,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				QueueName:           queueName,
 				DeadQueue:           queueName + "-dead",
 				Reference:           "CreateTestRef",
-				ReserveTimeout:      "1m",
+				LeaseTimeout:        "1m",
 				ExpireTimeout:       "10m",
 				MaxAttempts:         10,
 				RequestedPartitions: 1,
@@ -83,7 +83,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			assert.NotEmpty(t, list.Items[0].UpdatedAt)
 			assert.True(t, now.Before(list.Items[0].UpdatedAt.AsTime()))
 			assert.Equal(t, int32(10), list.Items[0].MaxAttempts)
-			assert.Equal(t, "1m0s", list.Items[0].ReserveTimeout)
+			assert.Equal(t, "1m0s", list.Items[0].LeaseTimeout)
 			assert.Equal(t, "10m0s", list.Items[0].ExpireTimeout)
 			assert.Equal(t, queueName+"-dead", list.Items[0].DeadQueue)
 			assert.Equal(t, "CreateTestRef", list.Items[0].Reference)
@@ -107,7 +107,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			assert.NotEmpty(t, r.UpdatedAt)
 			assert.True(t, now.Before(r.UpdatedAt.AsTime()))
 			assert.Equal(t, l.MaxAttempts, r.MaxAttempts)
-			assert.Equal(t, l.ReserveTimeout, r.ReserveTimeout)
+			assert.Equal(t, l.LeaseTimeout, r.LeaseTimeout)
 			assert.Equal(t, l.ExpireTimeout, r.ExpireTimeout)
 			assert.Equal(t, l.DeadQueue, r.DeadQueue)
 			assert.Equal(t, l.Reference, r.Reference)
@@ -141,16 +141,16 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				})
 			})
 
-			t.Run("ReserveTimeout", func(t *testing.T) {
+			t.Run("LeaseTimeout", func(t *testing.T) {
 				l := queues[31]
 
-				rt, err := clock.ParseDuration(l.ReserveTimeout)
+				rt, err := clock.ParseDuration(l.LeaseTimeout)
 				require.NoError(t, err)
 				rt += 10 * clock.Second
 
 				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
-					QueueName:      l.QueueName,
-					ReserveTimeout: rt.String(),
+					QueueName:    l.QueueName,
+					LeaseTimeout: rt.String(),
 				}))
 
 				var list pb.QueuesListResponse
@@ -166,7 +166,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				assert.True(t, clock.Now().After(r.UpdatedAt.AsTime()))
 				assert.True(t, now.Before(r.UpdatedAt.AsTime()))
 				assert.True(t, r.CreatedAt.AsTime().Before(r.UpdatedAt.AsTime()))
-				assert.Equal(t, rt.String(), r.ReserveTimeout)
+				assert.Equal(t, rt.String(), r.LeaseTimeout)
 				t.Run("Respected", func(t *testing.T) {
 					// TODO: Ensure producing and consuming on this queue respects the updated value
 				})
@@ -232,16 +232,16 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				require.NoError(t, err)
 				dt += 35 * clock.Second
 
-				rt, err := clock.ParseDuration(l.ReserveTimeout)
+				rt, err := clock.ParseDuration(l.LeaseTimeout)
 				require.NoError(t, err)
 				rt += 5 * clock.Second
 
 				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
-					QueueName:      l.QueueName,
-					Reference:      "FriendshipIsMagic",
-					MaxAttempts:    l.MaxAttempts + 1,
-					ReserveTimeout: rt.String(),
-					ExpireTimeout:  dt.String(),
+					QueueName:     l.QueueName,
+					Reference:     "FriendshipIsMagic",
+					MaxAttempts:   l.MaxAttempts + 1,
+					LeaseTimeout:  rt.String(),
+					ExpireTimeout: dt.String(),
 				}))
 
 				var list pb.QueuesListResponse
@@ -261,7 +261,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				assert.Equal(t, "FriendshipIsMagic", r.Reference)
 				assert.Equal(t, l.MaxAttempts+1, r.MaxAttempts)
 				assert.Equal(t, dt.String(), r.ExpireTimeout)
-				assert.Equal(t, rt.String(), r.ReserveTimeout)
+				assert.Equal(t, rt.String(), r.LeaseTimeout)
 			})
 		})
 		t.Run("Delete", func(t *testing.T) {
@@ -398,7 +398,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			QueueName:           queueName,
 			DeadQueue:           queueName + "-dead",
 			Reference:           "CreateTestRef",
-			ReserveTimeout:      "1m",
+			LeaseTimeout:        "1m",
 			ExpireTimeout:       "10m",
 			MaxAttempts:         10,
 			RequestedPartitions: 1,
@@ -436,7 +436,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				{
 					Name: "QueueWhiteSpace",
 					Req: &pb.QueueInfo{
-						ReserveTimeout:      ReserveTimeout,
+						LeaseTimeout:        LeaseTimeout,
 						ExpireTimeout:       ExpireTimeout,
 						QueueName:           "Friendship is Magic",
 						RequestedPartitions: 1,
@@ -447,7 +447,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				{
 					Name: "AlreadyExists",
 					Req: &pb.QueueInfo{
-						ReserveTimeout:      ReserveTimeout,
+						LeaseTimeout:        LeaseTimeout,
 						ExpireTimeout:       ExpireTimeout,
 						QueueName:           queueName,
 						RequestedPartitions: 1,
@@ -456,20 +456,20 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					Code: duh.CodeBadRequest,
 				},
 				{
-					Name: "MissingReservationTimeout",
+					Name: "MissingLeaseTimeout",
 					Req: &pb.QueueInfo{
 						QueueName:           random.String("queue-", 10),
 						ExpireTimeout:       "24h0m0s",
 						RequestedPartitions: 1,
 					},
-					Msg:  "reserve timeout is invalid; cannot be empty",
+					Msg:  "lease timeout is invalid; cannot be empty",
 					Code: duh.CodeBadRequest,
 				},
 				{
 					Name: "MissingExpireTimeout",
 					Req: &pb.QueueInfo{
 						QueueName:           random.String("queue-", 10),
-						ReserveTimeout:      "24h0m0s",
+						LeaseTimeout:        "24h0m0s",
 						RequestedPartitions: 1,
 					},
 					Msg:  "expire timeout is invalid; cannot be empty",
@@ -485,32 +485,32 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					Code: duh.CodeBadRequest,
 				},
 				{
-					Name: "ReserveTimeoutMaxLength",
+					Name: "LeaseTimeoutMaxLength",
 					Req: &pb.QueueInfo{
-						QueueName:      "ReserveTimeoutMaxLength",
-						ReserveTimeout: random.String("", 2_001),
+						QueueName:    "LeaseTimeoutMaxLength",
+						LeaseTimeout: random.String("", 2_001),
 					},
-					Msg:  "reserve timeout is invalid; cannot be greater than '15' characters",
+					Msg:  "lease timeout is invalid; cannot be greater than '15' characters",
 					Code: duh.CodeBadRequest,
 				},
 				{
-					Name: "ReserveTimeoutTooLong",
+					Name: "LeaseTimeoutTooLong",
 					Req: &pb.QueueInfo{
-						QueueName:           "ReserveTimeoutTooLong",
-						ReserveTimeout:      "1h0m0s",
+						QueueName:           "LeaseTimeoutTooLong",
+						LeaseTimeout:        "1h0m0s",
 						ExpireTimeout:       "30m0s",
 						RequestedPartitions: 1,
 					},
-					Msg:  "reserve timeout is too long; 1h0m0s cannot be greater than the expire timeout 30m0s",
+					Msg:  "lease timeout is too long; 1h0m0s cannot be greater than the expire timeout 30m0s",
 					Code: duh.CodeBadRequest,
 				},
 				{
-					Name: "InvalidReserveTimeout",
+					Name: "InvalidLeaseTimeout",
 					Req: &pb.QueueInfo{
-						QueueName:      "InvalidReserveTimeout",
-						ReserveTimeout: "foo",
+						QueueName:    "InvalidLeaseTimeout",
+						LeaseTimeout: "foo",
 					},
-					Msg:  "reserve timeout is invalid; time: invalid duration \"foo\" -  expected format: 8m, 15m or 1h",
+					Msg:  "lease timeout is invalid; time: invalid duration \"foo\" -  expected format: 8m, 15m or 1h",
 					Code: duh.CodeBadRequest,
 				},
 				{
@@ -665,7 +665,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				{
 					Name: "QueueWhiteSpace",
 					Req: &pb.QueueInfo{
-						ReserveTimeout:      ReserveTimeout,
+						LeaseTimeout:        LeaseTimeout,
 						ExpireTimeout:       ExpireTimeout,
 						QueueName:           "Friendship is Magic",
 						RequestedPartitions: 1,
@@ -683,22 +683,22 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					Code: duh.CodeBadRequest,
 				},
 				{
-					Name: "ReserveTimeoutTooLong",
+					Name: "LeaseTimeoutTooLong",
 					Req: &pb.QueueInfo{
-						QueueName:      queueName,
-						ReserveTimeout: "1h0m0s",
-						ExpireTimeout:  "30m0s",
+						QueueName:     queueName,
+						LeaseTimeout:  "1h0m0s",
+						ExpireTimeout: "30m0s",
 					},
-					Msg:  "reserve timeout is too long; 1h0m0s cannot be greater than the expire timeout 30m0s",
+					Msg:  "lease timeout is too long; 1h0m0s cannot be greater than the expire timeout 30m0s",
 					Code: duh.CodeBadRequest,
 				},
 				{
-					Name: "InvalidReserveTimeout",
+					Name: "InvalidLeaseTimeout",
 					Req: &pb.QueueInfo{
-						QueueName:      queueName,
-						ReserveTimeout: "foo",
+						QueueName:    queueName,
+						LeaseTimeout: "foo",
 					},
-					Msg:  "reserve timeout is invalid; time: invalid duration \"foo\" -  expected format: 8m, 15m or 1h",
+					Msg:  "lease timeout is invalid; time: invalid duration \"foo\" -  expected format: 8m, 15m or 1h",
 					Code: duh.CodeBadRequest,
 				},
 				{

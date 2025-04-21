@@ -29,8 +29,8 @@ import (
 )
 
 const (
-	ExpireTimeout  = "24h0m0s"
-	ReserveTimeout = "1m0s"
+	ExpireTimeout = "24h0m0s"
+	LeaseTimeout  = "1m0s"
 )
 
 var RetryTenTimes = retry.Policy{Interval: retry.Sleep(100 * clock.Millisecond), Attempts: 20}
@@ -166,9 +166,9 @@ func produceRandomItems(count int) []*pb.QueueProduceItem {
 func compareStorageItem(t *testing.T, l *pb.StorageItem, r *pb.StorageItem) {
 	t.Helper()
 	require.Equal(t, l.Id, r.Id)
-	require.Equal(t, l.IsReserved, r.IsReserved)
+	require.Equal(t, l.IsLeased, r.IsLeased)
 	require.Equal(t, l.ExpireDeadline.AsTime(), r.ExpireDeadline.AsTime())
-	require.Equal(t, l.ReserveDeadline.AsTime(), r.ReserveDeadline.AsTime())
+	require.Equal(t, l.LeaseDeadline.AsTime(), r.LeaseDeadline.AsTime())
 	require.Equal(t, l.Attempts, r.Attempts)
 	require.Equal(t, l.Reference, r.Reference)
 	require.Equal(t, l.Encoding, r.Encoding)
@@ -199,7 +199,7 @@ func dirExists(path string) bool {
 	return info.IsDir()
 }
 
-func findInResponses(responses []*pb.QueueReserveResponse, ref string) bool {
+func findInResponses(responses []*pb.QueueLeaseResponse, ref string) bool {
 
 	for _, item := range responses {
 		for _, idItem := range item.Items {
@@ -220,7 +220,7 @@ func findInStorageList(ref string, resp *pb.StorageItemsListResponse) *pb.Storag
 	return nil
 }
 
-func findInReserveResp(ref string, resp *pb.QueueReserveResponse) *pb.QueueReserveItem {
+func findInLeaseResp(ref string, resp *pb.QueueLeaseResponse) *pb.QueueLeaseItem {
 	for _, i := range resp.Items {
 		if i.Reference == ref {
 			return i
@@ -261,16 +261,16 @@ func randomSliceStrings(count int) []string {
 	return result
 }
 
-func pauseAndReserve(t *testing.T, ctx context.Context, s *que.Service, c *que.Client, name string,
-	requests []*pb.QueueReserveRequest) []*pb.QueueReserveResponse {
+func pauseAndLease(t *testing.T, ctx context.Context, s *que.Service, c *que.Client, name string,
+	requests []*pb.QueueLeaseRequest) []*pb.QueueLeaseResponse {
 	t.Helper()
 
 	// Pause processing of the queue for testing
 	require.NoError(t, s.PauseQueue(ctx, name, true))
 
-	responses := make([]*pb.QueueReserveResponse, len(requests))
+	responses := make([]*pb.QueueLeaseResponse, len(requests))
 	for i := range responses {
-		responses[i] = &pb.QueueReserveResponse{}
+		responses[i] = &pb.QueueLeaseResponse{}
 	}
 
 	var wg sync.WaitGroup
@@ -279,7 +279,7 @@ func pauseAndReserve(t *testing.T, ctx context.Context, s *que.Service, c *que.C
 	for i := range requests {
 		go func(idx int) {
 			defer wg.Done()
-			if err := c.QueueReserve(ctx, requests[idx], responses[idx]); err != nil {
+			if err := c.QueueLease(ctx, requests[idx], responses[idx]); err != nil {
 				var d duh.Error
 				if errors.As(err, &d) {
 					if d.Code() == duh.CodeRetryRequest {
@@ -298,17 +298,17 @@ func pauseAndReserve(t *testing.T, ctx context.Context, s *que.Service, c *que.C
 	err := retry.On(_ctx, RetryTenTimes, func(ctx context.Context, i int) error {
 		var resp pb.QueueStatsResponse
 		require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: name}, &resp))
-		// There should eventually be `len(requests)` waiting reserve requests
-		if int(resp.LogicalQueues[0].ReserveWaiting) != len(requests) {
-			return fmt.Errorf("ReserveWaiting never reached expected %d", len(requests))
+		// There should eventually be `len(requests)` waiting lease requests
+		if int(resp.LogicalQueues[0].LeaseWaiting) != len(requests) {
+			return fmt.Errorf("LeaseWaiting never reached expected %d", len(requests))
 		}
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("while waiting on %d reserved requests: %v", len(requests), err)
+		t.Fatalf("while waiting on %d leased requests: %v", len(requests), err)
 	}
 
-	// Unpause processing of the queue to allow the reservations to be filled.
+	// Unpause processing of the queue to allow the leases to be filled.
 	require.NoError(t, s.PauseQueue(ctx, name, false))
 
 	// Wait for each request to complete
@@ -327,7 +327,7 @@ func pauseAndReserve(t *testing.T, ctx context.Context, s *que.Service, c *que.C
 	return responses
 }
 
-func untilReserveClientWaiting(t *testing.T, c *que.Client, queueName string, numWaiting int) error {
+func untilLeaseClientWaiting(t *testing.T, c *que.Client, queueName string, numWaiting int) error {
 	_ctx, cancel := context.WithTimeout(context.Background(), 5*clock.Second)
 	defer cancel()
 	t.Helper()
@@ -336,8 +336,8 @@ func untilReserveClientWaiting(t *testing.T, c *que.Client, queueName string, nu
 	return retry.On(_ctx, RetryTenTimes, func(ctx context.Context, i int) error {
 		var resp pb.QueueStatsResponse
 		require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &resp))
-		if int(resp.LogicalQueues[0].ReserveWaiting) != numWaiting {
-			return fmt.Errorf("ReserveWaiting never reached expected %d", numWaiting)
+		if int(resp.LogicalQueues[0].LeaseWaiting) != numWaiting {
+			return fmt.Errorf("LeaseWaiting never reached expected %d", numWaiting)
 		}
 		return nil
 	})
@@ -347,33 +347,33 @@ func compareQueueInfo(t *testing.T, expected *pb.QueueInfo, actual *pb.QueueInfo
 	t.Helper()
 	require.Equal(t, expected.QueueName, actual.QueueName)
 	require.Equal(t, expected.ExpireTimeout, actual.ExpireTimeout)
-	require.Equal(t, expected.ReserveTimeout, actual.ReserveTimeout)
+	require.Equal(t, expected.LeaseTimeout, actual.LeaseTimeout)
 	require.Equal(t, expected.MaxAttempts, actual.MaxAttempts)
 	require.Equal(t, expected.DeadQueue, actual.DeadQueue)
 	require.Equal(t, expected.Reference, actual.Reference)
 }
 
 type Pair struct {
-	Reserve string
-	Dead    string
+	Lease string
+	Dead  string
 }
 
 var validTimeouts = []Pair{
 	{
-		Reserve: "15s",
-		Dead:    "1m0s",
+		Lease: "15s",
+		Dead:  "1m0s",
 	},
 	{
-		Reserve: "1m0s",
-		Dead:    "10m0s",
+		Lease: "1m0s",
+		Dead:  "10m0s",
 	},
 	{
-		Reserve: "10m0s",
-		Dead:    "24h0m0s",
+		Lease: "10m0s",
+		Dead:  "24h0m0s",
 	},
 	{
-		Reserve: "30m0s",
-		Dead:    "1h0m0s",
+		Lease: "30m0s",
+		Dead:  "1h0m0s",
 	},
 }
 
@@ -389,7 +389,7 @@ func createRandomQueues(t *testing.T, ctx context.Context, c *que.Client, count 
 			DeadQueue:           random.String("dead-", 10),
 			Reference:           random.String("ref-", 10),
 			MaxAttempts:         int32(rand.Intn(100)),
-			ReserveTimeout:      timeOuts.Reserve,
+			LeaseTimeout:        timeOuts.Lease,
 			ExpireTimeout:       timeOuts.Dead,
 			RequestedPartitions: 1,
 		}

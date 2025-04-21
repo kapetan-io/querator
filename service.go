@@ -44,8 +44,8 @@ type ServiceConfig struct {
 	WriteTimeout clock.Duration
 	// ReadTimeout The time it should take for a single batched read to complete
 	ReadTimeout clock.Duration
-	// MaxReserveBatchSize is the maximum number of items a client can request in a single reserve request
-	MaxReserveBatchSize int
+	// MaxLeaseBatchSize is the maximum number of items a client can request in a single lease request
+	MaxLeaseBatchSize int
 	// MaxProduceBatchSize is the maximum number of items a client can produce in a single produce request
 	MaxProduceBatchSize int
 	// MaxCompleteBatchSize is the maximum number of ids a client can mark complete in a single complete request
@@ -76,7 +76,7 @@ func NewService(conf ServiceConfig) (*Service, error) {
 
 	qm, err := internal.NewQueuesManager(internal.QueuesManagerConfig{
 		LogicalConfig: internal.LogicalConfig{
-			MaxReserveBatchSize:  conf.MaxReserveBatchSize,
+			MaxLeaseBatchSize:    conf.MaxLeaseBatchSize,
 			MaxProduceBatchSize:  conf.MaxProduceBatchSize,
 			MaxCompleteBatchSize: conf.MaxCompleteBatchSize,
 			MaxRequestsPerQueue:  conf.MaxRequestsPerQueue,
@@ -121,8 +121,8 @@ func (s *Service) QueueProduce(ctx context.Context, req *proto.QueueProduceReque
 	return nil
 }
 
-func (s *Service) QueueReserve(ctx context.Context, req *proto.QueueReserveRequest,
-	res *proto.QueueReserveResponse) error {
+func (s *Service) QueueLease(ctx context.Context, req *proto.QueueLeaseRequest,
+	res *proto.QueueLeaseResponse) error {
 
 	queue, err := s.queues.Get(ctx, req.QueueName)
 	if err != nil {
@@ -131,16 +131,16 @@ func (s *Service) QueueReserve(ctx context.Context, req *proto.QueueReserveReque
 
 	proxy, logical := queue.GetNext()
 	if proxy != nil {
-		return proxy.QueueReserve(ctx, req, res)
+		return proxy.QueueLease(ctx, req, res)
 	}
 
-	var r types.ReserveRequest
-	if err := s.validateQueueReserveProto(req, &r); err != nil {
+	var r types.LeaseRequest
+	if err := s.validateQueueLeaseProto(req, &r); err != nil {
 		return err
 	}
 
-	// Reserve will block until success, context cancel or timeout
-	if err := logical.Reserve(ctx, &r); err != nil {
+	// Lease will block until success, context cancel or timeout
+	if err := logical.Lease(ctx, &r); err != nil {
 		return err
 	}
 
@@ -148,14 +148,14 @@ func (s *Service) QueueReserve(ctx context.Context, req *proto.QueueReserveReque
 	res.QueueName = req.QueueName
 
 	for _, item := range r.Items {
-		res.Items = append(res.Items, &proto.QueueReserveItem{
-			ReserveDeadline: timestamppb.New(item.ReserveDeadline),
-			Attempts:        int32(item.Attempts),
-			Id:              string(item.ID),
-			Reference:       item.Reference,
-			Encoding:        item.Encoding,
-			Bytes:           item.Payload,
-			Kind:            item.Kind,
+		res.Items = append(res.Items, &proto.QueueLeaseItem{
+			LeaseDeadline: timestamppb.New(item.LeaseDeadline),
+			Attempts:      int32(item.Attempts),
+			Id:            string(item.ID),
+			Reference:     item.Reference,
+			Encoding:      item.Encoding,
+			Bytes:         item.Payload,
+			Kind:          item.Kind,
 		})
 	}
 
@@ -225,7 +225,7 @@ func (s *Service) QueueClear(ctx context.Context, req *proto.QueueClearRequest) 
 			Destructive: req.Destructive,
 			Scheduled:   req.Scheduled,
 			Queue:       req.Queue,
-			Defer:       req.Defer,
+			Retry:       req.Retry,
 		}
 
 		if err := logical.Clear(ctx, &r); err != nil {
@@ -434,7 +434,7 @@ func (s *Service) QueueStats(ctx context.Context, req *proto.QueueStatsRequest,
 
 		ls := &proto.QueueLogicalStats{
 			ProduceWaiting:  int32(stats.ProduceWaiting),
-			ReserveWaiting:  int32(stats.ReserveWaiting),
+			LeaseWaiting:    int32(stats.LeaseWaiting),
 			CompleteWaiting: int32(stats.CompleteWaiting),
 			InFlight:        int32(stats.InFlight),
 			Partitions:      nil,
@@ -443,12 +443,12 @@ func (s *Service) QueueStats(ctx context.Context, req *proto.QueueStatsRequest,
 		for _, stat := range stats.Partitions {
 			ls.Partitions = append(ls.Partitions,
 				&proto.QueuePartitionStats{
-					AverageReservedAge: stat.AverageReservedAge.String(),
-					Partition:          int32(stat.Partition),
-					TotalReserved:      int32(stat.NumReserved),
-					Failures:           int32(stat.Failures),
-					AverageAge:         stat.AverageAge.String(),
-					Total:              int32(stat.Total),
+					AverageLeasedAge: stat.AverageLeasedAge.String(),
+					Partition:        int32(stat.Partition),
+					TotalLeased:      int32(stat.NumLeased),
+					Failures:         int32(stat.Failures),
+					AverageAge:       stat.AverageAge.String(),
+					Total:            int32(stat.Total),
 				})
 		}
 		res.LogicalQueues = append(res.LogicalQueues, ls)

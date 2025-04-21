@@ -69,8 +69,8 @@ message QueueProduceItem {
   // TODO: Consider adding user provided metadata as a map of values
 }
 
-message QueueReserveRequest {
-  // The name of the queue to reserve work from
+message QueueLeaseRequest {
+  // The name of the queue to lease work from
   string queueName = 1  [json_name = "queue_name"];
 
   // The number of queue items requested from the queue.
@@ -78,17 +78,17 @@ message QueueReserveRequest {
 
   // A user supplied unique string which identifies the client making this request. This
   // must be unique for each client reserving items. Multiple clients with the same
-  // id cannot reserve from the same queue. If you need more throughput, increase the batch
+  // id cannot lease from the same queue. If you need more throughput, increase the batch
   // size instead.
   string clientId = 3 [json_name = "client_id"];
 
-  // The duration the client expects to wait for a queue item to be reserved before timing out.
+  // The duration the client expects to wait for a queue item to be leased before timing out.
   // Maximum timeout duration is 15 minutes
   // Example: '5m', '10s'
   string requestTimeout = 4 [json_name = "request_timeout"];
 }
 
-message QueueReserveItem {
+message QueueLeaseItem {
   // A user specified field which indicates the encoding the user used to encode the 'payload'
   string encoding = 1;
 
@@ -104,7 +104,7 @@ message QueueReserveItem {
   // A unique id which identifies an item in a queue
   string id = 4;
 
-  // The number of times this item has been deferred or reservation timed out during
+  // The number of times this item has been retried or leased and timed out during
   // processing by a consumer.
   int32  attempts = 5;
 
@@ -113,7 +113,7 @@ message QueueReserveItem {
   //
   // The consumer can use this date to decide if it should finalize it's work
   // if the timeout date has expired.
-  google.protobuf.Timestamp reserveDeadline = 6 [json_name = "reserve_deadline"];
+  google.protobuf.Timestamp leaseDeadline = 6 [json_name = "lease_deadline"];
 
   // The payload of the item as an array of raw bytes with no predetermined character set.
   //
@@ -124,22 +124,22 @@ message QueueReserveItem {
   bytes  bytes = 7;
 }
 
-message QueueReserveResponse {
-  // The name of the queue the reservation items are from
+message QueueLeaseResponse {
+  // The name of the queue the lease items are from
   string queueName = 1  [json_name = "queue_name"];
 
-  // Partition the reserved items are from
+  // Partition the leased items are from
   int32 partition = 2;
 
-  // Items reserved
-  repeated QueueReserveItem items = 3;
+  // Items leased
+  repeated QueueLeaseItem items = 3;
 }
 
 message QueueDeferRequest {
-  // The name of the queue the reservation items are from
+  // The name of the queue the lease items are from
   string queueName = 1  [json_name = "queue_name"];
 
-  // Partition the reserved items are from
+  // Partition the leased items are from
   int32 partition = 2;
 
   repeated QueueDeferItem items = 3;
@@ -155,7 +155,7 @@ message QueueDeferItem {
   google.protobuf.Timestamp enqueueAt = 2 [json_name = "enqueue_at"]; // TODO: OpenAPI
 
   // Indicates the item is dead, will not be retried regardless of the number of attempts
-  // remaining. If set to true the defer will place the item in the dead letter queue for
+  // remaining. If set to true the retry will place the item in the dead letter queue for
   // the specified queue.
   bool dead = 3;
 }
@@ -167,7 +167,7 @@ message QueueCompleteRequest {
   // The Partition these ids are associated with
   int32 partition = 2;
 
-  // The duration the client expects to wait for a queue item to be reserved before timing out.
+  // The duration the client expects to wait for a queue item to be leased before timing out.
   // Maximum timeout duration is 15 minutes
   // Example: '5m', '10s'
   string requestTimeout = 3 [json_name = "request_timeout"];
@@ -194,15 +194,15 @@ message QueueInfo {
   // Examples: "jake@statefarm.com", "stapler@office-space.com", "account-0001"
   string reference = 5;
 
-  // The reservation timeout for this queue.
+  // The lease timeout for this queue.
   // Example: '60m', '24h', '10s'
-  string reserveTimeout = 6  [json_name = "reserve_timeout"];
+  string leaseTimeout = 6  [json_name = "lease_timeout"];
 
   // How long the item can wait in the queue regardless of attempts before it is moved
   // to the dead letter queue. Example: '24h', '60m', '10s'
   string expireTimeout = 7 [json_name = "expire_timeout"];
 
-  // The maximum number of times this item can be deferred by a consumer before it is
+  // The maximum number of times this item can be retried by a consumer before it is
   // placed in the dead letter queue or removed. Infinite attempts if max_attempts is set to '0'
   int32 maxAttempts = 8 [json_name = "max_attempts"];
 
@@ -221,21 +221,21 @@ message PartitionInfo {
 message QueueClearRequest {
   // The name of the queue
   string queueName = 1  [json_name = "queue_name"];
-  // Defer indicates the 'defer' queue will be cleared. If true, any items
+  // retry indicates the 'retry' queue will be cleared. If true, any items
   // scheduled to be retried at a future date will be removed.
-  bool defer = 2; // TODO: Implement
+  bool retry = 2; // TODO: Implement
   // Scheduled indicates any 'scheduled' items in the queue will be
   // cleared. If true, any items scheduled to be enqueued at a future date
   // will be removed.
   bool scheduled = 3; // TODO: Implement
   // Queue indicates any items currently waiting in the FIFO queue will
-  // clear. If true, any items in the queue which have NOT been reserved
+  // clear. If true, any items in the queue which have NOT been leased
   // will be removed.
   bool Queue = 4;
-  // Destructive indicates the Defer,Scheduled,Queue operations should be
+  // Destructive indicates the Retry,Scheduled,Queue operations should be
   // destructive in that all data regardless of status will be removed.
   // For example, if used with ClearRequest.Queue = true, then ALL items
-  // in the queue regardless of reserve status will be removed. This means
+  // in the queue regardless of lease status will be removed. This means
   // that clients who currently have ownership of those items will not be able
   // to "complete" those items, as querator will have no knowledge of those items.
   bool destructive = 5;
@@ -254,24 +254,24 @@ message QueuePartitionStats {
   int32 partition = 1;
   // Total is the number of items in the partition
   int32 total = 2;
-  // TotalReserved is the number of items in the partition that are in reserved state
-  int32 totalReserved = 3 [json_name = "total_reserved"];
+  // TotalLeased is the number of items in the partition that are in leased state
+  int32 totalLeased = 3 [json_name = "total_leased"];
   // Failures is the total number of failures the partitions has encountered, which is
   // Reset when the partition becomes available. -1 means the partition isn't ready
   int32 failures = 4;
   // AverageAge is the average age of all items in the partition
   string averageAge = 5 [json_name = "average_age"];
-  // AverageReservedAge is the average age of reserved items in the partition
-  string averageReservedAge = 6 [json_name = "average_reserved_age"];
+  // AverageLeasedAge is the average age of leased items in the partition
+  string averageLeasedAge = 6 [json_name = "average_leased_age"];
 }
 
 message QueueLogicalStats {
   // ProduceWaiting is the number of `/queue.produce` requests currently waiting
   // to be processed
   int32 produceWaiting = 6 [json_name = "produce_waiting"];
-  // ReserveWaiting is the number of `/queue.reserve` requests currently waiting
+  // LeaseWaiting is the number of `/queue.lease` requests currently waiting
   // to for items from the queue
-  int32 reserveWaiting = 7 [json_name = "reserve_waiting"];
+  int32 leaseWaiting = 7 [json_name = "lease_waiting"];
   // CompleteWaiting is the number of `/queue.complete` requests currently waiting
   // to be processed
   int32 completeWaiting = 8 [json_name = "complete_waiting"];

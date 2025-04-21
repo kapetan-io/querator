@@ -67,7 +67,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
-			ReserveTimeout:      ReserveTimeout,
+			LeaseTimeout:        LeaseTimeout,
 			ExpireTimeout:       ExpireTimeout,
 			QueueName:           queueName,
 			RequestedPartitions: 1,
@@ -76,25 +76,25 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 		now := clock.Now().UTC()
 		var items []*pb.StorageItem
 		items = append(items, &pb.StorageItem{
-			IsReserved:      true,
-			ExpireDeadline:  timestamppb.New(now.Add(100_000 * clock.Minute)),
-			ReserveDeadline: timestamppb.New(now.Add(3_000 * clock.Minute)),
-			Attempts:        5,
-			Reference:       "rainbow@dash.com",
-			Encoding:        "rainbows",
-			Kind:            "20% cooler",
+			IsLeased:       true,
+			ExpireDeadline: timestamppb.New(now.Add(100_000 * clock.Minute)),
+			LeaseDeadline:  timestamppb.New(now.Add(3_000 * clock.Minute)),
+			Attempts:       5,
+			Reference:      "rainbow@dash.com",
+			Encoding:       "rainbows",
+			Kind:           "20% cooler",
 			Payload: []byte("I mean... have I changed? Same sleek body. Same " +
 				"flowing mane. Same spectacular hooves. Nope, I'm still awesome"),
 		})
 		items = append(items, &pb.StorageItem{
-			IsReserved:      false,
-			ExpireDeadline:  timestamppb.New(now.Add(1_000_000 * clock.Minute)),
-			ReserveDeadline: timestamppb.New(now.Add(3_000 * clock.Minute)),
-			Attempts:        10_000,
-			Reference:       "rarity@dash.com",
-			Encoding:        "beauty",
-			Kind:            "sparkles",
-			Payload:         []byte("Whining? I am not whining, I am complaining"),
+			IsLeased:       false,
+			ExpireDeadline: timestamppb.New(now.Add(1_000_000 * clock.Minute)),
+			LeaseDeadline:  timestamppb.New(now.Add(3_000 * clock.Minute)),
+			Attempts:       10_000,
+			Reference:      "rarity@dash.com",
+			Encoding:       "beauty",
+			Kind:           "sparkles",
+			Payload:        []byte("Whining? I am not whining, I am complaining"),
 		})
 
 		var resp pb.StorageItemsImportResponse
@@ -106,9 +106,9 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 		// Ensure all the fields are indeed the same
 		assert.NotEmpty(t, resp.Items[0].Id)
 		assert.NotEmpty(t, resp.Items[0].CreatedAt.AsTime())
-		assert.Equal(t, items[0].IsReserved, resp.Items[0].IsReserved)
+		assert.Equal(t, items[0].IsLeased, resp.Items[0].IsLeased)
 		assert.Equal(t, 0, resp.Items[0].ExpireDeadline.AsTime().Compare(items[0].ExpireDeadline.AsTime()))
-		assert.Equal(t, 0, resp.Items[0].ReserveDeadline.AsTime().Compare(items[0].ReserveDeadline.AsTime()))
+		assert.Equal(t, 0, resp.Items[0].LeaseDeadline.AsTime().Compare(items[0].LeaseDeadline.AsTime()))
 		assert.Equal(t, items[0].Attempts, resp.Items[0].Attempts)
 		assert.Equal(t, items[0].Reference, resp.Items[0].Reference)
 		assert.Equal(t, items[0].Encoding, resp.Items[0].Encoding)
@@ -117,9 +117,9 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 
 		assert.NotEmpty(t, resp.Items[1].Id)
 		assert.NotEmpty(t, resp.Items[1].CreatedAt.AsTime())
-		assert.Equal(t, items[1].IsReserved, resp.Items[1].IsReserved)
+		assert.Equal(t, items[1].IsLeased, resp.Items[1].IsLeased)
 		assert.Equal(t, 0, resp.Items[1].ExpireDeadline.AsTime().Compare(items[1].ExpireDeadline.AsTime()))
-		assert.Equal(t, 0, resp.Items[1].ReserveDeadline.AsTime().Compare(items[1].ReserveDeadline.AsTime()))
+		assert.Equal(t, 0, resp.Items[1].LeaseDeadline.AsTime().Compare(items[1].LeaseDeadline.AsTime()))
 		assert.Equal(t, items[1].Attempts, resp.Items[1].Attempts)
 		assert.Equal(t, items[1].Reference, resp.Items[1].Reference)
 		assert.Equal(t, items[1].Encoding, resp.Items[1].Encoding)
@@ -133,7 +133,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
-			ReserveTimeout:      ReserveTimeout,
+			LeaseTimeout:        LeaseTimeout,
 			ExpireTimeout:       ExpireTimeout,
 			QueueName:           queueName,
 			RequestedPartitions: 1,
@@ -149,7 +149,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 			for i := range items {
 				assert.NotEmpty(t, resp.Items[i].CreatedAt.AsTime())
 				assert.Equal(t, items[i].Id, resp.Items[i].Id)
-				assert.Equal(t, items[i].IsReserved, resp.Items[i].IsReserved)
+				assert.Equal(t, items[i].IsLeased, resp.Items[i].IsLeased)
 				assert.Equal(t, items[i].Attempts, resp.Items[i].Attempts)
 				assert.Equal(t, items[i].Reference, resp.Items[i].Reference)
 				assert.Equal(t, items[i].Encoding, resp.Items[i].Encoding)
@@ -291,7 +291,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
-			ReserveTimeout:      ReserveTimeout,
+			LeaseTimeout:        LeaseTimeout,
 			ExpireTimeout:       ExpireTimeout,
 			QueueName:           queueName,
 			RequestedPartitions: 1,
@@ -351,7 +351,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
-			ReserveTimeout:      ReserveTimeout,
+			LeaseTimeout:        LeaseTimeout,
 			ExpireTimeout:       ExpireTimeout,
 			QueueName:           queueName,
 			RequestedPartitions: 1,
@@ -435,7 +435,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
-			ReserveTimeout:      ReserveTimeout,
+			LeaseTimeout:        LeaseTimeout,
 			ExpireTimeout:       ExpireTimeout,
 			QueueName:           queueName,
 			RequestedPartitions: 1,

@@ -24,12 +24,12 @@ corner case interactions with Querator.
 
 ## Decision
 
-Provide a `/queue.pause` endpoint which will pause normal produce, reserve, complete, defer operations until the pause
+Provide a `/queue.pause` endpoint which will pause normal produce, lease, complete, retry operations until the pause
 is resumed or the pause times out. Because the state of the underlying data store may have changed during the pause
 Querator should not assume anything about the state of the data store after resuming, it should instead flush any
 cached information it held and rebuild from what exists in the data store. 
 
-During the pause, clients that make requests to or have in progress requests to produce, reserve, complete or defer
+During the pause, clients that make requests to or have in progress requests to produce, lease, complete or retry
 operations will be held until their request timeout is reached, at which time they will receive a retry message, 
 informing them to attempt the operation again. This interaction with the client should continue until the pause is 
 cancelled.

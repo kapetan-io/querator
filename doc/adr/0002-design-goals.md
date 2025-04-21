@@ -14,12 +14,12 @@ primary goals of the project.
 
 ## Decision
 
-The primary goal of the project is to implement a highly efficient and simple to integrate with reserve based FIFO
+The primary goal of the project is to implement a highly efficient and simple to integrate with lease based FIFO
 queuing system.
 
 [Querator](https://querator.io) is focused on simplicity and efficiency first. We want to appeal to users who
 wish to embrace distributed architectures without needing to run expensive high performance clusters. Although 
-our primary goal is to build an efficient reservation based queue, we believe our efficiency goals will also 
+our primary goal is to build an efficient lease based queue, we believe our efficiency goals will also 
 lend the project toward a high performance implementation. When deciding to do the efficient thing, or the
 fast thing we will always choose efficient.
 

@@ -7,8 +7,8 @@ Nothing too strict, just some general "labels for what this thing is, and why we
 * An *at* is a timestamp when something happened. Timestamps are of type `time.Time` and should always be in UTC.
   Examples are `CreatedAt`, `UpdatedAt`.
 
-If you have a type of `time.Duration` it should be named `<thing>Timeout` for example `ReservationTimeout`.
-However, if your type is `time.Time` then it should be named `ReservationDeadline`. This is consistent with many
+If you have a type of `time.Duration` it should be named `<thing>Timeout` for example `LeaseTimeout`.
+However, if your type is `time.Time` then it should be named `LeaseDeadline`. This is consistent with many
 golang libraries like `context.Context`.  For example, `context.WithTimeout(context.Context, time.Duration)`.
 
 ### Items vs Messages

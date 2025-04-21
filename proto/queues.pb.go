@@ -147,9 +147,9 @@ type QueuesDeleteRequest struct {
 
 	// QueueName is the name of the queue to delete
 	QueueName string `protobuf:"bytes,1,opt,name=queueName,json=queue_name,proto3" json:"queueName,omitempty"`
-	// Force indicates the deletion should ignore any current open reservations or items in the queue and
+	// Force indicates the deletion should ignore any current open lease or items in the queue and
 	// delete all data related to the queue. In addition, this forcibly cancels all in progress client
-	// reservation requests.
+	// lease requests.
 	Force bool `protobuf:"varint,2,opt,name=force,proto3" json:"force,omitempty"`
 }
 

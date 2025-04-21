@@ -16,8 +16,8 @@ const (
 type Partition struct {
 	// ProduceRequests is the batch of produce requests that are assigned to this partition
 	ProduceRequests types.ProduceBatch
-	// ReserveRequests is the batch of reserve requests that are assigned to this partition
-	ReserveRequests types.ReserveBatch
+	// LeaseRequests is the batch of lease requests that are assigned to this partition
+	LeaseRequests types.LeaseBatch
 	// CompleteRequests is the batch of complete requests that are assigned to this partition
 	CompleteRequests types.Batch[types.CompleteRequest]
 	// LifeCycleRequests is a batch of lifecycle requests that are assigned to this partition
@@ -34,28 +34,28 @@ type Partition struct {
 
 func (p *Partition) Reset() {
 	p.ProduceRequests.Reset()
-	p.ReserveRequests.Reset()
+	p.LeaseRequests.Reset()
 	p.CompleteRequests.Reset()
 	p.LifeCycleRequests.Reset()
 }
 
 func (p *Partition) Produce(req *types.ProduceRequest) {
-	p.State.UnReserved += len(req.Items)
+	p.State.UnLeased += len(req.Items)
 	p.ProduceRequests.Add(req)
 	req.Assigned = true
 }
 
-func (p *Partition) Reserve(req *types.ReserveRequest) {
+func (p *Partition) Lease(req *types.LeaseRequest) {
 	// Use the Number of Requested items OR the count of items in the partition which ever is least.
-	reserved := min(p.State.UnReserved, req.NumRequested)
-	// Increment the number of reserved items in this distribution.
-	p.State.NumReserved += reserved
+	lease := min(p.State.UnLeased, req.NumRequested)
+	// Increment the number of lease items in this distribution.
+	p.State.NumLeased += lease
 	// Decrement requested from the actual count
-	p.State.UnReserved -= reserved
+	p.State.UnLeased -= lease
 	// Record which partition this request is assigned, so it can be retrieved by the client later.
 	req.Partition = p.Info.PartitionNum
-	// Add the request to this partitions reserve batch
-	p.ReserveRequests.Add(req)
+	// Add the request to this partitions lease batch
+	p.LeaseRequests.Add(req)
 }
 
 type Request struct {

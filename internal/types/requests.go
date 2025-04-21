@@ -9,20 +9,20 @@ const UnSet = -1
 
 // TODO(thrawn01): Consider creating a pool of Request structs and Item to avoid GC
 
-type ReserveRequest struct {
+type LeaseRequest struct {
 	// The number of items requested from the queue.
 	NumRequested int // TODO: Rename the protobuf variable this maps too
-	// How long the caller expects Reserve() to block before returning
-	// if no items are available to be reserved. Max duration is 5 minutes.
+	// How long the caller expects Lease() to block before returning
+	// if no items are available to be leased. Max duration is 5 minutes.
 	RequestTimeout clock.Duration
 	// The id of the client
 	ClientID string
 	// The context of the requesting client
 	Context context.Context
 
-	// The result of the reservation
+	// The result of the lease
 	Items []*Item
-	// The partition the reserved items are from
+	// The partition the leased items are from
 	Partition int
 
 	// The RequestDeadline calculated from RequestTimeout
@@ -72,21 +72,21 @@ type ReloadRequest struct {
 }
 
 type ClearRequest struct {
-	// Defer indicates the 'defer' queue will be cleared. If true, any items
+	// Retry indicates the 'retry' queue will be cleared. If true, any items
 	// scheduled to be retried at a future date will be removed.
-	Defer bool // TODO: Implement
+	Retry bool // TODO: Implement
 	// Scheduled indicates any 'scheduled' items in the queue will be
 	// cleared. If true, any items scheduled to be enqueued at a future date
 	// will be removed.
 	Scheduled bool // TODO: Implement
 	// Queue indicates any items currently waiting in the FIFO queue will
-	// clear. If true, any items in the queue which have NOT been reserved
+	// clear. If true, any items in the queue which have NOT been leased
 	// will be removed.
 	Queue bool
-	// Destructive indicates the Defer,Scheduled,Queue operations should be
+	// Destructive indicates the Retry,Scheduled,Queue operations should be
 	// destructive in that all data regardless of status will be removed.
 	// For example, if used with ClearRequest.Queue = true, then ALL items
-	// in the queue regardless of reserve status will be removed. This means
+	// in the queue regardless of lease status will be removed. This means
 	// that clients who currently have ownership of those items will not be able
 	// to "complete" those items, as querator will have no knowledge of those items.
 	Destructive bool
@@ -113,9 +113,9 @@ type LogicalStats struct {
 	// ProduceWaiting is the number of `/queue.produce` requests currently waiting
 	// to be processed by the sync loop
 	ProduceWaiting int
-	// ReserveWaiting is the number of `/queue.reserve` requests currently waiting
+	// LeaseWaiting is the number of `/queue.lease` requests currently waiting
 	// to be processed by the sync loop
-	ReserveWaiting int
+	LeaseWaiting int
 	// CompleteWaiting is the number of `/queue.complete` requests currently waiting
 	// to be processed by the sync loop
 	CompleteWaiting int
@@ -130,14 +130,14 @@ type PartitionStats struct {
 	Partition int
 	// Total is the number of items in the queue
 	Total int
-	// NumReserved is the number of items in the queue that are in reserved state
-	NumReserved int
+	// NumLeased is the number of items in the queue that are in leased state
+	NumLeased int
 	// Failures is the number of failures the partition has encountered
 	Failures int
 	// AverageAge is the average age of all items in the queue
 	AverageAge clock.Duration
-	// AverageReservedAge is the average age of reserved items in the queue
-	AverageReservedAge clock.Duration
+	// AverageLeasedAge is the average age of leased items in the queue
+	AverageLeasedAge clock.Duration
 }
 
 type LifeCycleRequest struct {

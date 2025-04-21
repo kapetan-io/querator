@@ -91,7 +91,7 @@ func (b *BadgerPartition) Produce(_ context.Context, batch types.ProduceBatch) e
 	})
 }
 
-func (b *BadgerPartition) Reserve(_ context.Context, batch types.ReserveBatch, opts ReserveOptions) error {
+func (b *BadgerPartition) Lease(_ context.Context, batch types.LeaseBatch, opts LeaseOptions) error {
 	db, err := b.getDB()
 	if err != nil {
 		return err
@@ -126,17 +126,17 @@ func (b *BadgerPartition) Reserve(_ context.Context, batch types.ReserveBatch, o
 				return errors.Errorf("during Decode(): %w", err)
 			}
 
-			if item.IsReserved {
+			if item.IsLeased {
 				continue
 			}
 
-			item.ReserveDeadline = opts.ReserveDeadline
-			item.IsReserved = true
+			item.LeaseDeadline = opts.LeaseDeadline
+			item.IsLeased = true
 			item.Attempts++
 			count++
 
-			// Assign the item to the next waiting reservation in the batch,
-			// returns false if there are no more reservations available to fill
+			// Assign the item to the next waiting lease in the batch,
+			// returns false if there are no more leases available to fill
 			if batchIter.Next(item) {
 				// If assignment was a success, then we put the updated item into the db
 				var buf bytes.Buffer // TODO: memory pool
@@ -202,9 +202,9 @@ nextBatch:
 				return errors.Errorf("during Decode(): %w", err)
 			}
 
-			if !item.IsReserved {
+			if !item.IsLeased {
 				batch.Requests[i].Err = transport.NewConflict("item(s) cannot be completed; '%s' is not "+
-					"marked as reserved", id)
+					"marked as leased", id)
 				continue nextBatch
 			}
 
@@ -352,8 +352,8 @@ func (b *BadgerPartition) Clear(_ context.Context, destructive bool) error {
 				return errors.Errorf("during Decode(): %w", err)
 			}
 
-			// Skip reserved items
-			if item.IsReserved {
+			// Skip leased items
+			if item.IsLeased {
 				continue
 			}
 
@@ -400,11 +400,11 @@ func (b *BadgerPartition) ScanForActions(_ clock.Duration, now clock.Time) iter.
 					return errors.Errorf("during Decode(): %w", err)
 				}
 
-				// Is the reserved item expired?
-				if item.IsReserved {
-					if now.After(item.ReserveDeadline) {
+				// Is the leased item expired?
+				if item.IsLeased {
+					if now.After(item.LeaseDeadline) {
 						if !yield(types.Action{
-							Action:       types.ActionReserveExpired,
+							Action:       types.ActionLeaseExpired,
 							PartitionNum: b.info.PartitionNum,
 							Queue:        b.info.Queue.Name,
 							Item:         *item,
@@ -461,7 +461,7 @@ func (b *BadgerPartition) TakeAction(_ context.Context, batch types.Batch[types.
 		for _, req := range batch.Requests {
 			for _, a := range req.Actions {
 				switch a.Action {
-				case types.ActionReserveExpired:
+				case types.ActionLeaseExpired:
 					item := new(types.Item)
 					kvItem, err := txn.Get(a.Item.ID)
 					if err != nil {
@@ -481,8 +481,8 @@ func (b *BadgerPartition) TakeAction(_ context.Context, batch types.Batch[types.
 					}
 
 					// Update the item
-					item.ReserveDeadline = clock.Time{}
-					item.IsReserved = false
+					item.LeaseDeadline = clock.Time{}
+					item.IsLeased = false
 
 					// Assign a new ID to the item, as it is placed at the start of the queue
 					b.uid = b.uid.Next()
@@ -545,13 +545,13 @@ func (b *BadgerPartition) LifeCycleInfo(_ context.Context, info *types.LifeCycle
 				return err
 			}
 
-			if item.ReserveDeadline.Before(next) {
-				next = item.ReserveDeadline
+			if item.LeaseDeadline.Before(next) {
+				next = item.LeaseDeadline
 			}
 		}
 
 		if next != theFuture {
-			info.NextReserveExpiry = next
+			info.NextLeaseExpiry = next
 		}
 		return nil
 	})
@@ -584,17 +584,17 @@ func (b *BadgerPartition) Stats(_ context.Context, stats *types.PartitionStats) 
 
 			stats.Total++
 			stats.AverageAge += now.Sub(item.CreatedAt)
-			if item.IsReserved {
-				stats.AverageReservedAge += item.ReserveDeadline.Sub(now)
-				stats.NumReserved++
+			if item.IsLeased {
+				stats.AverageLeasedAge += item.LeaseDeadline.Sub(now)
+				stats.NumLeased++
 			}
 		}
 
 		if stats.Total != 0 {
 			stats.AverageAge = clock.Duration(int64(stats.AverageAge) / int64(stats.Total))
 		}
-		if stats.NumReserved != 0 {
-			stats.AverageReservedAge = clock.Duration(int64(stats.AverageReservedAge) / int64(stats.NumReserved))
+		if stats.NumLeased != 0 {
+			stats.AverageLeasedAge = clock.Duration(int64(stats.AverageLeasedAge) / int64(stats.NumLeased))
 		}
 		return nil
 	})
@@ -775,9 +775,9 @@ func (b *BadgerQueues) Update(_ context.Context, info types.QueueInfo) error {
 			return err
 		}
 
-		if found.ReserveTimeout > found.ExpireTimeout {
-			return transport.NewInvalidOption("reserve timeout is too long; %s cannot be greater than the "+
-				"expire timeout %s", info.ReserveTimeout.String(), found.ExpireTimeout.String())
+		if found.LeaseTimeout > found.ExpireTimeout {
+			return transport.NewInvalidOption("lease timeout is too long; %s cannot be greater than the "+
+				"expire timeout %s", info.LeaseTimeout.String(), found.ExpireTimeout.String())
 		}
 
 		var buf bytes.Buffer

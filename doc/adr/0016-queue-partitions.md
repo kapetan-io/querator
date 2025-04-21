@@ -80,7 +80,7 @@ clients to a Logical Queue:
 - Redirect clients to the instance handling the Logical Queue.
 - Proxy requests to the instance handling the Logical Queue.
  
-Logical partitions make calls to each partition, attempting to fulfill reserve requests until
+Logical partitions make calls to each partition, attempting to fulfill lease requests until
 either full, or wait for next produce. Since logical partitions are the point of sync, we can
 still preform some optimizations on producing and consuming as the LQ knows how many items are
 in each partition.
@@ -119,7 +119,7 @@ across the new data storage backend, which will...
 - Querying the `/queues.info` endpoint will return the current status of the partitions,
 storage backend and logical group assignments
 - Users are not allowed to make further changes via `/queue.rebalance` until the existing re-balance
-is complete. This includes the deletion of all read only queues, and any outstanding defer operations.
+is complete. This includes the deletion of all read only queues, and any outstanding retry operations.
 
 ### Removal of a data storage backend and re-balance partitions
 This is the opposite to adding a new data storage backend. We must allow the static configuration

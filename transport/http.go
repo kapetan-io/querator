@@ -29,16 +29,16 @@ import (
 	"net/http"
 )
 
-// TODO: Document pause in OpenAPI, "Pauses queue processing such that requests to produce, reserve,
-//  defer and complete are all paused. While a queue is on pause, Querator will queue those requests
+// TODO: Document pause in OpenAPI, "Pauses queue processing such that requests to produce, lease,
+//  retry and complete are all paused. While a queue is on pause, Querator will queue those requests
 //  until the pause is lifted". /v1/queue API requests can still timeout
 //  NOTE: This does not effect /v1/storage/ or /v1/queue.list,create,delete,update API requests.
 
 const (
 	RPCQueueProduce  = "/v1/queue.produce"
-	RPCQueueReserve  = "/v1/queue.reserve"
+	RPCQueueLease    = "/v1/queue.lease"
 	RPCQueueComplete = "/v1/queue.complete"
-	RPCQueueDefer    = "/v1/queue.defer"
+	RPCQueueRetry    = "/v1/queue.retry"
 	RPCQueueStats    = "/v1/queue.stats"
 	RPCQueueClear    = "/v1/queue.clear"
 
@@ -83,7 +83,7 @@ const (
 // from other Querator packages will result in a circular dependency warning.
 type Service interface {
 	QueueProduce(context.Context, *pb.QueueProduceRequest) error
-	QueueReserve(context.Context, *pb.QueueReserveRequest, *pb.QueueReserveResponse) error
+	QueueLease(context.Context, *pb.QueueLeaseRequest, *pb.QueueLeaseResponse) error
 	QueueComplete(context.Context, *pb.QueueCompleteRequest) error
 	QueueStats(context.Context, *pb.QueueStatsRequest, *pb.QueueStatsResponse) error
 	QueueClear(context.Context, *pb.QueueClearRequest) error
@@ -147,10 +147,10 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case RPCQueueProduce:
 		h.QueueProduce(ctx, w, r)
 		return
-	case RPCQueueReserve:
-		h.QueueReserve(ctx, w, r)
+	case RPCQueueLease:
+		h.QueueLease(ctx, w, r)
 		return
-	case RPCQueueDefer:
+	case RPCQueueRetry:
 	case RPCQueueComplete:
 		h.QueueComplete(ctx, w, r)
 		return
@@ -199,15 +199,15 @@ func (h *HTTPHandler) QueueProduce(ctx context.Context, w http.ResponseWriter, r
 	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
 }
 
-func (h *HTTPHandler) QueueReserve(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-	var req pb.QueueReserveRequest
+func (h *HTTPHandler) QueueLease(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.QueueLeaseRequest
 	if err := duh.ReadRequest(r, &req, 512*duh.Bytes); err != nil {
 		h.ReplyError(w, r, err)
 		return
 	}
 
-	var resp pb.QueueReserveResponse
-	if err := h.service.QueueReserve(ctx, &req, &resp); err != nil {
+	var resp pb.QueueLeaseResponse
+	if err := h.service.QueueLease(ctx, &req, &resp); err != nil {
 		h.ReplyError(w, r, err)
 		return
 	}

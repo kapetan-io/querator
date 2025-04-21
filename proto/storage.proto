@@ -51,8 +51,8 @@ message StorageItemsDeleteRequest {
 // StorageItem maps directly to the internal.types.Item and allows users to inspect items in storage
 message StorageItem {
   string id = 1;
-  bool isReserved = 2  [json_name = "is_reserved"];
-  google.protobuf.Timestamp reserveDeadline = 3 [json_name = "reserve_deadline"];
+  bool isLeased = 2  [json_name = "is_leased"];
+  google.protobuf.Timestamp leaseDeadline = 3 [json_name = "lease_deadline"];
   google.protobuf.Timestamp expireDeadline = 4 [json_name = "expire_deadline"];
   google.protobuf.Timestamp createdAt = 5 [json_name = "created_at"];
   google.protobuf.Timestamp updatedAt = 6 [json_name = "updated_at"];

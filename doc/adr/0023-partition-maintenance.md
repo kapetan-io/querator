@@ -43,7 +43,7 @@ TODO: Details
 
 ### Paused
 Pauses both the production and consumption of items to and from a partition. Pausing allows existing
-reservations to be completed, but new reservations are not allowed, and new items cannot be produced to
+leases to be completed, but new leases are not allowed, and new items cannot be produced to
 the partition. This allows a partition to "rest" while maintenance is preformed, migration is completed
 or the partition is reloaded.
 
@@ -60,8 +60,8 @@ TODO: Details
 
 ### Reloading a Partition
 Reloading is the process of syncing cached information about the underlying queue with actual stored
-information on disk. This can include the number of items in partitions, or the number of reserved
-and un-reserved items in a partition. Reloading can be useful if the underlying storage system has
+information on disk. This can include the number of items in partitions, or the number of leased
+and un-leased items in a partition. Reloading can be useful if the underlying storage system has
 changed out of band without `Querator` knowledge. For instance, due to a restored backup, or import
 or export of items from the partition which were preformed out of band or via the `/storage` API.
 
@@ -83,11 +83,11 @@ reloaded sequentially.
 3. LifeCycle will call `Logical.PartitionStateChange()` updating the current state of the partition and marking the
 partition as "Available".
 
-> NOTE: Marking the partition as "Unavailable" means any outstanding reservations given to clients will 
+> NOTE: Marking the partition as "Unavailable" means any outstanding leases given to clients will 
 > not be allowed to mark the item as completed until the reload process is complete. As such it is 
 > recommended to "Pause" the partitions you wish to reload first, allowing any outstanding item 
-> reservations to be completed before reload is run. This is not required however, and any outstanding 
-> reservations can be marked as completed after reload is completed.
+> leases to be completed before reload is run. This is not required however, and any outstanding 
+> leases can be marked as completed after reload is completed.
 
 ## Consequences
 

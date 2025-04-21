@@ -36,8 +36,8 @@ message QueuesListResponse {
 message QueuesDeleteRequest {
   // QueueName is the name of the queue to delete
   string queueName = 1 [json_name = "queue_name"];
-  // Force indicates the deletion should ignore any current open reservations or items in the queue and
+  // Force indicates the deletion should ignore any current open lease or items in the queue and
   // delete all data related to the queue. In addition, this forcibly cancels all in progress client
-  // reservation requests.
+  // lease requests.
   bool force = 2;
 }

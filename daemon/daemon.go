@@ -49,7 +49,7 @@ func NewDaemon(ctx context.Context, conf Config) (*Daemon, error) {
 
 	s, err := querator.NewService(querator.ServiceConfig{
 		MaxCompleteBatchSize: conf.MaxCompleteBatchSize,
-		MaxReserveBatchSize:  conf.MaxReserveBatchSize,
+		MaxLeaseBatchSize:    conf.MaxLeaseBatchSize,
 		MaxProduceBatchSize:  conf.MaxProduceBatchSize,
 		MaxRequestsPerQueue:  conf.MaxRequestsPerQueue,
 		WriteTimeout:         conf.WriteTimeout,

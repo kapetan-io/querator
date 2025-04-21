@@ -24,12 +24,12 @@ type Item struct {
 	// ID is unique to each item in the data store. The ID style is different depending on the data store
 	// implementation, and does not include the queue name.
 	ID ItemID
-	// IsReserved is true if the item has been reserved by a client
-	// TODO: Change this to a time stamp, which if non zero is the timestamp when the item was reserved
-	IsReserved bool
-	// ReserveDeadline is the time in the future when the reservation is
-	// expired and can be reserved by another consumer
-	ReserveDeadline clock.Time
+	// IsLeased is true if the item has been leased by a client
+	// TODO: Change this to a time stamp, which if non zero is the timestamp when the item was leased
+	IsLeased bool
+	// LeaseDeadline is the time in the future when the lease is
+	// expired and can be leased by another consumer
+	LeaseDeadline clock.Time
 	// ExpireDeadline is the time in the future the item must be consumed,
 	// before it is considered dead and moved to the dead letter queue if configured.
 	ExpireDeadline clock.Time
@@ -37,7 +37,7 @@ type Item struct {
 	CreatedAt clock.Time
 	// Attempts is how many attempts this item has seen
 	Attempts int
-	// MaxAttempts is the maximum number of times this message can be deferred by a consumer before it is
+	// MaxAttempts is the maximum number of times this message can be retried by a consumer before it is
 	// placed in the dead letter queue.
 	// TODO(thrawn01): We probably do NOT want to store this in the item, as the operator might want to
 	// retroactively increase the max attempts during an outage. As such the queue info should be the source
@@ -60,13 +60,13 @@ func (i *Item) Compare(r *Item) bool {
 	if !bytes.Equal(i.ID, r.ID) {
 		return false
 	}
-	if i.IsReserved != r.IsReserved {
+	if i.IsLeased != r.IsLeased {
 		return false
 	}
 	if i.ExpireDeadline.Compare(r.ExpireDeadline) != 0 {
 		return false
 	}
-	if i.ReserveDeadline.Compare(r.ReserveDeadline) != 0 {
+	if i.LeaseDeadline.Compare(r.LeaseDeadline) != 0 {
 		return false
 	}
 	if i.CreatedAt.Compare(r.CreatedAt) != 0 {
@@ -91,12 +91,12 @@ func (i *Item) Compare(r *Item) bool {
 }
 
 func (i *Item) ToProto(in *pb.StorageItem) *pb.StorageItem {
-	in.ReserveDeadline = timestamppb.New(i.ReserveDeadline)
+	in.LeaseDeadline = timestamppb.New(i.LeaseDeadline)
 	in.ExpireDeadline = timestamppb.New(i.ExpireDeadline)
 	in.CreatedAt = timestamppb.New(i.CreatedAt)
 	in.Attempts = int32(i.Attempts)
 	in.MaxAttempts = int32(i.MaxAttempts)
-	in.IsReserved = i.IsReserved
+	in.IsLeased = i.IsLeased
 	in.Reference = i.Reference
 	in.Encoding = i.Encoding
 	in.Payload = i.Payload
@@ -106,12 +106,12 @@ func (i *Item) ToProto(in *pb.StorageItem) *pb.StorageItem {
 }
 
 func (i *Item) FromProto(in *pb.StorageItem) *Item {
-	i.ReserveDeadline = in.ReserveDeadline.AsTime()
+	i.LeaseDeadline = in.LeaseDeadline.AsTime()
 	i.ExpireDeadline = in.ExpireDeadline.AsTime()
 	i.CreatedAt = in.CreatedAt.AsTime()
 	i.Attempts = int(in.Attempts)
 	i.MaxAttempts = int(in.MaxAttempts)
-	i.IsReserved = in.IsReserved
+	i.IsLeased = in.IsLeased
 	i.Reference = in.Reference
 	i.Encoding = in.Encoding
 	i.Payload = in.Payload
@@ -150,8 +150,8 @@ func (p *PartitionInfo) HashKey() PartitionHash {
 type QueueInfo struct {
 	// The name of the queue
 	Name string
-	// ReserveTimeout is how long the reservation is valid for.
-	ReserveTimeout clock.Duration
+	// LeaseTimeout is how long the lease is valid for.
+	LeaseTimeout clock.Duration
 	// DeadQueue is the name of the dead letter queue for this queue.
 	DeadQueue string
 	// ExpireTimeout is the time an item can wait in the queue regardless of attempts before
@@ -175,7 +175,7 @@ type QueueInfo struct {
 }
 
 func (i *QueueInfo) ToProto(in *pb.QueueInfo) *pb.QueueInfo {
-	in.ReserveTimeout = i.ReserveTimeout.String()
+	in.LeaseTimeout = i.LeaseTimeout.String()
 	in.UpdatedAt = timestamppb.New(i.UpdatedAt)
 	in.CreatedAt = timestamppb.New(i.CreatedAt)
 	in.ExpireTimeout = i.ExpireTimeout.String()
@@ -190,8 +190,8 @@ func (i *QueueInfo) Update(r QueueInfo) bool {
 	if r.ExpireTimeout.Nanoseconds() != 0 {
 		i.ExpireTimeout = r.ExpireTimeout
 	}
-	if r.ReserveTimeout.Nanoseconds() != 0 {
-		i.ReserveTimeout = r.ReserveTimeout
+	if r.LeaseTimeout.Nanoseconds() != 0 {
+		i.LeaseTimeout = r.LeaseTimeout
 	}
 	if i.MaxAttempts != r.MaxAttempts {
 		i.MaxAttempts = r.MaxAttempts
@@ -212,5 +212,5 @@ func (i *QueueInfo) Update(r QueueInfo) bool {
 }
 
 type LifeCycleInfo struct {
-	NextReserveExpiry clock.Time
+	NextLeaseExpiry clock.Time
 }

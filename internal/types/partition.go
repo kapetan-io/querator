@@ -10,13 +10,13 @@ type PartitionState struct {
 	// active and has communication with the underlying storage. It is updated by the
 	// partition LifeCycle
 	Failures int
-	// UnReserved is the total number of un-reserved items in the partition. It is updated by
+	// UnLeased is the total number of un-leased items in the partition. It is updated by
 	// the partition LifeCycle
-	UnReserved int
-	// NumReserved is the total number of items reserved during the most recent distribution
-	NumReserved int
+	UnLeased int
+	// NumLeased is the total number of items leased during the most recent distribution
+	NumLeased int
 	// MostRecentDeadline is the most recent deadline of this partition. This could be
-	// the ReserveDeadline, or it could be the ExpireDeadline which ever is sooner. It is
+	// the LeaseDeadline, or it could be the ExpireDeadline which ever is sooner. It is
 	// used to notify LifeCycle of changes to the partition made by this partition
 	// as a hint for when an action might be needed on items in the partition.
 	MostRecentDeadline clock.Time // TODO: Ensure this gets sent to LifeCycle

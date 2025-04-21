@@ -39,25 +39,25 @@ You can select a failing test by copying the full path of the test from running 
 
 For example
 ```bash
-=== RUN   TestQueue/InMemory/Errors/QueueReserve/RequestTimeoutInvalid
---- PASS: TestQueue/InMemory/Errors/QueueReserve/RequestTimeoutInvalid (0.00s)
-=== RUN   TestQueue/InMemory/Errors/QueueReserve/MinimumRequestTimeoutIsAllowed
---- PASS: TestQueue/InMemory/Errors/QueueReserve/MinimumRequestTimeoutIsAllowed (0.00s)
-=== RUN   TestQueue/InMemory/Errors/QueueReserve/RequestTimeoutIsTooShort
---- PASS: TestQueue/InMemory/Errors/QueueReserve/RequestTimeoutIsTooShort (0.00s)
-=== RUN   TestQueue/InMemory/Errors/QueueReserve/DuplicateClientId
+=== RUN   TestQueue/InMemory/Errors/QueueLease/RequestTimeoutInvalid
+--- PASS: TestQueue/InMemory/Errors/QueueLease/RequestTimeoutInvalid (0.00s)
+=== RUN   TestQueue/InMemory/Errors/QueueLease/MinimumRequestTimeoutIsAllowed
+--- PASS: TestQueue/InMemory/Errors/QueueLease/MinimumRequestTimeoutIsAllowed (0.00s)
+=== RUN   TestQueue/InMemory/Errors/QueueLease/RequestTimeoutIsTooShort
+--- PASS: TestQueue/InMemory/Errors/QueueLease/RequestTimeoutIsTooShort (0.00s)
+=== RUN   TestQueue/InMemory/Errors/QueueLease/DuplicateClientId
     queue_test.go:1018: 
         	Error Trace:	/Users/thrawn/Development/querator/queue_test.go:1018
         	Error:      	Received unexpected error:
         	            	context deadline exceeded
-        	Test:       	TestQueue/InMemory/Errors/QueueReserve/DuplicateClientId
---- FAIL: TestQueue/InMemory/Errors/QueueReserve/DuplicateClientId (5.02s)
+        	Test:       	TestQueue/InMemory/Errors/QueueLease/DuplicateClientId
+--- FAIL: TestQueue/InMemory/Errors/QueueLease/DuplicateClientId (5.02s)
 ```
 
 You can run the failing test `DuplicateClientId` in isolation by running
 
 ```bash
-$ go test ./... -run "^TestQueue/InMemory/Errors/QueueReserve/DuplicateClientId$"
+$ go test ./... -run "^TestQueue/InMemory/Errors/QueueLease/DuplicateClientId$"
 ```
 
 You can also run an entire sub suite of tests by using regex wild cards. For example, you can run only tests for 

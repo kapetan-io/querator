@@ -23,7 +23,7 @@ multiple Logical Queues per queue depending on the number of consuming clients a
 See [0016-queue-partitions](0016-queue-partitions.md)
 
 Because reads and writes to the queue are handled by a single go routine (single threaded). We can preform
-optimizations where items produced to the queue can be marked as reserved before they are written to the data store.
+optimizations where items produced to the queue can be marked as leased before they are written to the data store.
 Similar in design to a single threaded redis server. In addition, the single threaded design also allows batching
 reads and writes in the same transaction. Most databases benefit from batching as it reduces IOPs, transaction
 overheard, network overhead, results in fewer locks, and logging. By preforming the R/W synchronization here in code,
@@ -45,15 +45,15 @@ throughput of a queue as needed.
 ##### The Write Path
 The best cast scenario is that each item will have 3 writes.
  * 1st Write - Add item to the Queue
- * 2nd Write - Fetch Reservable items from the queue and mark them as Reserved
+ * 2nd Write - Fetch Reservable items from the queue and mark them as leased
  * 3rd Write - Write the item in the queue as complete (delete the item)
 
 In addition, our single threaded synchronized design may allow for several optimizations and probably some I'm
 not thinking of.
 * Pre-fetching reservable items from the queue into memory, if we know items are in high demand.
-* Reserving items as soon as they are produced, if we see that there are waiting reservation requests and if 
+* Reserving items as soon as they are produced, if we see that there are waiting lease requests and if 
   the storage queue is currently empty -- thus avoiding the second write by writing items to the queue as 
-  already reserved.
+  already leased.
 
 ## Consequences
 

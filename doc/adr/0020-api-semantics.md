@@ -16,12 +16,12 @@ This ADR is a collection of explanations on API semantics
 The server-side implementation of the `/queue.complete` endpoint should not continuously retry writing to a partition
 that has failed or is returning errors. Instead, it immediately returns an error to the client, indicating that 
 the client should retry the request. This behavior differs from other APIs, such as `/queue.produce` and
-`/queue.reserve`, which continue to attempt to fulfill the user's request until the `request_timeout` is reached.
+`/queue.lease`, which continue to attempt to fulfill the user's request until the `request_timeout` is reached.
 
 The rationale behind this is that the client might intend to take different actions if it knows the item is about to
-exceed its reservation timeout and could be offered to a different consumer. Therefore, the `/queue.complete` call
+exceed its lease timeout and could be offered to a different consumer. Therefore, the `/queue.complete` call
 should never be changed to retry partition errors until the request times out, unlike the behavior of
-`/queue.produce` and `/queue.reserve`.
+`/queue.produce` and `/queue.lease`.
 
 #### Partition Per Request Endpoints
 Although not explicitly discussed in [0019-partition-item-distribution.md](0019-partition-item-distribution.md), 

@@ -60,7 +60,7 @@ func TestQueue(t *testing.T) {
 func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	defer goleak.VerifyNone(t)
 
-	t.Run("ProduceAndReserve", func(t *testing.T) {
+	t.Run("ProduceAndLease", func(t *testing.T) {
 		_store := setup(clock.NewProvider())
 		defer tearDown()
 		var queueName = random.String("queue-", 10)
@@ -69,14 +69,14 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		// Create a queue
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
-			ReserveTimeout:      ReserveTimeout,
+			LeaseTimeout:        LeaseTimeout,
 			ExpireTimeout:       ExpireTimeout,
 			QueueName:           queueName,
 			RequestedPartitions: 1,
 		}))
 
 		//createQueueAndWait(t, ctx, c, &pb.QueueInfo{
-		//	ReserveTimeout:      ReserveTimeout,
+		//	LeaseTimeout:      LeaseTimeout,
 		//	ExpireTimeout:       ExpireTimeout,
 		//	QueueName:           queueName,
 		//	RequestedPartitions: 1,
@@ -100,18 +100,18 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			},
 		}))
 
-		// Reserve a single message
-		var reserve pb.QueueReserveResponse
-		require.NoError(t, c.QueueReserve(ctx, &pb.QueueReserveRequest{
+		// Lease a single message
+		var lease pb.QueueLeaseResponse
+		require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
 			ClientId:       random.String("client-", 10),
 			RequestTimeout: "5s",
 			QueueName:      queueName,
 			BatchSize:      1,
-		}, &reserve))
+		}, &lease))
 
 		// Ensure we got the item we produced
-		assert.Equal(t, 1, len(reserve.Items))
-		item := reserve.Items[0]
+		assert.Equal(t, 1, len(lease.Items))
+		item := lease.Items[0]
 		assert.Equal(t, ref, item.Reference)
 		assert.Equal(t, enc, item.Encoding)
 		assert.Equal(t, kind, item.Kind)
@@ -129,7 +129,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		assert.Equal(t, int32(1), inspect.Attempts)
 		assert.Equal(t, payload, inspect.Payload)
 		assert.Equal(t, item.Id, inspect.Id)
-		assert.Equal(t, true, inspect.IsReserved)
+		assert.Equal(t, true, inspect.IsLeased)
 
 		// Mark the item as complete
 		require.NoError(t, c.QueueComplete(ctx, &pb.QueueCompleteRequest{
@@ -165,7 +165,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			Reference:           "rainbow@dash.com",
 			ExpireTimeout:       "20h0m0s",
 			QueueName:           queueName,
-			ReserveTimeout:      "1m0s",
+			LeaseTimeout:        "1m0s",
 			MaxAttempts:         256,
 			RequestedPartitions: 1,
 		}))
@@ -199,7 +199,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			assert.Equal(t, "flutter@shy.com", list.Items[0].Reference)
 			assert.Equal(t, "friendship", list.Items[0].Encoding)
 			assert.Equal(t, "yes", list.Items[0].Kind)
-			assert.True(t, list.Items[0].ReserveDeadline.AsTime().IsZero())
+			assert.True(t, list.Items[0].LeaseDeadline.AsTime().IsZero())
 			assert.False(t, list.Items[0].ExpireDeadline.AsTime().IsZero())
 			assert.True(t, list.Items[0].ExpireDeadline.AsTime().After(now))
 			assert.True(t, list.Items[0].ExpireDeadline.AsTime().Before(expireDeadline))
@@ -207,17 +207,17 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			assert.Equal(t, "", list.Items[1].Reference)
 			assert.Equal(t, "application/json", list.Items[1].Encoding)
 			assert.Equal(t, "no", list.Items[1].Kind)
-			assert.True(t, list.Items[1].ReserveDeadline.AsTime().IsZero())
+			assert.True(t, list.Items[1].LeaseDeadline.AsTime().IsZero())
 			assert.False(t, list.Items[1].ExpireDeadline.AsTime().IsZero())
 			assert.True(t, list.Items[1].ExpireDeadline.AsTime().After(now))
 			assert.True(t, list.Items[1].ExpireDeadline.AsTime().Before(expireDeadline))
 		})
 
 		t.Run("MaxAttempts", func(t *testing.T) {
-			// TODO: Reserve and defer one of the items multiple clocks until we exhaust the MaxAttempts,
+			// TODO: Lease and retry one of the items multiple clocks until we exhaust the MaxAttempts,
 			//  then assert item was deleted.
 		})
-		t.Run("ReserveTimeout", func(t *testing.T) {})
+		t.Run("LeaseTimeout", func(t *testing.T) {})
 		t.Run("ExpireTimeout", func(t *testing.T) {
 			// TODO: Fast Forward to the future, and ensure the item is removed after the dead clockout
 		})
@@ -269,12 +269,12 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				assert.True(t, produced[i].CreatedAt.AsTime().After(now))
 
 				// ExpireDeadline should be after we produced the item, but before the dead clockout
-				assert.True(t, produced[i].ReserveDeadline.AsTime().IsZero())
+				assert.True(t, produced[i].LeaseDeadline.AsTime().IsZero())
 				assert.False(t, produced[i].ExpireDeadline.AsTime().IsZero())
 				assert.True(t, produced[i].ExpireDeadline.AsTime().After(now))
 				assert.True(t, produced[i].ExpireDeadline.AsTime().Before(expireDeadline))
 
-				assert.Equal(t, false, produced[i].IsReserved)
+				assert.Equal(t, false, produced[i].IsLeased)
 				assert.Equal(t, int32(0), produced[i].Attempts)
 				assert.Equal(t, items[i].Reference, produced[i].Reference)
 				assert.Equal(t, items[i].Encoding, produced[i].Encoding)
@@ -323,7 +323,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				assert.True(t, produced[i].ExpireDeadline.AsTime().After(now))
 				assert.True(t, produced[i].ExpireDeadline.AsTime().Before(expireDeadline))
 
-				assert.Equal(t, false, produced[i].IsReserved)
+				assert.Equal(t, false, produced[i].IsLeased)
 				assert.Equal(t, int32(0), produced[i].Attempts)
 				assert.Equal(t, items[i].Reference, produced[i].Reference)
 				assert.Equal(t, items[i].Encoding, produced[i].Encoding)
@@ -334,7 +334,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 	})
 
-	t.Run("Reserve", func(t *testing.T) {
+	t.Run("Lease", func(t *testing.T) {
 		_store := setup(clock.NewProvider())
 		defer tearDown()
 
@@ -346,18 +346,18 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
 			ExpireTimeout:       ExpireTimeout,
 			QueueName:           queueName,
-			ReserveTimeout:      "2m0s",
+			LeaseTimeout:        "2m0s",
 			RequestedPartitions: 1,
 		}))
 		items := writeRandomItems(t, ctx, c, queueName, 10_000)
 		require.Len(t, items, 10_000)
 
 		expire := clock.Now().UTC().Add(2_000 * clock.Minute)
-		var reserved, secondReserve pb.QueueReserveResponse
+		var leased, secondLease pb.QueueLeaseResponse
 		var list pb.StorageItemsListResponse
 
 		t.Run("TenItems", func(t *testing.T) {
-			req := pb.QueueReserveRequest{
+			req := pb.QueueLeaseRequest{
 				ClientId:       clientID,
 				QueueName:      queueName,
 				BatchSize:      10,
@@ -365,56 +365,56 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			}
 
 			now := clock.Now().UTC()
-			require.NoError(t, c.QueueReserve(ctx, &req, &reserved))
-			require.Equal(t, 10, len(reserved.Items))
-			reserveDeadline := clock.Now().UTC().Add(2 * clock.Minute)
+			require.NoError(t, c.QueueLease(ctx, &req, &leased))
+			require.Equal(t, 10, len(leased.Items))
+			leaseDeadline := clock.Now().UTC().Add(2 * clock.Minute)
 
-			// Ensure the items reserved are marked as reserved in the database
+			// Ensure the items leased are marked as leased in the database
 			require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, &que.ListOptions{Limit: 10_000}))
 
-			for i := range reserved.Items {
-				assert.Equal(t, list.Items[i].Id, reserved.Items[i].Id)
-				assert.Equal(t, true, list.Items[i].IsReserved)
+			for i := range leased.Items {
+				assert.Equal(t, list.Items[i].Id, leased.Items[i].Id)
+				assert.Equal(t, true, list.Items[i].IsLeased)
 
-				// ReserveDeadline should be after we reserved the item, but before the reserve clockout
-				assert.False(t, list.Items[i].ReserveDeadline.AsTime().IsZero())
-				assert.True(t, list.Items[i].ReserveDeadline.AsTime().After(now))
-				assert.True(t, list.Items[i].ReserveDeadline.AsTime().Before(reserveDeadline))
-				assert.True(t, list.Items[i].ReserveDeadline.AsTime().Before(expire))
+				// LeaseDeadline should be after we leased the item, but before the lease clockout
+				assert.False(t, list.Items[i].LeaseDeadline.AsTime().IsZero())
+				assert.True(t, list.Items[i].LeaseDeadline.AsTime().After(now))
+				assert.True(t, list.Items[i].LeaseDeadline.AsTime().Before(leaseDeadline))
+				assert.True(t, list.Items[i].LeaseDeadline.AsTime().Before(expire))
 			}
 		})
 
 		t.Run("AnotherTenItems", func(t *testing.T) {
-			req := pb.QueueReserveRequest{
+			req := pb.QueueLeaseRequest{
 				ClientId:       clientID,
 				QueueName:      queueName,
 				BatchSize:      10,
 				RequestTimeout: "1m",
 			}
 
-			require.NoError(t, c.QueueReserve(ctx, &req, &secondReserve))
-			require.Equal(t, 10, len(reserved.Items))
+			require.NoError(t, c.QueueLease(ctx, &req, &secondLease))
+			require.Equal(t, 10, len(leased.Items))
 
-			var combined []*pb.QueueReserveItem
-			combined = append(combined, reserved.Items...)
-			combined = append(combined, secondReserve.Items...)
+			var combined []*pb.QueueLeaseItem
+			combined = append(combined, leased.Items...)
+			combined = append(combined, secondLease.Items...)
 
 			require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, &que.ListOptions{Limit: 10_000}))
-			assert.NotEqual(t, reserved.Items[0].Id, secondReserve.Items[0].Id)
+			assert.NotEqual(t, leased.Items[0].Id, secondLease.Items[0].Id)
 			assert.Equal(t, combined[0].Id, list.Items[0].Id)
 			require.Equal(t, 20, len(combined))
 			require.Equal(t, 10_000, len(list.Items))
 
-			// Ensure all the items reserved are marked as reserved in the database
+			// Ensure all the items leased are marked as leased in the database
 			for i := range combined {
 				assert.Equal(t, list.Items[i].Id, combined[i].Id)
-				assert.Equal(t, true, list.Items[i].IsReserved)
-				assert.True(t, list.Items[i].ReserveDeadline.AsTime().Before(expire))
+				assert.Equal(t, true, list.Items[i].IsLeased)
+				assert.True(t, list.Items[i].LeaseDeadline.AsTime().Before(expire))
 			}
 		})
 
 		t.Run("DistributeNumRequested", func(t *testing.T) {
-			requests := []*pb.QueueReserveRequest{
+			requests := []*pb.QueueLeaseRequest{
 				{
 					ClientId:       random.String("client-", 10),
 					QueueName:      queueName,
@@ -434,7 +434,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					RequestTimeout: "1m",
 				},
 			}
-			responses := pauseAndReserve(t, ctx, d.Service(), c, queueName, requests)
+			responses := pauseAndLease(t, ctx, d.Service(), c, queueName, requests)
 
 			assert.Equal(t, int32(5), requests[0].BatchSize)
 			assert.Equal(t, 5, len(responses[0].Items))
@@ -443,20 +443,20 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			assert.Equal(t, int32(20), requests[2].BatchSize)
 			assert.Equal(t, 20, len(responses[2].Items))
 
-			// Fetch items from storage, ensure items are reserved
+			// Fetch items from storage, ensure items are leased
 			require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, &que.ListOptions{Limit: 10_000}))
 			require.Equal(t, 10_000, len(list.Items))
 
 			var found int
 			for _, item := range list.Items {
-				// Find the reserved item in the batch request
+				// Find the leased item in the batch request
 				if findInResponses(responses, item.Reference) {
 					found++
-					// Ensure the item is reserved
-					require.Equal(t, true, item.IsReserved)
+					// Ensure the item is leased
+					require.Equal(t, true, item.IsLeased)
 				}
 			}
-			assert.Equal(t, 35, found, "expected to find 35 reserved items, got %d", found)
+			assert.Equal(t, 35, found, "expected to find 35 leased items, got %d", found)
 		})
 
 		t.Run("DistributeNotEnoughItems", func(t *testing.T) {
@@ -473,7 +473,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, nil))
 			require.Equal(t, 23, len(list.Items))
 
-			requests := []*pb.QueueReserveRequest{
+			requests := []*pb.QueueLeaseRequest{
 				{
 					ClientId:       random.String("client-", 10),
 					QueueName:      queueName,
@@ -493,9 +493,9 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					RequestTimeout: "1m",
 				},
 			}
-			responses := pauseAndReserve(t, ctx, d.Service(), c, queueName, requests)
+			responses := pauseAndLease(t, ctx, d.Service(), c, queueName, requests)
 
-			// Reserve() should fairly distribute items across all requests
+			// Lease() should fairly distribute items across all requests
 			assert.Equal(t, int32(20), requests[0].BatchSize)
 			assert.Equal(t, 16, len(responses[0].Items))
 			assert.Equal(t, int32(6), requests[1].BatchSize)
@@ -512,7 +512,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				Queue:       true,
 			}))
 
-			requests := []*pb.QueueReserveRequest{
+			requests := []*pb.QueueLeaseRequest{
 				{
 					ClientId:       random.String("client-", 10),
 					QueueName:      queueName,
@@ -532,9 +532,9 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					RequestTimeout: "3s",
 				},
 			}
-			responses := pauseAndReserve(t, ctx, d.Service(), c, queueName, requests)
+			responses := pauseAndLease(t, ctx, d.Service(), c, queueName, requests)
 
-			// Reserve() should return no items, and
+			// Lease() should return no items, and
 			assert.Equal(t, int32(20), requests[0].BatchSize)
 			assert.Equal(t, 0, len(responses[0].Items))
 			assert.Equal(t, int32(6), requests[1].BatchSize)
@@ -553,7 +553,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
-			ReserveTimeout:      ReserveTimeout,
+			LeaseTimeout:        LeaseTimeout,
 			ExpireTimeout:       ExpireTimeout,
 			QueueName:           queueName,
 			RequestedPartitions: 1,
@@ -563,21 +563,21 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			items := writeRandomItems(t, ctx, c, queueName, 10)
 			require.Len(t, items, 10)
 
-			var reserved pb.QueueReserveResponse
+			var leased pb.QueueLeaseResponse
 			var list pb.StorageItemsListResponse
 
-			req := pb.QueueReserveRequest{
+			req := pb.QueueLeaseRequest{
 				ClientId:       clientID,
 				QueueName:      queueName,
 				BatchSize:      10,
 				RequestTimeout: "1m",
 			}
 
-			require.NoError(t, c.QueueReserve(ctx, &req, &reserved))
-			require.Equal(t, 10, len(reserved.Items))
+			require.NoError(t, c.QueueLease(ctx, &req, &leased))
+			require.Equal(t, 10, len(leased.Items))
 
 			require.NoError(t, c.QueueComplete(ctx, &pb.QueueCompleteRequest{
-				Ids:            que.CollectIDs(reserved.Items),
+				Ids:            que.CollectIDs(leased.Items),
 				QueueName:      queueName,
 				RequestTimeout: "1m",
 			}))
@@ -587,8 +587,8 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			require.Equal(t, 0, len(list.Items))
 		})
 
-		t.Run("NotReserved", func(t *testing.T) {
-			// Attempt to complete an item that has not been reserved
+		t.Run("NotLeased", func(t *testing.T) {
+			// Attempt to complete an item that has not been leased
 			items := writeRandomItems(t, ctx, c, queueName, 15)
 			require.Len(t, items, 15)
 
@@ -607,7 +607,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			var e duh.Error
 			require.True(t, errors.As(err, &e))
 			assert.Contains(t, e.Message(), "item(s) cannot be completed;")
-			assert.Contains(t, e.Message(), " is not marked as reserved")
+			assert.Contains(t, e.Message(), " is not marked as leased")
 			assert.Equal(t, 400, e.Code())
 		})
 
@@ -638,7 +638,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer d.Shutdown(t)
 
 		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
-			ReserveTimeout:      ReserveTimeout,
+			LeaseTimeout:        LeaseTimeout,
 			ExpireTimeout:       ExpireTimeout,
 			QueueName:           queueName,
 			RequestedPartitions: 1,
@@ -654,16 +654,16 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		// TODO: Reload the partition now that new items have been added to the underlying storage.
 		//c.QueueReload(ctx, queueName)
 
-		req := pb.QueueReserveRequest{
+		req := pb.QueueLeaseRequest{
 			ClientId:       clientID,
 			QueueName:      queueName,
 			BatchSize:      15,
 			RequestTimeout: "1m",
 		}
 
-		var reserved pb.QueueReserveResponse
-		require.NoError(t, c.QueueReserve(ctx, &req, &reserved))
-		require.Equal(t, 15, len(reserved.Items))
+		var leased pb.QueueLeaseResponse
+		require.NoError(t, c.QueueLease(ctx, &req, &leased))
+		require.Equal(t, 15, len(leased.Items))
 
 		var stats pb.QueueStatsResponse
 		require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats))
@@ -671,12 +671,12 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		stat := stats.LogicalQueues[0]
 		p := stat.Partitions[0]
 		assert.Equal(t, int32(500), p.Total)
-		assert.Equal(t, int32(15), p.TotalReserved)
+		assert.Equal(t, int32(15), p.TotalLeased)
 		assert.Equal(t, int32(0), p.Failures)
 		assert.NotEmpty(t, p.AverageAge)
-		assert.NotEmpty(t, p.AverageReservedAge)
-		t.Logf("total: %d average-age: %s reserved %d average-reserved: %s",
-			p.Total, p.AverageAge, p.TotalReserved, p.AverageReservedAge)
+		assert.NotEmpty(t, p.AverageLeasedAge)
+		t.Logf("total: %d average-age: %s leased %d average-leased: %s",
+			p.Total, p.AverageAge, p.TotalLeased, p.AverageLeasedAge)
 	})
 
 	t.Run("QueueClear", func(t *testing.T) {
@@ -687,10 +687,10 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: _store})
 		defer d.Shutdown(t)
 
-		var reserved []*pb.StorageItem
+		var leased []*pb.StorageItem
 		var list pb.StorageItemsListResponse
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
-			ReserveTimeout:      ReserveTimeout,
+			LeaseTimeout:        LeaseTimeout,
 			ExpireTimeout:       ExpireTimeout,
 			QueueName:           queueName,
 			RequestedPartitions: 1,
@@ -703,30 +703,30 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		assert.Equal(t, 500, len(list.Items))
 
 		expire := clock.Now().UTC().Add(random.Duration(10*clock.Second, clock.Minute))
-		reserved = append(reserved, &pb.StorageItem{
-			ExpireDeadline:  timestamppb.New(expire),
-			ReserveDeadline: timestamppb.New(expire),
-			Attempts:        int32(rand.Intn(10)),
-			Reference:       random.String("ref-", 10),
-			Encoding:        random.String("enc-", 10),
-			Kind:            random.String("kind-", 10),
-			Payload:         []byte("Reserved 1"),
-			IsReserved:      true,
+		leased = append(leased, &pb.StorageItem{
+			ExpireDeadline: timestamppb.New(expire),
+			LeaseDeadline:  timestamppb.New(expire),
+			Attempts:       int32(rand.Intn(10)),
+			Reference:      random.String("ref-", 10),
+			Encoding:       random.String("enc-", 10),
+			Kind:           random.String("kind-", 10),
+			Payload:        []byte("Leased 1"),
+			IsLeased:       true,
 		})
-		reserved = append(reserved, &pb.StorageItem{
-			ExpireDeadline:  timestamppb.New(expire),
-			ReserveDeadline: timestamppb.New(expire),
-			Attempts:        int32(rand.Intn(10)),
-			Reference:       random.String("ref-", 10),
-			Encoding:        random.String("enc-", 10),
-			Kind:            random.String("kind-", 10),
-			Payload:         []byte("Reserved 2"),
-			IsReserved:      true,
+		leased = append(leased, &pb.StorageItem{
+			ExpireDeadline: timestamppb.New(expire),
+			LeaseDeadline:  timestamppb.New(expire),
+			Attempts:       int32(rand.Intn(10)),
+			Reference:      random.String("ref-", 10),
+			Encoding:       random.String("enc-", 10),
+			Kind:           random.String("kind-", 10),
+			Payload:        []byte("Leased 2"),
+			IsLeased:       true,
 		})
 
-		// Add some reserved items
+		// Add some leased items
 		var resp pb.StorageItemsImportResponse
-		err := c.StorageItemsImport(ctx, &pb.StorageItemsImportRequest{Items: reserved, QueueName: queueName}, &resp)
+		err := c.StorageItemsImport(ctx, &pb.StorageItemsImportRequest{Items: leased, QueueName: queueName}, &resp)
 		require.NoError(t, err)
 		require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, nil))
 		assert.Equal(t, 502, len(list.Items))
@@ -761,7 +761,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			maxItems := produceRandomItems(1_001)
 
 			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
-				ReserveTimeout:      ReserveTimeout,
+				LeaseTimeout:        LeaseTimeout,
 				ExpireTimeout:       ExpireTimeout,
 				QueueName:           queueName,
 				RequestedPartitions: 1,
@@ -879,14 +879,14 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			}
 		})
 
-		t.Run("QueueReserve", func(t *testing.T) {
+		t.Run("QueueLease", func(t *testing.T) {
 			var queueName = random.String("queue-", 10)
 			var clientID = random.String("client-", 10)
 			d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: _store})
 			defer d.Shutdown(t)
 
 			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
-				ReserveTimeout:      ReserveTimeout,
+				LeaseTimeout:        LeaseTimeout,
 				ExpireTimeout:       ExpireTimeout,
 				QueueName:           queueName,
 				RequestedPartitions: 1,
@@ -894,19 +894,19 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 			for _, tc := range []struct {
 				Name string
-				Req  *pb.QueueReserveRequest
+				Req  *pb.QueueLeaseRequest
 				Msg  string
 				Code int
 			}{
 				{
 					Name: "EmptyRequest",
-					Req:  &pb.QueueReserveRequest{},
+					Req:  &pb.QueueLeaseRequest{},
 					Msg:  "queue name is invalid; queue name cannot be empty",
 					Code: duh.CodeBadRequest,
 				},
 				{
 					Name: "ClientIdMissing",
-					Req: &pb.QueueReserveRequest{
+					Req: &pb.QueueLeaseRequest{
 						QueueName: queueName,
 					},
 					Msg:  "invalid client id; cannot be empty",
@@ -914,7 +914,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				},
 				{
 					Name: "BatchSizeCannotBeEmpty",
-					Req: &pb.QueueReserveRequest{
+					Req: &pb.QueueLeaseRequest{
 						QueueName: queueName,
 						ClientId:  clientID,
 					},
@@ -923,17 +923,17 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				},
 				{
 					Name: "BatchSizeMaximum",
-					Req: &pb.QueueReserveRequest{
+					Req: &pb.QueueLeaseRequest{
 						QueueName: queueName,
 						ClientId:  clientID,
 						BatchSize: 1_001,
 					},
-					Msg:  "invalid batch size; max_reserve_batch_size is 1000, but 1001 was requested",
+					Msg:  "invalid batch size; max_lease_batch_size is 1000, but 1001 was requested",
 					Code: duh.CodeBadRequest,
 				},
 				{
 					Name: "RequestTimeoutRequired",
-					Req: &pb.QueueReserveRequest{
+					Req: &pb.QueueLeaseRequest{
 						QueueName: queueName,
 						ClientId:  clientID,
 						BatchSize: 111,
@@ -943,7 +943,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				},
 				{
 					Name: "RequestTimeoutTooLong",
-					Req: &pb.QueueReserveRequest{
+					Req: &pb.QueueLeaseRequest{
 						QueueName:      queueName,
 						ClientId:       clientID,
 						BatchSize:      1_000,
@@ -954,7 +954,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				},
 				{
 					Name: "RequestTimeoutInvalid",
-					Req: &pb.QueueReserveRequest{
+					Req: &pb.QueueLeaseRequest{
 						QueueName:      queueName,
 						ClientId:       clientID,
 						BatchSize:      1_000,
@@ -966,7 +966,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				},
 				{
 					Name: "MinimumRequestTimeoutIsAllowed",
-					Req: &pb.QueueReserveRequest{
+					Req: &pb.QueueLeaseRequest{
 						QueueName:      queueName,
 						ClientId:       clientID,
 						BatchSize:      1_000,
@@ -976,7 +976,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				},
 				{
 					Name: "RequestTimeoutIsTooShort",
-					Req: &pb.QueueReserveRequest{
+					Req: &pb.QueueLeaseRequest{
 						QueueName:      queueName,
 						ClientId:       clientID,
 						BatchSize:      1_000,
@@ -987,8 +987,8 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				},
 			} {
 				t.Run(tc.Name, func(t *testing.T) {
-					var res pb.QueueReserveResponse
-					err := c.QueueReserve(ctx, tc.Req, &res)
+					var res pb.QueueLeaseResponse
+					err := c.QueueLease(ctx, tc.Req, &res)
 					if tc.Code != duh.CodeOK {
 						var e duh.Error
 						require.True(t, errors.As(err, &e))
@@ -1007,8 +1007,8 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				var wg sync.WaitGroup
 				wg.Add(1)
 				go func() {
-					var res pb.QueueReserveResponse
-					resultCh <- c.QueueReserve(ctx, &pb.QueueReserveRequest{
+					var res pb.QueueLeaseResponse
+					resultCh <- c.QueueLease(ctx, &pb.QueueLeaseRequest{
 						QueueName:      queueName,
 						ClientId:       clientID,
 						RequestTimeout: "2s",
@@ -1017,12 +1017,12 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					wg.Done()
 				}()
 
-				// Wait until there is one reserve client blocking on the queue.
-				require.NoError(t, untilReserveClientWaiting(t, c, queueName, 1))
+				// Wait until there is one lease client blocking on the queue.
+				require.NoError(t, untilLeaseClientWaiting(t, c, queueName, 1))
 
 				// Should fail immediately
-				var res pb.QueueReserveResponse
-				err := c.QueueReserve(ctx, &pb.QueueReserveRequest{
+				var res pb.QueueLeaseResponse
+				err := c.QueueLease(ctx, &pb.QueueLeaseRequest{
 					QueueName:      queueName,
 					ClientId:       clientID,
 					RequestTimeout: "2s",
@@ -1048,13 +1048,13 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			defer d.Shutdown(t)
 
 			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
-				ReserveTimeout:      ReserveTimeout,
+				LeaseTimeout:        LeaseTimeout,
 				ExpireTimeout:       ExpireTimeout,
 				QueueName:           queueName,
 				RequestedPartitions: 1,
 			})
 
-			// TODO: Produce and Reserve some items to create actual ids
+			// TODO: Produce and Lease some items to create actual ids
 			listOfValidIds := []string{"valid-id"}
 
 			for _, tc := range []struct {
@@ -1177,14 +1177,14 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		// Create a queue
 		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
-			ReserveTimeout:      "1m0s",
+			LeaseTimeout:        "1m0s",
 			ExpireTimeout:       ExpireTimeout,
 			QueueName:           queueName,
 			RequestedPartitions: 1,
 			MaxAttempts:         2,
 		})
 
-		t.Run("ReserveTimeout", func(t *testing.T) {
+		t.Run("LeaseTimeout", func(t *testing.T) {
 			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
 				QueueName:      queueName,
 				RequestTimeout: "1m",
@@ -1197,23 +1197,23 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					},
 				}}))
 
-			var reserve pb.QueueReserveResponse
-			require.NoError(t, c.QueueReserve(ctx, &pb.QueueReserveRequest{
+			var lease pb.QueueLeaseResponse
+			require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
 				ClientId:       random.String("client-", 10),
 				RequestTimeout: "5s",
 				QueueName:      queueName,
 				BatchSize:      1,
-			}, &reserve))
+			}, &lease))
 
-			reserved := reserve.Items[0]
-			assert.Equal(t, "flutter@shy.com", reserved.Reference)
+			leased := lease.Items[0]
+			assert.Equal(t, "flutter@shy.com", leased.Reference)
 
 			var resp pb.StorageItemsListResponse
 			err := c.StorageItemsList(ctx, queueName, 0, &resp,
-				&que.ListOptions{Pivot: reserved.Id, Limit: 1})
+				&que.ListOptions{Pivot: leased.Id, Limit: 1})
 			require.NoError(t, err)
-			require.Equal(t, reserved.Id, resp.Items[0].Id)
-			require.Equal(t, true, resp.Items[0].IsReserved)
+			require.Equal(t, leased.Id, resp.Items[0].Id)
+			require.Equal(t, true, resp.Items[0].IsLeased)
 
 			for i := 0; i < 4; i++ {
 				require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
@@ -1229,10 +1229,10 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					}}))
 			}
 
-			// Advance time til we meet the ReserveTime set by the queue
+			// Advance time til we meet the LeaseTime set by the queue
 			now.Advance(2 * clock.Minute)
 
-			// Wait until the item is no longer reserved
+			// Wait until the item is no longer leased
 			err = retry.On(ctx, RetryTenTimes, func(ctx context.Context, i int) error {
 				var resp pb.StorageItemsListResponse
 				err := c.StorageItemsList(ctx, queueName, 0, &resp, nil)
@@ -1241,32 +1241,32 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				}
 				item := findInStorageList("flutter@shy.com", &resp)
 				require.NotNil(t, item)
-				if item.IsReserved == false {
+				if item.IsLeased == false {
 					return nil
 				}
-				return fmt.Errorf("expected reserved item to be false, for '%s'", resp.Items[0].Id)
+				return fmt.Errorf("expected leased item to be false, for '%s'", resp.Items[0].Id)
 			})
 			require.NoError(t, err)
 
 			err = c.StorageItemsList(ctx, queueName, 0, &resp,
-				&que.ListOptions{Pivot: reserved.Id, Limit: 5})
+				&que.ListOptions{Pivot: leased.Id, Limit: 5})
 			require.NoError(t, err)
 			item := findInStorageList("flutter@shy.com", &resp)
 			require.NotNil(t, item)
 
-			require.NotEqual(t, reserved.Id, item.Id)
-			assert.Equal(t, "friendship", reserved.Encoding)
-			assert.True(t, item.ReserveDeadline.AsTime().Before(now.Now()))
-			require.Equal(t, false, item.IsReserved)
+			require.NotEqual(t, leased.Id, item.Id)
+			assert.Equal(t, "friendship", leased.Encoding)
+			assert.True(t, item.LeaseDeadline.AsTime().Before(now.Now()))
+			require.Equal(t, false, item.IsLeased)
 			assert.Equal(t, int32(1), item.Attempts)
 
 			t.Run("AttemptComplete", func(t *testing.T) {
-				// Attempt to complete the reserved id using the original id
+				// Attempt to complete the leased id using the original id
 				err = c.QueueComplete(ctx, &pb.QueueCompleteRequest{
 					QueueName:      queueName,
 					RequestTimeout: "5s",
 					Ids: []string{
-						reserved.Id,
+						leased.Id,
 					},
 				})
 				require.Error(t, err)
@@ -1281,30 +1281,30 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					},
 				})
 				require.Error(t, err)
-				assert.Contains(t, err.Error(), "is not marked as reserved")
+				assert.Contains(t, err.Error(), "is not marked as leased")
 			})
 
-			t.Run("CanReserveAgain", func(t *testing.T) {
-				// Reserve the item again
-				require.NoError(t, c.QueueReserve(ctx, &pb.QueueReserveRequest{
+			t.Run("CanLeaseAgain", func(t *testing.T) {
+				// Lease the item again
+				require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
 					ClientId:       random.String("client-", 10),
 					RequestTimeout: "5s",
 					QueueName:      queueName,
 					BatchSize:      5,
-				}, &reserve))
+				}, &lease))
 
-				requeued := findInReserveResp("flutter@shy.com", &reserve)
-				require.NotNil(t, reserved)
-				// Items placed back into un-reserved status should have a different id
-				require.NotEqual(t, requeued.Id, reserved.Id)
+				requeued := findInLeaseResp("flutter@shy.com", &lease)
+				require.NotNil(t, leased)
+				// Items placed back into un-leased status should have a different id
+				require.NotEqual(t, requeued.Id, leased.Id)
 
-				// Ensure the item is marked as reserved
+				// Ensure the item is marked as leased
 				err = c.StorageItemsList(ctx, queueName, 0, &resp,
 					&que.ListOptions{Pivot: requeued.Id, Limit: 5})
 				require.NoError(t, err)
 				require.Equal(t, requeued.Id, resp.Items[0].Id)
 				assert.True(t, resp.Items[0].ExpireDeadline.AsTime().After(now.Now()))
-				require.Equal(t, true, resp.Items[0].IsReserved)
+				require.Equal(t, true, resp.Items[0].IsLeased)
 
 				// Mark it as complete
 				err = c.QueueComplete(ctx, &pb.QueueCompleteRequest{
@@ -1327,7 +1327,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		// Create a queue
 		queueName = random.String("queue-", 10)
 		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
-			ReserveTimeout:      "1m0s",
+			LeaseTimeout:        "1m0s",
 			ExpireTimeout:       ExpireTimeout,
 			QueueName:           queueName,
 			RequestedPartitions: 1,
@@ -1349,24 +1349,24 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				}}))
 
 			for i := 0; i < 2; i++ {
-				// Reserve the item produced
-				var reserve pb.QueueReserveResponse
-				require.NoError(t, c.QueueReserve(ctx, &pb.QueueReserveRequest{
+				// Lease the item produced
+				var lease pb.QueueLeaseResponse
+				require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
 					ClientId:       random.String("client-", 10),
 					RequestTimeout: "5s",
 					QueueName:      queueName,
 					BatchSize:      1,
-				}, &reserve))
+				}, &lease))
 
-				reserved := reserve.Items[0]
-				assert.Equal(t, "durp@pony.com", reserved.Reference)
+				leased := lease.Items[0]
+				assert.Equal(t, "durp@pony.com", leased.Reference)
 
-				// Advance time til we meet the ReserveTime set by the queue
+				// Advance time til we meet the LeaseTime set by the queue
 				now.Advance(2 * clock.Minute)
 
 				// If this isn't the final attempt
-				if reserved.Attempts != 2 {
-					// Wait until the item is no longer reserved
+				if leased.Attempts != 2 {
+					// Wait until the item is no longer leased
 					err := retry.On(ctx, RetryTenTimes, func(ctx context.Context, i int) error {
 						var resp pb.StorageItemsListResponse
 						if err := c.StorageItemsList(ctx, queueName, 0, &resp, nil); err != nil {
@@ -1374,10 +1374,10 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 						}
 						item := findInStorageList("durp@pony.com", &resp)
 						require.NotNil(t, item)
-						if item.IsReserved == false {
+						if item.IsLeased == false {
 							return nil
 						}
-						return fmt.Errorf("expected reserved item to be false, for '%s'", resp.Items[0].Id)
+						return fmt.Errorf("expected leased item to be false, for '%s'", resp.Items[0].Id)
 					})
 					require.NoError(t, err)
 				}
@@ -1390,7 +1390,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					return err
 				}
 				if item := findInStorageList("durp@pony.com", &resp); item != nil {
-					return fmt.Errorf("expected reserved item to be deleted, for '%s'", resp.Items[0].Reference)
+					return fmt.Errorf("expected leased item to be deleted, for '%s'", resp.Items[0].Reference)
 				}
 				return nil
 			})
@@ -1399,7 +1399,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		//t.Run("UntilDeadLetter", func(t *testing.T) {
 		//	// Produce an item
-		//	// Reserve it
+		//	// Lease it
 		//	// Wait for the Timeout
 		//	// Repeat until max attempts reached
 		//})
@@ -1412,5 +1412,5 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 }
 
 // TODO: Start the Service, produce some items, then Shutdown the service
-// TODO: Variations on this, produce/reserve, shutdown, etc.... ensure all items are consumed.
+// TODO: Variations on this, produce/lease, shutdown, etc.... ensure all items are consumed.
 // TODO: Attempt to shutdown the service while clients are still making requests

@@ -20,9 +20,9 @@ var (
 	theFuture        = time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.UTC)
 )
 
-type ReserveOptions struct {
-	// ReserveDeadline is a time in the future when the reservation should expire
-	ReserveDeadline clock.Time
+type LeaseOptions struct {
+	// LeaseDeadline is a time in the future when the lease should expire
+	LeaseDeadline clock.Time
 }
 
 // Queues is storage for listing and storing information about queues. The Queues store implementations
@@ -57,9 +57,9 @@ type Partition interface {
 	// Produce writes the items in the batch to the data store.
 	Produce(ctx context.Context, batch types.ProduceBatch) error
 
-	// Reserve attempts to reserve items for each request in the reserve batch. It uses the batch.Iterator()
-	// to evenly distribute items to all the waiting reserve requests represented in the batch.
-	Reserve(ctx context.Context, batch types.ReserveBatch, opts ReserveOptions) error
+	// Lease attempts to lease items for each request in the lease batch. It uses the batch.Iterator()
+	// to evenly distribute items to all the waiting lease requests represented in the batch.
+	Lease(ctx context.Context, batch types.LeaseBatch, opts LeaseOptions) error
 
 	// Complete marks item ids in the batch as complete. If the underlying data storage fails for some
 	// reason, this call returns an error. In that case the caller should assume none of the batched
@@ -142,7 +142,6 @@ type StorageConfig struct {
 // Backend is the struct which holds the configured partition backend interfaces
 type Backend struct {
 	PartitionStore PartitionStore
-	ScheduledStore ScheduledStore
 	Affinity       float64
 	Name           string
 }
@@ -154,20 +153,4 @@ type PartitionStore interface {
 	Get(types.PartitionInfo) Partition
 
 	// TODO: List StoragePartitions, Delete StoragePartitions, etc...
-}
-
-// TODO: A scheduled store should probably be located or managed by a partition store, possibly in the same table
-//  or a separate table on the same data storage as the partition table. Queued schedule items should be distributed
-//  across partitions as to avoid a throughput bottle neck, and should be queued into whatever partition the logical
-//  queue has access to when the scheduled item deadline is reached. This avoids complication
-//
-
-// ScheduledStore manages scheduled and deferred items
-type ScheduledStore interface {
-	Create(types.PartitionInfo) error
-	Get(types.PartitionInfo) Scheduled
-}
-
-// TODO: Design the Scheduled interface
-type Scheduled interface {
 }

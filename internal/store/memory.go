@@ -46,7 +46,7 @@ func (m *MemoryPartition) Produce(_ context.Context, batch types.ProduceBatch) e
 	return nil
 }
 
-func (m *MemoryPartition) Reserve(_ context.Context, batch types.ReserveBatch, opts ReserveOptions) error {
+func (m *MemoryPartition) Lease(_ context.Context, batch types.LeaseBatch, opts LeaseOptions) error {
 	defer m.mu.Unlock()
 	m.mu.Lock()
 
@@ -54,12 +54,12 @@ func (m *MemoryPartition) Reserve(_ context.Context, batch types.ReserveBatch, o
 	var count int
 
 	for i, item := range m.mem {
-		if item.IsReserved {
+		if item.IsLeased {
 			continue
 		}
 
-		item.ReserveDeadline = opts.ReserveDeadline
-		item.IsReserved = true
+		item.LeaseDeadline = opts.LeaseDeadline
+		item.IsLeased = true
 		item.Attempts++
 		count++
 
@@ -67,8 +67,8 @@ func (m *MemoryPartition) Reserve(_ context.Context, batch types.ReserveBatch, o
 		itemPtr := new(types.Item) // TODO: Memory Pool
 		*itemPtr = item
 
-		// Assign the item to the next waiting reservation in the batch,
-		// returns false if there are no more reservations available to fill
+		// Assign the item to the next waiting lease in the batch,
+		// returns false if there are no more leases available to fill
 		if batchIter.Next(itemPtr) {
 			// If assignment was a success, put the updated item into the array
 			m.mem[i] = item
@@ -97,9 +97,9 @@ nextBatch:
 				continue nextBatch
 			}
 
-			if !m.mem[idx].IsReserved {
+			if !m.mem[idx].IsLeased {
 				batch.Requests[i].Err = transport.NewConflict("item(s) cannot be completed; '%s' is not "+
-					"marked as reserved", id)
+					"marked as leased", id)
 				continue nextBatch
 			}
 			// Remove the item from the array
@@ -187,7 +187,7 @@ func (m *MemoryPartition) Clear(_ context.Context, destructive bool) error {
 
 	mem := make([]types.Item, 0, len(m.mem))
 	for _, item := range m.mem {
-		if item.IsReserved {
+		if item.IsLeased {
 			mem = append(mem, item)
 			continue
 		}
@@ -215,11 +215,11 @@ func (m *MemoryPartition) ScanForActions(_ clock.Duration, now clock.Time) iter.
 
 	return func(yield func(types.Action) bool) {
 		for _, item := range m.mem {
-			// Is the reserved item expired?
-			if item.IsReserved {
-				if now.After(item.ReserveDeadline) {
+			// Is the leased item expired?
+			if item.IsLeased {
+				if now.After(item.LeaseDeadline) {
 					yield(types.Action{
-						Action:       types.ActionReserveExpired,
+						Action:       types.ActionLeaseExpired,
 						PartitionNum: m.info.PartitionNum,
 						Queue:        m.info.Queue.Name,
 						Item:         item,
@@ -227,8 +227,8 @@ func (m *MemoryPartition) ScanForActions(_ clock.Duration, now clock.Time) iter.
 					continue
 				}
 				// NOTE: This wll catch any items which may have been left in the data store
-				// due to a failed /queue.defer call. This could happen if there is a dead letter queue
-				// defined and defer inserted the item into the dead letter, but failed to remove it
+				// due to a failed /queue.retry call. This could happen if there is a dead letter queue
+				// defined and retry inserted the item into the dead letter, but failed to remove it
 				// due to partition error or catastrophic failure of querator before it could be removed.
 				if m.info.Queue.MaxAttempts != 0 && item.Attempts >= m.info.Queue.MaxAttempts {
 					yield(types.Action{
@@ -265,17 +265,17 @@ func (m *MemoryPartition) TakeAction(_ context.Context, batch types.Batch[types.
 	for _, req := range batch.Requests {
 		for _, a := range req.Actions {
 			switch a.Action {
-			case types.ActionReserveExpired:
+			case types.ActionLeaseExpired:
 				idx, ok := m.findID(a.Item.ID)
 				if !ok {
 					m.log.Warn("unable to find item while processing action; ignoring action",
 						"id", a.Item.ID, "action", types.ActionToString(a.Action))
 					continue
 				}
-				// make a copy of the item and mark as un-reserved
+				// make a copy of the item and mark as un-leased
 				item := m.mem[idx]
-				item.ReserveDeadline = clock.Time{}
-				item.IsReserved = false
+				item.LeaseDeadline = clock.Time{}
+				item.IsLeased = false
 
 				// Assign a new ID to the item, as it is placed at the start of the queue
 				m.uid = m.uid.Next()
@@ -310,13 +310,13 @@ func (m *MemoryPartition) LifeCycleInfo(ctx context.Context, info *types.LifeCyc
 
 	// Find the item that will expire next
 	for _, item := range m.mem {
-		if item.ReserveDeadline.Before(next) {
-			next = item.ReserveDeadline
+		if item.LeaseDeadline.Before(next) {
+			next = item.LeaseDeadline
 		}
 	}
 
 	if next != theFuture {
-		info.NextReserveExpiry = next
+		info.NextLeaseExpiry = next
 	}
 	return nil
 }
@@ -329,16 +329,16 @@ func (m *MemoryPartition) Stats(_ context.Context, stats *types.PartitionStats) 
 	for _, item := range m.mem {
 		stats.Total++
 		stats.AverageAge += now.Sub(item.CreatedAt)
-		if item.IsReserved {
-			stats.AverageReservedAge += item.ReserveDeadline.Sub(now)
-			stats.NumReserved++
+		if item.IsLeased {
+			stats.AverageLeasedAge += item.LeaseDeadline.Sub(now)
+			stats.NumLeased++
 		}
 	}
 	if stats.Total != 0 {
 		stats.AverageAge = clock.Duration(int64(stats.AverageAge) / int64(stats.Total))
 	}
-	if stats.NumReserved != 0 {
-		stats.AverageReservedAge = clock.Duration(int64(stats.AverageReservedAge) / int64(stats.NumReserved))
+	if stats.NumLeased != 0 {
+		stats.AverageLeasedAge = clock.Duration(int64(stats.AverageLeasedAge) / int64(stats.NumLeased))
 	}
 	return nil
 }
@@ -426,15 +426,15 @@ func (s *MemoryQueues) Update(_ context.Context, info types.QueueInfo) error {
 	}
 
 	if info.ExpireTimeout.Nanoseconds() != 0 {
-		if info.ReserveTimeout > info.ExpireTimeout {
-			return transport.NewInvalidOption("reserve timeout is too long; %s cannot be greater than the "+
-				"expire timeout %s", info.ReserveTimeout.String(), info.ExpireTimeout.String())
+		if info.LeaseTimeout > info.ExpireTimeout {
+			return transport.NewInvalidOption("lease timeout is too long; %s cannot be greater than the "+
+				"expire timeout %s", info.LeaseTimeout.String(), info.ExpireTimeout.String())
 		}
 	}
 
-	if info.ReserveTimeout > s.mem[idx].ExpireTimeout {
-		return transport.NewInvalidOption("reserve timeout is too long; %s cannot be greater than the "+
-			"expire timeout %s", info.ReserveTimeout.String(), s.mem[idx].ExpireTimeout.String())
+	if info.LeaseTimeout > s.mem[idx].ExpireTimeout {
+		return transport.NewInvalidOption("lease timeout is too long; %s cannot be greater than the "+
+			"expire timeout %s", info.LeaseTimeout.String(), s.mem[idx].ExpireTimeout.String())
 	}
 
 	found := s.mem[idx]

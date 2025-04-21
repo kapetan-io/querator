@@ -73,7 +73,7 @@ func BenchmarkProduce(b *testing.B) {
 			require.NoError(b, s.QueuesCreate(context.Background(), &pb.QueueInfo{
 				QueueName:           "bench-queue",
 				ExpireTimeout:       "24h0m0s",
-				ReserveTimeout:      "1m0s",
+				LeaseTimeout:        "1m0s",
 				RequestedPartitions: 1,
 			}))
 
@@ -129,7 +129,7 @@ func BenchmarkProduce(b *testing.B) {
 		//				DeadQueue:           random.String("dead-", 10),
 		//				Reference:           random.String("ref-", 10),
 		//				MaxAttempts:         int32(rand.Intn(100)),
-		//				ReserveTimeout:      timeOuts.Reserve,
+		//				LeaseTimeout:      timeOuts.Lease,
 		//				ExpireTimeout:         timeOuts.Dead,
 		//				RequestedPartitions: 1,
 		//			}

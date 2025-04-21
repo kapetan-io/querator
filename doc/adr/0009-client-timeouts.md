@@ -27,14 +27,14 @@ the client how long the client will wait for a response from the server.
 
 Consider the example of a server that is experiencing a high saturation event such it is handling many individual 
 queues very slowly.
-1. Client issues a request to reserve 10 items from the queue with a 5s request timeout.
+1. Client issues a request to lease 10 items from the queue with a 5s request timeout.
 2. 1 second after the client makes its request, the server kernel notifies the service of the incoming request,
    and the golang HTTP library spawns a go routine to handle the HTTP request. That request then queues the 
-   reservation request with `Queue` and waits for a response.
+   lease request with `Queue` and waits for a response.
 3. 5 seconds later (because the CPU is busy doing something else) the scheduler provides CPU time to the 
    main queue loop, and an item waiting in the queue is provided to the waiting client channel.
 4. The HTTP go routine handling the HTTP request, receives notification from the kernel that the client has closed 
-   the remote connection, and thus cancels the context and never receives the item marked for reservation in the queue.
+   the remote connection, and thus cancels the context and never receives the item marked for lease in the queue.
 
 Since the server is under heavy load, timing of all operations are slowed, and occur in an order which neither 
 the client nor the server can predict. If both the client and server know the client has been waiting longer than 
@@ -54,8 +54,8 @@ allow the server to continue to operate during degraded or high saturation event
 Clients and networks will not always operate in a manner we expect. Especially in the world of mobile devices and
 mobile networks where devices can and will switch networks un-expectedly. In these situations, increasing the timeout
 can cause normally short operations to last for quite a long time if connectivity is lost. Indeed, due to the nature of 
-TCP, it's possible the server will have no idea the client has gone away and despite sending the reservation to the
-TCP stack, the client will not receive the reservation provided. This is one of the reasons EOD is impossible, and we 
+TCP, it's possible the server will have no idea the client has gone away and despite sending the lease to the
+TCP stack, the client will not receive the lease provided. This is one of the reasons EOD is impossible, and we 
 instead strive for AEOD (Almost Exactly Once Delivery).
 
 If the timeout of the client is too short, it increases the likelihood of duplicate processing, and if the timeout

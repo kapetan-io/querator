@@ -54,7 +54,7 @@ func (m *MemoryPartition) Lease(_ context.Context, batch types.LeaseBatch, opts 
 	var count int
 
 	for i, item := range m.mem {
-		// If the item is reserved, or is a scheduled item
+		// If the item is leased, or is a scheduled item
 		if item.IsLeased || !item.EnqueueAt.IsZero() {
 			continue
 		}
@@ -239,7 +239,7 @@ func (m *MemoryPartition) ScanForActions(_ clock.Duration, now clock.Time) iter.
 			if !item.EnqueueAt.IsZero() {
 				continue
 			}
-			// Is the reserved item expired?
+			// Is the leased item expired?
 			if item.IsLeased {
 				if now.After(item.LeaseDeadline) {
 					yield(types.Action{
@@ -339,8 +339,8 @@ func (m *MemoryPartition) LifeCycleInfo(ctx context.Context, info *types.LifeCyc
 			continue
 		}
 
-		if item.ReserveDeadline.Before(next) {
-			next = item.ReserveDeadline
+		if item.LeaseDeadline.Before(next) {
+			next = item.LeaseDeadline
 		}
 	}
 

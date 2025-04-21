@@ -138,7 +138,7 @@ message QueueLeaseResponse {
 }
 
 message QueueRetryRequest {
-  // The name of the queue the lease items are from
+  // The name of the queue the leased items are from
   string queueName = 1  [json_name = "queue_name"];
 
   // Partition the leased items are from

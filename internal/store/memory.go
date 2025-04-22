@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 )
 
 var bucketName = []byte("partition")
@@ -30,7 +31,7 @@ type MemoryPartition struct {
 	uid  ksuid.KSUID
 }
 
-func (m *MemoryPartition) Produce(_ context.Context, batch types.ProduceBatch) error {
+func (m *MemoryPartition) Produce(_ context.Context, batch types.ProduceBatch, now clock.Time) error {
 	defer m.mu.Unlock()
 	m.mu.Lock()
 
@@ -38,7 +39,20 @@ func (m *MemoryPartition) Produce(_ context.Context, batch types.ProduceBatch) e
 		for _, item := range r.Items {
 			m.uid = m.uid.Next()
 			item.ID = []byte(m.uid.String())
-			item.CreatedAt = m.conf.Clock.Now().UTC()
+			item.CreatedAt = now
+
+			// If the EnqueueAt is less than 100 milliseconds from now, we want to enqueue
+			// the item immediately. This avoids unnecessary work for something that will be moved into the
+			// queue less than a few milliseconds from now. Programmers may want to be "complete", so they may
+			// include an EnqueueAt time when producing items, which is set to now or near to now, due to clock
+			// drift between systems. Because of this, Querator may end up doing more work and be less efficient
+			// simply because of programmers who desire to completely fill out the pb.QueueProduceItem{} struct
+			// with every possible field, regardless of whether the field is needed.
+
+			// If EnqueueAt dates are in the past, enqueue the item instead of adding it as a scheduled item.
+			if item.EnqueueAt.Before(now.Add(time.Millisecond * 100)) {
+				item.EnqueueAt = time.Time{}
+			}
 
 			m.mem = append(m.mem, *item)
 		}
@@ -153,7 +167,7 @@ func (m *MemoryPartition) List(_ context.Context, items *[]*types.Item, opts typ
 	return nil
 }
 
-func (m *MemoryPartition) Add(_ context.Context, items []*types.Item) error {
+func (m *MemoryPartition) Add(_ context.Context, items []*types.Item, now clock.Time) error {
 	defer m.mu.Unlock()
 	m.mu.Lock()
 
@@ -164,7 +178,7 @@ func (m *MemoryPartition) Add(_ context.Context, items []*types.Item) error {
 	for _, item := range items {
 		m.uid = m.uid.Next()
 		item.ID = []byte(m.uid.String())
-		item.CreatedAt = m.conf.Clock.Now().UTC()
+		item.CreatedAt = now
 
 		m.mem = append(m.mem, *item)
 	}
@@ -225,8 +239,29 @@ func (m *MemoryPartition) UpdateQueueInfo(info types.QueueInfo) {
 }
 
 func (m *MemoryPartition) ScanForScheduled(_ clock.Duration, now clock.Time) iter.Seq[types.Action] {
-	// TODO(NEXT):
-	return nil
+	defer m.mu.RUnlock()
+	m.mu.RLock()
+
+	return func(yield func(types.Action) bool) {
+		for _, item := range m.mem {
+			// Skip non-scheduled items
+			if item.EnqueueAt.IsZero() {
+				continue
+			}
+
+			// NOTE: Different implementations might not include the entire item in the action if
+			// only the id is needed to enqueue the item in place.
+			if now.After(item.EnqueueAt) {
+				yield(types.Action{
+					Action:       types.ActionQueueScheduledItem,
+					PartitionNum: m.info.PartitionNum,
+					Queue:        m.info.Queue.Name,
+					Item:         item,
+				})
+				continue
+			}
+		}
+	}
 }
 
 func (m *MemoryPartition) ScanForActions(_ clock.Duration, now clock.Time) iter.Seq[types.Action] {
@@ -278,7 +313,9 @@ func (m *MemoryPartition) ScanForActions(_ clock.Duration, now clock.Time) iter.
 	}
 }
 
-func (m *MemoryPartition) TakeAction(_ context.Context, batch types.Batch[types.LifeCycleRequest]) error {
+func (m *MemoryPartition) TakeAction(_ context.Context, batch types.Batch[types.LifeCycleRequest],
+	state *types.PartitionState) error {
+
 	if len(batch.Requests) == 0 {
 		return nil
 	}
@@ -307,7 +344,7 @@ func (m *MemoryPartition) TakeAction(_ context.Context, batch types.Batch[types.
 
 				// Remove the item from the array
 				m.mem = append(m.mem[:idx], m.mem[idx+1:]...)
-				// Add the item to the beginning of the array
+				// Add the item to the tail of the array
 				// See doc/adr/0022-managing-item-lifecycles.md for and explanation
 				m.mem = append(m.mem, item)
 			case types.ActionDeleteItem:
@@ -318,9 +355,35 @@ func (m *MemoryPartition) TakeAction(_ context.Context, batch types.Batch[types.
 				// Remove the item from the array
 				m.mem = append(m.mem[:idx], m.mem[idx+1:]...)
 			case types.ActionQueueScheduledItem:
-				// TODO(NEXT): Find the scheduled item and add it to the partition queue
+				// NOTE: Different implementations might take the item provided and insert the item into
+				// the partition, or they could update the item in place depending upon the capabilities
+				// of the data store used.
+				idx, ok := m.findID(a.Item.ID)
+				if !ok {
+					m.log.Warn("assertion failed; scheduled item is should be in partition; action ignored",
+						"id", string(a.Item.ID))
+					continue
+				}
+
+				// Make a copy of the item, then remove it
+				item := m.mem[idx]
+				if item.EnqueueAt.IsZero() {
+					m.log.Warn("assertion failed; expected to be a scheduled item; action ignored",
+						"id", string(a.Item.ID))
+					continue
+				}
+				m.mem = append(m.mem[:idx], m.mem[idx+1:]...)
+
+				// Assign a new id, and add the item to the tail
+				m.uid = m.uid.Next()
+				item.EnqueueAt = clock.Time{}
+				item.ID = []byte(m.uid.String())
+				m.mem = append(m.mem, item)
+				// Tell the partition it gained a new un-leased item.
+				state.UnLeased++
 			default:
-				m.log.Warn("undefined action", "action", fmt.Sprintf("%d", int(a.Action)))
+				m.log.Warn("assertion failed; undefined action", "action",
+					fmt.Sprintf("0x%X", int(a.Action)))
 			}
 		}
 	}
@@ -350,11 +413,10 @@ func (m *MemoryPartition) LifeCycleInfo(ctx context.Context, info *types.LifeCyc
 	return nil
 }
 
-func (m *MemoryPartition) Stats(_ context.Context, stats *types.PartitionStats) error {
+func (m *MemoryPartition) Stats(_ context.Context, stats *types.PartitionStats, now clock.Time) error {
 	defer m.mu.RUnlock()
 	m.mu.RLock()
 
-	now := m.conf.Clock.Now().UTC()
 	for _, item := range m.mem {
 		// Count scheduled and do not include them in other stats
 		if !item.EnqueueAt.IsZero() {

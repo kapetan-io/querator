@@ -367,7 +367,7 @@ func (l *LifeCycle) recoverPartition(state *lifeCycleState) bool {
 	var stats types.PartitionStats
 	defer cancel()
 
-	if err := l.conf.Storage.Stats(ctx, &stats); err != nil {
+	if err := l.conf.Storage.Stats(ctx, &stats, l.conf.Clock.Now().UTC()); err != nil {
 		l.state.Failures++
 		l.partitionStateChange(l.state.Failures, types.UnSet)
 		retryIn := retry.DefaultBackOff.Next(l.state.Failures)

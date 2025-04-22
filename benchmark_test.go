@@ -34,7 +34,7 @@ func BenchmarkProduce(b *testing.B) {
 		{
 			Name: "InMemory",
 			Setup: func(cp *clock.Provider) store.StorageConfig {
-				return setupMemoryStorage(store.StorageConfig{Clock: cp})
+				return setupMemoryStorage(store.StorageConfig{})
 			},
 			TearDown: func() {},
 		},

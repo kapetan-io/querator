@@ -31,14 +31,14 @@ func TestQueue(t *testing.T) {
 		{
 			Name: "InMemory",
 			Setup: func(cp *clock.Provider) store.StorageConfig {
-				return setupMemoryStorage(store.StorageConfig{Clock: cp})
+				return setupMemoryStorage(store.StorageConfig{})
 			},
 			TearDown: func() {},
 		},
 		{
 			Name: "BadgerDB",
 			Setup: func(cp *clock.Provider) store.StorageConfig {
-				return badgerdb.Setup(store.BadgerConfig{Clock: cp})
+				return badgerdb.Setup(store.BadgerConfig{})
 			},
 			TearDown: func() {
 				badgerdb.Teardown()

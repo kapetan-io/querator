@@ -55,7 +55,7 @@ type Queues interface {
 // upon first invocation. See 0021-storage-lazy-initialization.md for details.
 type Partition interface {
 	// Produce writes the items in the batch to the data store.
-	Produce(ctx context.Context, batch types.ProduceBatch) error
+	Produce(ctx context.Context, batch types.ProduceBatch, now clock.Time) error
 
 	// Lease attempts to lease items for each request in the lease batch. It uses the batch.Iterator()
 	// to evenly distribute items to all the waiting lease requests represented in the batch.
@@ -71,7 +71,7 @@ type Partition interface {
 	List(ctx context.Context, items *[]*types.Item, opts types.ListOptions) error
 
 	// Add adds the item to the queue and updates the item with the unique id.
-	Add(ctx context.Context, items []*types.Item) error
+	Add(ctx context.Context, items []*types.Item, now clock.Time) error
 
 	// Delete removes the provided ids from the queue
 	Delete(ctx context.Context, ids []types.ItemID) error
@@ -81,7 +81,7 @@ type Partition interface {
 	Clear(ctx context.Context, destructive bool) error
 
 	// Stats returns stats about the queue
-	Stats(ctx context.Context, stats *types.PartitionStats) error
+	Stats(ctx context.Context, stats *types.PartitionStats, now clock.Time) error
 
 	// ScanForActions returns an iterator of actions that should be preformed for the partition life cycle.
 	// This method must be thread safe as it will be called by a go routine that is separate from the
@@ -104,7 +104,7 @@ type Partition interface {
 	ScanForScheduled(timeout clock.Duration, now clock.Time) iter.Seq[types.Action]
 
 	// TakeAction takes lifecycle requests and preforms the actions requested on the partition.
-	TakeAction(ctx context.Context, batch types.Batch[types.LifeCycleRequest]) error
+	TakeAction(ctx context.Context, batch types.Batch[types.LifeCycleRequest], stats *types.PartitionState) error
 
 	// LifeCycleInfo fills out the LifeCycleInfo struct which is used to decide when the
 	// next life cycle should run
@@ -142,8 +142,6 @@ type StorageConfig struct {
 	Queues Queues
 	// The Backends configured for partitions to utilize
 	Backends Backends
-	// Clock is the clock provider the backend implementation should use
-	Clock *clock.Provider
 }
 
 // Backend is the struct which holds the configured partition backend interfaces

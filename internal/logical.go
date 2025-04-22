@@ -172,14 +172,6 @@ func (l *Logical) Produce(ctx context.Context, req *types.ProduceRequest) error 
 			" %d but received %d", l.conf.MaxProduceBatchSize, len(req.Items))
 	}
 
-	// TODO(schedule): Ignore Schedule dates in the past and enqueue immediately.
-	// TODO(schedule): If Scheduled is set, and if the future date is less than 1 second from now, then skip schedule
-	//  and enqueue the item immediately. This avoids unnecessary work for something that will be moved into
-	//  the queue less than 1 second from now. If someone queued work with the intention that is be be scheduled
-	//  now or within a few seconds we should optimize for this common mistake. Programmers may want to be
-	//  "complete", so they may include a Scheduled time which is set to now or near to now, due to clock drift
-	//  between systems.
-
 	req.RequestDeadline = l.conf.Clock.Now().UTC().Add(req.RequestTimeout)
 	req.ReadyCh = make(chan struct{})
 	req.Context = ctx
@@ -620,9 +612,6 @@ func (l *Logical) requestLoop() {
 
 	l.prepareQueueState(&state)
 
-	// TODO(scheduled): When adding new scheduled items to the partition, requestLoop needs
-	//  to notify the life cycle of the new items.
-
 	for {
 		l.log.LogAttrs(context.Background(), LevelDebugAll, "Logical.requestLoop()",
 			slog.Int("HotRequests", len(l.hotRequestCh)),
@@ -940,13 +929,18 @@ func (l *Logical) applyToPartitions(state *QueueState) {
 
 		// ==== Produce ====
 		if len(p.ProduceRequests.Requests) != 0 {
-			if err := p.Store.Produce(ctx, p.ProduceRequests); err != nil {
+			if err := p.Store.Produce(ctx, p.ProduceRequests, l.conf.Clock.Now().UTC()); err != nil {
 				l.log.Error("while calling store.Partition.Produce()",
 					"partition", p.Info.PartitionNum, "error", err)
 				// TODO: Handle degradation
 			}
 			// Only if Produce was successful
 			p.State.MostRecentDeadline = l.conf.Clock.Now().UTC().Add(l.conf.ExpireTimeout)
+			// TODO(schedule): Need to update the most recent scheduled items from the items
+			//  just produced, so we can notify LifeCycle
+
+			// TODO: I think we can call LifeCycle.NotifyScheduled() from here, and avoid another state variable
+			//  we set MostRecentDeadline because both produce and lease update that value.
 		}
 
 		// ==== Lease ====
@@ -993,7 +987,7 @@ func (l *Logical) applyToPartitions(state *QueueState) {
 		}
 
 		// ==== LifeCycle ====
-		if err := p.Store.TakeAction(ctx, p.LifeCycleRequests); err != nil {
+		if err := p.Store.TakeAction(ctx, p.LifeCycleRequests, &p.State); err != nil {
 			l.log.Error("while calling store.Partition.TakeAction()",
 				"partition", p.Info.PartitionNum,
 				"queueName", l.conf.Name,
@@ -1107,7 +1101,7 @@ func (l *Logical) handleStorageRequests(req *Request) {
 			req.Err = err
 		}
 	case MethodStorageItemsImport:
-		if err := l.conf.StoragePartitions[sr.Partition].Add(req.Context, *sr.Items); err != nil {
+		if err := l.conf.StoragePartitions[sr.Partition].Add(req.Context, *sr.Items, l.conf.Clock.Now().UTC()); err != nil {
 			req.Err = err
 		}
 	case MethodStorageItemsDelete:
@@ -1129,7 +1123,7 @@ func (l *Logical) handleStats(state *QueueState, r *Request) {
 
 	for _, p := range l.conf.StoragePartitions {
 		var ps types.PartitionStats
-		if err := p.Stats(r.Context, &ps); err != nil {
+		if err := p.Stats(r.Context, &ps, l.conf.Clock.Now().UTC()); err != nil {
 			r.Err = err
 		}
 		s := state.Partitions[p.Info().PartitionNum]

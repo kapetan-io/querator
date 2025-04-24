@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 type MethodKind int
@@ -775,6 +776,24 @@ func (l *Logical) assignToPartitions(state *QueueState) {
 	l.assignCompleteRequests(state)
 }
 
+// notifyScheduled iterates through the produced items. If any are scheduled
+// items, then we notify the life cycle for the provided partition
+func (l *Logical) notifyScheduled(p *Partition) {
+	// Find the most recent scheduled item in the requests
+	var mostRecentScheduled time.Time
+	for _, r := range p.ProduceRequests.Requests {
+		for _, item := range r.Items {
+			if item.EnqueueAt.Before(mostRecentScheduled) {
+				mostRecentScheduled = item.EnqueueAt
+			}
+		}
+	}
+	if mostRecentScheduled.IsZero() {
+		return
+	}
+	p.LifeCycle.NotifyScheduled(mostRecentScheduled)
+}
+
 func (l *Logical) assignProduceRequests(state *QueueState) {
 	for _, req := range state.Producers.Requests {
 		// Assign a ExpireTimeout to each item
@@ -936,11 +955,7 @@ func (l *Logical) applyToPartitions(state *QueueState) {
 			}
 			// Only if Produce was successful
 			p.State.MostRecentDeadline = l.conf.Clock.Now().UTC().Add(l.conf.ExpireTimeout)
-			// TODO(schedule): Need to update the most recent scheduled items from the items
-			//  just produced, so we can notify LifeCycle
-
-			// TODO: I think we can call LifeCycle.NotifyScheduled() from here, and avoid another state variable
-			//  we set MostRecentDeadline because both produce and lease update that value.
+			l.notifyScheduled(p)
 		}
 
 		// ==== Lease ====

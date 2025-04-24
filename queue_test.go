@@ -30,14 +30,14 @@ func TestQueue(t *testing.T) {
 	}{
 		{
 			Name: "InMemory",
-			Setup: func(cp *clock.Provider) store.StorageConfig {
+			Setup: func() store.StorageConfig {
 				return setupMemoryStorage(store.StorageConfig{})
 			},
 			TearDown: func() {},
 		},
 		{
 			Name: "BadgerDB",
-			Setup: func(cp *clock.Provider) store.StorageConfig {
+			Setup: func() store.StorageConfig {
 				return badgerdb.Setup(store.BadgerConfig{})
 			},
 			TearDown: func() {
@@ -61,26 +61,20 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	defer goleak.VerifyNone(t)
 
 	t.Run("ProduceAndLease", func(t *testing.T) {
-		_store := setup(clock.NewProvider())
-		defer tearDown()
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: _store})
-		defer d.Shutdown(t)
+		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: setup()})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
 
 		// Create a queue
-		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 			LeaseTimeout:        LeaseTimeout,
 			ExpireTimeout:       ExpireTimeout,
 			QueueName:           queueName,
 			RequestedPartitions: 1,
-		}))
-
-		//createQueueAndWait(t, ctx, c, &pb.QueueInfo{
-		//	LeaseTimeout:      LeaseTimeout,
-		//	ExpireTimeout:       ExpireTimeout,
-		//	QueueName:           queueName,
-		//	RequestedPartitions: 1,
-		//})
+		})
 
 		// Produce a single message
 		ref := random.String("ref-", 10)
@@ -151,15 +145,15 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		for _, q := range queues.Items {
 			assert.NotEqual(t, q.QueueName, queueName)
 		}
-
 	})
 
 	t.Run("Produce", func(t *testing.T) {
-		_store := setup(clock.NewProvider())
-		defer tearDown()
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: _store})
-		defer d.Shutdown(t)
+		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: setup()})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
 			Reference:           "rainbow@dash.com",
@@ -330,25 +324,59 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				assert.Equal(t, []byte(items[i].Utf8), produced[i].Payload)
 				assert.Equal(t, items[i].Kind, produced[i].Kind)
 			}
+			lastItem = list.Items[len(list.Items)-1]
 		})
 
+		//t.Run("Scheduled", func(t *testing.T) {
+		//	var items []*pb.QueueProduceItem
+		//	for i := 0; i < 100; i++ {
+		//		items = append(items, &pb.QueueProduceItem{
+		//			Reference: random.String("ref-", 10),
+		//			Encoding:  random.String("enc-", 10),
+		//			Kind:      random.String("kind-", 10),
+		//			Utf8:      fmt.Sprintf("message-%d", i),
+		//			// TODO(schedule) Add enqueue_at
+		//		})
+		//	}
+		//	require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+		//		QueueName:      queueName,
+		//		RequestTimeout: "1m",
+		//		Items:          items,
+		//	}))
+		//
+		//	// List all the items we just produced
+		//	var list pb.StorageItemsListResponse
+		//	err := c.StorageItemsList(ctx, queueName, 0, &list,
+		//		&que.ListOptions{Pivot: lastItem.Id, Limit: 101})
+		//	require.NoError(t, err)
+		//	require.Len(t, items, 100)
+		//
+		//	assert.Equal(t, len(items), len(list.Items[1:]))
+		//	produced := list.Items[1:]
+		//
+		//	for i := range produced {
+		//		// TODO(schedule) add enqueue_at
+		//		assert.True(t, produced[i].EnqueueAt)
+		//	}
+		//	lastItem = list.Items[len(list.Items)-1]
+		//})
 	})
 
 	t.Run("Lease", func(t *testing.T) {
-		_store := setup(clock.NewProvider())
-		defer tearDown()
-
 		var queueName = random.String("queue-", 10)
 		clientID := random.String("client-", 10)
-		d, c, ctx := newDaemon(t, 30*clock.Second, que.ServiceConfig{StorageConfig: _store})
-		defer d.Shutdown(t)
+		d, c, ctx := newDaemon(t, 30*clock.Second, que.ServiceConfig{StorageConfig: setup()})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
 
-		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 			ExpireTimeout:       ExpireTimeout,
 			QueueName:           queueName,
 			LeaseTimeout:        "2m0s",
 			RequestedPartitions: 1,
-		}))
+		})
 		items := writeRandomItems(t, ctx, c, queueName, 10_000)
 		require.Len(t, items, 10_000)
 
@@ -545,12 +573,13 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	})
 
 	t.Run("Complete", func(t *testing.T) {
-		_store := setup(clock.NewProvider())
-		defer tearDown()
 		var queueName = random.String("queue-", 10)
 		clientID := random.String("client-", 10)
-		d, c, ctx := newDaemon(t, 30*clock.Second, que.ServiceConfig{StorageConfig: _store})
-		defer d.Shutdown(t)
+		d, c, ctx := newDaemon(t, 30*clock.Second, que.ServiceConfig{StorageConfig: setup()})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
 			LeaseTimeout:        LeaseTimeout,
@@ -629,13 +658,99 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		})
 	})
 
+	//t.Run("Scheduled", func(t *testing.T) {
+	//	now := clock.NewProvider()
+	//	now.Freeze(clock.Now())
+	//	defer now.UnFreeze()
+	//
+	//	var queueName = random.String("queue-", 10)
+	//	d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: setup(), Clock: now})
+	//defer func() {
+	//	d.Shutdown(t)
+	//	tearDown()
+	//}()
+	//
+	//	// Create a queue
+	//	createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+	//		LeaseTimeout:        LeaseTimeout,
+	//		ExpireTimeout:       ExpireTimeout,
+	//		QueueName:           queueName,
+	//		RequestedPartitions: 1,
+	//	})
+	//
+	//	// Produce a single message
+	//	ref := random.String("ref-", 10)
+	//	enc := random.String("enc-", 10)
+	//	kind := random.String("kind-", 10)
+	//	payload := []byte("I didn't learn a thing. I was right all along")
+	//	require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+	//		QueueName:      queueName,
+	//		RequestTimeout: "1m",
+	//		Items: []*pb.QueueProduceItem{
+	//			{
+	//				Reference: ref,
+	//				Encoding:  enc,
+	//				Kind:      kind,
+	//				Bytes:     payload,
+	//			},
+	//		},
+	//	}))
+	//
+	//	// TODO(scheduled) Produce a scheduled item in the future
+	//	// TODO: Lease should only return the item produced, and no others
+	//	// TODO: Advance time until scheduled items are placed into the queue
+	//	// TODO: Should lease the items scheduled for produce.
+	//
+	//	// Lease a single message
+	//	var lease pb.QueueLeaseResponse
+	//	require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+	//		ClientId:       random.String("client-", 10),
+	//		RequestTimeout: "5s",
+	//		QueueName:      queueName,
+	//		BatchSize:      1,
+	//	}, &lease))
+	//
+	//	// Ensure we got the item we produced
+	//	assert.Equal(t, 1, len(lease.Items))
+	//	item := lease.Items[0]
+	//	assert.Equal(t, ref, item.Reference)
+	//	assert.Equal(t, enc, item.Encoding)
+	//	assert.Equal(t, kind, item.Kind)
+	//	assert.Equal(t, int32(1), item.Attempts)
+	//	assert.Equal(t, payload, item.Bytes)
+	//
+	//	// TODO(scheduled) Add a StorageScheduledList() client and endpoint
+	//
+	//	// Partition storage should have scheduled items
+	//	//var list pb.StorageItemsListResponse
+	//	//require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, &que.ListOptions{Limit: 10}))
+	//	//require.Equal(t, 1, len(list.Items))
+	//
+	//	//inspect := list.Items[0]
+	//	//assert.Equal(t, ref, inspect.Reference)
+	//	//assert.Equal(t, kind, inspect.Kind)
+	//	//assert.Equal(t, int32(1), inspect.Attempts)
+	//	//assert.Equal(t, payload, inspect.Payload)
+	//	//assert.Equal(t, item.Id, inspect.Id)
+	//	//assert.Equal(t, true, inspect.IsLeased)
+	//
+	//	// Remove queue
+	//	require.NoError(t, c.QueuesDelete(ctx, &pb.QueuesDeleteRequest{QueueName: queueName}))
+	//	var queues pb.QueuesListResponse
+	//	require.NoError(t, c.QueuesList(ctx, &queues, &que.ListOptions{Limit: 10}))
+	//	for _, q := range queues.Items {
+	//		assert.NotEqual(t, q.QueueName, queueName)
+	//	}
+	//})
+
 	t.Run("Stats", func(t *testing.T) {
-		_store := setup(clock.NewProvider())
-		defer tearDown()
 		var queueName = random.String("queue-", 10)
 		clientID := random.String("client-", 10)
-		d, c, ctx := newDaemon(t, 30*clock.Second, que.ServiceConfig{StorageConfig: _store})
-		defer d.Shutdown(t)
+		d, c, ctx := newDaemon(t, 30*clock.Second, que.ServiceConfig{StorageConfig: setup()})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
 
 		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 			LeaseTimeout:        LeaseTimeout,
@@ -680,12 +795,12 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	})
 
 	t.Run("QueueClear", func(t *testing.T) {
-		_store := setup(clock.NewProvider())
-		defer tearDown()
-
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: _store})
-		defer d.Shutdown(t)
+		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: setup()})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
 
 		var leased []*pb.StorageItem
 		var list pb.StorageItemsListResponse
@@ -751,12 +866,12 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 	})
 	t.Run("Errors", func(t *testing.T) {
-		_store := setup(clock.NewProvider())
+		storage := setup()
 		defer tearDown()
 
 		t.Run("QueueProduce", func(t *testing.T) {
 			var queueName = random.String("queue-", 10)
-			d, c, ctx := newDaemon(t, 5*clock.Second, que.ServiceConfig{StorageConfig: _store})
+			d, c, ctx := newDaemon(t, 5*clock.Second, que.ServiceConfig{StorageConfig: storage})
 			defer d.Shutdown(t)
 			maxItems := produceRandomItems(1_001)
 
@@ -882,7 +997,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		t.Run("QueueLease", func(t *testing.T) {
 			var queueName = random.String("queue-", 10)
 			var clientID = random.String("client-", 10)
-			d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: _store})
+			d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: storage})
 			defer d.Shutdown(t)
 
 			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -1044,7 +1159,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		})
 		t.Run("QueueComplete", func(t *testing.T) {
 			var queueName = random.String("queue-", 10)
-			d, c, ctx := newDaemon(t, 5*clock.Second, que.ServiceConfig{StorageConfig: _store})
+			d, c, ctx := newDaemon(t, 5*clock.Second, que.ServiceConfig{StorageConfig: storage})
 			defer d.Shutdown(t)
 
 			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
@@ -1169,11 +1284,12 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		now.Freeze(clock.Now())
 		defer now.UnFreeze()
 
-		_store := setup(now)
-		defer tearDown()
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: _store, Clock: now})
-		defer d.Shutdown(t)
+		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: setup(), Clock: now})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
 
 		// Create a queue
 		createQueueAndWait(t, ctx, c, &pb.QueueInfo{

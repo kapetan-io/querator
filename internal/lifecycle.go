@@ -89,6 +89,8 @@ func (l *LifeCycle) Start() error {
 
 // Notify proposes a time for the life cycle to consider when determining the next execution cycle.
 func (l *LifeCycle) Notify(t clock.Time) {
+	l.log.LogAttrs(context.Background(), LevelDebugAll, "notify life cycle",
+		slog.String("time", humanize.Time(t)))
 	select {
 	case l.notifyCh <- Request{Method: MethodNotify, Request: t}:
 	default:
@@ -97,6 +99,8 @@ func (l *LifeCycle) Notify(t clock.Time) {
 
 // NotifyScheduled proposes a time for the life cycle to consider when determining the next scheduled cycle.
 func (l *LifeCycle) NotifyScheduled(t clock.Time) {
+	l.log.LogAttrs(context.Background(), LevelDebugAll, "notify life cycle scheduled",
+		slog.String("time", humanize.Time(t)))
 	select {
 	case l.notifyCh <- Request{Method: MethodNotifyScheduled, Request: t}:
 	default:

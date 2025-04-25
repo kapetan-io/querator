@@ -79,8 +79,7 @@ func waitForShutdown(ctx context.Context, d *daemon.Daemon) error {
 	select {
 	case <-c:
 		log.Info("caught signal; shutting down")
-		d.Shutdown(ctx)
-		return nil
+		return d.Shutdown(ctx)
 	case <-ctx.Done():
 		return ctx.Err()
 	}

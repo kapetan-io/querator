@@ -123,7 +123,9 @@ func TestConvertYamlConfigToDaemonConfig(t *testing.T) {
 		// queue  validation
 		for i := 0; i < len(tc.config.Queues); i++ {
 			var queueInfo types.QueueInfo
-			dmnCfg.StorageConfig.Queues.Get(context.Background(), tc.config.Queues[i].Name, &queueInfo)
+			err = dmnCfg.StorageConfig.Queues.Get(context.Background(), tc.config.Queues[i].Name, &queueInfo)
+			assert.NoError(t, err)
+
 			assert.Equal(t, queueInfo.Name, tc.config.Queues[i].Name)
 			assert.Equal(t, queueInfo.DeadQueue, tc.config.Queues[i].DeadQueue)
 			assert.Equal(t, queueInfo.LeaseTimeout, tc.config.Queues[i].LeaseTimeout)

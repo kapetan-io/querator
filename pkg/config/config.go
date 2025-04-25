@@ -81,7 +81,10 @@ func LoadFile(path string) (*Config, error) {
 func (cfg *Config) ToDaemonConfig(ctx context.Context, log *slog.Logger) (daemon.Config, error) {
 	var daemonCfg daemon.Config
 
-	daemonCfg.SetDefaults()
+	err := daemonCfg.SetDefaults()
+	if err != nil {
+		return daemon.Config{}, err
+	}
 
 	// setup backend for daemon
 	backends := make([]store.Backend, 0, len(cfg.Backends))
@@ -102,7 +105,10 @@ func (cfg *Config) ToDaemonConfig(ctx context.Context, log *slog.Logger) (daemon
 	// setup queues for daemon
 	queues := store.NewMemoryQueues(log)
 	for _, queue := range cfg.Queues {
-		queues.Add(ctx, queue.ToQueueInfo())
+		err := queues.Add(ctx, queue.ToQueueInfo())
+		if err != nil {
+			return daemon.Config{}, err
+		}
 	}
 	daemonCfg.StorageConfig.Queues = queues
 

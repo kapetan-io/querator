@@ -444,18 +444,11 @@ func (l *Logical) UpdatePartitions(ctx context.Context, p []store.Partition) err
 // Methods to manage queue storage
 // -------------------------------------------------
 
-func (l *Logical) StorageItemsList(ctx context.Context, partition int, items *[]*types.Item, opts types.ListOptions) error {
+func (l *Logical) StorageItemsList(ctx context.Context, req StorageRequest) error {
+
 	if l.inShutdown.Load() {
 		return ErrQueueShutdown
 	}
-	req := StorageRequest{
-		Partition: partition,
-		Items:     items,
-		Options:   opts,
-	}
-
-	// TODO: Test for invalid pivot
-
 	r := Request{
 		Method:  MethodStorageItemsList,
 		Request: req,
@@ -1112,8 +1105,15 @@ func (l *Logical) handleStorageRequests(req *Request) {
 
 	switch req.Method {
 	case MethodStorageItemsList:
-		if err := l.conf.StoragePartitions[sr.Partition].List(req.Context, sr.Items, sr.Options); err != nil {
-			req.Err = err
+		switch sr.ListKind {
+		case types.ListItems:
+			if err := l.conf.StoragePartitions[sr.Partition].List(req.Context, sr.Items, sr.Options); err != nil {
+				req.Err = err
+			}
+		case types.ListScheduled:
+			if err := l.conf.StoragePartitions[sr.Partition].ListScheduled(req.Context, sr.Items, sr.Options); err != nil {
+				req.Err = err
+			}
 		}
 	case MethodStorageItemsImport:
 		if err := l.conf.StoragePartitions[sr.Partition].Add(req.Context, *sr.Items, l.conf.Clock.Now().UTC()); err != nil {

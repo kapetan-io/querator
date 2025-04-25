@@ -267,6 +267,10 @@ func (b *BadgerPartition) List(_ context.Context, items *[]*types.Item, opts typ
 	})
 }
 
+func (b *BadgerPartition) ListScheduled(_ context.Context, items *[]*types.Item, opts types.ListOptions) error {
+	return nil // TODO(scheduled)
+}
+
 func (b *BadgerPartition) Add(_ context.Context, items []*types.Item, now clock.Time) error {
 	db, err := b.getDB()
 	if err != nil {

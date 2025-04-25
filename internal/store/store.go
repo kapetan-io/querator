@@ -70,6 +70,9 @@ type Partition interface {
 	// in the queue.
 	List(ctx context.Context, items *[]*types.Item, opts types.ListOptions) error
 
+	// TODO(scheduled) doc
+	ListScheduled(ctx context.Context, items *[]*types.Item, opts types.ListOptions) error
+
 	// Add adds the item to the queue and updates the item with the unique id.
 	Add(ctx context.Context, items []*types.Item, now clock.Time) error
 
@@ -135,6 +138,7 @@ func (b Backends) Find(name string) Backend {
 }
 
 // TODO: Rename this to `store.Config` if possible
+
 // StorageConfig is the configuration accepted by QueueManager to manage storage of queues, scheduled items,
 // and partitions.
 type StorageConfig struct {

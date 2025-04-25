@@ -5,7 +5,14 @@ import (
 	"github.com/kapetan-io/tackle/clock"
 )
 
-const UnSet = -1
+type ListKind int
+
+const (
+	ListItems ListKind = iota
+	ListScheduled
+
+	UnSet = -1
+)
 
 // TODO(thrawn01): Consider creating a pool of Request structs and Item to avoid GC
 

@@ -167,6 +167,33 @@ func (m *MemoryPartition) List(_ context.Context, items *[]*types.Item, opts typ
 	return nil
 }
 
+func (m *MemoryPartition) ListScheduled(_ context.Context, items *[]*types.Item, opts types.ListOptions) error {
+	defer m.mu.RUnlock()
+	var count, idx int
+	m.mu.RLock()
+
+	if opts.Pivot != nil {
+		if err := m.validateID(opts.Pivot); err != nil {
+			return transport.NewInvalidOption("invalid storage id; '%s': %s", opts.Pivot, err)
+		}
+		idx, _ = m.findID(opts.Pivot)
+	}
+	for _, item := range m.mem[idx:] {
+		if count >= opts.Limit {
+			return nil
+		}
+
+		// Do not report scheduled items in the queued items list
+		if item.EnqueueAt.IsZero() {
+			continue
+		}
+
+		*items = append(*items, &item)
+		count++
+	}
+	return nil
+}
+
 func (m *MemoryPartition) Add(_ context.Context, items []*types.Item, now clock.Time) error {
 	defer m.mu.Unlock()
 	m.mu.Lock()

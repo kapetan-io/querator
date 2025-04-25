@@ -18,6 +18,7 @@ import (
 	"math/rand"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestQueue(t *testing.T) {
@@ -229,7 +230,10 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		var last pb.StorageItemsListResponse
 		err := c.StorageItemsList(ctx, queueName, 0, &last, nil)
 		require.NoError(t, err)
-		lastItem := last.Items[len(last.Items)-1]
+		lastItem := &pb.StorageItem{}
+		if len(last.Items) != 0 {
+			lastItem = last.Items[len(last.Items)-1]
+		}
 
 		t.Run("Bytes", func(t *testing.T) {
 			var items []*pb.QueueProduceItem
@@ -327,39 +331,39 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			lastItem = list.Items[len(list.Items)-1]
 		})
 
-		//t.Run("Scheduled", func(t *testing.T) {
-		//	var items []*pb.QueueProduceItem
-		//	for i := 0; i < 100; i++ {
-		//		items = append(items, &pb.QueueProduceItem{
-		//			Reference: random.String("ref-", 10),
-		//			Encoding:  random.String("enc-", 10),
-		//			Kind:      random.String("kind-", 10),
-		//			Utf8:      fmt.Sprintf("message-%d", i),
-		//			// TODO(schedule) Add enqueue_at
-		//		})
-		//	}
-		//	require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
-		//		QueueName:      queueName,
-		//		RequestTimeout: "1m",
-		//		Items:          items,
-		//	}))
-		//
-		//	// List all the items we just produced
-		//	var list pb.StorageItemsListResponse
-		//	err := c.StorageItemsList(ctx, queueName, 0, &list,
-		//		&que.ListOptions{Pivot: lastItem.Id, Limit: 101})
-		//	require.NoError(t, err)
-		//	require.Len(t, items, 100)
-		//
-		//	assert.Equal(t, len(items), len(list.Items[1:]))
-		//	produced := list.Items[1:]
-		//
-		//	for i := range produced {
-		//		// TODO(schedule) add enqueue_at
-		//		assert.True(t, produced[i].EnqueueAt)
-		//	}
-		//	lastItem = list.Items[len(list.Items)-1]
-		//})
+		t.Run("Scheduled", func(t *testing.T) {
+			now := clock.Now().UTC()
+			enqueueAt := now.Add(time.Minute)
+			var items []*pb.QueueProduceItem
+			for i := 0; i < 100; i++ {
+				items = append(items, &pb.QueueProduceItem{
+					Reference: random.String("ref-", 10),
+					Encoding:  random.String("enc-", 10),
+					Kind:      random.String("kind-", 10),
+					Utf8:      fmt.Sprintf("message-%d", i),
+					EnqueueAt: timestamppb.New(enqueueAt),
+				})
+			}
+			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+				QueueName:      queueName,
+				RequestTimeout: "1m",
+				Items:          items,
+			}))
+
+			// Listing items in the queue should return no new items
+			var list pb.StorageItemsListResponse
+			err := c.StorageItemsList(ctx, queueName, 0, &list,
+				&que.ListOptions{Pivot: lastItem.Id, Limit: 101})
+			require.NoError(t, err)
+			// Returns the pivot item only
+			// TODO(NEXT): Either StorageItemsList() is returning scheduled items,
+			//  or produce is not correctly storing them as scheduled items
+			require.Equal(t, 1, len(items))
+
+			//for i := range produced {
+			//	assert.False(t, produced[i].EnqueueAt.AsTime().IsZero())
+			//}
+		})
 	})
 
 	t.Run("Lease", func(t *testing.T) {

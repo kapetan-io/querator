@@ -46,7 +46,7 @@ message QueueProduceItem {
   // Examples: 'account-0001', 'john.smith'
   string reference = 3; // TODO: This should be removed in favor of a workflow id.
   // Indicates the item is to be enqueued at a future timestamp specified.
-  google.protobuf.Timestamp scheduledAt = 4 [json_name = "enqueue_at"];
+  google.protobuf.Timestamp enqueueAt = 4 [json_name = "enqueue_at"];
   // The payload of the item as an array of raw bytes with no predetermined character set.
   // Clients who communicate with Querator with `Content-Type: application/protobuf`
   // (which is the default for golang clients) should use this field instead of `strings`.

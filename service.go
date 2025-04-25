@@ -325,6 +325,17 @@ func (s *Service) QueuesDelete(ctx context.Context, req *proto.QueuesDeleteReque
 
 func (s *Service) StorageItemsList(ctx context.Context, req *proto.StorageItemsListRequest,
 	res *proto.StorageItemsListResponse) error {
+	return s.storageItemsList(ctx, types.ListItems, req, res)
+}
+
+func (s *Service) StorageScheduledList(ctx context.Context, req *proto.StorageItemsListRequest,
+	res *proto.StorageItemsListResponse) error {
+	return s.storageItemsList(ctx, types.ListScheduled, req, res)
+}
+
+func (s *Service) storageItemsList(ctx context.Context, kind types.ListKind,
+	req *proto.StorageItemsListRequest,
+	res *proto.StorageItemsListResponse) error {
 	if req.Limit == 0 {
 		req.Limit = DefaultListLimit
 	}
@@ -344,9 +355,15 @@ func (s *Service) StorageItemsList(ctx context.Context, req *proto.StorageItemsL
 	}
 
 	items := make([]*types.Item, 0, allocInt32(req.Limit))
-	if err := logical.StorageItemsList(ctx, int(req.Partition), &items, types.ListOptions{
-		Pivot: types.ToItemID(req.Pivot),
-		Limit: int(req.Limit),
+
+	if err := logical.StorageItemsList(ctx, internal.StorageRequest{
+		Partition: int(req.Partition),
+		Options: types.ListOptions{
+			Pivot: types.ToItemID(req.Pivot),
+			Limit: int(req.Limit),
+		},
+		Items:    &items,
+		ListKind: kind,
 	}); err != nil {
 		return err
 	}

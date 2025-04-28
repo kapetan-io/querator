@@ -80,4 +80,12 @@ type StorageRequest struct {
 	Options types.ListOptions
 	// Partition is the partition this request is for
 	Partition int
+	// ListKind the kind of item to list
+	ListKind types.ListKind
+}
+
+func Assert(condition bool, message string) {
+	if !condition {
+		panic(message)
+	}
 }

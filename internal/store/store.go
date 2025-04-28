@@ -55,7 +55,7 @@ type Queues interface {
 // upon first invocation. See 0021-storage-lazy-initialization.md for details.
 type Partition interface {
 	// Produce writes the items in the batch to the data store.
-	Produce(ctx context.Context, batch types.ProduceBatch) error
+	Produce(ctx context.Context, batch types.ProduceBatch, now clock.Time) error
 
 	// Lease attempts to lease items for each request in the lease batch. It uses the batch.Iterator()
 	// to evenly distribute items to all the waiting lease requests represented in the batch.
@@ -70,8 +70,11 @@ type Partition interface {
 	// in the queue.
 	List(ctx context.Context, items *[]*types.Item, opts types.ListOptions) error
 
+	// TODO(scheduled) doc
+	ListScheduled(ctx context.Context, items *[]*types.Item, opts types.ListOptions) error
+
 	// Add adds the item to the queue and updates the item with the unique id.
-	Add(ctx context.Context, items []*types.Item) error
+	Add(ctx context.Context, items []*types.Item, now clock.Time) error
 
 	// Delete removes the provided ids from the queue
 	Delete(ctx context.Context, ids []types.ItemID) error
@@ -81,7 +84,7 @@ type Partition interface {
 	Clear(ctx context.Context, destructive bool) error
 
 	// Stats returns stats about the queue
-	Stats(ctx context.Context, stats *types.PartitionStats) error
+	Stats(ctx context.Context, stats *types.PartitionStats, now clock.Time) error
 
 	// ScanForActions returns an iterator of actions that should be preformed for the partition life cycle.
 	// This method must be thread safe as it will be called by a go routine that is separate from the
@@ -91,16 +94,23 @@ type Partition interface {
 	// ### Parameters
 	// - `timeout`: The read timeout for each read operation to the underlying storage system.
 	// If a read exceeds this timeout, the iterator is aborted.
-	// - `now`: The time used by LifeCycleActions to determine which items need action.
+	// - `now`: The time used to determine which items need action.
 	ScanForActions(timeout clock.Duration, now clock.Time) iter.Seq[types.Action]
 
+	// ScanForScheduled returns an iterator of ONLY scheduled actions. This allows more efficient
+	// handling of scheduled items, which operate on different timers and schedule times.
+	//
+	// ### Parameters
+	// - `timeout`: The read timeout for each read operation to the underlying storage system.
+	// If a read exceeds this timeout, the iterator is aborted.
+	// - `now`: The time used to determine which items are ready to be queued.
+	ScanForScheduled(timeout clock.Duration, now clock.Time) iter.Seq[types.Action]
+
 	// TakeAction takes lifecycle requests and preforms the actions requested on the partition.
-	// TODO(NEXT): Update this sig to accept types.PartitionState
-	TakeAction(ctx context.Context, batch types.Batch[types.LifeCycleRequest]) error
+	TakeAction(ctx context.Context, batch types.Batch[types.LifeCycleRequest], stats *types.PartitionState) error
 
 	// LifeCycleInfo fills out the LifeCycleInfo struct which is used to decide when the
 	// next life cycle should run
-	// TODO: Rename this, this is too generic for what it currently does.
 	LifeCycleInfo(ctx context.Context, info *types.LifeCycleInfo) error
 
 	// Info returns the Partition Info for this partition. This call needs to be thread
@@ -128,6 +138,7 @@ func (b Backends) Find(name string) Backend {
 }
 
 // TODO: Rename this to `store.Config` if possible
+
 // StorageConfig is the configuration accepted by QueueManager to manage storage of queues, scheduled items,
 // and partitions.
 type StorageConfig struct {
@@ -135,8 +146,6 @@ type StorageConfig struct {
 	Queues Queues
 	// The Backends configured for partitions to utilize
 	Backends Backends
-	// Clock is the clock provider the backend implementation should use
-	Clock *clock.Provider
 }
 
 // Backend is the struct which holds the configured partition backend interfaces

@@ -44,7 +44,9 @@ message QueueProduceItem {
   // This is a user specified field that can be used by the consumer to determine handling
   // of the message without needing to unmarshall the payload.
   // Examples: 'account-0001', 'john.smith'
-  string reference = 3;
+  string reference = 3; // TODO: This should be removed in favor of a workflow id.
+  // Indicates the item is to be enqueued at a future timestamp specified.
+  google.protobuf.Timestamp enqueueAt = 4 [json_name = "enqueue_at"];
   // The payload of the item as an array of raw bytes with no predetermined character set.
   // Clients who communicate with Querator with `Content-Type: application/protobuf`
   // (which is the default for golang clients) should use this field instead of `strings`.
@@ -53,7 +55,7 @@ message QueueProduceItem {
   // 'bytes' field will be encoded as base64. This is because byte fields (unlike string fields)
   // can contain non-UTF8 binary data, and since that cannot be directly represented in JSON, we
   // have to base64 encode it.
-  bytes bytes = 4;
+  bytes bytes = 5;
   // This is an a convenience field useful for clients that are communicating with Querator via
   // `Content-Type: application/json`. This field assumes a utf8 encoded payload and does not
   // require the payload to be encoded as base64. As such is is an excellent choice for clients
@@ -62,11 +64,11 @@ message QueueProduceItem {
   // NOTE: Both `bytes` and `utf8` can be set, but `bytes` takes precedence. If `bytes` is set,
   // then that will be used as the payload. If `utf8` is set and `bytes` is empty, then `utf8`
   // will be used. If both `bytes` and `utf8` are set, then `bytes` will be used and `utf8` will
-  // be dropped.
+  // be ignored.
   // Example: 'Hello, I am a UTF-8 payload' , '{"key", "value"}'
-  string utf8 = 5;
+  string utf8 = 6;
 
-  // TODO: Consider adding user provided metadata as a map of values
+  // TODO: Consider adding user provided metadata as a map of values, for instance "reference"
 }
 
 message QueueLeaseRequest {
@@ -135,24 +137,24 @@ message QueueLeaseResponse {
   repeated QueueLeaseItem items = 3;
 }
 
-message QueueDeferRequest {
-  // The name of the queue the lease items are from
+message QueueRetryRequest {
+  // The name of the queue the leased items are from
   string queueName = 1  [json_name = "queue_name"];
 
   // Partition the leased items are from
   int32 partition = 2;
 
-  repeated QueueDeferItem items = 3;
+  repeated QueueRetryItem items = 3;
 }
 
-message QueueDeferItem {
+message QueueRetryItem {
   // A unique id which identifies a unique item in a queue.
   string id = 1;
 
   // The timestamp after which the item will be added to the queue specified.
   // The date can be empty, the current time or a past date/time, in which
   // case the item will be immediately added to the queue.
-  google.protobuf.Timestamp enqueueAt = 2 [json_name = "enqueue_at"]; // TODO: OpenAPI
+  google.protobuf.Timestamp retryAt = 2 [json_name = "retry_at"];
 
   // Indicates the item is dead, will not be retried regardless of the number of attempts
   // remaining. If set to true the retry will place the item in the dead letter queue for
@@ -204,6 +206,7 @@ message QueueInfo {
 
   // The maximum number of times this item can be retried by a consumer before it is
   // placed in the dead letter queue or removed. Infinite attempts if max_attempts is set to '0'
+  // `lease_timeout` violations are included as attempts
   int32 maxAttempts = 8 [json_name = "max_attempts"];
 
   // The number of partitions the queue is requesting. This might be different than the
@@ -232,7 +235,7 @@ message QueueClearRequest {
   // clear. If true, any items in the queue which have NOT been leased
   // will be removed.
   bool Queue = 4;
-  // Destructive indicates the Retry,Scheduled,Queue operations should be
+  // Destructive indicates the Retry, Scheduled, Queue operations should be
   // destructive in that all data regardless of status will be removed.
   // For example, if used with ClearRequest.Queue = true, then ALL items
   // in the queue regardless of lease status will be removed. This means

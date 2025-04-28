@@ -24,9 +24,6 @@ type BadgerConfig struct {
 	StorageDir string
 	// Log is used to log warnings and errors
 	Log *slog.Logger
-	// Clock is a time provider used to preform time related calculations. It is configurable so that it can
-	// be overridden for testing.
-	Clock *clock.Provider
 }
 
 // ---------------------------------------------
@@ -63,7 +60,7 @@ type BadgerPartition struct {
 	db   *badger.DB
 }
 
-func (b *BadgerPartition) Produce(_ context.Context, batch types.ProduceBatch) error {
+func (b *BadgerPartition) Produce(_ context.Context, batch types.ProduceBatch, now clock.Time) error {
 	db, err := b.getDB()
 	if err != nil {
 		return err
@@ -74,7 +71,7 @@ func (b *BadgerPartition) Produce(_ context.Context, batch types.ProduceBatch) e
 			for _, item := range r.Items {
 				b.uid = b.uid.Next()
 				item.ID = []byte(b.uid.String())
-				item.CreatedAt = b.conf.Clock.Now().UTC()
+				item.CreatedAt = now
 
 				// TODO: GetByPartition buffers from memory pool
 				var buf bytes.Buffer
@@ -270,7 +267,11 @@ func (b *BadgerPartition) List(_ context.Context, items *[]*types.Item, opts typ
 	})
 }
 
-func (b *BadgerPartition) Add(_ context.Context, items []*types.Item) error {
+func (b *BadgerPartition) ListScheduled(_ context.Context, items *[]*types.Item, opts types.ListOptions) error {
+	return nil // TODO(scheduled)
+}
+
+func (b *BadgerPartition) Add(_ context.Context, items []*types.Item, now clock.Time) error {
 	db, err := b.getDB()
 	if err != nil {
 		return err
@@ -285,7 +286,7 @@ func (b *BadgerPartition) Add(_ context.Context, items []*types.Item) error {
 		for _, item := range items {
 			b.uid = b.uid.Next()
 			item.ID = []byte(b.uid.String())
-			item.CreatedAt = b.conf.Clock.Now().UTC()
+			item.CreatedAt = now
 
 			// TODO: GetByPartition buffers from memory pool
 			var buf bytes.Buffer
@@ -377,6 +378,11 @@ func (b *BadgerPartition) UpdateQueueInfo(info types.QueueInfo) {
 	b.info.Queue = info
 }
 
+func (b *BadgerPartition) ScanForScheduled(_ clock.Duration, now clock.Time) iter.Seq[types.Action] {
+	// TODO(schedule):
+	return nil
+}
+
 func (b *BadgerPartition) ScanForActions(_ clock.Duration, now clock.Time) iter.Seq[types.Action] {
 	return func(yield func(types.Action) bool) {
 		db, err := b.getDB()
@@ -447,7 +453,9 @@ func (b *BadgerPartition) ScanForActions(_ clock.Duration, now clock.Time) iter.
 	}
 }
 
-func (b *BadgerPartition) TakeAction(_ context.Context, batch types.Batch[types.LifeCycleRequest]) error {
+func (b *BadgerPartition) TakeAction(_ context.Context, batch types.Batch[types.LifeCycleRequest],
+	state *types.PartitionState) error {
+
 	if len(batch.Requests) == 0 {
 		return nil
 	}
@@ -504,16 +512,18 @@ func (b *BadgerPartition) TakeAction(_ context.Context, batch types.Batch[types.
 					}
 
 				case types.ActionDeleteItem:
-					// TODO(lifecycle): Find the item and remove it
 					if err := txn.Delete(a.Item.ID); err != nil {
 						return err
 					}
 
 				case types.ActionQueueScheduledItem:
-					// TODO: Find the scheduled item and add it to the partition queue
+					state.UnLeased++
+					panic("not implemented")
+					// TODO(scheduled): Find the scheduled item and add it to the partition queue
 
 				default:
-					b.conf.Log.Warn("undefined action", "action", fmt.Sprintf("%d", int(a.Action)))
+					b.conf.Log.Warn("assertion failed; undefined action", "action",
+						fmt.Sprintf("0x%X", int(a.Action)))
 				}
 			}
 		}
@@ -557,9 +567,7 @@ func (b *BadgerPartition) LifeCycleInfo(_ context.Context, info *types.LifeCycle
 	})
 }
 
-func (b *BadgerPartition) Stats(_ context.Context, stats *types.PartitionStats) error {
-	now := b.conf.Clock.Now().UTC()
-
+func (b *BadgerPartition) Stats(_ context.Context, stats *types.PartitionStats, now clock.Time) error {
 	db, err := b.getDB()
 	if err != nil {
 		return err

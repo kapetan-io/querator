@@ -35,7 +35,7 @@ const (
 
 var RetryTenTimes = retry.Policy{Interval: retry.Sleep(100 * clock.Millisecond), Attempts: 20}
 
-type NewStorageFunc func(cp *clock.Provider) store.StorageConfig
+type NewStorageFunc func() store.StorageConfig
 
 var log *slog.Logger
 

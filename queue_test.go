@@ -156,14 +156,36 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			tearDown()
 		}()
 
-		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 			Reference:           "rainbow@dash.com",
 			ExpireTimeout:       "20h0m0s",
 			QueueName:           queueName,
 			LeaseTimeout:        "1m0s",
 			MaxAttempts:         256,
 			RequestedPartitions: 1,
+		})
+
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			QueueName:      queueName,
+			RequestTimeout: "1m",
+			Items: []*pb.QueueProduceItem{
+				{
+					Reference: random.String("ref-", 10),
+					Encoding:  random.String("enc-", 10),
+					Kind:      random.String("kind-", 10),
+					Bytes:     []byte("first item"),
+				},
+			},
 		}))
+
+		// GetByPartition the last item in the queue, so the following tests know where to begin their assertions.
+		var last pb.StorageItemsListResponse
+		err := c.StorageItemsList(ctx, queueName, 0, &last, nil)
+		require.NoError(t, err)
+		lastItem := &pb.StorageItem{}
+		if len(last.Items) != 0 {
+			lastItem = last.Items[len(last.Items)-1]
+		}
 
 		t.Run("InheritsQueueInfo", func(t *testing.T) {
 			now := clock.Now().UTC()
@@ -187,25 +209,27 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			expireDeadline := clock.Now().UTC().Add(20 * clock.Hour)
 
 			var list pb.StorageItemsListResponse
-			err := c.StorageItemsList(ctx, queueName, 0, &list, &que.ListOptions{Limit: 20})
+			err := c.StorageItemsList(ctx, queueName, 0, &list, &que.ListOptions{Limit: 20, Pivot: lastItem.Id})
 			require.NoError(t, err)
+			produced := list.Items[1:]
 
-			assert.Equal(t, 2, len(list.Items))
-			assert.Equal(t, "flutter@shy.com", list.Items[0].Reference)
-			assert.Equal(t, "friendship", list.Items[0].Encoding)
-			assert.Equal(t, "yes", list.Items[0].Kind)
-			assert.True(t, list.Items[0].LeaseDeadline.AsTime().IsZero())
-			assert.False(t, list.Items[0].ExpireDeadline.AsTime().IsZero())
-			assert.True(t, list.Items[0].ExpireDeadline.AsTime().After(now))
-			assert.True(t, list.Items[0].ExpireDeadline.AsTime().Before(expireDeadline))
+			assert.Equal(t, 2, len(produced))
+			assert.Equal(t, "flutter@shy.com", produced[0].Reference)
+			assert.Equal(t, "friendship", produced[0].Encoding)
+			assert.Equal(t, "yes", produced[0].Kind)
+			assert.True(t, produced[0].LeaseDeadline.AsTime().IsZero())
+			assert.False(t, produced[0].ExpireDeadline.AsTime().IsZero())
+			assert.True(t, produced[0].ExpireDeadline.AsTime().After(now))
+			assert.True(t, produced[0].ExpireDeadline.AsTime().Before(expireDeadline))
 
-			assert.Equal(t, "", list.Items[1].Reference)
-			assert.Equal(t, "application/json", list.Items[1].Encoding)
-			assert.Equal(t, "no", list.Items[1].Kind)
-			assert.True(t, list.Items[1].LeaseDeadline.AsTime().IsZero())
-			assert.False(t, list.Items[1].ExpireDeadline.AsTime().IsZero())
-			assert.True(t, list.Items[1].ExpireDeadline.AsTime().After(now))
-			assert.True(t, list.Items[1].ExpireDeadline.AsTime().Before(expireDeadline))
+			assert.Equal(t, "", produced[1].Reference)
+			assert.Equal(t, "application/json", produced[1].Encoding)
+			assert.Equal(t, "no", produced[1].Kind)
+			assert.True(t, produced[1].LeaseDeadline.AsTime().IsZero())
+			assert.False(t, produced[1].ExpireDeadline.AsTime().IsZero())
+			assert.True(t, produced[1].ExpireDeadline.AsTime().After(now))
+			assert.True(t, produced[1].ExpireDeadline.AsTime().Before(expireDeadline))
+			lastItem = list.Items[len(list.Items)-1]
 		})
 
 		t.Run("MaxAttempts", func(t *testing.T) {
@@ -225,15 +249,6 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				//  dead clockout
 			})
 		})
-
-		// GetByPartition the last item in the queue, so the following tests know where to begin their assertions.
-		var last pb.StorageItemsListResponse
-		err := c.StorageItemsList(ctx, queueName, 0, &last, nil)
-		require.NoError(t, err)
-		lastItem := &pb.StorageItem{}
-		if len(last.Items) != 0 {
-			lastItem = last.Items[len(last.Items)-1]
-		}
 
 		t.Run("Bytes", func(t *testing.T) {
 			var items []*pb.QueueProduceItem
@@ -355,14 +370,14 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			err := c.StorageItemsList(ctx, queueName, 0, &list,
 				&que.ListOptions{Pivot: lastItem.Id, Limit: 101})
 			require.NoError(t, err)
-			// Returns the pivot item only
-			// TODO(NEXT): Either StorageItemsList() is returning scheduled items,
-			//  or produce is not correctly storing them as scheduled items
-			require.Equal(t, 1, len(items))
+			require.Equal(t, 1, len(list.Items))
 
-			//for i := range produced {
-			//	assert.False(t, produced[i].EnqueueAt.AsTime().IsZero())
-			//}
+			produced := list.Items[1:]
+			for i := range produced {
+				assert.False(t, produced[i].EnqueueAt.AsTime().IsZero())
+			}
+
+			// TODO(next): Call ListScheduled and confirm the items were produced as scheduled items
 		})
 	})
 

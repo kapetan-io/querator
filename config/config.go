@@ -100,6 +100,7 @@ func (cfg *Config) ToDaemonConfig(ctx context.Context, log *slog.Logger) (daemon
 			PartitionStore: partitionStore,
 		})
 	}
+
 	daemonCfg.StorageConfig.Backends = backends
 
 	// setup queues for daemon

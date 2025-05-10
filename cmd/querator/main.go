@@ -11,8 +11,8 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/kapetan-io/querator/config"
 	"github.com/kapetan-io/querator/daemon"
-	"github.com/kapetan-io/querator/pkg/config"
 )
 
 var log = slog.New(slog.NewTextHandler(os.Stdout, nil))

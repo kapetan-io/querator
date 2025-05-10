@@ -2,13 +2,14 @@ package daemon
 
 import (
 	"crypto/tls"
+	"log/slog"
+
 	"github.com/duh-rpc/duh-go"
 	"github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/internal"
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/set"
-	"log/slog"
 )
 
 type Config struct {

@@ -20,12 +20,12 @@ func TestLoadYamlConfigFile(t *testing.T) {
 	}{
 		{
 			name:           "valid generic config yaml",
-			configFilePath: "../../test/testyamlconfig/validconfig1.yaml",
+			configFilePath: "../test/testyamlconfig/validconfig1.yaml",
 			expectErrCheck: nil,
 		},
 		{
 			name:           "error file not exists",
-			configFilePath: "../../test/testyamlconfig/does_not_exist.yaml",
+			configFilePath: "../test/testyamlconfig/does_not_exist.yaml",
 			expectErrCheck: func(err error) bool {
 				var expectErr ErrFileNotExist
 				return errors.As(err, &expectErr)
@@ -33,7 +33,7 @@ func TestLoadYamlConfigFile(t *testing.T) {
 		},
 		{
 			name:           "failed yaml read invalid mapping values",
-			configFilePath: "../../test/testyamlconfig/invalidconfig1.yaml",
+			configFilePath: "../test/testyamlconfig/invalidconfig1.yaml",
 			expectErrCheck: func(err error) bool {
 				var expectErr ErrYAMLParse
 				return errors.As(err, &expectErr)

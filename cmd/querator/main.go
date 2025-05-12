@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"os/signal"
 	"strings"
@@ -15,72 +14,61 @@ import (
 	"github.com/kapetan-io/querator/daemon"
 )
 
-var log = slog.New(slog.NewTextHandler(os.Stdout, nil))
-
 type FlagParams struct {
 	ConfigFile string
 }
 
 func main() {
-	err := Start(context.Background())
-	if err != nil {
-		log.Error("failed", "error", err)
+	if err := Start(context.Background(), os.Args[1:], os.Stdout); err != nil {
 		os.Exit(1)
 	}
 }
 
-func Start(ctx context.Context) error {
-	flagParams, err := parseFlags()
+func Start(ctx context.Context, args []string, stdout io.Writer) error {
+	flags, err := parseFlags(args)
 	if err != nil {
 		return err
 	}
 
-	cfg, err := config.LoadFile(flagParams.ConfigFile)
-	if err != nil {
-		return err
+	var reader io.Reader
+	if flags.ConfigFile != "" {
+		reader, err = os.Open(flags.ConfigFile)
+		if err != nil {
+			return fmt.Errorf("while opening config file: %w", err)
+		}
 	}
 
-	dmnCfg, err := cfg.ToDaemonConfig(ctx, log)
-	if err != nil {
-		return err
+	var conf daemon.Config
+	if err := config.SetupDaemonConfig(ctx, &conf, reader, stdout); err != nil {
+		return fmt.Errorf("while setting up daemon config: %w", err)
 	}
 
-	dmn, err := daemon.NewDaemon(ctx, dmnCfg)
+	d, err := daemon.NewDaemon(ctx, conf)
 	if err != nil {
-		return err
+		return fmt.Errorf("while creating daemon: %w", err)
 	}
 
-	err = waitForShutdown(ctx, dmn)
-	if err != nil {
-		return err
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM, syscall.SIGINT)
+	select {
+	case <-c:
+		return d.Shutdown(ctx)
+	case <-ctx.Done():
+		return d.Shutdown(ctx)
 	}
-
-	return nil
 }
 
-func parseFlags() (FlagParams, error) {
+func parseFlags(args []string) (FlagParams, error) {
 	var flagParams FlagParams
 
 	flags := flag.NewFlagSet("querator", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	flags.StringVar(&flagParams.ConfigFile, "config", "", "environment config file")
-	if err := flags.Parse(os.Args[1:]); err != nil {
+	if err := flags.Parse(args); err != nil {
 		if !strings.Contains(err.Error(), "flag provided but not defined") {
 			return FlagParams{}, fmt.Errorf("while parsing flags: %w", err)
 		}
 	}
 
 	return flagParams, nil
-}
-
-func waitForShutdown(ctx context.Context, d *daemon.Daemon) error {
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt, syscall.SIGTERM, syscall.SIGINT)
-	select {
-	case <-c:
-		log.Info("caught signal; shutting down")
-		return d.Shutdown(ctx)
-	case <-ctx.Done():
-		return ctx.Err()
-	}
 }

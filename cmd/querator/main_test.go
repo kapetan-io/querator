@@ -5,38 +5,21 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
-	"flag"
 	"fmt"
+	"github.com/kapetan-io/tackle/random"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/net/proxy"
 	"net"
 	"os"
-	"os/exec"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
 	cli "github.com/kapetan-io/querator/cmd/querator"
 )
 
-var configFiles = map[string]string{
-	"invalid-config.yaml": `	`,
-	"valid-config.yaml":   `	`,
-}
-
-var cliRunning = flag.Bool("test_cli_running", false, "True if running as a child process; used by TestCLI")
-
 func TestCLI(t *testing.T) {
-	if *cliRunning {
-		if err := cli.Start(context.Background()); err != nil {
-			fmt.Print(err.Error())
-			os.Exit(1)
-		}
-		os.Exit(0)
-	}
-
 	tests := []struct {
 		args     []string
 		config   string
@@ -45,56 +28,50 @@ func TestCLI(t *testing.T) {
 	}{
 		{
 			name:     "ShouldStartWithNoConfigProvided",
-			args:     []string{},
+			args:     []string{"querator"},
 			config:   "",
 			contains: "Starting querator",
 		},
 		{
 			name:     "ShouldStartWithValidConfig",
-			args:     []string{},
-			config:   "valid-config.yaml",
+			args:     []string{"querator"},
+			config:   validConfig,
 			contains: "Starting querator",
 		},
 		{
 			name:     "ShouldStartWithInValidConfig",
-			args:     []string{},
-			config:   "",
+			args:     []string{"querator"},
+			config:   invalidConfig,
 			contains: "!!!!",
 		},
 	}
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// write a config file and add it to the args if provided
 			if tt.config != "" {
-				file := writeFile(t, tt.config, configFiles[tt.config])
+				file := writeFile(t, tt.config)
 				tt.args = append(tt.args, "--config", file)
 				defer os.RemoveAll(file)
 			}
 
-			c := exec.Command(os.Args[0], append([]string{"--test.run=TestCLI", "--test_cli_running"}, tt.args...)...)
-			var out bytes.Buffer
-			c.Stdout = &out
-			c.Stderr = &out
-
-			if err := c.Start(); err != nil {
-				t.Fatal("failed to start child process: ", err)
-			}
-
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 			defer cancel()
+			var out bytes.Buffer
 
 			waitCh := make(chan struct{})
 			go func() {
-				_ = c.Wait()
+				err := cli.Start(ctx, tt.args, &out)
+				if err != nil {
+					t.Logf("cli.Start() returned error: '%v'", err)
+				}
 				close(waitCh)
 			}()
 
 			err := waitForConnect(ctx, "localhost:2319", nil)
 			assert.NoError(t, err)
 			time.Sleep(time.Second * 1)
-
-			err = c.Process.Signal(syscall.SIGTERM)
-			require.NoError(t, err)
+			cancel()
 
 			<-waitCh
 			assert.Contains(t, out.String(), tt.contains)
@@ -132,12 +109,61 @@ func waitForConnect(ctx context.Context, address string, cfg *tls.Config) error 
 	}
 }
 
-func writeFile(t *testing.T, name, contents string) string {
+func writeFile(t *testing.T, contents string) string {
+	t.Helper()
 	path, err := os.MkdirTemp("/tmp/", "querator")
 	require.NoError(t, err)
-	f, err := os.Create(path + "/" + name)
+	file := path + "/" + random.String("", 10)
+	f, err := os.Create(file)
 	defer f.Close()
 	_, err = f.WriteString(contents)
 	require.NoError(t, err)
-	return path + "/" + name
+	return file
 }
+
+const (
+	invalidConfig = `
+queues:
+  - name: queue-1
+     lease-timeout: 10m
+    expire-timeout: 10m
+    dead-queue: queue-1-dead
+    max-attempts: 10
+    reference: test
+     requested-partitions: 20
+ partitions:
+      - partition: 0
+        read-only: false
+        storage-name: badger-00
+
+backends:
+  - name: badger-00
+    driver: Badger 
+    affinity: 0
+
+    config:
+      storage-dir: "/tmp/badger1"
+`
+	validConfig = `
+queues:
+  - name: queue-1
+    lease-timeout: 10m
+    expire-timeout: 10m
+    dead-queue: queue-1-dead
+    max-attempts: 10
+    reference: test
+    requested-partitions: 20
+    partitions:
+      - partition: 0
+        read-only: false
+        storage-name: badger-00
+
+backends:
+  - name: badger-00
+    driver: Badger 
+    affinity: 0
+
+    config:
+      storage-dir: "/tmp/badger1"
+`
+)

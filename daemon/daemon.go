@@ -45,8 +45,6 @@ type Daemon struct {
 func NewDaemon(ctx context.Context, conf Config) (*Daemon, error) {
 	set.Default(&conf.Log, slog.Default())
 
-	// TODO: Load from config file
-
 	s, err := querator.NewService(querator.ServiceConfig{
 		MaxCompleteBatchSize: conf.MaxCompleteBatchSize,
 		MaxLeaseBatchSize:    conf.MaxLeaseBatchSize,

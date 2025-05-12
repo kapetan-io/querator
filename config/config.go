@@ -11,8 +11,8 @@ package config
 
 import (
 	"context"
+	"io"
 	"log/slog"
-	"os"
 	"time"
 
 	"github.com/kapetan-io/querator/daemon"
@@ -56,42 +56,26 @@ type Partition struct {
 	StorageName string `yaml:"storage-name"`
 }
 
-// LoadFile accepts a path string to a predefined config yaml file
-func LoadFile(path string) (*Config, error) {
-	if path == "" {
-		return nil, nil
+func SetupDaemonConfig(ctx context.Context, d *daemon.Config, reader io.Reader, stdout io.Writer) error {
+	var conf Config
+	decoder := yaml.NewDecoder(reader)
+	if err := decoder.Decode(&conf); err != nil {
+		return err
 	}
 
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, ErrFileNotExist{Msg: err.Error()}
-	}
+	// TODO: Setup Logging based on the config provided
+	var log = slog.New(slog.NewTextHandler(stdout, nil))
 
-	var cfg Config
-
-	decoder := yaml.NewDecoder(file)
-	if err := decoder.Decode(&cfg); err != nil {
-		return nil, ErrYAMLParse{Msg: err.Error()}
-	}
-
-	return &cfg, nil
-}
-
-// ToDaemonConfig converts a Config struct to a daemon.Config struct
-func (cfg *Config) ToDaemonConfig(ctx context.Context, log *slog.Logger) (daemon.Config, error) {
-	var daemonCfg daemon.Config
-
-	err := daemonCfg.SetDefaults()
-	if err != nil {
-		return daemon.Config{}, err
+	if err := d.SetDefaults(); err != nil {
+		return err
 	}
 
 	// setup backend for daemon
-	backends := make([]store.Backend, 0, len(cfg.Backends))
-	for _, backend := range cfg.Backends {
+	backends := make([]store.Backend, 0, len(conf.Backends))
+	for _, backend := range conf.Backends {
 		partitionStore, err := getPartitionStore(backend.Driver, backend.Config, log)
 		if err != nil {
-			return daemon.Config{}, err
+			return err
 		}
 
 		backends = append(backends, store.Backend{
@@ -101,19 +85,22 @@ func (cfg *Config) ToDaemonConfig(ctx context.Context, log *slog.Logger) (daemon
 		})
 	}
 
-	daemonCfg.StorageConfig.Backends = backends
+	d.StorageConfig.Backends = backends
 
 	// setup queues for daemon
+	// TODO(thrawn01): Shouldn't always be the in-memory queue
 	queues := store.NewMemoryQueues(log)
-	for _, queue := range cfg.Queues {
+	for _, queue := range conf.Queues {
+		// TODO(thrawn01): doesn't handle if the queue already exists
 		err := queues.Add(ctx, queue.ToQueueInfo())
 		if err != nil {
-			return daemon.Config{}, err
+			return err
 		}
 	}
-	daemonCfg.StorageConfig.Queues = queues
+	// Should add queued
+	d.StorageConfig.Queues = queues
 
-	return daemonCfg, nil
+	return nil
 }
 
 // getPartitionStore converts a provided driver type and config map to a store.PartitionStore struct. Useful

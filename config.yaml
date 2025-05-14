@@ -1,66 +1,73 @@
-# I'm using this file to model out how the configuration model looks. This model might exist in full or in
-# part in a data store a config yaml file. Not sure yet.
+# This is an example config file
 
-# In any case, I'm reasonably sure that Querator should be able to hot reload any config changes on the fly
-# and make use of them immediately provided the config is valid.
+# Querator currently supports "badger" and "memory" storage drivers
+# TODO: Need to document all options for each storage driver
 
+logging:
+  # The logging handler; options are 'color', 'text', 'json'
+  handler: text
+  # The logging level; options are 'info', 'warn', 'error', 'debug',
+  level: error
 
-queues: # is of type 'QueueInfo'
+# Queue Storage defines where metadata about the queues is stored
+queue-storage:
+  driver: badger
+  config:
+    storage-dir: /tmp/badger-queue.db
+
+# Partition Storage defines where partitions are stored
+partition-storage:
+  - name: badger-01
+    driver: badger
+    affinity: 1
+    config:
+      storage-dir: /tmp/badger-01.db
+
+#  - name: postgres-01
+#    driver: postgres
+#    affinity: 1
+#
+#    config:
+#      host: localhost
+#      port: 5432
+#      user: foo
+#      pass: bar
+#      database: querator
+#      ca-file: /path/to/ca
+#      client-cert: /path/to/client/cert
+#      client-key: /path/to/client/key
+
+#  - name: mongodb-01
+#    driver: mongoDB
+#    affinity: 1
+#
+#    config:
+#      host: localhost
+#      port: 27017
+#      user: foo
+#      pass: bar
+#      database: querator
+#      ca-file: /path/to/ca
+#      client-cert: /path/to/client/cert
+#      client-key: /path/to/client/key
+
+# Queues is a convenience that allows users to define queues without needing
+# to call the /v1/queues.create after querator starts.
+queues:
   - name: queue-1
     lease-timeout: 10m
+    expire-timeout: 10m
     dead-queue: queue-1-dead
     max-attempts: 10
+    reference: test
+    requested-partitions: 20
     partitions:
       - partition: 0
         read-only: false
-        storage-name: postgres-01
-      # This is a partition which has moved from bolt-00 to postgres-01 but still has items in it
-      - partition: 0
-        read-only: true
-        storage-name: bolt-00
-      - partition: 1
-        read-only: false
-        storage-name: postgres-01
-      - partition: 2
-        read-only: false
-        storage-name: mongodb-01
-
-
-backends: # is of type 'BackendInfo'
-  - name: bolt-00
-    driver: BoltDB
-    affinity: 0
-
-    # config is of type map[string]string
-    config:
-      file: /var/bolt00
-
-  - name: postgres-01
-    driver: Postgres
-    affinity: 1
-
-    # config is of type map[string]string
-    config:
-      host: localhost
-      port: 5432
-      user: foo
-      pass: bar
-      database: querator
-      ca-file: /path/to/ca
-      client-cert: /path/to/client/cert
-      client-key: /path/to/client/key
-
-  - name: mongodb-01
-    driver: MongoDB
-    affinity: 1
-
-    # config is of type map[string]string
-    config:
-      host: localhost
-      port: 27017
-      user: foo
-      pass: bar
-      database: querator
-      ca-file: /path/to/ca
-      client-cert: /path/to/client/cert
-      client-key: /path/to/client/key
+        storage-name: badger-01
+#      - partition: 1
+#        read-only: false
+#        storage-name: postgres-01
+#      - partition: 2
+#        read-only: false
+#        storage-name: mongodb-01

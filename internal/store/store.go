@@ -16,8 +16,9 @@ const (
 )
 
 var (
-	ErrQueueNotExist = transport.NewRequestFailed("queue does not exist")
-	theFuture        = time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.UTC)
+	ErrQueueNotExist      = transport.NewRequestFailed("queue does not exist")
+	ErrQueueAlreadyExists = transport.NewInvalidOption("queue already exists")
+	theFuture             = time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.UTC)
 )
 
 type LeaseOptions struct {
@@ -95,7 +96,6 @@ type Partition interface {
 	ScanForActions(timeout clock.Duration, now clock.Time) iter.Seq[types.Action]
 
 	// TakeAction takes lifecycle requests and preforms the actions requested on the partition.
-	// TODO(NEXT): Update this sig to accept types.PartitionState
 	TakeAction(ctx context.Context, batch types.Batch[types.LifeCycleRequest]) error
 
 	// LifeCycleInfo fills out the LifeCycleInfo struct which is used to decide when the
@@ -116,31 +116,30 @@ type Partition interface {
 	Close(ctx context.Context) error
 }
 
-type Backends []Backend
-
-func (b Backends) Find(name string) Backend {
-	for _, backend := range b {
-		if backend.Name == name {
-			return backend
+func Find(needle string, haystack []PartitionStorage) PartitionStorage {
+	for _, i := range haystack {
+		if i.Name == needle {
+			return i
 		}
 	}
-	return Backend{}
+	return PartitionStorage{}
 }
 
-// TODO: Rename this to `store.Config` if possible
-// StorageConfig is the configuration accepted by QueueManager to manage storage of queues, scheduled items,
+// Config is the configuration accepted by QueueManager to manage storage of queues, scheduled items,
 // and partitions.
-type StorageConfig struct {
-	// How Queues are stored can be separate from PartitionInfo and Scheduled stores
+type Config struct {
+	// Queues where metadata about the queues is stored
 	Queues Queues
-	// The Backends configured for partitions to utilize
-	Backends Backends
+	// The PartitionStorage configured for partitions to utilize
+	PartitionStorage []PartitionStorage
 	// Clock is the clock provider the backend implementation should use
 	Clock *clock.Provider
+	// Log is the logger to be used
+	Log *slog.Logger
 }
 
-// Backend is the struct which holds the configured partition backend interfaces
-type Backend struct {
+// PartitionStorage is the struct which holds the configured partition backend interfaces
+type PartitionStorage struct {
 	PartitionStore PartitionStore
 	Affinity       float64
 	Name           string

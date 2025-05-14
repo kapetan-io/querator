@@ -35,7 +35,7 @@ const (
 
 var RetryTenTimes = retry.Policy{Interval: retry.Sleep(100 * clock.Millisecond), Attempts: 20}
 
-type NewStorageFunc func(cp *clock.Provider) store.StorageConfig
+type NewStorageFunc func(cp *clock.Provider) store.Config
 
 var log *slog.Logger
 
@@ -114,7 +114,7 @@ type badgerTestSetup struct {
 	Dir string
 }
 
-func (b *badgerTestSetup) Setup(bc store.BadgerConfig) store.StorageConfig {
+func (b *badgerTestSetup) Setup(bc store.BadgerConfig) store.Config {
 	if !dirExists(b.Dir) {
 		if err := os.Mkdir(b.Dir, 0777); err != nil {
 			panic(err)
@@ -127,9 +127,9 @@ func (b *badgerTestSetup) Setup(bc store.BadgerConfig) store.StorageConfig {
 	bc.StorageDir = b.Dir
 	bc.Log = log
 
-	var conf store.StorageConfig
+	var conf store.Config
 	conf.Queues = store.NewBadgerQueues(bc)
-	conf.Backends = []store.Backend{
+	conf.PartitionStorage = []store.PartitionStorage{
 		{
 			PartitionStore: store.NewBadgerPartitionStore(bc),
 			Name:           "badger-0",
@@ -176,9 +176,9 @@ func compareStorageItem(t *testing.T, l *pb.StorageItem, r *pb.StorageItem) {
 	require.Equal(t, l.Payload, r.Payload)
 }
 
-func setupMemoryStorage(conf store.StorageConfig) store.StorageConfig {
+func setupMemoryStorage(conf store.Config) store.Config {
 	conf.Queues = store.NewMemoryQueues(log)
-	conf.Backends = []store.Backend{
+	conf.PartitionStorage = []store.PartitionStorage{
 		{
 			PartitionStore: store.NewMemoryPartitionStore(conf, log),
 			Name:           "memory-0",

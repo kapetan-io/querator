@@ -50,14 +50,13 @@ func (c *Config) SetDefaults() error {
 	set.Default(&c.MaxCompleteBatchSize, internal.DefaultMaxCompleteBatchSize)
 	set.Default(&c.MaxRequestsPerQueue, internal.DefaultMaxRequestsPerQueue)
 	set.Default(&c.StorageConfig.Queues, store.NewMemoryQueues(c.Log))
-	set.Default(&c.StorageConfig.Backends, []store.Backend{
+	set.Default(&c.StorageConfig.Log, c.Log)
+	set.Default(&c.StorageConfig.PartitionStorage, []store.PartitionStorage{
 		{
-			PartitionStore: store.NewMemoryPartitionStore(c.StorageConfig, c.Log),
+			PartitionStore: store.NewMemoryPartitionStore(c.StorageConfig),
 			Name:           "mem-0",
 			Affinity:       1,
 		},
 	})
 	return err
 }
-
-// TODO: Load from config system

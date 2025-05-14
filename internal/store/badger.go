@@ -723,7 +723,7 @@ func (b *BadgerQueues) Add(_ context.Context, info types.QueueInfo) error {
 		// If the queue already exists in the store
 		_, err := txn.Get([]byte(info.Name))
 		if err == nil {
-			return transport.NewInvalidOption("invalid queue; '%s' already exists", info.Name)
+			return ErrQueueAlreadyExists
 		}
 
 		var buf bytes.Buffer // TODO: memory pool

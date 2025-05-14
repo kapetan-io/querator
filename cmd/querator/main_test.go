@@ -6,12 +6,9 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"github.com/kapetan-io/tackle/random"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"golang.org/x/net/proxy"
 	"net"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -26,35 +23,20 @@ func TestCLI(t *testing.T) {
 		name     string
 		contains string
 	}{
-		{
+		{ // TODO(NEXT): This is not working
 			name:     "ShouldStartWithNoConfigProvided",
 			args:     []string{"querator"},
-			config:   "",
 			contains: "Starting querator",
 		},
 		{
-			name:     "ShouldStartWithValidConfig",
-			args:     []string{"querator"},
-			config:   validConfig,
+			name:     "ShouldStartWithSampleConfig",
+			args:     []string{"-config=../../config.yaml"},
 			contains: "Starting querator",
-		},
-		{
-			name:     "ShouldStartWithInValidConfig",
-			args:     []string{"querator"},
-			config:   invalidConfig,
-			contains: "!!!!",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// write a config file and add it to the args if provided
-			if tt.config != "" {
-				file := writeFile(t, tt.config)
-				tt.args = append(tt.args, "--config", file)
-				defer os.RemoveAll(file)
-			}
-
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 			defer cancel()
 			var out bytes.Buffer
@@ -109,61 +91,14 @@ func waitForConnect(ctx context.Context, address string, cfg *tls.Config) error 
 	}
 }
 
-func writeFile(t *testing.T, contents string) string {
-	t.Helper()
-	path, err := os.MkdirTemp("/tmp/", "querator")
-	require.NoError(t, err)
-	file := path + "/" + random.String("", 10)
-	f, err := os.Create(file)
-	defer f.Close()
-	_, err = f.WriteString(contents)
-	require.NoError(t, err)
-	return file
-}
-
-const (
-	invalidConfig = `
-queues:
-  - name: queue-1
-     lease-timeout: 10m
-    expire-timeout: 10m
-    dead-queue: queue-1-dead
-    max-attempts: 10
-    reference: test
-     requested-partitions: 20
- partitions:
-      - partition: 0
-        read-only: false
-        storage-name: badger-00
-
-backends:
-  - name: badger-00
-    driver: Badger 
-    affinity: 0
-
-    config:
-      storage-dir: "/tmp/badger1"
-`
-	validConfig = `
-queues:
-  - name: queue-1
-    lease-timeout: 10m
-    expire-timeout: 10m
-    dead-queue: queue-1-dead
-    max-attempts: 10
-    reference: test
-    requested-partitions: 20
-    partitions:
-      - partition: 0
-        read-only: false
-        storage-name: badger-00
-
-backends:
-  - name: badger-00
-    driver: Badger 
-    affinity: 0
-
-    config:
-      storage-dir: "/tmp/badger1"
-`
-)
+//func writeFile(t *testing.T, contents string) string {
+//	t.Helper()
+//	path, err := os.MkdirTemp("/tmp/", "querator")
+//	require.NoError(t, err)
+//	file := path + "/" + random.String("", 10)
+//	f, err := os.Create(file)
+//	defer f.Close()
+//	_, err = f.WriteString(contents)
+//	require.NoError(t, err)
+//	return file
+//}

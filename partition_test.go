@@ -25,14 +25,14 @@ func TestPartitions(t *testing.T) {
 	}{
 		{
 			Name: "InMemory",
-			Setup: func(cp *clock.Provider) store.StorageConfig {
-				return setupMemoryStorage(store.StorageConfig{Clock: cp})
+			Setup: func(cp *clock.Provider) store.Config {
+				return setupMemoryStorage(store.Config{Clock: cp})
 			},
 			TearDown: func() {},
 		},
 		{
 			Name: "BadgerDB",
-			Setup: func(cp *clock.Provider) store.StorageConfig {
+			Setup: func(cp *clock.Provider) store.Config {
 				return badger.Setup(store.BadgerConfig{Clock: cp})
 			},
 			TearDown: func() {

@@ -12,6 +12,7 @@ import (
 
 	"github.com/kapetan-io/querator/config"
 	"github.com/kapetan-io/querator/daemon"
+	"gopkg.in/yaml.v3"
 )
 
 type FlagParams struct {
@@ -30,16 +31,20 @@ func Start(ctx context.Context, args []string, stdout io.Writer) error {
 		return err
 	}
 
-	var reader io.Reader
+	var file config.File
 	if flags.ConfigFile != "" {
-		reader, err = os.Open(flags.ConfigFile)
+		reader, err := os.Open(flags.ConfigFile)
 		if err != nil {
 			return fmt.Errorf("while opening config file: %w", err)
+		}
+		decoder := yaml.NewDecoder(reader)
+		if err := decoder.Decode(&file); err != nil {
+			return err
 		}
 	}
 
 	var conf daemon.Config
-	if err := config.SetupDaemonConfig(ctx, &conf, reader, stdout); err != nil {
+	if err := config.ApplyConfigFile(ctx, &conf, file, stdout); err != nil {
 		return fmt.Errorf("while setting up daemon config: %w", err)
 	}
 
@@ -69,6 +74,5 @@ func parseFlags(args []string) (FlagParams, error) {
 			return FlagParams{}, fmt.Errorf("while parsing flags: %w", err)
 		}
 	}
-
 	return flagParams, nil
 }

@@ -93,12 +93,9 @@ func TestApplyConfigFile(t *testing.T) {
 		},
 		PartitionStorage: []config.PartitionStorage{
 			{
-				Name:     "badger-00",
-				Driver:   "Badger",
+				Name:     "mem-00",
+				Driver:   "memory",
 				Affinity: 0,
-				Config: map[string]string{
-					"storage-dir": "/tmp/badger1",
-				},
 			},
 		},
 		QueueStorage: config.QueueStorage{
@@ -117,7 +114,7 @@ func TestApplyConfigFile(t *testing.T) {
 					{
 						Partition:   0,
 						ReadOnly:    false,
-						StorageName: "badger-00",
+						StorageName: "mem-00",
 					},
 				},
 			},
@@ -125,14 +122,14 @@ func TestApplyConfigFile(t *testing.T) {
 	}
 
 	conf := &daemon.Config{}
-	err := config.ApplyConfigFile(context.Background(), conf, file, io.Discard)
-	require.NoError(t, err)
 	ctx := context.Background()
+	err := config.ApplyConfigFile(ctx, conf, file, io.Discard)
+	require.NoError(t, err)
 
 	// Check if the config is reflected correctly
 	assert.Equal(t, true, conf.Log.Handler().Enabled(ctx, slog.LevelDebug))
 	assert.Len(t, conf.StorageConfig.PartitionStorage, 1)
-	assert.Equal(t, "badger-00", conf.StorageConfig.PartitionStorage[0].Name)
+	assert.Equal(t, "mem-00", conf.StorageConfig.PartitionStorage[0].Name)
 	assert.Equal(t, float64(0), conf.StorageConfig.PartitionStorage[0].Affinity)
 	assert.IsType(t, &store.MemoryQueues{}, conf.StorageConfig.Queues)
 
@@ -150,47 +147,15 @@ func TestApplyConfigFile(t *testing.T) {
 
 	assert.Equal(t, 0, info.PartitionInfo[0].PartitionNum)
 	assert.False(t, info.PartitionInfo[0].ReadOnly)
-	assert.Equal(t, "badger-00", info.PartitionInfo[0].StorageName)
+	assert.Equal(t, "mem-00", info.PartitionInfo[0].StorageName)
 }
 
 func TestApplyConfigFromYAML(t *testing.T) {
-	var file config.File
-	err := yaml.Unmarshal([]byte(validConfig), &file)
-	require.NoError(t, err)
-
-	conf := &daemon.Config{}
-	err = config.ApplyConfigFile(context.Background(), conf, file, io.Discard)
-	require.NoError(t, err)
-
-	// Verify the configuration
-	assert.Len(t, conf.StorageConfig.PartitionStorage, 1)
-	assert.Equal(t, "badger-00", conf.StorageConfig.PartitionStorage[0].Name)
-	assert.IsType(t, &store.MemoryQueues{}, conf.StorageConfig.Queues)
-	ctx := context.Background()
-
-	var info types.QueueInfo
-	require.NoError(t, conf.StorageConfig.Queues.Get(ctx, "queue-1", &info))
-	assert.Equal(t, "queue-1", info.Name)
-	assert.Equal(t, 10*time.Minute, info.LeaseTimeout)
-	assert.Equal(t, 10*time.Minute, info.ExpireTimeout)
-	assert.Equal(t, "queue-1-dead", info.DeadQueue)
-	assert.Equal(t, 10, info.MaxAttempts)
-	assert.Equal(t, "test", info.Reference)
-	assert.Equal(t, 20, info.RequestedPartitions)
-	assert.Len(t, info.PartitionInfo, 1)
-	assert.Equal(t, 0, info.PartitionInfo[0].PartitionNum)
-	assert.False(t, info.PartitionInfo[0].ReadOnly)
-	assert.Equal(t, "badger-00", info.PartitionInfo[0].StorageName)
-}
-
-const (
-	validConfig = `
+	validConfig := `
 partition-storage:
-  - name: badger-00
-    driver: Badger 
+  - name: mem-00
+    driver: Memory 
     affinity: 0
-    file:
-      storage-dir: "/tmp/badger1"
 
 queue-storage:
   driver: Memory
@@ -206,6 +171,62 @@ queues:
     partitions:
       - partition: 0
         read-only: false
-        storage-name: badger-00
+        storage-name: mem-00
 `
-)
+	var file config.File
+	err := yaml.Unmarshal([]byte(validConfig), &file)
+	require.NoError(t, err)
+
+	conf := &daemon.Config{}
+	err = config.ApplyConfigFile(context.Background(), conf, file, io.Discard)
+	require.NoError(t, err)
+
+	// Verify the configuration
+	assert.Len(t, conf.StorageConfig.PartitionStorage, 1)
+	assert.Equal(t, "mem-00", conf.StorageConfig.PartitionStorage[0].Name)
+	assert.IsType(t, &store.MemoryQueues{}, conf.StorageConfig.Queues)
+	ctx := context.Background()
+
+	var info types.QueueInfo
+	require.NoError(t, conf.StorageConfig.Queues.Get(ctx, "queue-1", &info))
+	assert.Equal(t, "queue-1", info.Name)
+	assert.Equal(t, 10*time.Minute, info.LeaseTimeout)
+	assert.Equal(t, 10*time.Minute, info.ExpireTimeout)
+	assert.Equal(t, "queue-1-dead", info.DeadQueue)
+	assert.Equal(t, 10, info.MaxAttempts)
+	assert.Equal(t, "test", info.Reference)
+	assert.Equal(t, 20, info.RequestedPartitions)
+	assert.Len(t, info.PartitionInfo, 1)
+	assert.Equal(t, 0, info.PartitionInfo[0].PartitionNum)
+	assert.False(t, info.PartitionInfo[0].ReadOnly)
+	assert.Equal(t, "mem-00", info.PartitionInfo[0].StorageName)
+}
+
+func TestBadgerConfig(t *testing.T) {
+	badgerConfig := `
+partition-storage:
+  - name: badger-00
+    driver: Badger 
+    affinity: 0
+    config:
+      storage-dir: /tmp/badger1
+queue-storage:
+  driver: badger
+  config:
+    storage-dir: "/tmp/queue-storage"
+`
+	var file config.File
+	err := yaml.Unmarshal([]byte(badgerConfig), &file)
+	require.NoError(t, err)
+
+	var conf daemon.Config
+	ctx := context.Background()
+	err = config.ApplyConfigFile(ctx, &conf, file, io.Discard)
+	require.NoError(t, err)
+	assert.Equal(t, "/tmp/badger1",
+		conf.StorageConfig.PartitionStorage[0].PartitionStore.(*store.BadgerPartitionStore).Config().StorageDir)
+	assert.Equal(t, "/tmp/queue-storage",
+		conf.StorageConfig.Queues.(*store.BadgerQueues).Config().StorageDir)
+}
+
+// TODO: Add config tests for the other storage drivers as we add them

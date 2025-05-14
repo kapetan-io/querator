@@ -51,6 +51,10 @@ func (b *BadgerPartitionStore) Get(info types.PartitionInfo) Partition {
 	}
 }
 
+func (b *BadgerPartitionStore) Config() BadgerConfig {
+	return b.conf
+}
+
 // ---------------------------------------------
 // Partition Implementation
 // ---------------------------------------------
@@ -855,9 +859,16 @@ func (b *BadgerQueues) Delete(_ context.Context, name string) error {
 }
 
 func (b *BadgerQueues) Close(_ context.Context) error {
+	if b.db == nil {
+		return nil
+	}
 	err := b.db.Close()
 	b.db = nil
 	return err
+}
+
+func (b *BadgerQueues) Config() BadgerConfig {
+	return b.conf
 }
 
 type badgerLogger struct {

@@ -45,6 +45,7 @@ func (c *Config) SetDefaults() error {
 	var err error
 	set.Default(&c.Clock, clock.NewProvider())
 	set.Default(&c.Log, slog.Default())
+	set.Default(&c.ListenAddress, "localhost:2319")
 	set.Default(&c.MaxLeaseBatchSize, internal.DefaultMaxLeaseBatchSize)
 	set.Default(&c.MaxProduceBatchSize, internal.DefaultMaxProduceBatchSize)
 	set.Default(&c.MaxCompleteBatchSize, internal.DefaultMaxCompleteBatchSize)

@@ -7,7 +7,7 @@ logging:
   # The logging handler; options are 'color', 'text', 'json'
   handler: text
   # The logging level; options are 'info', 'warn', 'error', 'debug',
-  level: error
+  level: info
 
 # Queue Storage defines where metadata about the queues is stored
 queue-storage:

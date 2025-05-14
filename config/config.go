@@ -32,6 +32,8 @@ type File struct {
 	PartitionStorage []PartitionStorage `yaml:"partition-storage"`
 	QueueStorage     QueueStorage       `yaml:"queue-storage"`
 	Queues           []Queue            `yaml:"queues"`
+	// ConfigFile is the path to the config file that was loaded
+	ConfigFile string
 }
 
 type Logging struct {
@@ -42,14 +44,14 @@ type Logging struct {
 type QueueStorage struct {
 	Name   string            `yaml:"name"`
 	Driver string            `yaml:"driver"`
-	Config map[string]string `yaml:"file"`
+	Config map[string]string `yaml:"config"`
 }
 
 type PartitionStorage struct {
 	Name     string            `yaml:"name"`
 	Driver   string            `yaml:"driver"`
 	Affinity int               `yaml:"affinity"`
-	Config   map[string]string `yaml:"file"`
+	Config   map[string]string `yaml:"config"`
 }
 
 type Queue struct {
@@ -83,12 +85,19 @@ func ApplyConfigFile(ctx context.Context, conf *daemon.Config, file File, w io.W
 	}
 
 	// Apply defaults if there are required config items missing from the provided config file
-	return conf.SetDefaults()
+	if err := conf.SetDefaults(); err != nil {
+		return err
+	}
+
+	if file.ConfigFile != "" {
+		conf.Log.Info("Loaded config from file", "file", file.ConfigFile)
+	}
+	return nil
 }
 
 func setupLogger(file File, w io.Writer, d *daemon.Config) error {
 	switch file.Logging.Handler {
-	case "color":
+	case "color", "":
 		d.Log = slog.New(color.NewLog(&color.LogOptions{
 			HandlerOptions: slog.HandlerOptions{
 				Level: toLogLevel(file.Logging.Level),
@@ -105,8 +114,6 @@ func setupLogger(file File, w io.Writer, d *daemon.Config) error {
 		d.Log = slog.New(slog.NewJSONHandler(w, &slog.HandlerOptions{
 			Level: toLogLevel(file.Logging.Level),
 		}))
-		return nil
-	case "":
 		return nil
 	default:
 		return fmt.Errorf("invalid handler; '%s' is not one of (color, text, json)",
@@ -125,7 +132,7 @@ func toLogLevel(level string) slog.Level {
 	case "info":
 		return slog.LevelInfo
 	default:
-		return slog.LevelError
+		return slog.LevelInfo
 	}
 }
 

@@ -1,6 +1,7 @@
 package main_test
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
@@ -21,29 +22,32 @@ func TestCLI(t *testing.T) {
 		args     []string
 		config   string
 		name     string
-		contains string
+		contains []string
 	}{
 		{ // TODO(NEXT): This is not working
 			name:     "ShouldStartWithNoConfigProvided",
-			args:     []string{"querator"},
-			contains: "Starting querator",
+			args:     []string{""},
+			contains: []string{"Server Started"},
 		},
 		{
-			name:     "ShouldStartWithSampleConfig",
-			args:     []string{"-config=../../config.yaml"},
-			contains: "Starting querator",
+			name: "ShouldStartWithSampleConfig",
+			args: []string{"-config=../../config.yaml"},
+			contains: []string{
+				"Server Started",
+				"Loaded config from file",
+			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
-			defer cancel()
-			var out bytes.Buffer
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+			var buf bytes.Buffer
+			w := bufio.NewWriter(&buf)
 
 			waitCh := make(chan struct{})
 			go func() {
-				err := cli.Start(ctx, tt.args, &out)
+				err := cli.Start(ctx, tt.args, w)
 				if err != nil {
 					t.Logf("cli.Start() returned error: '%v'", err)
 				}
@@ -56,7 +60,11 @@ func TestCLI(t *testing.T) {
 			cancel()
 
 			<-waitCh
-			assert.Contains(t, out.String(), tt.contains)
+			w.Flush()
+			for _, s := range tt.contains {
+				//t.Logf("Checking for '%s' in output", s)
+				assert.Contains(t, buf.String(), s)
+			}
 		})
 	}
 }

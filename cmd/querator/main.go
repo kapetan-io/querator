@@ -25,7 +25,7 @@ func main() {
 	}
 }
 
-func Start(ctx context.Context, args []string, stdout io.Writer) error {
+func Start(ctx context.Context, args []string, w io.Writer) error {
 	flags, err := parseFlags(args)
 	if err != nil {
 		return err
@@ -39,13 +39,14 @@ func Start(ctx context.Context, args []string, stdout io.Writer) error {
 		}
 		decoder := yaml.NewDecoder(reader)
 		if err := decoder.Decode(&file); err != nil {
-			return err
+			return fmt.Errorf("while reading config file: %w", err)
 		}
+		file.ConfigFile = flags.ConfigFile
 	}
 
 	var conf daemon.Config
-	if err := config.ApplyConfigFile(ctx, &conf, file, stdout); err != nil {
-		return fmt.Errorf("while setting up daemon config: %w", err)
+	if err := config.ApplyConfigFile(ctx, &conf, file, w); err != nil {
+		return fmt.Errorf("while applying config file: %w", err)
 	}
 
 	d, err := daemon.NewDaemon(ctx, conf)
@@ -59,7 +60,7 @@ func Start(ctx context.Context, args []string, stdout io.Writer) error {
 	case <-c:
 		return d.Shutdown(ctx)
 	case <-ctx.Done():
-		return d.Shutdown(ctx)
+		return d.Shutdown(context.Background())
 	}
 }
 

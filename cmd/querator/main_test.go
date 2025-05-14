@@ -24,14 +24,14 @@ func TestCLI(t *testing.T) {
 		name     string
 		contains []string
 	}{
-		{ // TODO(NEXT): This is not working
+		{
 			name:     "ShouldStartWithNoConfigProvided",
 			args:     []string{""},
 			contains: []string{"Server Started"},
 		},
 		{
 			name: "ShouldStartWithSampleConfig",
-			args: []string{"-config=../../config.yaml"},
+			args: []string{"-config=../../example.yaml"},
 			contains: []string{
 				"Server Started",
 				"Loaded config from file",
@@ -98,15 +98,3 @@ func waitForConnect(ctx context.Context, address string, cfg *tls.Config) error 
 		continue
 	}
 }
-
-//func writeFile(t *testing.T, contents string) string {
-//	t.Helper()
-//	path, err := os.MkdirTemp("/tmp/", "querator")
-//	require.NoError(t, err)
-//	file := path + "/" + random.String("", 10)
-//	f, err := os.Create(file)
-//	defer f.Close()
-//	_, err = f.WriteString(contents)
-//	require.NoError(t, err)
-//	return file
-//}

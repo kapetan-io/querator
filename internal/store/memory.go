@@ -23,7 +23,7 @@ var bucketName = []byte("queue")
 
 type MemoryPartition struct {
 	info types.PartitionInfo
-	conf StorageConfig
+	conf Config
 	mem  []types.Item
 	mu   sync.RWMutex
 	log  *slog.Logger
@@ -408,7 +408,7 @@ func (s *MemoryQueues) Add(_ context.Context, info types.QueueInfo) error {
 
 	_, ok := s.findQueue(info.Name)
 	if ok {
-		return transport.NewInvalidOption("invalid queue; '%s' already exists", info.Name)
+		return ErrQueueAlreadyExists
 	}
 
 	s.mem = append(s.mem, info)
@@ -509,18 +509,18 @@ func (s *MemoryQueues) findQueue(name string) (int, bool) {
 
 type MemoryPartitionStore struct {
 	partitions map[types.PartitionHash]*MemoryPartition
-	conf       StorageConfig
+	conf       Config
 	log        *slog.Logger
 }
 
 var _ PartitionStore = &MemoryPartitionStore{}
 
-func NewMemoryPartitionStore(conf StorageConfig, log *slog.Logger) *MemoryPartitionStore {
-	set.Default(&log, slog.Default())
+func NewMemoryPartitionStore(conf Config) *MemoryPartitionStore {
+	set.Default(&conf.Log, slog.Default())
 
 	return &MemoryPartitionStore{
 		partitions: make(map[types.PartitionHash]*MemoryPartition),
-		log:        log.With("store", "memory"),
+		log:        conf.Log.With("store", "memory"),
 		conf:       conf,
 	}
 }

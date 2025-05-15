@@ -37,7 +37,7 @@ type ServiceConfig struct {
 	// Log is the logging implementation used by this Querator instance
 	Log *slog.Logger
 	// StorageConfig is the configured storage backends
-	StorageConfig store.StorageConfig
+	StorageConfig store.Config
 	// InstanceID is a unique id for this instance of Querator
 	InstanceID string
 	// WriteTimeout The time it should take for a single batched write to complete

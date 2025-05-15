@@ -4,35 +4,50 @@
 // runtime, initializing the appropriate backends and in-memory queue management
 // structures.
 //
-// Additionally provides access to Backend and Queue structures in a generic
+// Additionally, provides access to PartitionStorage and Queue structures in a generic
 // format to allow users to instantiate querator "Service" instances in-code.
 
 package config
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"log/slog"
-	"os"
+	"strings"
 	"time"
 
+	"github.com/kapetan-io/errors"
 	"github.com/kapetan-io/querator/daemon"
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/tackle/clock"
-	"gopkg.in/yaml.v3"
+	"github.com/kapetan-io/tackle/color"
 )
 
-const (
-	driverTypeMemory = "Memory"
-	driverTypeBadger = "Badger"
-)
-
-type Config struct {
-	Backends []Backend `yaml:"backends"`
-	Queues   []Queue   `yaml:"queues"`
+type File struct {
+	// TODO(thrawn01): Add support for TLS config
+	// TODO(thrawn01): Add support for changing the bind address and port
+	Logging          Logging            `yaml:"logging"`
+	PartitionStorage []PartitionStorage `yaml:"partition-storage"`
+	QueueStorage     QueueStorage       `yaml:"queue-storage"`
+	Queues           []Queue            `yaml:"queues"`
+	// ConfigFile is the path to the config file that was loaded
+	ConfigFile string
 }
 
-type Backend struct {
+type Logging struct {
+	Level   string `yaml:"level"`
+	Handler string `yaml:"handler"`
+}
+
+type QueueStorage struct {
+	Name   string            `yaml:"name"`
+	Driver string            `yaml:"driver"`
+	Config map[string]string `yaml:"config"`
+}
+
+type PartitionStorage struct {
 	Name     string            `yaml:"name"`
 	Driver   string            `yaml:"driver"`
 	Affinity int               `yaml:"affinity"`
@@ -56,84 +71,139 @@ type Partition struct {
 	StorageName string `yaml:"storage-name"`
 }
 
-// LoadFile accepts a path string to a predefined config yaml file
-func LoadFile(path string) (*Config, error) {
-	if path == "" {
-		return nil, nil
+func ApplyConfigFile(ctx context.Context, conf *daemon.Config, file File, w io.Writer) error {
+	if err := setupLogger(file, w, conf); err != nil {
+		return err
 	}
 
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, ErrFileNotExist{Msg: err.Error()}
+	if err := setupPartitionStorage(file, conf); err != nil {
+		return err
 	}
 
-	var cfg Config
-
-	decoder := yaml.NewDecoder(file)
-	if err := decoder.Decode(&cfg); err != nil {
-		return nil, ErrYAMLParse{Msg: err.Error()}
+	if err := setupQueueStorage(ctx, file, conf); err != nil {
+		return err
 	}
 
-	return &cfg, nil
+	// Apply defaults if there are required config items missing from the provided config file
+	if err := conf.SetDefaults(); err != nil {
+		return err
+	}
+
+	if file.ConfigFile != "" {
+		conf.Log.Info("Loaded config from file", "file", file.ConfigFile)
+	}
+	return nil
 }
 
-// ToDaemonConfig converts a Config struct to a daemon.Config struct
-func (cfg *Config) ToDaemonConfig(ctx context.Context, log *slog.Logger) (daemon.Config, error) {
-	var daemonCfg daemon.Config
-
-	err := daemonCfg.SetDefaults()
-	if err != nil {
-		return daemon.Config{}, err
+func setupLogger(file File, w io.Writer, d *daemon.Config) error {
+	switch file.Logging.Handler {
+	case "color", "":
+		d.Log = slog.New(color.NewLog(&color.LogOptions{
+			HandlerOptions: slog.HandlerOptions{
+				Level: toLogLevel(file.Logging.Level),
+			},
+			Writer: w,
+		}))
+		return nil
+	case "text":
+		d.Log = slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{
+			Level: toLogLevel(file.Logging.Level),
+		}))
+		return nil
+	case "json":
+		d.Log = slog.New(slog.NewJSONHandler(w, &slog.HandlerOptions{
+			Level: toLogLevel(file.Logging.Level),
+		}))
+		return nil
+	default:
+		return fmt.Errorf("invalid handler; '%s' is not one of (color, text, json)",
+			file.Logging.Handler)
 	}
+}
 
-	// setup backend for daemon
-	backends := make([]store.Backend, 0, len(cfg.Backends))
-	for _, backend := range cfg.Backends {
-		partitionStore, err := getPartitionStore(backend.Driver, backend.Config, log)
-		if err != nil {
-			return daemon.Config{}, err
+func toLogLevel(level string) slog.Level {
+	switch level {
+	case "debug":
+		return slog.LevelDebug
+	case "error":
+		return slog.LevelError
+	case "warn":
+		return slog.LevelWarn
+	case "info":
+		return slog.LevelInfo
+	default:
+		return slog.LevelInfo
+	}
+}
+
+func setupPartitionStorage(file File, d *daemon.Config) error {
+	for _, ps := range file.PartitionStorage {
+		var s store.PartitionStore
+
+		switch strings.ToLower(ps.Driver) {
+		case "memory":
+			s = store.NewMemoryPartitionStore(store.Config{
+				Clock: clock.NewProvider(),
+				Log:   d.Log,
+			})
+		case "badger":
+			s = store.NewBadgerPartitionStore(store.BadgerConfig{
+				StorageDir: ps.Config["storage-dir"], // TODO(thrawn01): validate badger config options
+				Clock:      clock.NewProvider(),
+				Log:        d.Log,
+			})
+		default:
+			return fmt.Errorf("invalid driver; '%s' is not one of (Memory, Badger)", ps.Driver)
 		}
 
-		backends = append(backends, store.Backend{
-			Name:           backend.Name,
-			Affinity:       float64(backend.Affinity),
-			PartitionStore: partitionStore,
+		d.StorageConfig.PartitionStorage = append(d.StorageConfig.PartitionStorage, store.PartitionStorage{
+			Name:           ps.Name,
+			Affinity:       float64(ps.Affinity),
+			PartitionStore: s,
 		})
 	}
+	return nil
+}
 
-	daemonCfg.StorageConfig.Backends = backends
+func setupQueueStorage(ctx context.Context, file File, conf *daemon.Config) error {
+	switch strings.ToLower(file.QueueStorage.Driver) {
+	case "memory", "":
+		conf.StorageConfig.Queues = store.NewMemoryQueues(conf.Log)
+	case "badger":
+		conf.StorageConfig.Queues = store.NewBadgerQueues(store.BadgerConfig{
+			StorageDir: file.QueueStorage.Config["storage-dir"], // TODO(thrawn01): validate bolt config options
+			Clock:      clock.NewProvider(),
+			Log:        conf.Log,
+		})
+	default:
+		return fmt.Errorf("invalid driver; '%s' is not one of (Memory, Badger)", file.QueueStorage.Driver)
+	}
 
-	// setup queues for daemon
-	queues := store.NewMemoryQueues(log)
-	for _, queue := range cfg.Queues {
-		err := queues.Add(ctx, queue.ToQueueInfo())
-		if err != nil {
-			return daemon.Config{}, err
+	for _, queue := range file.Queues {
+		for _, p := range queue.Partitions {
+			// Ensure the storage name referenced in the partition exists
+			found := store.Find(p.StorageName, conf.StorageConfig.PartitionStorage)
+			if found.Name == "" {
+				return fmt.Errorf("invalid partition storage; queue '%s' references '%s' which is undefined",
+					queue.Name, p.StorageName)
+			}
+			p.StorageName = found.Name
+		}
+
+		if err := conf.StorageConfig.Queues.Add(ctx, queue.ToQueueInfo()); err != nil {
+			// Skip if the queue already exists, so pre-existing queues do not keep Querator from starting
+			if errors.Is(err, store.ErrQueueAlreadyExists) {
+				// TODO(thrawn01): We should probably update the queue if
+				//  it already exists as the config might have changed
+				continue
+			}
+			return err
 		}
 	}
-	daemonCfg.StorageConfig.Queues = queues
-
-	return daemonCfg, nil
+	return nil
 }
 
-// getPartitionStore converts a provided driver type and config map to a store.PartitionStore struct. Useful
-// when manually defining a store.StorageConfig instance.
-func getPartitionStore(driverType string, config map[string]string, log *slog.Logger) (store.PartitionStore, error) {
-	var partitionStore store.PartitionStore
-
-	switch driverType {
-	case driverTypeMemory:
-		partitionStore = store.NewMemoryPartitionStore(store.StorageConfig{Clock: clock.NewProvider()}, log)
-	case driverTypeBadger:
-		partitionStore = store.NewBadgerPartitionStore(store.BadgerConfig{Clock: clock.NewProvider(), Log: log, StorageDir: config["storage-dir"]})
-	default:
-		return partitionStore, ErrUnsupportedBackendDriverType{driverType: driverType}
-	}
-
-	return partitionStore, nil
-}
-
-// ToQueueInfo converts a Config.Queue instance to a types.QueueInfo instance
+// ToQueueInfo converts a File.Queue instance to a types.QueueInfo instance
 func (q Queue) ToQueueInfo() types.QueueInfo {
 	partitionInfo := make([]types.PartitionInfo, 0, len(q.Partitions))
 

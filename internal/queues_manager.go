@@ -20,7 +20,7 @@ const MsgServiceInShutdown = "service is shutting down"
 var ErrServiceShutdown = transport.NewRequestFailed(MsgServiceInShutdown)
 
 type QueuesManagerConfig struct {
-	StorageConfig store.Config
+	StorageConfig store.StorageConfig
 	LogicalConfig LogicalConfig
 	Log           *slog.Logger
 }
@@ -61,11 +61,11 @@ func NewQueuesManager(conf QueuesManagerConfig) (*QueuesManager, error) {
 	set.Default(&conf.Log, slog.Default())
 
 	if conf.StorageConfig.Queues == nil {
-		return nil, errors.New("conf.Config.Queues cannot be nil")
+		return nil, errors.New("conf.StorageConfig.Queues cannot be nil")
 	}
 
-	if len(conf.StorageConfig.PartitionStorage) == 0 {
-		return nil, errors.New("conf.Config.PartitionStorage cannot be empty")
+	if len(conf.StorageConfig.Backends) == 0 {
+		return nil, errors.New("conf.StorageConfig.Backends cannot be empty")
 	}
 
 	qm := &QueuesManager{
@@ -77,7 +77,7 @@ func NewQueuesManager(conf QueuesManagerConfig) (*QueuesManager, error) {
 	return qm, nil
 }
 
-// TODO: Implement a healthcheck method call, which will ensure access to Config is working
+// TODO: Implement a healthcheck method call, which will ensure access to StorageConfig is working
 
 func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Queue, error) {
 	if qm.inShutdown.Load() {
@@ -102,7 +102,7 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Que
 	for idx, count := range qm.assignPartitions(info.RequestedPartitions) {
 		for i := 0; i < count; i++ {
 			p := types.PartitionInfo{
-				StorageName:  qm.conf.StorageConfig.PartitionStorage[idx].Name,
+				StorageName:  qm.conf.StorageConfig.Backends[idx].Name,
 				PartitionNum: partitionIdx,
 				Queue:        info,
 			}
@@ -154,7 +154,7 @@ func (qm *QueuesManager) get(ctx context.Context, name string) (*Queue, error) {
 	var partitions []store.Partition
 	for _, info := range queue.PartitionInfo {
 
-		b := store.Find(info.StorageName, qm.conf.StorageConfig.PartitionStorage)
+		b := qm.conf.StorageConfig.Backends.Find(info.StorageName)
 		if b.Name == "" {
 			return nil, errors.WithAttr(
 				slog.Int("partition", info.PartitionNum),
@@ -303,11 +303,11 @@ func (qm *QueuesManager) Shutdown(ctx context.Context) error {
 // assignPartitions assigns partition counts to a backend based on affinity
 func (qm *QueuesManager) assignPartitions(totalPartitions int) []int {
 	var totalAffinity float64
-	for _, backend := range qm.conf.StorageConfig.PartitionStorage {
+	for _, backend := range qm.conf.StorageConfig.Backends {
 		totalAffinity += backend.Affinity
 	}
-	assignments := make([]int, len(qm.conf.StorageConfig.PartitionStorage))
-	for i, b := range qm.conf.StorageConfig.PartitionStorage {
+	assignments := make([]int, len(qm.conf.StorageConfig.Backends))
+	for i, b := range qm.conf.StorageConfig.Backends {
 		assignments[i] = int(math.Floor((b.Affinity / totalAffinity) * float64(totalPartitions)))
 	}
 	return assignments

@@ -13,12 +13,12 @@ func TestAssignPartitions(t *testing.T) {
 
 	for _, test := range []struct {
 		Name     string
-		Backends []store.PartitionStorage
+		Backends []store.Backend
 		Expect   []int
 	}{
 		{
 			Name: "OneBackend",
-			Backends: []store.PartitionStorage{
+			Backends: []store.Backend{
 				{
 					Name:     "store-1",
 					Affinity: 1.0,
@@ -28,7 +28,7 @@ func TestAssignPartitions(t *testing.T) {
 		},
 		{
 			Name: "EvenDist",
-			Backends: []store.PartitionStorage{
+			Backends: []store.Backend{
 				{
 					Name:     "store-1",
 					Affinity: 1.0,
@@ -50,7 +50,7 @@ func TestAssignPartitions(t *testing.T) {
 		},
 		{
 			Name: "ZeroAffinity",
-			Backends: []store.PartitionStorage{
+			Backends: []store.Backend{
 				{
 					Name:     "store-1",
 					Affinity: 1.0,
@@ -72,7 +72,7 @@ func TestAssignPartitions(t *testing.T) {
 		},
 		{
 			Name: "Preferred",
-			Backends: []store.PartitionStorage{
+			Backends: []store.Backend{
 				{
 					Name:     "store-1",
 					Affinity: 1.0,
@@ -95,7 +95,7 @@ func TestAssignPartitions(t *testing.T) {
 	} {
 		t.Run(test.Name, func(t *testing.T) {
 			qm := &QueuesManager{
-				conf: QueuesManagerConfig{StorageConfig: store.Config{PartitionStorage: test.Backends}},
+				conf: QueuesManagerConfig{StorageConfig: store.StorageConfig{Backends: test.Backends}},
 			}
 			a := qm.assignPartitions(100)
 			assert.Equal(t, test.Expect, a)

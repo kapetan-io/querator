@@ -25,15 +25,15 @@ func TestQueuesStorage(t *testing.T) {
 	}{
 		{
 			Name: "InMemory",
-			Setup: func(cp *clock.Provider) store.Config {
-				return setupMemoryStorage(store.Config{Clock: cp})
+			Setup: func() store.StorageConfig {
+				return setupMemoryStorage(store.StorageConfig{})
 			},
 			TearDown: func() {},
 		},
 		{
 			Name: "BadgerDB",
-			Setup: func(cp *clock.Provider) store.Config {
-				return badger.Setup(store.BadgerConfig{Clock: cp})
+			Setup: func() store.StorageConfig {
+				return badger.Setup(store.BadgerConfig{})
 			},
 			TearDown: func() {
 				badger.Teardown()
@@ -56,10 +56,11 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	defer goleak.VerifyNone(t)
 
 	t.Run("CRUD", func(t *testing.T) {
-		_store := setup(clock.NewProvider())
-		defer tearDown()
-		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: _store})
-		defer d.Shutdown(t)
+		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: setup()})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
 
 		t.Run("Create", func(t *testing.T) {
 			var queueName = random.String("queue-", 10)
@@ -305,10 +306,11 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	})
 
 	t.Run("List", func(t *testing.T) {
-		_store := setup(clock.NewProvider())
-		defer tearDown()
-		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: _store})
-		defer d.Shutdown(t)
+		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: setup()})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
 
 		queues := createRandomQueues(t, ctx, c, 50)
 
@@ -388,10 +390,11 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	})
 
 	t.Run("Errors", func(t *testing.T) {
-		_store := setup(clock.NewProvider())
-		defer tearDown()
-		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: _store})
-		defer d.Shutdown(t)
+		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: setup()})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
 
 		var queueName = random.String("queue-", 10)
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{

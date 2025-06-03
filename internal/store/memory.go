@@ -13,9 +13,10 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 )
 
-var bucketName = []byte("queue")
+var bucketName = []byte("partition")
 
 // ---------------------------------------------
 // Partition Implementation
@@ -23,14 +24,14 @@ var bucketName = []byte("queue")
 
 type MemoryPartition struct {
 	info types.PartitionInfo
-	conf Config
+	conf StorageConfig
 	mem  []types.Item
 	mu   sync.RWMutex
 	log  *slog.Logger
 	uid  ksuid.KSUID
 }
 
-func (m *MemoryPartition) Produce(_ context.Context, batch types.ProduceBatch) error {
+func (m *MemoryPartition) Produce(_ context.Context, batch types.ProduceBatch, now clock.Time) error {
 	defer m.mu.Unlock()
 	m.mu.Lock()
 
@@ -38,7 +39,20 @@ func (m *MemoryPartition) Produce(_ context.Context, batch types.ProduceBatch) e
 		for _, item := range r.Items {
 			m.uid = m.uid.Next()
 			item.ID = []byte(m.uid.String())
-			item.CreatedAt = m.conf.Clock.Now().UTC()
+			item.CreatedAt = now
+
+			// If the EnqueueAt is less than 100 milliseconds from now, we want to enqueue
+			// the item immediately. This avoids unnecessary work for something that will be moved into the
+			// queue less than a few milliseconds from now. Programmers may want to be "complete", so they may
+			// include an EnqueueAt time when producing items, which is set to now or near to now, due to clock
+			// drift between systems. Because of this, Querator may end up doing more work and be less efficient
+			// simply because of programmers who desire to completely fill out the pb.QueueProduceItem{} struct
+			// with every possible field, regardless of whether the field is needed.
+
+			// If EnqueueAt dates are in the past, enqueue the item instead of adding it as a scheduled item.
+			if item.EnqueueAt.Before(now.Add(time.Millisecond * 100)) {
+				item.EnqueueAt = time.Time{}
+			}
 
 			m.mem = append(m.mem, *item)
 		}
@@ -54,7 +68,8 @@ func (m *MemoryPartition) Lease(_ context.Context, batch types.LeaseBatch, opts 
 	var count int
 
 	for i, item := range m.mem {
-		if item.IsLeased {
+		// If the item is leased, or is a scheduled item
+		if item.IsLeased || !item.EnqueueAt.IsZero() {
 			continue
 		}
 
@@ -79,7 +94,7 @@ func (m *MemoryPartition) Lease(_ context.Context, batch types.LeaseBatch, opts 
 	return nil
 }
 
-func (m *MemoryPartition) Complete(_ context.Context, batch types.Batch[types.CompleteRequest]) error {
+func (m *MemoryPartition) Complete(ctx context.Context, batch types.Batch[types.CompleteRequest]) error {
 	defer m.mu.Unlock()
 	m.mu.Lock()
 
@@ -93,6 +108,14 @@ nextBatch:
 
 			idx, ok := m.findID(id)
 			if !ok {
+				batch.Requests[i].Err = transport.NewInvalidOption("invalid storage id; '%s' does not exist", id)
+				continue nextBatch
+			}
+
+			// This should not happen, but we need to handle it anyway.
+			if !m.mem[idx].EnqueueAt.IsZero() {
+				m.log.LogAttrs(ctx, slog.LevelWarn, "attempted to complete a scheduled item; reported does not exist",
+					slog.String("id", string(m.mem[idx].ID)))
 				batch.Requests[i].Err = transport.NewInvalidOption("invalid storage id; '%s' does not exist", id)
 				continue nextBatch
 			}
@@ -132,13 +155,46 @@ func (m *MemoryPartition) List(_ context.Context, items *[]*types.Item, opts typ
 		if count >= opts.Limit {
 			return nil
 		}
+
+		// Do not report scheduled items in the queued items list
+		if !item.EnqueueAt.IsZero() {
+			continue
+		}
+
 		*items = append(*items, &item)
 		count++
 	}
 	return nil
 }
 
-func (m *MemoryPartition) Add(_ context.Context, items []*types.Item) error {
+func (m *MemoryPartition) ListScheduled(_ context.Context, items *[]*types.Item, opts types.ListOptions) error {
+	defer m.mu.RUnlock()
+	var count, idx int
+	m.mu.RLock()
+
+	if opts.Pivot != nil {
+		if err := m.validateID(opts.Pivot); err != nil {
+			return transport.NewInvalidOption("invalid storage id; '%s': %s", opts.Pivot, err)
+		}
+		idx, _ = m.findID(opts.Pivot)
+	}
+	for _, item := range m.mem[idx:] {
+		if count >= opts.Limit {
+			return nil
+		}
+
+		// Do not report scheduled items in the queued items list
+		if item.EnqueueAt.IsZero() {
+			continue
+		}
+
+		*items = append(*items, &item)
+		count++
+	}
+	return nil
+}
+
+func (m *MemoryPartition) Add(_ context.Context, items []*types.Item, now clock.Time) error {
 	defer m.mu.Unlock()
 	m.mu.Lock()
 
@@ -149,7 +205,7 @@ func (m *MemoryPartition) Add(_ context.Context, items []*types.Item) error {
 	for _, item := range items {
 		m.uid = m.uid.Next()
 		item.ID = []byte(m.uid.String())
-		item.CreatedAt = m.conf.Clock.Now().UTC()
+		item.CreatedAt = now
 
 		m.mem = append(m.mem, *item)
 	}
@@ -209,12 +265,42 @@ func (m *MemoryPartition) UpdateQueueInfo(info types.QueueInfo) {
 	m.info.Queue = info
 }
 
+func (m *MemoryPartition) ScanForScheduled(_ clock.Duration, now clock.Time) iter.Seq[types.Action] {
+	defer m.mu.RUnlock()
+	m.mu.RLock()
+
+	return func(yield func(types.Action) bool) {
+		for _, item := range m.mem {
+			// Skip non-scheduled items
+			if item.EnqueueAt.IsZero() {
+				continue
+			}
+
+			// NOTE: Different implementations might not include the entire item in the action if
+			// only the id is needed to enqueue the item in place.
+			if now.After(item.EnqueueAt) {
+				yield(types.Action{
+					Action:       types.ActionQueueScheduledItem,
+					PartitionNum: m.info.PartitionNum,
+					Queue:        m.info.Queue.Name,
+					Item:         item,
+				})
+				continue
+			}
+		}
+	}
+}
+
 func (m *MemoryPartition) ScanForActions(_ clock.Duration, now clock.Time) iter.Seq[types.Action] {
 	defer m.mu.RUnlock()
 	m.mu.RLock()
 
 	return func(yield func(types.Action) bool) {
 		for _, item := range m.mem {
+			// Skip scheduled items
+			if !item.EnqueueAt.IsZero() {
+				continue
+			}
 			// Is the leased item expired?
 			if item.IsLeased {
 				if now.After(item.LeaseDeadline) {
@@ -254,7 +340,9 @@ func (m *MemoryPartition) ScanForActions(_ clock.Duration, now clock.Time) iter.
 	}
 }
 
-func (m *MemoryPartition) TakeAction(_ context.Context, batch types.Batch[types.LifeCycleRequest]) error {
+func (m *MemoryPartition) TakeAction(_ context.Context, batch types.Batch[types.LifeCycleRequest],
+	state *types.PartitionState) error {
+
 	if len(batch.Requests) == 0 {
 		return nil
 	}
@@ -283,7 +371,7 @@ func (m *MemoryPartition) TakeAction(_ context.Context, batch types.Batch[types.
 
 				// Remove the item from the array
 				m.mem = append(m.mem[:idx], m.mem[idx+1:]...)
-				// Add the item to the beginning of the array
+				// Add the item to the tail of the array
 				// See doc/adr/0022-managing-item-lifecycles.md for and explanation
 				m.mem = append(m.mem, item)
 			case types.ActionDeleteItem:
@@ -294,9 +382,35 @@ func (m *MemoryPartition) TakeAction(_ context.Context, batch types.Batch[types.
 				// Remove the item from the array
 				m.mem = append(m.mem[:idx], m.mem[idx+1:]...)
 			case types.ActionQueueScheduledItem:
-				// TODO: Find the scheduled item and add it to the partition queue
+				// NOTE: Different implementations might take the item provided and insert the item into
+				// the partition, or they could update the item in place depending upon the capabilities
+				// of the data store used.
+				idx, ok := m.findID(a.Item.ID)
+				if !ok {
+					m.log.Warn("assertion failed; scheduled item is should be in partition; action ignored",
+						"id", string(a.Item.ID))
+					continue
+				}
+
+				// Make a copy of the item, then remove it
+				item := m.mem[idx]
+				if item.EnqueueAt.IsZero() {
+					m.log.Warn("assertion failed; expected to be a scheduled item; action ignored",
+						"id", string(a.Item.ID))
+					continue
+				}
+				m.mem = append(m.mem[:idx], m.mem[idx+1:]...)
+
+				// Assign a new id, and add the item to the tail
+				m.uid = m.uid.Next()
+				item.EnqueueAt = clock.Time{}
+				item.ID = []byte(m.uid.String())
+				m.mem = append(m.mem, item)
+				// Tell the partition it gained a new un-leased item.
+				state.UnLeased++
 			default:
-				m.log.Warn("undefined action", "action", fmt.Sprintf("%d", int(a.Action)))
+				m.log.Warn("assertion failed; undefined action", "action",
+					fmt.Sprintf("0x%X", int(a.Action)))
 			}
 		}
 	}
@@ -310,6 +424,11 @@ func (m *MemoryPartition) LifeCycleInfo(ctx context.Context, info *types.LifeCyc
 
 	// Find the item that will expire next
 	for _, item := range m.mem {
+		// Skip scheduled items
+		if !item.EnqueueAt.IsZero() {
+			continue
+		}
+
 		if item.LeaseDeadline.Before(next) {
 			next = item.LeaseDeadline
 		}
@@ -321,15 +440,20 @@ func (m *MemoryPartition) LifeCycleInfo(ctx context.Context, info *types.LifeCyc
 	return nil
 }
 
-func (m *MemoryPartition) Stats(_ context.Context, stats *types.PartitionStats) error {
+func (m *MemoryPartition) Stats(_ context.Context, stats *types.PartitionStats, now clock.Time) error {
 	defer m.mu.RUnlock()
 	m.mu.RLock()
 
-	now := m.conf.Clock.Now().UTC()
 	for _, item := range m.mem {
+		// Count scheduled and do not include them in other stats
+		if !item.EnqueueAt.IsZero() {
+			stats.Scheduled++
+			continue
+		}
+
 		stats.Total++
 		stats.AverageAge += now.Sub(item.CreatedAt)
-		if item.IsLeased {
+		if item.IsLeased && item.EnqueueAt.IsZero() {
 			stats.AverageLeasedAge += item.LeaseDeadline.Sub(now)
 			stats.NumLeased++
 		}
@@ -408,7 +532,7 @@ func (s *MemoryQueues) Add(_ context.Context, info types.QueueInfo) error {
 
 	_, ok := s.findQueue(info.Name)
 	if ok {
-		return ErrQueueAlreadyExists
+		return transport.NewInvalidOption("invalid queue; '%s' already exists", info.Name)
 	}
 
 	s.mem = append(s.mem, info)
@@ -509,18 +633,18 @@ func (s *MemoryQueues) findQueue(name string) (int, bool) {
 
 type MemoryPartitionStore struct {
 	partitions map[types.PartitionHash]*MemoryPartition
-	conf       Config
+	conf       StorageConfig
 	log        *slog.Logger
 }
 
 var _ PartitionStore = &MemoryPartitionStore{}
 
-func NewMemoryPartitionStore(conf Config) *MemoryPartitionStore {
-	set.Default(&conf.Log, slog.Default())
+func NewMemoryPartitionStore(conf StorageConfig, log *slog.Logger) *MemoryPartitionStore {
+	set.Default(&log, slog.Default())
 
 	return &MemoryPartitionStore{
 		partitions: make(map[types.PartitionHash]*MemoryPartition),
-		log:        conf.Log.With("store", "memory"),
+		log:        log.With("store", "memory"),
 		conf:       conf,
 	}
 }

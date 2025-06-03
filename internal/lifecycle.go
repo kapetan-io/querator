@@ -89,8 +89,20 @@ func (l *LifeCycle) Start() error {
 
 // Notify proposes a time for the life cycle to consider when determining the next execution cycle.
 func (l *LifeCycle) Notify(t clock.Time) {
+	l.log.LogAttrs(context.Background(), LevelDebugAll, "notify life cycle",
+		slog.String("time", humanize.Time(t)))
 	select {
-	case l.notifyCh <- Request{Request: t}:
+	case l.notifyCh <- Request{Method: MethodNotify, Request: t}:
+	default:
+	}
+}
+
+// NotifyScheduled proposes a time for the life cycle to consider when determining the next scheduled cycle.
+func (l *LifeCycle) NotifyScheduled(t clock.Time) {
+	l.log.LogAttrs(context.Background(), LevelDebugAll, "notify life cycle scheduled",
+		slog.String("time", humanize.Time(t)))
+	select {
+	case l.notifyCh <- Request{Method: MethodNotifyScheduled, Request: t}:
 	default:
 	}
 }
@@ -98,8 +110,9 @@ func (l *LifeCycle) Notify(t clock.Time) {
 func (l *LifeCycle) requestLoop() {
 	defer l.wg.Done()
 	state := lifeCycleState{
-		timer:           l.conf.Clock.NewTimer(humanize.LongTime),
 		nextRunDeadline: l.conf.Clock.Now().UTC().Add(humanize.LongTime),
+		scheduleTimer:   l.conf.Clock.NewTimer(humanize.LongTime),
+		timer:           l.conf.Clock.NewTimer(humanize.LongTime),
 	}
 
 	for {
@@ -109,7 +122,12 @@ func (l *LifeCycle) requestLoop() {
 			l.runLifeCycle(&state)
 			close(req.ReadyCh)
 		case req := <-l.notifyCh:
-			l.handleNotify(&state, req.Request.(clock.Time))
+			switch req.Method {
+			case MethodNotify:
+				l.handleNotify(&state, req.Request.(clock.Time))
+			case MethodNotifyScheduled:
+				l.handleScheduledNotify(&state, req.Request.(clock.Time))
+			}
 		case req := <-l.shutdownCh:
 			close(req.ReadyCh)
 			state.timer.Stop()
@@ -117,6 +135,9 @@ func (l *LifeCycle) requestLoop() {
 		case <-state.timer.C():
 			l.log.LogAttrs(context.Background(), LevelDebugAll, "life cycle run - timer fired")
 			l.runLifeCycle(&state)
+		case <-state.scheduleTimer.C():
+			l.log.LogAttrs(context.Background(), LevelDebugAll, "scheduled run - timer fired")
+			l.runScheduled(&state)
 		}
 
 		now := l.conf.Clock.Now().UTC()
@@ -124,6 +145,45 @@ func (l *LifeCycle) requestLoop() {
 		l.log.LogAttrs(context.Background(), LevelDebugAll, "life cycle timer reset",
 			slog.String("nextRunDeadline", state.nextRunDeadline.String()),
 			slog.String("duration", state.nextRunDeadline.Sub(now).String()))
+	}
+}
+
+func (l *LifeCycle) handleScheduledNotify(state *lifeCycleState, notify clock.Time) {
+	now := l.conf.Clock.Now().UTC()
+	// Ignore notify times from the past
+	if now.After(notify) {
+		return
+	}
+
+	// Ignore if we already have a life cycle run scheduled that is before the notify time.
+	if state.nextScheduleDeadline.After(now) && state.nextScheduleDeadline.Before(notify) {
+		return
+	}
+	l.log.LogAttrs(context.Background(), LevelDebugAll, "scheduled notified",
+		slog.String("next", notify.String()),
+		slog.String("now", now.String()),
+		slog.String("timer_reset", notify.Sub(now).String()))
+	state.nextScheduleDeadline = notify
+}
+
+func (l *LifeCycle) runScheduled(state *lifeCycleState) {
+	defer func() {
+		l.log.LogAttrs(context.Background(), LevelDebugAll, "scheduled run complete",
+			slog.String("next-run", state.nextScheduleDeadline.String()))
+	}()
+
+	now := l.conf.Clock.Now().UTC()
+	actions := make([]types.Action, 0, 1_000)
+
+	// ScanForScheduled() returns an iterator which allows us to batch the scheduled actions together
+	// before writing the actions to the logical.
+	for a := range l.conf.Storage.ScanForScheduled(l.logical.conf.ReadTimeout, now) {
+		Assert(a.Action != types.ActionQueueScheduledItem, "must only return scheduled items")
+		actions = l.batchAction(state, a, actions, l.writeLogicalActions)
+	}
+
+	if len(actions) > 0 {
+		l.writeLogicalActions(state, actions)
 	}
 }
 
@@ -146,12 +206,11 @@ func (l *LifeCycle) handleNotify(state *lifeCycleState, notify clock.Time) {
 }
 
 func (l *LifeCycle) runLifeCycle(state *lifeCycleState) {
-	now := l.conf.Clock.Now().UTC()
-
 	defer func() {
 		l.log.LogAttrs(context.Background(), LevelDebugAll, "life cycle run complete",
 			slog.String("next-run", state.nextRunDeadline.String()))
 	}()
+	now := l.conf.Clock.Now().UTC()
 
 	// Attempt to get the partition out of a failed state
 	if l.state.Failures != 0 {
@@ -274,9 +333,9 @@ func (l *LifeCycle) writeLogicalActions(state *lifeCycleState, actions []types.A
 		retryIn := retry.DefaultBackOff.Next(l.state.Failures)
 		state.nextRunDeadline = l.conf.Clock.Now().UTC().Add(retryIn)
 
-		// Only log a warning as a failure here isn't a big deal as the next life cycle
+		// Only log a warning as a failure here isn't a big deal. The next life cycle
 		// run will find the same items and attempt to handle them in the same way.
-		l.log.Warn("storage failure during logical life cycle; retrying...",
+		l.log.Warn("partition storage failure; retrying...",
 			"retry", retryIn,
 			"error", err)
 	}
@@ -312,7 +371,7 @@ func (l *LifeCycle) recoverPartition(state *lifeCycleState) bool {
 	var stats types.PartitionStats
 	defer cancel()
 
-	if err := l.conf.Storage.Stats(ctx, &stats); err != nil {
+	if err := l.conf.Storage.Stats(ctx, &stats, l.conf.Clock.Now().UTC()); err != nil {
 		l.state.Failures++
 		l.partitionStateChange(l.state.Failures, types.UnSet)
 		retryIn := retry.DefaultBackOff.Next(l.state.Failures)
@@ -331,6 +390,7 @@ func (l *LifeCycle) recoverPartition(state *lifeCycleState) bool {
 		return false
 	}
 
+	// TODO(thrawn01): Change this to info, if this is the first time the partition has become available.
 	l.log.LogAttrs(context.Background(), slog.LevelWarn, "partition recovered",
 		slog.Int("partition", l.conf.Partition.Info.PartitionNum))
 
@@ -379,6 +439,8 @@ func (l *LifeCycle) Shutdown(ctx context.Context) error {
 }
 
 type lifeCycleState struct {
-	nextRunDeadline clock.Time
-	timer           clock.Timer
+	scheduleTimer        clock.Timer
+	timer                clock.Timer
+	nextScheduleDeadline clock.Time
+	nextRunDeadline      clock.Time
 }

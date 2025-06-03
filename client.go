@@ -210,10 +210,11 @@ func (c *Client) QueuesDelete(ctx context.Context, req *pb.QueuesDeleteRequest) 
 }
 
 // TODO: Write an iterator we can use to iterate through list APIs
+// TODO(scheduled): Listing enqueued items should NOT include scheduled items
 
 // StorageItemsList lists current items in the queue.
 // # NOTE
-// If the pivot does not exist when calling StoreItemsList(), the endpoint will return the
+// If the pivot does not exist when calling StorageItemsList(), the endpoint will return the
 // nearest next item in the list to the pivot provided. It is up to the caller to verify the
 // list of items returned begins with the id specified in the pivot. This allows users to iterate
 // through a constantly moving list without constantly running into "pivot not found" errors.
@@ -238,6 +239,41 @@ func (c *Client) StorageItemsList(ctx context.Context, name string, partition in
 
 	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		fmt.Sprintf("%s%s", c.conf.Endpoint, transport.RPCStorageItemsList), bytes.NewReader(payload))
+	if err != nil {
+		return duh.NewClientError("", err, nil)
+	}
+
+	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	return c.client.Do(r, res)
+}
+
+// StorageScheduledList lists scheduled items in the partition.
+// # NOTE
+// If the pivot does not exist when calling StorageScheduledList(), the endpoint will return the
+// nearest next item in the list to the pivot provided. It is up to the caller to verify the
+// list of items returned begins with the id specified in the pivot. This allows users to iterate
+// through a constantly moving list without constantly running into "pivot not found" errors.
+func (c *Client) StorageScheduledList(ctx context.Context, name string, partition int, res *pb.StorageItemsListResponse,
+	opts *ListOptions) error {
+
+	if opts == nil {
+		opts = &ListOptions{}
+	}
+
+	req := pb.StorageItemsListRequest{
+		Limit:     int32(opts.Limit),
+		Partition: int32(partition),
+		Pivot:     opts.Pivot,
+		QueueName: name,
+	}
+
+	payload, err := proto.Marshal(&req)
+	if err != nil {
+		return duh.NewClientError("while marshaling request payload: %w", err, nil)
+	}
+
+	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("%s%s", c.conf.Endpoint, transport.RPCStorageScheduledList), bytes.NewReader(payload))
 	if err != nil {
 		return duh.NewClientError("", err, nil)
 	}

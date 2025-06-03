@@ -2,14 +2,13 @@ package daemon
 
 import (
 	"crypto/tls"
-	"log/slog"
-
 	"github.com/duh-rpc/duh-go"
 	"github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/internal"
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/set"
+	"log/slog"
 )
 
 type Config struct {
@@ -41,23 +40,22 @@ func (c *Config) ServerTLS() *tls.Config {
 	return nil
 }
 
-func (c *Config) SetDefaults() error {
-	var err error
+func (c *Config) SetDefaults() {
 	set.Default(&c.Clock, clock.NewProvider())
 	set.Default(&c.Log, slog.Default())
-	set.Default(&c.ListenAddress, "localhost:2319")
 	set.Default(&c.MaxLeaseBatchSize, internal.DefaultMaxLeaseBatchSize)
 	set.Default(&c.MaxProduceBatchSize, internal.DefaultMaxProduceBatchSize)
 	set.Default(&c.MaxCompleteBatchSize, internal.DefaultMaxCompleteBatchSize)
 	set.Default(&c.MaxRequestsPerQueue, internal.DefaultMaxRequestsPerQueue)
+	set.Default(&c.MaxConcurrentRequests, internal.DefaultMaxConcurrentConnections)
 	set.Default(&c.StorageConfig.Queues, store.NewMemoryQueues(c.Log))
-	set.Default(&c.StorageConfig.Log, c.Log)
-	set.Default(&c.StorageConfig.PartitionStorage, []store.PartitionStorage{
+	set.Default(&c.StorageConfig.Backends, []store.Backend{
 		{
-			PartitionStore: store.NewMemoryPartitionStore(c.StorageConfig),
+			PartitionStore: store.NewMemoryPartitionStore(c.StorageConfig, c.Log),
 			Name:           "mem-0",
 			Affinity:       1,
 		},
 	})
-	return err
 }
+
+// TODO: Load from config system

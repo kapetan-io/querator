@@ -16,9 +16,8 @@ const (
 )
 
 var (
-	ErrQueueNotExist      = transport.NewRequestFailed("queue does not exist")
-	ErrQueueAlreadyExists = transport.NewInvalidOption("queue already exists")
-	theFuture             = time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.UTC)
+	ErrQueueNotExist = transport.NewRequestFailed("queue does not exist")
+	theFuture        = time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.UTC)
 )
 
 type LeaseOptions struct {
@@ -56,7 +55,7 @@ type Queues interface {
 // upon first invocation. See 0021-storage-lazy-initialization.md for details.
 type Partition interface {
 	// Produce writes the items in the batch to the data store.
-	Produce(ctx context.Context, batch types.ProduceBatch) error
+	Produce(ctx context.Context, batch types.ProduceBatch, now clock.Time) error
 
 	// Lease attempts to lease items for each request in the lease batch. It uses the batch.Iterator()
 	// to evenly distribute items to all the waiting lease requests represented in the batch.
@@ -71,8 +70,11 @@ type Partition interface {
 	// in the queue.
 	List(ctx context.Context, items *[]*types.Item, opts types.ListOptions) error
 
+	// TODO(scheduled) doc
+	ListScheduled(ctx context.Context, items *[]*types.Item, opts types.ListOptions) error
+
 	// Add adds the item to the queue and updates the item with the unique id.
-	Add(ctx context.Context, items []*types.Item) error
+	Add(ctx context.Context, items []*types.Item, now clock.Time) error
 
 	// Delete removes the provided ids from the queue
 	Delete(ctx context.Context, ids []types.ItemID) error
@@ -82,7 +84,7 @@ type Partition interface {
 	Clear(ctx context.Context, destructive bool) error
 
 	// Stats returns stats about the queue
-	Stats(ctx context.Context, stats *types.PartitionStats) error
+	Stats(ctx context.Context, stats *types.PartitionStats, now clock.Time) error
 
 	// ScanForActions returns an iterator of actions that should be preformed for the partition life cycle.
 	// This method must be thread safe as it will be called by a go routine that is separate from the
@@ -92,15 +94,23 @@ type Partition interface {
 	// ### Parameters
 	// - `timeout`: The read timeout for each read operation to the underlying storage system.
 	// If a read exceeds this timeout, the iterator is aborted.
-	// - `now`: The time used by LifeCycleActions to determine which items need action.
+	// - `now`: The time used to determine which items need action.
 	ScanForActions(timeout clock.Duration, now clock.Time) iter.Seq[types.Action]
 
+	// ScanForScheduled returns an iterator of ONLY scheduled actions. This allows more efficient
+	// handling of scheduled items, which operate on different timers and schedule times.
+	//
+	// ### Parameters
+	// - `timeout`: The read timeout for each read operation to the underlying storage system.
+	// If a read exceeds this timeout, the iterator is aborted.
+	// - `now`: The time used to determine which items are ready to be queued.
+	ScanForScheduled(timeout clock.Duration, now clock.Time) iter.Seq[types.Action]
+
 	// TakeAction takes lifecycle requests and preforms the actions requested on the partition.
-	TakeAction(ctx context.Context, batch types.Batch[types.LifeCycleRequest]) error
+	TakeAction(ctx context.Context, batch types.Batch[types.LifeCycleRequest], stats *types.PartitionState) error
 
 	// LifeCycleInfo fills out the LifeCycleInfo struct which is used to decide when the
 	// next life cycle should run
-	// TODO: Rename this, this is too generic for what it currently does.
 	LifeCycleInfo(ctx context.Context, info *types.LifeCycleInfo) error
 
 	// Info returns the Partition Info for this partition. This call needs to be thread
@@ -116,30 +126,30 @@ type Partition interface {
 	Close(ctx context.Context) error
 }
 
-func Find(needle string, haystack []PartitionStorage) PartitionStorage {
-	for _, i := range haystack {
-		if i.Name == needle {
-			return i
+type Backends []Backend
+
+func (b Backends) Find(name string) Backend {
+	for _, backend := range b {
+		if backend.Name == name {
+			return backend
 		}
 	}
-	return PartitionStorage{}
+	return Backend{}
 }
 
-// Config is the configuration accepted by QueueManager to manage storage of queues, scheduled items,
+// TODO: Rename this to `store.Config` if possible
+
+// StorageConfig is the configuration accepted by QueueManager to manage storage of queues, scheduled items,
 // and partitions.
-type Config struct {
-	// Queues where metadata about the queues is stored
+type StorageConfig struct {
+	// How Queues are stored can be separate from PartitionInfo and Scheduled stores
 	Queues Queues
-	// The PartitionStorage configured for partitions to utilize
-	PartitionStorage []PartitionStorage
-	// Clock is the clock provider the backend implementation should use
-	Clock *clock.Provider
-	// Log is the logger to be used
-	Log *slog.Logger
+	// The Backends configured for partitions to utilize
+	Backends Backends
 }
 
-// PartitionStorage is the struct which holds the configured partition backend interfaces
-type PartitionStorage struct {
+// Backend is the struct which holds the configured partition backend interfaces
+type Backend struct {
 	PartitionStore PartitionStore
 	Affinity       float64
 	Name           string

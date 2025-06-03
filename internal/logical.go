@@ -1202,37 +1202,32 @@ func (l *Logical) handleShutdown(state *QueueState, req *types.ShutdownRequest) 
 
 	// Consume all requests currently in flight
 	for l.inFlight.Load() != 0 {
-		for {
-			select {
-			case r := <-l.hotRequestCh:
-				switch r.Method {
-				case MethodProduce:
-					o := r.Request.(*types.ProduceRequest)
-					o.Err = ErrQueueShutdown
-					close(o.ReadyCh)
-				case MethodLease:
-					o := r.Request.(*types.LeaseRequest)
-					o.Err = ErrQueueShutdown
-					close(o.ReadyCh)
-				case MethodComplete:
-					o := r.Request.(*types.CompleteRequest)
-					o.Err = ErrQueueShutdown
-					close(o.ReadyCh)
-				case MethodLifeCycle:
-					o := r.Request.(*Request)
-					o.Err = ErrQueueShutdown
-					close(o.ReadyCh)
-				default:
-					panic(fmt.Sprintf("undefined request method '%d'", r.Method))
-				}
+		select {
+		case r := <-l.hotRequestCh:
+			switch r.Method {
+			case MethodProduce:
+				o := r.Request.(*types.ProduceRequest)
+				o.Err = ErrQueueShutdown
+				close(o.ReadyCh)
+			case MethodLease:
+				o := r.Request.(*types.LeaseRequest)
+				o.Err = ErrQueueShutdown
+				close(o.ReadyCh)
+			case MethodComplete:
+				o := r.Request.(*types.CompleteRequest)
+				o.Err = ErrQueueShutdown
+				close(o.ReadyCh)
+			case MethodLifeCycle:
+				o := r.Request.(*Request)
+				o.Err = ErrQueueShutdown
+				close(o.ReadyCh)
 			default:
-				// If there is a hot request still in flight, it is possible
-				// it hasn't been added to the channel yet, so we try until there
-				// are no more waiting requests.
-				if l.inFlight.Load() == 0 {
-					break
-				}
+				panic(fmt.Sprintf("undefined request method '%d'", r.Method))
 			}
+		default:
+			// If there is a hot request still in flight, it is possible
+			// it hasn't been added to the channel yet, so we continue trying
+			// until there are no more waiting requests.
 		}
 	}
 

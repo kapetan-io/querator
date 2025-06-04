@@ -27,6 +27,7 @@ import (
 	"github.com/kapetan-io/tackle/set"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"golang.org/x/net/netutil"
 	"log/slog"
 	"net"
 	"net/http"
@@ -44,6 +45,8 @@ type Daemon struct {
 
 func NewDaemon(ctx context.Context, conf Config) (*Daemon, error) {
 	set.Default(&conf.Log, slog.Default())
+
+	conf.SetDefaults()
 
 	s, err := querator.NewService(querator.ServiceConfig{
 		MaxCompleteBatchSize: conf.MaxCompleteBatchSize,
@@ -139,10 +142,11 @@ func (d *Daemon) spawnHTTPS(ctx context.Context, mux http.Handler) error {
 	}
 
 	var err error
-	d.Listener, err = net.Listen("tcp", d.conf.ListenAddress)
+	l, err := net.Listen("tcp", d.conf.ListenAddress)
 	if err != nil {
 		return fmt.Errorf("while starting HTTPS listener: %w", err)
 	}
+	d.Listener = netutil.LimitListener(l, d.conf.MaxConcurrentRequests)
 	srv.Addr = d.Listener.Addr().String()
 
 	d.wg.Add(1)
@@ -171,10 +175,12 @@ func (d *Daemon) spawnHTTP(ctx context.Context, h http.Handler) error {
 		Handler:  h,
 	}
 	var err error
-	d.Listener, err = net.Listen("tcp", d.conf.ListenAddress)
+	l, err := net.Listen("tcp", d.conf.ListenAddress)
 	if err != nil {
 		return fmt.Errorf("while starting HTTP listener: %w", err)
 	}
+	// Limit the number of concurrent connections allowed to avoid abusing our resources.
+	d.Listener = netutil.LimitListener(l, d.conf.MaxConcurrentRequests)
 	srv.Addr = d.Listener.Addr().String()
 
 	d.wg.Add(1)

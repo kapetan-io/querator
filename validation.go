@@ -39,6 +39,7 @@ func (s *Service) validateQueueProduceProto(in *proto.QueueProduceRequest, out *
 		qi.Encoding = item.Encoding
 		qi.Kind = item.Kind
 		qi.Reference = item.Reference
+		qi.EnqueueAt = item.EnqueueAt.AsTime()
 		if item.Bytes != nil {
 			qi.Payload = item.Bytes
 		} else {

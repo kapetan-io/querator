@@ -25,15 +25,15 @@ func TestPartitions(t *testing.T) {
 	}{
 		{
 			Name: "InMemory",
-			Setup: func(cp *clock.Provider) store.Config {
-				return setupMemoryStorage(store.Config{Clock: cp})
+			Setup: func() store.Config {
+				return setupMemoryStorage(store.Config{})
 			},
 			TearDown: func() {},
 		},
 		{
 			Name: "BadgerDB",
-			Setup: func(cp *clock.Provider) store.Config {
-				return badger.Setup(store.BadgerConfig{Clock: cp})
+			Setup: func() store.Config {
+				return badger.Setup(store.BadgerConfig{})
 			},
 			TearDown: func() {
 				badger.Teardown()
@@ -54,10 +54,11 @@ func TestPartitions(t *testing.T) {
 
 func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	defer goleak.VerifyNone(t)
-	_store := setup(clock.NewProvider())
-	defer tearDown()
-	d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: _store})
-	defer d.Shutdown(t)
+	d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: setup()})
+	defer func() {
+		d.Shutdown(t)
+		tearDown()
+	}()
 
 	t.Run("TwoPartitions", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)

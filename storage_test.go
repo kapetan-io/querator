@@ -27,15 +27,15 @@ func TestQueueStorage(t *testing.T) {
 	}{
 		{
 			Name: "InMemory",
-			Setup: func(cp *clock.Provider) store.Config {
-				return setupMemoryStorage(store.Config{Clock: cp})
+			Setup: func() store.Config {
+				return setupMemoryStorage(store.Config{})
 			},
 			TearDown: func() {},
 		},
 		{
 			Name: "BadgerDB",
-			Setup: func(cp *clock.Provider) store.Config {
-				return badger.Setup(store.BadgerConfig{Clock: cp})
+			Setup: func() store.Config {
+				return badger.Setup(store.BadgerConfig{})
 			},
 			TearDown: func() {
 				badger.Teardown()
@@ -55,15 +55,15 @@ func TestQueueStorage(t *testing.T) {
 	}
 }
 
-func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
+func testQueueStorage(t *testing.T, setUp NewStorageFunc, tearDown func()) {
 	defer goleak.VerifyNone(t)
 
-	_store := newStore(clock.NewProvider())
+	storage := setUp()
 	defer tearDown()
 
 	t.Run("CRUDCompare", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: _store})
+		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: storage})
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -129,7 +129,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 
 	t.Run("CRUD", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 15*clock.Second, que.ServiceConfig{StorageConfig: _store})
+		d, c, ctx := newDaemon(t, 15*clock.Second, que.ServiceConfig{StorageConfig: storage})
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -287,7 +287,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 
 	t.Run("StorageItemsListErrors", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 5*clock.Second, que.ServiceConfig{StorageConfig: _store})
+		d, c, ctx := newDaemon(t, 5*clock.Second, que.ServiceConfig{StorageConfig: storage})
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -347,7 +347,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 	})
 	t.Run("StorageItemsImportErrors", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 5*clock.Second, que.ServiceConfig{StorageConfig: _store})
+		d, c, ctx := newDaemon(t, 5*clock.Second, que.ServiceConfig{StorageConfig: storage})
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -431,7 +431,7 @@ func testQueueStorage(t *testing.T, newStore NewStorageFunc, tearDown func()) {
 
 	t.Run("StorageItemsDeleteErrors", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 5*clock.Second, que.ServiceConfig{StorageConfig: _store})
+		d, c, ctx := newDaemon(t, 5*clock.Second, que.ServiceConfig{StorageConfig: storage})
 		defer d.Shutdown(t)
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{

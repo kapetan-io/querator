@@ -21,7 +21,6 @@ import (
 	"github.com/kapetan-io/querator/daemon"
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
-	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/color"
 )
 
@@ -85,9 +84,7 @@ func ApplyConfigFile(ctx context.Context, conf *daemon.Config, file File, w io.W
 	}
 
 	// Apply defaults if there are required config items missing from the provided config file
-	if err := conf.SetDefaults(); err != nil {
-		return err
-	}
+	conf.SetDefaults()
 
 	if file.ConfigFile != "" {
 		conf.Log.Info("Loaded config from file", "file", file.ConfigFile)
@@ -142,14 +139,10 @@ func setupPartitionStorage(file File, d *daemon.Config) error {
 
 		switch strings.ToLower(ps.Driver) {
 		case "memory":
-			s = store.NewMemoryPartitionStore(store.Config{
-				Clock: clock.NewProvider(),
-				Log:   d.Log,
-			})
+			s = store.NewMemoryPartitionStore(store.Config{}, d.Log)
 		case "badger":
 			s = store.NewBadgerPartitionStore(store.BadgerConfig{
 				StorageDir: ps.Config["storage-dir"], // TODO(thrawn01): validate badger config options
-				Clock:      clock.NewProvider(),
 				Log:        d.Log,
 			})
 		default:
@@ -172,7 +165,6 @@ func setupQueueStorage(ctx context.Context, file File, conf *daemon.Config) erro
 	case "badger":
 		conf.StorageConfig.Queues = store.NewBadgerQueues(store.BadgerConfig{
 			StorageDir: file.QueueStorage.Config["storage-dir"], // TODO(thrawn01): validate bolt config options
-			Clock:      clock.NewProvider(),
 			Log:        conf.Log,
 		})
 	default:

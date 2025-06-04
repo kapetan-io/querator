@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 type MethodKind int
@@ -36,11 +37,14 @@ const (
 	MethodLifeCycle
 	MethodPartitionStateChange
 	MethodReloadPartitions
+	MethodNotify
+	MethodNotifyScheduled
 
-	DefaultMaxLeaseBatchSize    = 1_000
-	DefaultMaxProduceBatchSize  = 1_000
-	DefaultMaxCompleteBatchSize = 1_000
-	DefaultMaxRequestsPerQueue  = 500
+	DefaultMaxLeaseBatchSize        = 1_000
+	DefaultMaxProduceBatchSize      = 1_000
+	DefaultMaxCompleteBatchSize     = 1_000
+	DefaultMaxRequestsPerQueue      = 100
+	DefaultMaxConcurrentConnections = 1_000
 
 	MsgRequestTimeout    = "request timeout; no items are in the queue, try again"
 	MsgDuplicateClientID = "duplicate client id; a client cannot make multiple leased requests to the same queue"
@@ -168,14 +172,6 @@ func (l *Logical) Produce(ctx context.Context, req *types.ProduceRequest) error 
 		return transport.NewInvalidOption("items is invalid; max_produce_batch_size is"+
 			" %d but received %d", l.conf.MaxProduceBatchSize, len(req.Items))
 	}
-
-	// TODO(schedule): Ignore Schedule dates in the past and enqueue immediately.
-	// TODO(schedule): If Scheduled is set, and if the future date is less than 1 second from now, then skip schedule
-	//  and enqueue the item immediately. This avoids unnecessary work for something that will be moved into
-	//  the queue less than 1 second from now. If someone queued work with the intention that is be be scheduled
-	//  now or within a few seconds we should optimize for this common mistake. Programmers may want to be
-	//  "complete", so they may include a Scheduled time which is set to now or near to now, due to clock drift
-	//  between systems.
 
 	req.RequestDeadline = l.conf.Clock.Now().UTC().Add(req.RequestTimeout)
 	req.ReadyCh = make(chan struct{})
@@ -448,18 +444,11 @@ func (l *Logical) UpdatePartitions(ctx context.Context, p []store.Partition) err
 // Methods to manage queue storage
 // -------------------------------------------------
 
-func (l *Logical) StorageItemsList(ctx context.Context, partition int, items *[]*types.Item, opts types.ListOptions) error {
+func (l *Logical) StorageItemsList(ctx context.Context, req StorageRequest) error {
+
 	if l.inShutdown.Load() {
 		return ErrQueueShutdown
 	}
-	req := StorageRequest{
-		Partition: partition,
-		Items:     items,
-		Options:   opts,
-	}
-
-	// TODO: Test for invalid pivot
-
 	r := Request{
 		Method:  MethodStorageItemsList,
 		Request: req,
@@ -616,9 +605,6 @@ func (l *Logical) requestLoop() {
 	var state QueueState
 
 	l.prepareQueueState(&state)
-
-	// TODO(scheduled): When adding new scheduled items to the partition, requestLoop needs
-	//  to notify the life cycle of the new items.
 
 	for {
 		l.log.LogAttrs(context.Background(), LevelDebugAll, "Logical.requestLoop()",
@@ -783,6 +769,24 @@ func (l *Logical) assignToPartitions(state *QueueState) {
 	l.assignCompleteRequests(state)
 }
 
+// notifyScheduled iterates through the produced items. If any are scheduled
+// items, then we notify the life cycle for the provided partition
+func (l *Logical) notifyScheduled(p *Partition) {
+	// Find the most recent scheduled item in the requests
+	var mostRecentScheduled time.Time
+	for _, r := range p.ProduceRequests.Requests {
+		for _, item := range r.Items {
+			if item.EnqueueAt.Before(mostRecentScheduled) {
+				mostRecentScheduled = item.EnqueueAt
+			}
+		}
+	}
+	if mostRecentScheduled.IsZero() {
+		return
+	}
+	p.LifeCycle.NotifyScheduled(mostRecentScheduled)
+}
+
 func (l *Logical) assignProduceRequests(state *QueueState) {
 	for _, req := range state.Producers.Requests {
 		// Assign a ExpireTimeout to each item
@@ -937,13 +941,14 @@ func (l *Logical) applyToPartitions(state *QueueState) {
 
 		// ==== Produce ====
 		if len(p.ProduceRequests.Requests) != 0 {
-			if err := p.Store.Produce(ctx, p.ProduceRequests); err != nil {
+			if err := p.Store.Produce(ctx, p.ProduceRequests, l.conf.Clock.Now().UTC()); err != nil {
 				l.log.Error("while calling store.Partition.Produce()",
 					"partition", p.Info.PartitionNum, "error", err)
 				// TODO: Handle degradation
 			}
 			// Only if Produce was successful
 			p.State.MostRecentDeadline = l.conf.Clock.Now().UTC().Add(l.conf.ExpireTimeout)
+			l.notifyScheduled(p)
 		}
 
 		// ==== Lease ====
@@ -990,7 +995,7 @@ func (l *Logical) applyToPartitions(state *QueueState) {
 		}
 
 		// ==== LifeCycle ====
-		if err := p.Store.TakeAction(ctx, p.LifeCycleRequests); err != nil {
+		if err := p.Store.TakeAction(ctx, p.LifeCycleRequests, &p.State); err != nil {
 			l.log.Error("while calling store.Partition.TakeAction()",
 				"partition", p.Info.PartitionNum,
 				"queueName", l.conf.Name,
@@ -1091,7 +1096,7 @@ func (l *Logical) handleClear(_ *QueueState, req *Request) {
 			req.Err = err
 		}
 	}
-	// TODO(thrawn01): Support clearing retry and scheduled
+	// TODO(thrawn01): Support clearing retry and scheduled queues
 	close(req.ReadyCh)
 }
 
@@ -1100,11 +1105,18 @@ func (l *Logical) handleStorageRequests(req *Request) {
 
 	switch req.Method {
 	case MethodStorageItemsList:
-		if err := l.conf.StoragePartitions[sr.Partition].List(req.Context, sr.Items, sr.Options); err != nil {
-			req.Err = err
+		switch sr.ListKind {
+		case types.ListItems:
+			if err := l.conf.StoragePartitions[sr.Partition].List(req.Context, sr.Items, sr.Options); err != nil {
+				req.Err = err
+			}
+		case types.ListScheduled:
+			if err := l.conf.StoragePartitions[sr.Partition].ListScheduled(req.Context, sr.Items, sr.Options); err != nil {
+				req.Err = err
+			}
 		}
 	case MethodStorageItemsImport:
-		if err := l.conf.StoragePartitions[sr.Partition].Add(req.Context, *sr.Items); err != nil {
+		if err := l.conf.StoragePartitions[sr.Partition].Add(req.Context, *sr.Items, l.conf.Clock.Now().UTC()); err != nil {
 			req.Err = err
 		}
 	case MethodStorageItemsDelete:
@@ -1126,7 +1138,7 @@ func (l *Logical) handleStats(state *QueueState, r *Request) {
 
 	for _, p := range l.conf.StoragePartitions {
 		var ps types.PartitionStats
-		if err := p.Stats(r.Context, &ps); err != nil {
+		if err := p.Stats(r.Context, &ps, l.conf.Clock.Now().UTC()); err != nil {
 			r.Err = err
 		}
 		s := state.Partitions[p.Info().PartitionNum]
@@ -1190,37 +1202,32 @@ func (l *Logical) handleShutdown(state *QueueState, req *types.ShutdownRequest) 
 
 	// Consume all requests currently in flight
 	for l.inFlight.Load() != 0 {
-		for {
-			select {
-			case r := <-l.hotRequestCh:
-				switch r.Method {
-				case MethodProduce:
-					o := r.Request.(*types.ProduceRequest)
-					o.Err = ErrQueueShutdown
-					close(o.ReadyCh)
-				case MethodLease:
-					o := r.Request.(*types.LeaseRequest)
-					o.Err = ErrQueueShutdown
-					close(o.ReadyCh)
-				case MethodComplete:
-					o := r.Request.(*types.CompleteRequest)
-					o.Err = ErrQueueShutdown
-					close(o.ReadyCh)
-				case MethodLifeCycle:
-					o := r.Request.(*Request)
-					o.Err = ErrQueueShutdown
-					close(o.ReadyCh)
-				default:
-					panic(fmt.Sprintf("undefined request method '%d'", r.Method))
-				}
+		select {
+		case r := <-l.hotRequestCh:
+			switch r.Method {
+			case MethodProduce:
+				o := r.Request.(*types.ProduceRequest)
+				o.Err = ErrQueueShutdown
+				close(o.ReadyCh)
+			case MethodLease:
+				o := r.Request.(*types.LeaseRequest)
+				o.Err = ErrQueueShutdown
+				close(o.ReadyCh)
+			case MethodComplete:
+				o := r.Request.(*types.CompleteRequest)
+				o.Err = ErrQueueShutdown
+				close(o.ReadyCh)
+			case MethodLifeCycle:
+				o := r.Request.(*Request)
+				o.Err = ErrQueueShutdown
+				close(o.ReadyCh)
 			default:
-				// If there is a hot request still in flight, it is possible
-				// it hasn't been added to the channel yet, so we try until there
-				// are no more waiting requests.
-				if l.inFlight.Load() == 0 {
-					break
-				}
+				panic(fmt.Sprintf("undefined request method '%d'", r.Method))
 			}
+		default:
+			// If there is a hot request still in flight, it is possible
+			// it hasn't been added to the channel yet, so we continue trying
+			// until there are no more waiting requests.
 		}
 	}
 

@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 type BadgerConfig struct {
@@ -24,9 +25,6 @@ type BadgerConfig struct {
 	StorageDir string
 	// Log is used to log warnings and errors
 	Log *slog.Logger
-	// Clock is a time provider used to preform time related calculations. It is configurable so that it can
-	// be overridden for testing.
-	Clock *clock.Provider
 }
 
 // ---------------------------------------------
@@ -67,7 +65,7 @@ type BadgerPartition struct {
 	db   *badger.DB
 }
 
-func (b *BadgerPartition) Produce(_ context.Context, batch types.ProduceBatch) error {
+func (b *BadgerPartition) Produce(_ context.Context, batch types.ProduceBatch, now clock.Time) error {
 	db, err := b.getDB()
 	if err != nil {
 		return err
@@ -78,7 +76,20 @@ func (b *BadgerPartition) Produce(_ context.Context, batch types.ProduceBatch) e
 			for _, item := range r.Items {
 				b.uid = b.uid.Next()
 				item.ID = []byte(b.uid.String())
-				item.CreatedAt = b.conf.Clock.Now().UTC()
+				item.CreatedAt = now
+
+				// If the EnqueueAt is less than 100 milliseconds from now, we want to enqueue
+				// the item immediately. This avoids unnecessary work for something that will be moved into the
+				// queue less than a few milliseconds from now. Programmers may want to be "complete", so they may
+				// include an EnqueueAt time when producing items, which is set to now or near to now, due to clock
+				// drift between systems. Because of this, Querator may end up doing more work and be less efficient
+				// simply because of programmers who desire to completely fill out the pb.QueueProduceItem{} struct
+				// with every possible field, regardless of whether the field is needed.
+
+				// If EnqueueAt dates are in the past, enqueue the item instead of adding it as a scheduled item.
+				if item.EnqueueAt.Before(now.Add(time.Millisecond * 100)) {
+					item.EnqueueAt = clock.Time{}
+				}
 
 				// TODO: GetByPartition buffers from memory pool
 				var buf bytes.Buffer
@@ -131,6 +142,11 @@ func (b *BadgerPartition) Lease(_ context.Context, batch types.LeaseBatch, opts 
 			}
 
 			if item.IsLeased {
+				continue
+			}
+
+			// Skip scheduled items
+			if !item.EnqueueAt.IsZero() {
 				continue
 			}
 
@@ -263,6 +279,11 @@ func (b *BadgerPartition) List(_ context.Context, items *[]*types.Item, opts typ
 				return errors.Errorf("during Decode(): %w", err)
 			}
 
+			// Skip scheduled items in the regular list
+			if !item.EnqueueAt.IsZero() {
+				continue
+			}
+
 			*items = append(*items, item)
 			count++
 
@@ -274,7 +295,58 @@ func (b *BadgerPartition) List(_ context.Context, items *[]*types.Item, opts typ
 	})
 }
 
-func (b *BadgerPartition) Add(_ context.Context, items []*types.Item) error {
+func (b *BadgerPartition) ListScheduled(_ context.Context, items *[]*types.Item, opts types.ListOptions) error {
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	if opts.Pivot != nil {
+		if err := b.validateID(opts.Pivot); err != nil {
+			return transport.NewInvalidOption("invalid storage id; '%s': %s", opts.Pivot, err)
+		}
+	}
+
+	return db.View(func(txn *badger.Txn) error {
+		var count int
+		iter := txn.NewIterator(badger.DefaultIteratorOptions)
+		defer iter.Close()
+
+		if opts.Pivot != nil {
+			iter.Seek(opts.Pivot)
+		} else {
+			iter.Rewind()
+		}
+
+		for ; iter.Valid(); iter.Next() {
+			var v []byte
+			v, err := iter.Item().ValueCopy(v)
+			if err != nil {
+				return err
+			}
+
+			item := new(types.Item)
+			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(item); err != nil {
+				return errors.Errorf("during Decode(): %w", err)
+			}
+
+			// Only return scheduled items (those with non-zero EnqueueAt)
+			if item.EnqueueAt.IsZero() {
+				continue
+			}
+
+			*items = append(*items, item)
+			count++
+
+			if count >= opts.Limit {
+				return nil
+			}
+		}
+		return nil
+	})
+}
+
+func (b *BadgerPartition) Add(_ context.Context, items []*types.Item, now clock.Time) error {
 	db, err := b.getDB()
 	if err != nil {
 		return err
@@ -289,7 +361,7 @@ func (b *BadgerPartition) Add(_ context.Context, items []*types.Item) error {
 		for _, item := range items {
 			b.uid = b.uid.Next()
 			item.ID = []byte(b.uid.String())
-			item.CreatedAt = b.conf.Clock.Now().UTC()
+			item.CreatedAt = now
 
 			// TODO: GetByPartition buffers from memory pool
 			var buf bytes.Buffer
@@ -348,7 +420,7 @@ func (b *BadgerPartition) Clear(_ context.Context, destructive bool) error {
 			k = iter.Item().KeyCopy(k)
 			v, err := iter.Item().ValueCopy(v)
 			if err != nil {
-				return errors.Errorf("during GetByPartition value: %w", err)
+				return err
 			}
 
 			item := new(types.Item) // TODO: memory pool
@@ -381,6 +453,55 @@ func (b *BadgerPartition) UpdateQueueInfo(info types.QueueInfo) {
 	b.info.Queue = info
 }
 
+func (b *BadgerPartition) ScanForScheduled(_ clock.Duration, now clock.Time) iter.Seq[types.Action] {
+	return func(yield func(types.Action) bool) {
+		db, err := b.getDB()
+		if err != nil {
+			return
+		}
+
+		err = db.View(func(txn *badger.Txn) error {
+			iter := txn.NewIterator(badger.DefaultIteratorOptions)
+			defer iter.Close()
+
+			for iter.Rewind(); iter.Valid(); iter.Next() {
+				var v []byte
+				v, err := iter.Item().ValueCopy(v)
+				if err != nil {
+					return err
+				}
+
+				item := new(types.Item)
+				if err := gob.NewDecoder(bytes.NewReader(v)).Decode(item); err != nil {
+					return errors.Errorf("during Decode(): %w", err)
+				}
+
+				// Skip non-scheduled items
+				if item.EnqueueAt.IsZero() {
+					continue
+				}
+
+				// If the scheduled time has passed, yield an action to queue the item
+				if now.After(item.EnqueueAt) {
+					if !yield(types.Action{
+						Action:       types.ActionQueueScheduledItem,
+						PartitionNum: b.info.PartitionNum,
+						Queue:        b.info.Queue.Name,
+						Item:         *item,
+					}) {
+						return nil
+					}
+				}
+			}
+			return nil
+		})
+
+		if err != nil {
+			b.conf.Log.Error("Error scanning for scheduled items", "error", err)
+		}
+	}
+}
+
 func (b *BadgerPartition) ScanForActions(_ clock.Duration, now clock.Time) iter.Seq[types.Action] {
 	return func(yield func(types.Action) bool) {
 		db, err := b.getDB()
@@ -402,6 +523,11 @@ func (b *BadgerPartition) ScanForActions(_ clock.Duration, now clock.Time) iter.
 				item := new(types.Item)
 				if err := gob.NewDecoder(bytes.NewReader(v)).Decode(item); err != nil {
 					return errors.Errorf("during Decode(): %w", err)
+				}
+
+				// Skip scheduled items
+				if !item.EnqueueAt.IsZero() {
+					continue
 				}
 
 				// Is the leased item expired?
@@ -451,7 +577,9 @@ func (b *BadgerPartition) ScanForActions(_ clock.Duration, now clock.Time) iter.
 	}
 }
 
-func (b *BadgerPartition) TakeAction(_ context.Context, batch types.Batch[types.LifeCycleRequest]) error {
+func (b *BadgerPartition) TakeAction(_ context.Context, batch types.Batch[types.LifeCycleRequest],
+	state *types.PartitionState) error {
+
 	if len(batch.Requests) == 0 {
 		return nil
 	}
@@ -508,16 +636,63 @@ func (b *BadgerPartition) TakeAction(_ context.Context, batch types.Batch[types.
 					}
 
 				case types.ActionDeleteItem:
-					// TODO(lifecycle): Find the item and remove it
 					if err := txn.Delete(a.Item.ID); err != nil {
 						return err
 					}
 
 				case types.ActionQueueScheduledItem:
-					// TODO: Find the scheduled item and add it to the partition queue
+					// Find the scheduled item and move it to the regular queue
+					item := new(types.Item)
+					kvItem, err := txn.Get(a.Item.ID)
+					if err != nil {
+						if errors.Is(err, badger.ErrKeyNotFound) {
+							b.conf.Log.Warn("unable to find scheduled item while processing action; ignoring action",
+								"id", a.Item.ID, "action", types.ActionToString(a.Action))
+							continue
+						}
+						return err
+					}
+
+					err = kvItem.Value(func(val []byte) error {
+						return gob.NewDecoder(bytes.NewReader(val)).Decode(item)
+					})
+					if err != nil {
+						return err
+					}
+
+					if item.EnqueueAt.IsZero() {
+						b.conf.Log.Warn("assertion failed; expected to be a scheduled item; action ignored",
+							"id", string(a.Item.ID))
+						continue
+					}
+
+					// Clear the scheduled time and assign a new ID
+					item.EnqueueAt = clock.Time{}
+					b.uid = b.uid.Next()
+					newID := []byte(b.uid.String())
+					item.ID = newID
+
+					// Encode and store the updated item with new ID
+					var buf bytes.Buffer
+					if err := gob.NewEncoder(&buf).Encode(item); err != nil {
+						return err
+					}
+
+					if err := txn.Set(newID, buf.Bytes()); err != nil {
+						return err
+					}
+
+					// Delete the old scheduled item
+					if err := txn.Delete(a.Item.ID); err != nil {
+						return err
+					}
+
+					// Tell the partition it gained a new un-leased item
+					state.UnLeased++
 
 				default:
-					b.conf.Log.Warn("undefined action", "action", fmt.Sprintf("%d", int(a.Action)))
+					b.conf.Log.Warn("assertion failed; undefined action", "action",
+						fmt.Sprintf("0x%X", int(a.Action)))
 				}
 			}
 		}
@@ -549,6 +724,11 @@ func (b *BadgerPartition) LifeCycleInfo(_ context.Context, info *types.LifeCycle
 				return err
 			}
 
+			// Skip scheduled items
+			if !item.EnqueueAt.IsZero() {
+				continue
+			}
+
 			if item.LeaseDeadline.Before(next) {
 				next = item.LeaseDeadline
 			}
@@ -561,9 +741,7 @@ func (b *BadgerPartition) LifeCycleInfo(_ context.Context, info *types.LifeCycle
 	})
 }
 
-func (b *BadgerPartition) Stats(_ context.Context, stats *types.PartitionStats) error {
-	now := b.conf.Clock.Now().UTC()
-
+func (b *BadgerPartition) Stats(_ context.Context, stats *types.PartitionStats, now clock.Time) error {
 	db, err := b.getDB()
 	if err != nil {
 		return err
@@ -584,6 +762,12 @@ func (b *BadgerPartition) Stats(_ context.Context, stats *types.PartitionStats) 
 			item := new(types.Item) // TODO: memory pool
 			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(item); err != nil {
 				return errors.Errorf("during Decode(): %w", err)
+			}
+
+			// Count scheduled and do not include them in other stats
+			if !item.EnqueueAt.IsZero() {
+				stats.Scheduled++
+				continue
 			}
 
 			stats.Total++
@@ -727,7 +911,7 @@ func (b *BadgerQueues) Add(_ context.Context, info types.QueueInfo) error {
 		// If the queue already exists in the store
 		_, err := txn.Get([]byte(info.Name))
 		if err == nil {
-			return ErrQueueAlreadyExists
+			return transport.NewInvalidOption("invalid queue; '%s' already exists", info.Name)
 		}
 
 		var buf bytes.Buffer // TODO: memory pool

@@ -66,10 +66,11 @@ const (
 	RPCStorageItemsImport = "/v1/storage/items.import"
 	RPCStorageItemsDelete = "/v1/storage/items.delete"
 
-	RPCStorageScheduleList     = "/v1/storage/schedule.list"
-	RPCStorageScheduleQueueAdd = "/v1/storage/schedule.add"
-	RPCStorageScheduleDelete   = "/v1/storage/schedule.delete"
-	RPCStorageScheduleStats    = "/v1/storage/schedule.stats"
+	// TODO: Add this endpoint to openapi.yaml
+
+	RPCStorageScheduledList     = "/v1/storage/scheduled.list"
+	RPCStorageScheduledQueueAdd = "/v1/storage/scheduled.add"
+	RPCStorageScheduledDelete   = "/v1/storage/scheduled.delete"
 )
 
 // Service is an abstraction separating the public protocol from the underlying implementation.
@@ -96,6 +97,8 @@ type Service interface {
 	StorageItemsList(context.Context, *pb.StorageItemsListRequest, *pb.StorageItemsListResponse) error
 	StorageItemsImport(context.Context, *pb.StorageItemsImportRequest, *pb.StorageItemsImportResponse) error
 	StorageItemsDelete(context.Context, *pb.StorageItemsDeleteRequest) error
+
+	StorageScheduledList(context.Context, *pb.StorageItemsListRequest, *pb.StorageItemsListResponse) error
 }
 
 type HTTPHandler struct {
@@ -180,6 +183,9 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	case RPCStorageItemsDelete:
 		h.StorageItemsDelete(ctx, w, r)
+		return
+	case RPCStorageScheduledList:
+		h.StorageScheduledList(ctx, w, r)
 		return
 	}
 	duh.ReplyWithCode(w, r, duh.CodeNotImplemented, nil, "no such method; "+r.URL.Path)
@@ -328,6 +334,21 @@ func (h *HTTPHandler) StorageItemsList(ctx context.Context, w http.ResponseWrite
 
 	var resp pb.StorageItemsListResponse
 	if err := h.service.StorageItemsList(ctx, &req, &resp); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &resp)
+}
+
+func (h *HTTPHandler) StorageScheduledList(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.StorageItemsListRequest
+	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	var resp pb.StorageItemsListResponse
+	if err := h.service.StorageScheduledList(ctx, &req, &resp); err != nil {
 		h.ReplyError(w, r, err)
 		return
 	}

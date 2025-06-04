@@ -56,10 +56,11 @@ message StorageItem {
   google.protobuf.Timestamp expireDeadline = 4 [json_name = "expire_deadline"];
   google.protobuf.Timestamp createdAt = 5 [json_name = "created_at"];
   google.protobuf.Timestamp updatedAt = 6 [json_name = "updated_at"];
-  int32 attempts = 7;
-  int32 maxAttempts = 8 [json_name = "max_attempts"];
-  string reference = 9;
-  string encoding = 10;
-  string kind = 11;
-  bytes payload = 12;
+  google.protobuf.Timestamp enqueueAt = 7 [json_name = "enqueue_at"];
+  int32 attempts = 8;
+  int32 maxAttempts = 9 [json_name = "max_attempts"];
+  string reference = 10;
+  string encoding = 11;
+  string kind = 12;
+  bytes payload = 13;
 }

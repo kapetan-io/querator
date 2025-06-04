@@ -35,7 +35,7 @@ const (
 
 var RetryTenTimes = retry.Policy{Interval: retry.Sleep(100 * clock.Millisecond), Attempts: 20}
 
-type NewStorageFunc func(cp *clock.Provider) store.Config
+type NewStorageFunc func() store.Config
 
 var log *slog.Logger
 
@@ -177,11 +177,10 @@ func compareStorageItem(t *testing.T, l *pb.StorageItem, r *pb.StorageItem) {
 }
 
 func setupMemoryStorage(conf store.Config) store.Config {
-	conf.Log = log
 	conf.Queues = store.NewMemoryQueues(log)
 	conf.PartitionStorage = []store.PartitionStorage{
 		{
-			PartitionStore: store.NewMemoryPartitionStore(conf),
+			PartitionStore: store.NewMemoryPartitionStore(conf, log),
 			Name:           "memory-0",
 			Affinity:       1,
 		},

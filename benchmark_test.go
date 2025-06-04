@@ -33,15 +33,15 @@ func BenchmarkProduce(b *testing.B) {
 	}{
 		{
 			Name: "InMemory",
-			Setup: func(cp *clock.Provider) store.Config {
-				return setupMemoryStorage(store.Config{Clock: cp})
+			Setup: func() store.Config {
+				return setupMemoryStorage(store.Config{})
 			},
 			TearDown: func() {},
 		},
 		//{
 		//	Name: "BadgerDB",
-		//	Setup: func(cp *clock.Provider) store.Config {
-		//		return badgerdb.Setup(store.BadgerConfig{Clock: cp})
+		//	Setup: func() store.Config {
+		//		return badgerdb.Setup(store.BadgerConfig{})
 		//	},
 		//	TearDown: func() {
 		//		badgerdb.Teardown()
@@ -61,7 +61,7 @@ func BenchmarkProduce(b *testing.B) {
 
 			d, err := daemon.NewDaemon(context.Background(), daemon.Config{
 				ServiceConfig: querator.ServiceConfig{
-					StorageConfig: tc.Setup(clock.NewProvider()),
+					StorageConfig: tc.Setup(),
 					Log:           log,
 				},
 			})

@@ -1,10 +1,77 @@
 openapi: 3.1.0
 info:
-  title: Querator
-  description: ''
+  title: Querator API
+  description: |
+    **Querator** is a Distributed Durable Execution System built on top of an Almost Exactly Once Delivery (AEOD) Queue.
+    
+    ## Core Features
+    
+    ### Almost Exactly Once Delivery
+    Querator provides high-throughput, lease-based queue operations with Almost Exactly Once Delivery semantics. 
+    Unlike streaming systems, items are leased to consumers who gain exclusive processing rights until completion or retry.
+    
+    ### Lease-Based Processing
+    - **Exclusive Access**: Consumers lease items with guaranteed exclusive processing rights
+    - **Timeout Protection**: Automatic re-queuing if lease deadline expires
+    - **Flexible Completion**: Items can be completed, retried, or moved to dead letter queues
+    
+    ### Scheduled Delivery
+    Support for scheduled item delivery via `enqueue_at` timestamps, enabling delayed processing and retry scheduling.
+    
+    ### Horizontal Scaling
+    - **Partitioned Queues**: Each queue can have multiple partitions for parallel processing
+    - **Automatic Load Balancing**: Consumers are automatically distributed across partitions
+    - **Pluggable Storage**: Support for multiple storage backends (BadgerDB, Memory, with PostgreSQL/MySQL planned)
+    
+    ## API Design
+    
+    The API follows a lease-based workflow:
+    1. **Produce** items to queues with optional scheduling
+    2. **Lease** items for exclusive processing with configurable timeouts  
+    3. **Complete** processed items or **Retry** failed items
+    4. **Manage** queues and inspect storage state
+    
+    All operations support batch processing for high throughput scenarios.
+    
+    ## Storage Backends
+    
+    Querator supports pluggable storage backends with minimal requirements (ordered primary keys only):
+    - **Memory**: In-memory storage for testing and ephemeral workloads
+    - **BadgerDB**: Embedded storage for single-instance deployments
+    - **Planned**: PostgreSQL, MySQL, SurrealDB, FoundationDB
+    
+    For more information, visit [querator.io](https://querator.io) or the [GitHub repository](https://github.com/kapetan-io/querator).
   version: 0.1.0
+  contact:
+    name: Querator Team
+    url: https://github.com/kapetan-io/querator
+    email: querator@kapetan.io
+  license:
+    name: Apache 2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0.html
 tags:
-  - name: Querator
+  - name: Querator V1
+    description: |
+      Core queue operations including produce, lease, complete, retry, and queue management.
+      
+      **Queue Operations:**
+      - `queue.produce` - Add items to queues with optional scheduling
+      - `queue.lease` - Lease items for exclusive processing
+      - `queue.complete` - Mark leased items as successfully processed
+      - `queue.retry` - Retry failed items or move to dead letter queue
+      - `queue.stats` - Get queue performance statistics
+      - `queue.clear` - Clear queue data (destructive operation)
+      
+      **Queue Management:**
+      - `queues.create` - Create new queues with specified configuration
+      - `queues.list` - List all available queues with pagination
+      - `queues.info` - Get detailed information about a specific queue
+      - `queues.update` - Update queue configuration
+      - `queues.delete` - Delete queues and associated data
+      
+      **Storage Operations:**
+      - `storage/items.*` - Direct storage inspection and manipulation
+      - Low-level operations for debugging and data migration
 paths:
   /v1/queue.produce:
     post:
@@ -236,12 +303,12 @@ paths:
                     code: 200
           headers: {}
       security: []
-  /v1/queue.list:
+  /v1/queues.list:
     post:
       summary: List all available queues
       deprecated: false
       description: List all the available queues
-      operationId: post-v1-queue.list
+      operationId: post-v1-queues.list
       tags:
         - Querator V1
       parameters: []
@@ -271,7 +338,7 @@ paths:
                         dead_queue: queue-1-dead
                         reference: jake@statefarm.com
                         lease_timeout: 60m
-                        dead_timeout: 24h
+                        expire_timeout: 24h
                         max_attempts: 10
                         requested_partitions: 5
                       - name: queue-2
@@ -280,17 +347,17 @@ paths:
                         dead_queue: queue-2-dead
                         reference: jake@statefarm.com
                         lease_timeout: 60m
-                        dead_timeout: 24h
+                        expire_timeout: 24h
                         max_attempts: 20
                         requested_partitions: 1025
           headers: {}
       security: []
-  /v1/queue.create:
+  /v1/queues.create:
     post:
       summary: Create a queue
       deprecated: false
       description: Create a new queue with the provided characteristics
-      operationId: post-v1-queue.create
+      operationId: post-v1-queues.create
       tags:
         - Querator V1
       parameters: []
@@ -304,7 +371,7 @@ paths:
               dead_queue: queue-name-dead
               reference: jake@statefarm.com
               lease_timeout: 60m
-              dead_timeout: 24h
+              expire_timeout: 24h
               max_attempts: 10
               requested_partitions: 25
       responses:
@@ -324,12 +391,12 @@ paths:
                     }
           headers: {}
       security: []
-  /v1/queue.update:
+  /v1/queues.update:
     post:
       summary: Update a queue
       deprecated: false
       description: Update the details of a queue.
-      operationId: post-v1-queue.update
+      operationId: post-v1-queues.update
       tags:
         - Querator V1
       parameters: []
@@ -342,7 +409,7 @@ paths:
               dead_queue: queue-name-dead
               reference: account-12345
               lease_timeout: 60m
-              dead_timeout: 24h
+              expire_timeout: 24h
               max_attempts: 35
       responses:
         '200':
@@ -357,12 +424,12 @@ paths:
                     code: 200
           headers: {}
       security: []
-  /v1/queue.info:
+  /v1/queues.info:
     post:
       summary: Get Info about a queue
       deprecated: false
       description: ''
-      operationId: post-v1-queue.inspect
+      operationId: post-v1-queues.info
       tags:
         - Querator V1
       parameters: []
@@ -395,9 +462,42 @@ paths:
                     dead_queue: queue-name-dead
                     reference: jake@statefarm.com
                     lease_timeout: 60m
-                    dead_timeout: 24h
+                    expire_timeout: 24h
                     max_attempts: 50
                     requested_partitions: 456
+          headers: {}
+      security: []
+  /v1/queues.delete:
+    post:
+      summary: Delete a queue
+      deprecated: false
+      description: >-
+        Delete a queue and all associated data. Use the force parameter to
+        delete queues that have active items or leases.
+      operationId: post-v1-queues.delete
+      tags:
+        - Querator V1
+      parameters: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QueuesDeleteRequest'
+            example:
+              queue_name: queue-name
+              force: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Reply'
+              examples:
+                '1':
+                  summary: Success
+                  value:
+                    code: 200
           headers: {}
       security: []
   /v1/queue.stats:
@@ -433,7 +533,6 @@ paths:
                       - produce_waiting: 12
                         lease_waiting: 32
                         complete_waiting: 2
-                        lease_blocked: 32
                         in_flight: 54
                         partitions:
                           - partition: 0
@@ -444,7 +543,6 @@ paths:
                       - produce_waiting: 12
                         leased_waiting: 32
                         complete_waiting: 2
-                        leased_blocked: 32
                         in_flight: 54
                         partitions:
                           - partition: 1
@@ -804,12 +902,16 @@ components:
       properties:
         queue_name:
           type: string
+        partition:
+          type: integer
+          description: The partition number these ids belong to
         ids:
           type: array
           items:
             type: string
       required:
         - queue_name
+        - partition
         - ids
     Inspect:
       type: object
@@ -920,22 +1022,15 @@ components:
       properties:
         code:
           type: integer
+          description: Response status code
         code_text:
           type: string
+          description: Human readable status message
         message:
           type: string
-        details:
-          type: object
-          properties:
-            key:
-              type: string
-          required:
-            - key
+          description: Additional details about the response
       required:
         - code
-        - code_text
-        - message
-        - details
     QueueProduceItem:
       type: object
       properties:
@@ -1055,12 +1150,12 @@ components:
             The item id provided when the item was leased. If the item id
             provided does not match an item id already in `lease` status, then
             the retry request will return a non 200 status code.
-        enqueue_at:
+        retry_at:
           type: string
           format: date-time
           description: >-
             The timestamp after which the item will be queued to the
-            queue/partition specified. If `offer_at` is empty the item will be
+            queue/partition specified. If `retry_at` is empty the item will be
             immediately re-added to the queue and the attempts counter
             incremented.
         dead:
@@ -1114,11 +1209,6 @@ components:
           description: >-
             the number of `/queue.complete` requests currently waiting to be
             processed by the sync loop
-        lease_blocked:
-          type: integer
-          description: >-
-            The number of leases which are blocked waiting for new item to
-            enter the queue
         in_flight:
           type: integer
           description: >-
@@ -1133,7 +1223,6 @@ components:
         - produce_waiting
         - lease_waiting
         - complete_waiting
-        - lease_blocked
         - in_flight
         - partitions
     QueueInfo:
@@ -1178,7 +1267,7 @@ components:
           description: The default lease timeout for this queue
           examples:
             - 60m
-        dead_timeout:
+        expire_timeout:
           type: string
           description: >-
             How long an item can wait in the queue regardless of attempts before
@@ -1207,7 +1296,7 @@ components:
         - max_attempts
         - reference
         - lease_timeout
-        - dead_timeout
+        - expire_timeout
     StorageItem:
       type: object
       properties:
@@ -1219,10 +1308,18 @@ components:
           type: string
         dead_deadline:
           type: string
+        expire_deadline:
+          type: string
+          format: date-time
+          description: The deadline when this item expires and moves to dead letter queue
         created_at:
           type: string
         updated_at:
           type: string
+        enqueue_at:
+          type: string
+          format: date-time
+          description: The timestamp when this item should be enqueued for processing
         attempts:
           type: integer
         max_attempts:
@@ -1240,13 +1337,19 @@ components:
         - is_leased
         - lease_deadline
         - dead_deadline
+        - expire_deadline
         - created_at
-        - attempts
         - updated_at
+        - enqueue_at
+        - attempts
         - max_attempts
         - reference
         - encoding
         - kind
         - payload
   securitySchemes: {}
-servers: []
+servers:
+  - url: http://localhost:9090
+    description: Local development server
+  - url: https://api.querator.io
+    description: Production server (example)

@@ -234,7 +234,7 @@ message QueueClearRequest {
   // Queue indicates any items currently waiting in the FIFO queue will
   // clear. If true, any items in the queue which have NOT been leased
   // will be removed.
-  bool Queue = 4;
+  bool queue = 4;
   // Destructive indicates the Retry, Scheduled, Queue operations should be
   // destructive in that all data regardless of status will be removed.
   // For example, if used with ClearRequest.Queue = true, then ALL items

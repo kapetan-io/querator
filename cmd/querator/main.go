@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"syscall"
 
@@ -14,6 +15,8 @@ import (
 	"github.com/kapetan-io/querator/daemon"
 	"gopkg.in/yaml.v3"
 )
+
+var Version = "dev-build"
 
 type FlagParams struct {
 	ConfigFile string
@@ -49,6 +52,7 @@ func Start(ctx context.Context, args []string, w io.Writer) error {
 		return fmt.Errorf("while applying config file: %w", err)
 	}
 
+	conf.Log.Info(fmt.Sprintf("Querator %s (%s/%s)", Version, runtime.GOARCH, runtime.GOOS))
 	d, err := daemon.NewDaemon(ctx, conf)
 	if err != nil {
 		return fmt.Errorf("while creating daemon: %w", err)

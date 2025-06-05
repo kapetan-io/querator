@@ -1,6 +1,7 @@
 .DEFAULT_GOAL := build
 LINT = $(GOPATH)/bin/golangci-lint
 LINT_VERSION = v1.64.6
+VERSION=$(shell cat version)
 
 .PHONY: proto
 proto: ## Build protos
@@ -37,4 +38,9 @@ ci: tidy lint test
 .PHONY: vet
 vet:
 	go vet ./...
+
+.PHONY: docker
+docker: ## Build Docker image
+	docker build --build-arg VERSION=$(VERSION) -t ghcr.io/kapetan-io/querator:$(VERSION) .
+	docker tag ghcr.io/kapetan-io/querator:$(VERSION) ghcr.io/kapetan-io/querator:latest
 

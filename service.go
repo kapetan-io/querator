@@ -319,6 +319,17 @@ func (s *Service) QueuesDelete(ctx context.Context, req *proto.QueuesDeleteReque
 	return nil
 }
 
+func (s *Service) QueuesInfo(ctx context.Context, req *proto.QueuesInfoRequest, resp *proto.QueueInfo) error {
+	queue, err := s.queues.Get(ctx, req.QueueName)
+	if err != nil {
+		return err
+	}
+
+	info := queue.Info()
+	*resp = *info.ToProto(resp)
+	return nil
+}
+
 // -------------------------------------------------
 // API to inspect queue storage
 // -------------------------------------------------

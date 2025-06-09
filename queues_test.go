@@ -820,5 +820,62 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				})
 			}
 		})
+		t.Run("QueuesInfo", func(t *testing.T) {
+			// Test successful info retrieval first
+			t.Run("Success", func(t *testing.T) {
+				var resp pb.QueueInfo
+				err := c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &resp)
+				require.NoError(t, err)
+
+				// Verify that we got valid queue info back
+				assert.Equal(t, queueName, resp.QueueName)
+				assert.Equal(t, queueName+"-dead", resp.DeadQueue)
+				assert.Equal(t, "CreateTestRef", resp.Reference)
+				assert.Equal(t, "1m0s", resp.LeaseTimeout)
+				assert.Equal(t, "10m0s", resp.ExpireTimeout)
+				assert.Equal(t, int32(10), resp.MaxAttempts)
+				assert.Equal(t, int32(0), resp.RequestedPartitions) // partitions start at 0
+				assert.NotNil(t, resp.CreatedAt)
+				assert.NotNil(t, resp.UpdatedAt)
+			})
+
+			// Test validation errors
+			for _, test := range []struct {
+				Name string
+				Req  *pb.QueuesInfoRequest
+				Msg  string
+				Code int
+			}{
+				{
+					Name: "EmptyQueueName",
+					Req:  &pb.QueuesInfoRequest{QueueName: ""},
+					Msg:  "queue name is invalid; queue name cannot be empty",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "WhitespaceQueueName",
+					Req:  &pb.QueuesInfoRequest{QueueName: "   "},
+					Msg:  "queue name is invalid; queue name cannot be empty",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "QueueNotFound",
+					Req:  &pb.QueuesInfoRequest{QueueName: "non-existent-queue"},
+					Msg:  "queue does not exist; no such queue named 'non-existent-queue'",
+					Code: duh.CodeBadRequest,
+				},
+			} {
+				t.Run(test.Name, func(t *testing.T) {
+					var resp pb.QueueInfo
+					err := c.QueuesInfo(ctx, test.Req, &resp)
+					if test.Code != duh.CodeOK {
+						var e duh.Error
+						require.True(t, errors.As(err, &e))
+						assert.Equal(t, test.Msg, e.Message())
+						assert.Equal(t, test.Code, e.Code())
+					}
+				})
+			}
+		})
 	})
 }

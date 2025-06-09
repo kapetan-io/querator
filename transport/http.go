@@ -93,6 +93,7 @@ type Service interface {
 	QueuesList(context.Context, *pb.QueuesListRequest, *pb.QueuesListResponse) error
 	QueuesUpdate(context.Context, *pb.QueueInfo) error
 	QueuesDelete(context.Context, *pb.QueuesDeleteRequest) error
+	QueuesInfo(context.Context, *pb.QueuesInfoRequest, *pb.QueueInfo) error
 
 	StorageItemsList(context.Context, *pb.StorageItemsListRequest, *pb.StorageItemsListResponse) error
 	StorageItemsImport(context.Context, *pb.StorageItemsImportRequest, *pb.StorageItemsImportResponse) error
@@ -174,6 +175,9 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	case RPCQueuesDelete:
 		h.QueuesDelete(ctx, w, r)
+		return
+	case RPCQueuesInfo:
+		h.QueuesInfo(ctx, w, r)
 		return
 	case RPCStorageItemsList:
 		h.StorageItemsList(ctx, w, r)
@@ -294,6 +298,21 @@ func (h *HTTPHandler) QueuesDelete(ctx context.Context, w http.ResponseWriter, r
 		return
 	}
 	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
+}
+
+func (h *HTTPHandler) QueuesInfo(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.QueuesInfoRequest
+	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	var resp pb.QueueInfo
+	if err := h.service.QueuesInfo(ctx, &req, &resp); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &resp)
 }
 
 func (h *HTTPHandler) QueueStats(ctx context.Context, w http.ResponseWriter, r *http.Request) {

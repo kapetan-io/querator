@@ -731,7 +731,7 @@ components:
           type: integer
           minimum: 1
           maximum: 1000
-          description: The maxium number of items to be leased for this request
+          description: The maximum number of items to be leased for this request
       required:
         - queue_name
         - client_id

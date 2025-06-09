@@ -1,7 +1,7 @@
 .DEFAULT_GOAL := build
 LINT = $(GOPATH)/bin/golangci-lint
 LINT_VERSION = v1.64.6
-VERSION=$(shell cat version)
+VERSION=$(shell git describe --tags --exact-match 2>/dev/null || echo "dev-build")
 
 .PHONY: proto
 proto: ## Build protos

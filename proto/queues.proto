@@ -41,3 +41,8 @@ message QueuesDeleteRequest {
   // lease requests.
   bool force = 2;
 }
+
+message QueuesInfoRequest {
+  // The name of the queue to retrieve information about
+  string queueName = 1 [json_name = "queue_name"];
+}

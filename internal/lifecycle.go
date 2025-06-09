@@ -313,6 +313,8 @@ func (l *LifeCycle) partitionStateChange(failures int, numLeased int) bool {
 		l.log.Warn("while updating partition state; continuing...", "error", err)
 		return false
 	}
+	l.log.LogAttrs(context.Background(), slog.LevelInfo, "partition state changed; ready",
+		slog.Int("partition", l.conf.Partition.Info.PartitionNum))
 	return true
 }
 
@@ -389,10 +391,6 @@ func (l *LifeCycle) recoverPartition(state *lifeCycleState) bool {
 			"leased", stats.NumLeased)
 		return false
 	}
-
-	// TODO(thrawn01): Change this to info, if this is the first time the partition has become available.
-	l.log.LogAttrs(context.Background(), slog.LevelWarn, "partition recovered",
-		slog.Int("partition", l.conf.Partition.Info.PartitionNum))
 
 	l.state.Failures = 0
 	l.state.NumLeased = stats.NumLeased

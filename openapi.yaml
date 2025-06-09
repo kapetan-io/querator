@@ -367,7 +367,7 @@ paths:
             schema: &ref_0
               $ref: '#/components/schemas/QueueInfo'
             example:
-              name: queue-name
+              queue_name: queue-name
               dead_queue: queue-name-dead
               reference: jake@statefarm.com
               lease_timeout: 60m
@@ -405,7 +405,7 @@ paths:
           application/json:
             schema: *ref_0
             example:
-              name: queue-name
+              queue_name: queue-name
               dead_queue: queue-name-dead
               reference: account-12345
               lease_timeout: 60m
@@ -1228,7 +1228,7 @@ components:
     QueueInfo:
       type: object
       properties:
-        name:
+        queue_name:
           type: string
           description: The name of the queue
           examples:
@@ -1288,7 +1288,7 @@ components:
             different than the number of currently active partitions as the
             system grows or contracts the number of partitions.
       required:
-        - name
+        - queue_name
         - requested_partitions
         - created_at
         - updated_at

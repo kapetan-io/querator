@@ -60,7 +60,7 @@ func TestCLI(t *testing.T) {
 			cancel()
 
 			<-waitCh
-			w.Flush()
+			_ = w.Flush()
 			for _, s := range tt.contains {
 				//t.Logf("Checking for '%s' in output", s)
 				assert.Contains(t, buf.String(), s)

@@ -209,6 +209,22 @@ func (c *Client) QueuesDelete(ctx context.Context, req *pb.QueuesDeleteRequest) 
 	return c.client.Do(r, &res)
 }
 
+func (c *Client) QueuesInfo(ctx context.Context, req *pb.QueuesInfoRequest, res *pb.QueueInfo) error {
+	payload, err := proto.Marshal(req)
+	if err != nil {
+		return duh.NewClientError("while marshaling request payload: %w", err, nil)
+	}
+
+	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("%s%s", c.conf.Endpoint, transport.RPCQueuesInfo), bytes.NewReader(payload))
+	if err != nil {
+		return duh.NewClientError("", err, nil)
+	}
+
+	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	return c.client.Do(r, res)
+}
+
 // TODO: Write an iterator we can use to iterate through list APIs
 // TODO(scheduled): Listing enqueued items should NOT include scheduled items
 

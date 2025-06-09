@@ -54,13 +54,14 @@ message StorageItem {
   bool isLeased = 2  [json_name = "is_leased"];
   google.protobuf.Timestamp leaseDeadline = 3 [json_name = "lease_deadline"];
   google.protobuf.Timestamp expireDeadline = 4 [json_name = "expire_deadline"];
-  google.protobuf.Timestamp createdAt = 5 [json_name = "created_at"];
-  google.protobuf.Timestamp updatedAt = 6 [json_name = "updated_at"];
-  google.protobuf.Timestamp enqueueAt = 7 [json_name = "enqueue_at"];
-  int32 attempts = 8;
-  int32 maxAttempts = 9 [json_name = "max_attempts"];
-  string reference = 10;
-  string encoding = 11;
-  string kind = 12;
-  bytes payload = 13;
+  google.protobuf.Timestamp deadDeadline = 5 [json_name = "dead_deadline"];
+  google.protobuf.Timestamp createdAt = 6 [json_name = "created_at"];
+  google.protobuf.Timestamp updatedAt = 7 [json_name = "updated_at"];
+  google.protobuf.Timestamp enqueueAt = 8 [json_name = "enqueue_at"];
+  int32 attempts = 9;
+  int32 maxAttempts = 10 [json_name = "max_attempts"];
+  string reference = 11;
+  string encoding = 12;
+  string kind = 13;
+  bytes payload = 14;
 }

@@ -178,6 +178,24 @@ message QueueCompleteRequest {
   repeated string ids = 4;
 }
 
+message QueueProduceResponse {
+  int32 code = 1;
+  string codeText = 2 [json_name = "code_text"];
+  string message = 3;
+}
+
+message QueueCompleteResponse {
+  int32 code = 1;
+  string codeText = 2 [json_name = "code_text"];
+  string message = 3;
+}
+
+message QueueRetryResponse {
+  int32 code = 1;
+  string codeText = 2 [json_name = "code_text"];
+  string message = 3;
+}
+
 message QueueInfo {
   // The name of the queue
   string queueName = 1  [json_name = "queue_name"];

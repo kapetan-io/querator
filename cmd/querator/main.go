@@ -36,7 +36,7 @@ func Start(ctx context.Context, args []string, w io.Writer) error {
 	}
 
 	if flags.ShowVersion {
-		fmt.Fprintf(w, "querator %s\n", Version)
+		_, _ = fmt.Fprintf(w, "querator %s\n", Version)
 		return nil
 	}
 

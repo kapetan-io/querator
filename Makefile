@@ -3,6 +3,10 @@ LINT = $(GOPATH)/bin/golangci-lint
 LINT_VERSION = v1.64.6
 VERSION=$(shell git describe --tags --exact-match 2>/dev/null || echo "dev-build")
 
+.PHONY: install
+install: ## Install querator binary with version
+	go install -ldflags "-s -w -X main.Version=$(VERSION)" ./cmd/querator
+
 .PHONY: proto
 proto: ## Build protos
 	./buf.gen.yaml

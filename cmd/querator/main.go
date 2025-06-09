@@ -19,7 +19,8 @@ import (
 var Version = "dev-build"
 
 type FlagParams struct {
-	ConfigFile string
+	ConfigFile  string
+	ShowVersion bool
 }
 
 func main() {
@@ -32,6 +33,11 @@ func Start(ctx context.Context, args []string, w io.Writer) error {
 	flags, err := parseFlags(args)
 	if err != nil {
 		return err
+	}
+
+	if flags.ShowVersion {
+		fmt.Fprintf(w, "querator %s\n", Version)
+		return nil
 	}
 
 	var file config.File
@@ -74,6 +80,7 @@ func parseFlags(args []string) (FlagParams, error) {
 	flags := flag.NewFlagSet("querator", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	flags.StringVar(&flagParams.ConfigFile, "config", "", "environment config file")
+	flags.BoolVar(&flagParams.ShowVersion, "version", false, "show version information")
 	if err := flags.Parse(args); err != nil {
 		if !strings.Contains(err.Error(), "flag provided but not defined") {
 			return FlagParams{}, fmt.Errorf("while parsing flags: %w", err)

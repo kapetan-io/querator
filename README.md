@@ -149,6 +149,19 @@ See our [Architecture Decision Docs](doc/adr) for details on our current impleme
 - Join our [Discord](https://discord.gg/XwfBdN9wdg)
 - Checkout [querator.io](https://querator.io/api) for the HTML OpenAPI docs
 
+### Installation
+
+#### Homebrew (macOS/Linux)
+```bash
+brew tap kapetan-io/kapetan
+brew install querator
+```
+
+#### From Source
+```bash
+go install github.com/kapetan-io/querator/cmd/querator@latest
+```
+
 ### Similar Projects
 * https://engineering.fb.com/2021/02/22/production-engineering/foqs-scaling-a-distributed-priority-queue/
 * https://temporal.io/

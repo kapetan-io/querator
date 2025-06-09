@@ -4,6 +4,7 @@ FROM golang:1.23.1-alpine AS builder
 # Install build dependencies
 RUN apk add --no-cache git ca-certificates
 
+
 # Set working directory
 WORKDIR /app
 
@@ -21,6 +22,8 @@ RUN go build -ldflags "-w -s -X main.Version=$VERSION" -o querator ./cmd/querato
 
 # Final stage
 FROM alpine:latest
+
+LABEL org.opencontainers.image.source="https://github.com/kapetan-io/querator"
 
 # Install runtime dependencies
 RUN apk --no-cache add ca-certificates tzdata
@@ -47,7 +50,10 @@ USER querator
 WORKDIR /data
 
 # Expose port (default querator port)
-EXPOSE 9090
+EXPOSE 2319
+
+# Run the server
+ENTRYPOINT ["/querator"]
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \

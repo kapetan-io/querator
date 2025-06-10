@@ -94,10 +94,11 @@ func TestCompleteCommand(t *testing.T) {
 	testFlags := main.FlagParams{
 		CompleteTimeout: "30s",
 		Endpoint:        ms.URL(),
+		Partition:       0,
 	}
 
 	_, stderr, err := captureOutput(func() error {
-		return main.RunComplete(testFlags, "test-queue", 0, []string{"item1", "item2"})
+		return main.RunComplete(testFlags, "test-queue", testFlags.Partition, []string{"item1", "item2"})
 	})
 
 	require.NoError(t, err)
@@ -388,10 +389,11 @@ func TestCompleteCommandWithFile(t *testing.T) {
 		File:            tempFile.Name(),
 		CompleteTimeout: "30s",
 		Endpoint:        ms.URL(),
+		Partition:       0,
 	}
 
 	_, stderr, err := captureOutput(func() error {
-		return main.RunComplete(testFlags, "test-queue", 0, []string{})
+		return main.RunComplete(testFlags, "test-queue", testFlags.Partition, []string{})
 	})
 
 	require.NoError(t, err)

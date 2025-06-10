@@ -36,6 +36,7 @@ type FlagParams struct {
 	// Complete Flags
 	File            string
 	CompleteTimeout string
+	Partition       int32
 
 	// Create Flags
 	LeaseTimeoutCreate string

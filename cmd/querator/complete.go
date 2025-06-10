@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -15,24 +14,20 @@ import (
 )
 
 var completeCommand = &cobra.Command{
-	Use:   "complete [flags] <queue-name> <partition> <id>...",
+	Use:   "complete [flags] <queue-name> <id>...",
 	Short: "Mark items as complete",
 	Long: `Mark leased items as complete. Provide item IDs as arguments or use --file to read from file.
-Partition must be specified as it's required for completion.`,
-	Args: cobra.MinimumNArgs(2),
+Partition must be specified via --partition flag as it's required for completion.`,
+	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		queueName := args[0]
-		partition, err := strconv.Atoi(args[1])
-		if err != nil {
-			return fmt.Errorf("invalid partition number: %w", err)
-		}
 
 		var ids []string
-		if len(args) > 2 {
-			ids = args[2:]
+		if len(args) > 1 {
+			ids = args[1:]
 		}
 
-		return RunComplete(flags, queueName, int32(partition), ids)
+		return RunComplete(flags, queueName, flags.Partition, ids)
 	},
 }
 
@@ -41,6 +36,9 @@ func init() {
 		"", "Read IDs from file (one per line)")
 	completeCommand.Flags().StringVar(&flags.CompleteTimeout, "timeout",
 		"30s", "Request timeout")
+	completeCommand.Flags().Int32VarP(&flags.Partition, "partition", "p",
+		0, "Partition number (required)")
+	_ = completeCommand.MarkFlagRequired("partition")
 }
 
 func RunComplete(flags FlagParams, queueName string, partition int32, cmdLineIds []string) error {

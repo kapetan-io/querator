@@ -92,6 +92,17 @@ func runUpdate(cmd *cobra.Command, queueName string) error {
 
 	if updateFlags.leaseTimeoutSet {
 		req.LeaseTimeout = updateFlags.leaseTimeout
+		
+		// If lease-timeout is updated but expire-timeout is not explicitly set,
+		// recalculate expire-timeout as 60x the new lease-timeout
+		if !updateFlags.expireTimeoutSet {
+			leaseTimeout, err := time.ParseDuration(updateFlags.leaseTimeout)
+			if err != nil {
+				return fmt.Errorf("invalid lease-timeout format: %w", err)
+			}
+			expireTimeout := leaseTimeout * 60
+			req.ExpireTimeout = expireTimeout.String()
+		}
 	}
 	if updateFlags.expireTimeoutSet {
 		req.ExpireTimeout = updateFlags.expireTimeout

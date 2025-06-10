@@ -46,17 +46,19 @@ to interact with a running Querator instance via its HTTP API.`,
 		},
 	})
 
-	// ======== Server =========
-	serverCommand.Flags().StringVar(&flags.ConfigFile, "config",
-		getEnv("QUERATOR_CONFIG", ""),
-		"Configuration file path")
-	serverCommand.Flags().StringVar(&flags.Address, "address",
-		getEnv("QUERATOR_ADDRESS", "localhost:2319"),
-		"HTTP address to bind")
-	serverCommand.Flags().StringVar(&flags.LogLevel, "log-level",
-		getEnv("QUERATOR_LOG_LEVEL", "info"),
-		"Logging level (debug,error,warn,info)")
+	// Server
 	root.AddCommand(serverCommand)
+
+	// Queue Commands
+	root.AddCommand(produceCommand)
+	root.AddCommand(leaseCommand)
+	root.AddCommand(completeCommand)
+
+	// Queue Management Commands
+	root.AddCommand(createCommand)
+	root.AddCommand(listCommand)
+	root.AddCommand(updateCommand)
+	root.AddCommand(deleteCmd)
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)

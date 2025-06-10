@@ -116,6 +116,84 @@ func TestCLI(t *testing.T) {
 		// If we can connect, the server started successfully with config
 		// This test verifies the server starts with the example.yaml config
 	})
+
+	t.Run("ProduceCommandHelp", func(t *testing.T) {
+		cmd := exec.Command(binPath, "produce", "--help")
+		output, err := cmd.CombinedOutput()
+		assert.NoError(t, err)
+
+		outputStr := string(output)
+		assert.Contains(t, outputStr, "Produce items to a queue")
+		assert.Contains(t, outputStr, "--payload")
+		assert.Contains(t, outputStr, "--timeout")
+		assert.Contains(t, outputStr, "--encoding")
+	})
+
+	t.Run("LeaseCommandHelp", func(t *testing.T) {
+		cmd := exec.Command(binPath, "lease", "--help")
+		output, err := cmd.CombinedOutput()
+		assert.NoError(t, err)
+
+		outputStr := string(output)
+		assert.Contains(t, outputStr, "Lease items from a queue")
+		assert.Contains(t, outputStr, "--client-id")
+		assert.Contains(t, outputStr, "--batch-size")
+		assert.Contains(t, outputStr, "--timeout")
+	})
+
+	t.Run("CompleteCommandHelp", func(t *testing.T) {
+		cmd := exec.Command(binPath, "complete", "--help")
+		output, err := cmd.CombinedOutput()
+		assert.NoError(t, err)
+
+		outputStr := string(output)
+		assert.Contains(t, outputStr, "Mark leased items as complete")
+		assert.Contains(t, outputStr, "--timeout")
+		assert.Contains(t, outputStr, "--file")
+	})
+
+	t.Run("CreateCommandHelp", func(t *testing.T) {
+		cmd := exec.Command(binPath, "create", "--help")
+		output, err := cmd.CombinedOutput()
+		assert.NoError(t, err)
+
+		outputStr := string(output)
+		assert.Contains(t, outputStr, "Create a new queue")
+		assert.Contains(t, outputStr, "--lease-timeout")
+		assert.Contains(t, outputStr, "--max-attempts")
+	})
+
+	t.Run("ListCommandHelp", func(t *testing.T) {
+		cmd := exec.Command(binPath, "list", "--help")
+		output, err := cmd.CombinedOutput()
+		assert.NoError(t, err)
+
+		outputStr := string(output)
+		assert.Contains(t, outputStr, "List all queues")
+		assert.Contains(t, outputStr, "--limit")
+		assert.Contains(t, outputStr, "--pivot")
+	})
+
+	t.Run("UpdateCommandHelp", func(t *testing.T) {
+		cmd := exec.Command(binPath, "update", "--help")
+		output, err := cmd.CombinedOutput()
+		assert.NoError(t, err)
+
+		outputStr := string(output)
+		assert.Contains(t, outputStr, "Update an existing queue")
+		assert.Contains(t, outputStr, "--lease-timeout")
+		assert.Contains(t, outputStr, "--max-attempts")
+	})
+
+	t.Run("DeleteCommandHelp", func(t *testing.T) {
+		cmd := exec.Command(binPath, "delete", "--help")
+		output, err := cmd.CombinedOutput()
+		assert.NoError(t, err)
+
+		outputStr := string(output)
+		assert.Contains(t, outputStr, "Delete a queue")
+		assert.Contains(t, outputStr, "--force")
+	})
 }
 
 func buildTestBinary(t *testing.T) string {

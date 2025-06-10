@@ -23,7 +23,7 @@ var serverCommand = &cobra.Command{
 The server command starts the HTTP API server that handles queue operations.
 Configuration can be provided via flags, environment variables, or a config file.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return startServer(context.Background(), os.Stdout)
+		return StartServer(context.Background(), os.Stdout)
 	},
 }
 
@@ -39,7 +39,7 @@ func init() {
 		"Logging level (debug,error,warn,info)")
 }
 
-func startServer(ctx context.Context, w io.Writer) error {
+func StartServer(ctx context.Context, w io.Writer) error {
 	var file config.File
 	if flags.ConfigFile != "" {
 		reader, err := os.Open(flags.ConfigFile)

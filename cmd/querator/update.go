@@ -6,54 +6,39 @@ import (
 	"os"
 	"time"
 
+	"github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/proto"
 	"github.com/spf13/cobra"
 )
 
-var updateCommand = &cobra.Command{
+var UpdateCommand = &cobra.Command{
 	Use:   "update [flags] <queue-name>",
 	Short: "Update an existing queue",
 	Long: `Update an existing queue configuration.
 Only the flags provided will be updated, others remain unchanged.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runUpdate(cmd, args[0])
+		return RunUpdate(flags, args[0])
 	},
 }
 
-var updateFlags struct {
-	leaseTimeout  string
-	expireTimeout string
-	maxAttempts   int32
-	deadQueue     string
-	reference     string
-	partitions    int32
-	// Track which flags were actually set
-	leaseTimeoutSet  bool
-	expireTimeoutSet bool
-	maxAttemptsSet   bool
-	deadQueueSet     bool
-	referenceSet     bool
-	partitionsSet    bool
-}
-
 func init() {
-	updateCommand.Flags().StringVar(&updateFlags.leaseTimeout, "lease-timeout",
+	UpdateCommand.Flags().StringVar(&flags.LeaseTimeoutUpdate, "lease-timeout",
 		"", "Lease timeout duration (e.g., '5m', '1h')")
-	updateCommand.Flags().StringVar(&updateFlags.expireTimeout, "expire-timeout",
+	UpdateCommand.Flags().StringVar(&flags.ExpireTimeoutUpdate, "expire-timeout",
 		"", "Item expiration timeout (e.g., '24h', '7d')")
-	updateCommand.Flags().Int32Var(&updateFlags.maxAttempts, "max-attempts",
+	UpdateCommand.Flags().Int32Var(&flags.MaxAttemptsUpdate, "max-attempts",
 		0, "Maximum retry attempts (0 for unlimited)")
-	updateCommand.Flags().StringVar(&updateFlags.deadQueue, "dead-queue",
+	UpdateCommand.Flags().StringVar(&flags.DeadQueueUpdate, "dead-queue",
 		"", "Dead letter queue name")
-	updateCommand.Flags().StringVar(&updateFlags.reference, "reference",
+	UpdateCommand.Flags().StringVar(&flags.ReferenceUpdate, "reference",
 		"", "Queue reference/owner")
-	updateCommand.Flags().Int32Var(&updateFlags.partitions, "partitions",
+	UpdateCommand.Flags().Int32Var(&flags.PartitionsUpdate, "partitions",
 		0, "Number of requested partitions")
 }
 
-func runUpdate(cmd *cobra.Command, queueName string) error {
-	client, err := createClient()
+func RunUpdate(flags FlagParams, queueName string) error {
+	client, err := querator.NewClient(querator.ClientConfig{Endpoint: flags.Endpoint})
 	if err != nil {
 		return fmt.Errorf("failed to create client: %w", err)
 	}
@@ -82,36 +67,48 @@ func runUpdate(cmd *cobra.Command, queueName string) error {
 		RequestedPartitions: currentQueue.RequestedPartitions,
 	}
 
-	// Update only the fields that were explicitly set
-	updateFlags.leaseTimeoutSet = cmd.Flags().Changed("lease-timeout")
-	updateFlags.expireTimeoutSet = cmd.Flags().Changed("expire-timeout")
-	updateFlags.maxAttemptsSet = cmd.Flags().Changed("max-attempts")
-	updateFlags.deadQueueSet = cmd.Flags().Changed("dead-queue")
-	updateFlags.referenceSet = cmd.Flags().Changed("reference")
-	updateFlags.partitionsSet = cmd.Flags().Changed("partitions")
+	// Update only the fields that have non-default values
+	leaseTimeoutSet := flags.LeaseTimeoutUpdate != ""
+	expireTimeoutSet := flags.ExpireTimeoutUpdate != ""
+	maxAttemptsSet := flags.MaxAttemptsUpdate != 0
+	deadQueueSet := flags.DeadQueueUpdate != ""
+	referenceSet := flags.ReferenceUpdate != ""
+	partitionsSet := flags.PartitionsUpdate != 0
 
-	if updateFlags.leaseTimeoutSet {
-		req.LeaseTimeout = updateFlags.leaseTimeout
+	if leaseTimeoutSet {
+		req.LeaseTimeout = flags.LeaseTimeoutUpdate
+
+		// If lease-timeout is updated but expire-timeout is not explicitly set,
+		// recalculate expire-timeout as 60x the new lease-timeout
+		if !expireTimeoutSet {
+			leaseTimeout, err := time.ParseDuration(flags.LeaseTimeoutUpdate)
+			if err != nil {
+				return fmt.Errorf("invalid lease-timeout format: %w", err)
+			}
+			expireTimeout := leaseTimeout * 60
+			req.ExpireTimeout = expireTimeout.String()
+		}
 	}
-	if updateFlags.expireTimeoutSet {
-		req.ExpireTimeout = updateFlags.expireTimeout
+
+	if expireTimeoutSet {
+		req.ExpireTimeout = flags.ExpireTimeoutUpdate
 	}
-	if updateFlags.maxAttemptsSet {
-		req.MaxAttempts = updateFlags.maxAttempts
+	if maxAttemptsSet {
+		req.MaxAttempts = flags.MaxAttemptsUpdate
 	}
-	if updateFlags.deadQueueSet {
-		req.DeadQueue = updateFlags.deadQueue
+	if deadQueueSet {
+		req.DeadQueue = flags.DeadQueueUpdate
 	}
-	if updateFlags.referenceSet {
-		req.Reference = updateFlags.reference
+	if referenceSet {
+		req.Reference = flags.ReferenceUpdate
 	}
-	if updateFlags.partitionsSet {
-		req.RequestedPartitions = updateFlags.partitions
+	if partitionsSet {
+		req.RequestedPartitions = flags.PartitionsUpdate
 	}
 
 	// Check if any flags were actually set
-	if !updateFlags.leaseTimeoutSet && !updateFlags.expireTimeoutSet && !updateFlags.maxAttemptsSet &&
-		!updateFlags.deadQueueSet && !updateFlags.referenceSet && !updateFlags.partitionsSet {
+	if !leaseTimeoutSet && !expireTimeoutSet && !maxAttemptsSet &&
+		!deadQueueSet && !referenceSet && !partitionsSet {
 		return fmt.Errorf("no update flags provided (use --help to see available options)")
 	}
 

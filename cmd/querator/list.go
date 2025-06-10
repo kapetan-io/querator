@@ -18,24 +18,19 @@ var listCommand = &cobra.Command{
 	Long: `List all queues with pagination support.
 Outputs queue information as JSON.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runList()
+		return RunList(flags)
 	},
 }
 
-var listFlags struct {
-	limit int32
-	pivot string
-}
-
 func init() {
-	listCommand.Flags().Int32Var(&listFlags.limit, "limit",
+	listCommand.Flags().Int32Var(&flags.Limit, "limit",
 		100, "Maximum results to return")
-	listCommand.Flags().StringVar(&listFlags.pivot, "pivot",
+	listCommand.Flags().StringVar(&flags.Pivot, "pivot",
 		"", "Pagination pivot")
 }
 
-func runList() error {
-	client, err := createClient()
+func RunList(flags FlagParams) error {
+	client, err := querator.NewClient(querator.ClientConfig{Endpoint: flags.Endpoint})
 	if err != nil {
 		return fmt.Errorf("failed to create client: %w", err)
 	}
@@ -45,8 +40,8 @@ func runList() error {
 
 	var resp proto.QueuesListResponse
 	opts := &querator.ListOptions{
-		Limit: int(listFlags.limit),
-		Pivot: listFlags.pivot,
+		Limit: int(flags.Limit),
+		Pivot: flags.Pivot,
 	}
 
 	if err := client.QueuesList(ctx, &resp, opts); err != nil {

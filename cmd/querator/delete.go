@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/proto"
 	"github.com/spf13/cobra"
 )
@@ -17,21 +18,17 @@ var deleteCmd = &cobra.Command{
 This operation is irreversible.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runDelete(args[0])
+		return RunDelete(flags, args[0])
 	},
 }
 
-var deleteFlags struct {
-	force bool
-}
-
 func init() {
-	deleteCmd.Flags().BoolVar(&deleteFlags.force, "force",
+	deleteCmd.Flags().BoolVar(&flags.Force, "force",
 		false, "Force deletion with items present")
 }
 
-func runDelete(queueName string) error {
-	client, err := createClient()
+func RunDelete(flags FlagParams, queueName string) error {
+	client, err := querator.NewClient(querator.ClientConfig{Endpoint: flags.Endpoint})
 	if err != nil {
 		return fmt.Errorf("failed to create client: %w", err)
 	}
@@ -41,7 +38,7 @@ func runDelete(queueName string) error {
 
 	req := &proto.QueuesDeleteRequest{
 		QueueName: queueName,
-		Force:     deleteFlags.force,
+		Force:     flags.Force,
 	}
 
 	if err := client.QueuesDelete(ctx, req); err != nil {

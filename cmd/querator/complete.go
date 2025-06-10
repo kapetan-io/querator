@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/proto"
 	"github.com/spf13/cobra"
 )
@@ -31,29 +32,25 @@ Partition must be specified as it's required for completion.`,
 			ids = args[2:]
 		}
 
-		return runComplete(queueName, int32(partition), ids)
+		return RunComplete(flags, queueName, int32(partition), ids)
 	},
 }
 
-var completeFlags struct {
-	file    string
-	timeout string
-}
-
 func init() {
-	completeCommand.Flags().StringVar(&completeFlags.file, "file",
+	completeCommand.Flags().StringVar(&flags.File, "file",
 		"", "Read IDs from file (one per line)")
-	completeCommand.Flags().StringVar(&completeFlags.timeout, "timeout",
+	completeCommand.Flags().StringVar(&flags.CompleteTimeout, "timeout",
 		"30s", "Request timeout")
 }
 
-func runComplete(queueName string, partition int32, cmdLineIds []string) error {
-	client, err := createClient()
+func RunComplete(flags FlagParams, queueName string, partition int32, cmdLineIds []string) error {
+
+	client, err := querator.NewClient(querator.ClientConfig{Endpoint: flags.Endpoint})
 	if err != nil {
 		return fmt.Errorf("failed to create client: %w", err)
 	}
 
-	timeout, err := time.ParseDuration(completeFlags.timeout)
+	timeout, err := time.ParseDuration(flags.CompleteTimeout)
 	if err != nil {
 		return fmt.Errorf("invalid timeout format: %w", err)
 	}
@@ -64,8 +61,8 @@ func runComplete(queueName string, partition int32, cmdLineIds []string) error {
 	var ids []string
 
 	// Read IDs from file if specified
-	if completeFlags.file != "" {
-		file, err := os.Open(completeFlags.file)
+	if flags.File != "" {
+		file, err := os.Open(flags.File)
 		if err != nil {
 			return fmt.Errorf("failed to open file: %w", err)
 		}
@@ -98,7 +95,7 @@ func runComplete(queueName string, partition int32, cmdLineIds []string) error {
 	req := &proto.QueueCompleteRequest{
 		QueueName:      queueName,
 		Partition:      partition,
-		RequestTimeout: completeFlags.timeout,
+		RequestTimeout: flags.CompleteTimeout,
 		Ids:            ids,
 	}
 

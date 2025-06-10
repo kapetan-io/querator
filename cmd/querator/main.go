@@ -19,6 +19,46 @@ type FlagParams struct {
 	ConfigFile string
 	Address    string
 	LogLevel   string
+
+	// Produce Flags
+	Payload   string
+	Encoding  string
+	Kind      string
+	Reference string
+	EnqueueAt string
+	Timeout   string
+
+	// Lease Flags
+	ClientId     string
+	BatchSize    int32
+	LeaseTimeout string
+
+	// Complete Flags
+	File            string
+	CompleteTimeout string
+
+	// Create Flags
+	LeaseTimeoutCreate string
+	ExpireTimeout      string
+	MaxAttempts        int32
+	DeadQueue          string
+	ReferenceCreate    string
+	Partitions         int32
+
+	// List Flags
+	Limit int32
+	Pivot string
+
+	// Update Flags
+	LeaseTimeoutUpdate  string
+	ExpireTimeoutUpdate string
+	MaxAttemptsUpdate   int32
+	DeadQueueUpdate     string
+	ReferenceUpdate     string
+	PartitionsUpdate    int32
+
+	// Delete Flags
+	Force bool
 }
 
 func main() {
@@ -57,7 +97,7 @@ to interact with a running Querator instance via its HTTP API.`,
 	// Queue Management Commands
 	root.AddCommand(createCommand)
 	root.AddCommand(listCommand)
-	root.AddCommand(updateCommand)
+	root.AddCommand(UpdateCommand)
 	root.AddCommand(deleteCmd)
 
 	if err := root.Execute(); err != nil {

@@ -116,6 +116,8 @@ the tests are all nested under a single test function.
 - Functional tests preferred over unit tests (90% target)
 - Nested test organization for isolation and dependencies
 - Table-driven tests for validation scenarios
+- You MUST use `github.com/stretchr/testify/assert` and `github.com/stretchr/testify/require` instead of `if` for assertions
+- All tests MUST be in the `XXXX_test` package and NOT in the same package which is under test
 
 ### Naming Conventions
 - Follow `doc/NAMING.md` guidelines

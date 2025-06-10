@@ -8,6 +8,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/proto"
 	"github.com/spf13/cobra"
 )
@@ -19,32 +20,26 @@ var leaseCommand = &cobra.Command{
 The command exits after successfully leasing items.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runLease(args[0])
+		return RunLease(flags, args[0])
 	},
 }
 
-var leaseFlags struct {
-	clientId  string
-	batchSize int32
-	timeout   string
-}
-
 func init() {
-	leaseCommand.Flags().StringVarP(&leaseFlags.clientId, "client-id", "c",
+	leaseCommand.Flags().StringVarP(&flags.ClientId, "client-id", "c",
 		random.Alpha("id-", 10), "Client identifier (required)")
-	leaseCommand.Flags().Int32VarP(&leaseFlags.batchSize, "batch-size", "b",
+	leaseCommand.Flags().Int32VarP(&flags.BatchSize, "batch-size", "b",
 		1, "Number of items to lease")
-	leaseCommand.Flags().StringVar(&leaseFlags.timeout, "timeout",
+	leaseCommand.Flags().StringVar(&flags.LeaseTimeout, "timeout",
 		"30s", "Request timeout")
 }
 
-func runLease(queueName string) error {
-	client, err := createClient()
+func RunLease(flags FlagParams, queueName string) error {
+	client, err := querator.NewClient(querator.ClientConfig{Endpoint: flags.Endpoint})
 	if err != nil {
 		return fmt.Errorf("failed to create client: %w", err)
 	}
 
-	timeout, err := time.ParseDuration(leaseFlags.timeout)
+	timeout, err := time.ParseDuration(flags.LeaseTimeout)
 	if err != nil {
 		return fmt.Errorf("invalid timeout format: %w", err)
 	}
@@ -54,9 +49,9 @@ func runLease(queueName string) error {
 
 	req := &proto.QueueLeaseRequest{
 		QueueName:      queueName,
-		BatchSize:      leaseFlags.batchSize,
-		ClientId:       leaseFlags.clientId,
-		RequestTimeout: leaseFlags.timeout,
+		BatchSize:      flags.BatchSize,
+		ClientId:       flags.ClientId,
+		RequestTimeout: flags.LeaseTimeout,
 	}
 
 	var resp proto.QueueLeaseResponse

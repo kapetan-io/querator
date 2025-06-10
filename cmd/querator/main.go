@@ -1,90 +1,72 @@
 package main
 
 import (
-	"context"
-	"flag"
 	"fmt"
-	"io"
+	"github.com/spf13/cobra"
 	"os"
-	"os/signal"
-	"runtime"
-	"strings"
-	"syscall"
-
-	"github.com/kapetan-io/querator/config"
-	"github.com/kapetan-io/querator/daemon"
-	"gopkg.in/yaml.v3"
 )
 
-var Version = "dev-build"
+var (
+	Version = "dev-build"
+	flags   FlagParams
+)
 
 type FlagParams struct {
-	ConfigFile  string
-	ShowVersion bool
+	// Global Flags
+	Endpoint string
+
+	// Server Flags
+	ConfigFile string
+	Address    string
+	LogLevel   string
 }
 
 func main() {
-	if err := Start(context.Background(), os.Args[1:], os.Stdout); err != nil {
+	var root = &cobra.Command{
+		Use:   "querator",
+		Short: "Querator is a distributed queue system",
+		Long: `Querator is a distributed queue system that provides reliable,
+scalable message queuing with lease-based processing semantics.
+
+Use 'querator server' to start the daemon, or use the various subcommands
+to interact with a running Querator instance via its HTTP API.`,
+	}
+
+	root.PersistentFlags().StringVar(&flags.Endpoint, "endpoint",
+		getEnv("QUERATOR_ENDPOINT", "http://localhost:2319"),
+		"Querator server endpoint for API calls")
+
+	// ======== Version =========
+	root.AddCommand(&cobra.Command{
+		Use:   "version",
+		Short: "Print the version number",
+		Long:  "Print the version number of Querator",
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Printf("querator %s\n", Version)
+		},
+	})
+
+	// ======== Server =========
+	serverCommand.Flags().StringVar(&flags.ConfigFile, "config",
+		getEnv("QUERATOR_CONFIG", ""),
+		"Configuration file path")
+	serverCommand.Flags().StringVar(&flags.Address, "address",
+		getEnv("QUERATOR_ADDRESS", "localhost:2319"),
+		"HTTP address to bind")
+	serverCommand.Flags().StringVar(&flags.LogLevel, "log-level",
+		getEnv("QUERATOR_LOG_LEVEL", "info"),
+		"Logging level (debug,error,warn,info)")
+	root.AddCommand(serverCommand)
+
+	if err := root.Execute(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func Start(ctx context.Context, args []string, w io.Writer) error {
-	flags, err := parseFlags(args)
-	if err != nil {
-		return err
+func getEnv(envVar, defaultValue string) string {
+	if value := os.Getenv(envVar); value != "" {
+		return value
 	}
-
-	if flags.ShowVersion {
-		_, _ = fmt.Fprintf(w, "querator %s\n", Version)
-		return nil
-	}
-
-	var file config.File
-	if flags.ConfigFile != "" {
-		reader, err := os.Open(flags.ConfigFile)
-		if err != nil {
-			return fmt.Errorf("while opening config file: %w", err)
-		}
-		decoder := yaml.NewDecoder(reader)
-		if err := decoder.Decode(&file); err != nil {
-			return fmt.Errorf("while reading config file: %w", err)
-		}
-		file.ConfigFile = flags.ConfigFile
-	}
-
-	var conf daemon.Config
-	if err := config.ApplyConfigFile(ctx, &conf, file, w); err != nil {
-		return fmt.Errorf("while applying config file: %w", err)
-	}
-
-	conf.Log.Info(fmt.Sprintf("Querator %s (%s/%s)", Version, runtime.GOARCH, runtime.GOOS))
-	d, err := daemon.NewDaemon(ctx, conf)
-	if err != nil {
-		return fmt.Errorf("while creating daemon: %w", err)
-	}
-
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt, syscall.SIGTERM, syscall.SIGINT)
-	select {
-	case <-c:
-		return d.Shutdown(ctx)
-	case <-ctx.Done():
-		return d.Shutdown(context.Background())
-	}
-}
-
-func parseFlags(args []string) (FlagParams, error) {
-	var flagParams FlagParams
-
-	flags := flag.NewFlagSet("querator", flag.ContinueOnError)
-	flags.SetOutput(io.Discard)
-	flags.StringVar(&flagParams.ConfigFile, "config", "", "environment config file")
-	flags.BoolVar(&flagParams.ShowVersion, "version", false, "show version information")
-	if err := flags.Parse(args); err != nil {
-		if !strings.Contains(err.Error(), "flag provided but not defined") {
-			return FlagParams{}, fmt.Errorf("while parsing flags: %w", err)
-		}
-	}
-	return flagParams, nil
+	return defaultValue
 }

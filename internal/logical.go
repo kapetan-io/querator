@@ -201,11 +201,11 @@ func (l *Logical) Produce(ctx context.Context, req *types.ProduceRequest) error 
 // Callers SHOULD cancel the context if the client has gone away, in this case Logical will abort the lease
 // request. If the context is cancelled after lease has been written to the data store
 // then those leases will remain leased until they can be offered to another client after the
-// LeaseDeadline has been reached. See doc/adr/0009-client-timeouts.md
+// LeaseDeadline has been reached. See docs/adr/0009-client-timeouts.md
 //
 // # Unique Requests
 // ClientID must NOT be empty and each request must be unique, Non-unique requests will be rejected with
-// MsgDuplicateClientID. See doc/adr/0007-encourage-simple-clients.md for an explanation.
+// MsgDuplicateClientID. See docs/adr/0007-encourage-simple-clients.md for an explanation.
 func (l *Logical) Lease(ctx context.Context, req *types.LeaseRequest) error {
 	if l.inShutdown.Load() {
 		return ErrQueueShutdown
@@ -579,7 +579,7 @@ func (l *Logical) prepareQueueState(state *QueueState) {
 
 // -------------------------------------------------
 // Main Loop and Handlers
-// See doc/adr/0003-rw-sync-point.md for an explanation of this design
+// See docs/adr/0003-rw-sync-point.md for an explanation of this design
 // -------------------------------------------------
 
 type QueueState struct {
@@ -799,7 +799,7 @@ func (l *Logical) assignProduceRequests(state *QueueState) {
 			slog.Int("items", len(req.Items)))
 
 		// TODO: This should check the Status of the Partition, not just the failures
-		//  See doc/adr/0023-partition-maintenance.md
+		//  See docs/adr/0023-partition-maintenance.md
 		if state.Partitions[0].State.Failures != 0 {
 			// If the chosen sorted partition has failed, then all partitions have failed, as
 			// partition sorting ensures failed partitions are sorted last.
@@ -809,7 +809,7 @@ func (l *Logical) assignProduceRequests(state *QueueState) {
 		}
 
 		// Preform Opportunistic Partition Distribution
-		// See doc/adr/0019-partition-items-distribution.md for details
+		// See docs/adr/0019-partition-items-distribution.md for details
 		state.Partitions[0].Produce(req)
 		slices.SortFunc(state.Partitions, func(a, b *Partition) int {
 			// Ensure failed Partitions are sorted last
@@ -833,7 +833,7 @@ func (l *Logical) assignLeaseRequests(state *QueueState) {
 		// Perform a reverse search through state.Partitions finding the first partition where b.State.Failures == 0
 		var assigned *Partition
 		for i := len(state.Partitions) - 1; i >= 0; i-- {
-			// TODO: This should check for partition availability see doc/adr/0023-partition-maintenance.md
+			// TODO: This should check for partition availability see docs/adr/0023-partition-maintenance.md
 			if state.Partitions[i].State.Failures == 0 {
 				assigned = state.Partitions[i]
 				break
@@ -856,7 +856,7 @@ func (l *Logical) assignLeaseRequests(state *QueueState) {
 		assigned.Lease(req)
 
 		// Perform Opportunistic Partition Distribution
-		// See doc/adr/0019-partition-items-distribution.md for details
+		// See docs/adr/0019-partition-items-distribution.md for details
 		slices.SortFunc(state.Partitions, func(a, b *Partition) int {
 			// Ensure failed Partitions are sorted last
 			if a.State.Failures < b.State.Failures {

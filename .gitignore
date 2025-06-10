@@ -8,5 +8,5 @@ coverage.html
 *test-data*
 .aider*
 .env
-doc/notes
-doc/plans
+docs/notes
+docs/plans

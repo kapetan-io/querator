@@ -372,7 +372,7 @@ func (m *MemoryPartition) TakeAction(_ context.Context, batch types.Batch[types.
 				// Remove the item from the array
 				m.mem = append(m.mem[:idx], m.mem[idx+1:]...)
 				// Add the item to the tail of the array
-				// See doc/adr/0022-managing-item-lifecycles.md for and explanation
+				// See docs/adr/0022-managing-item-lifecycles.md for and explanation
 				m.mem = append(m.mem, item)
 			case types.ActionDeleteItem:
 				idx, ok := m.findID(a.Item.ID)

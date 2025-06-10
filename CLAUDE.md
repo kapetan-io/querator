@@ -9,15 +9,62 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `make proto` - Generate protobuf files using buf
 - You MUST NOT call `make ci` to run the test suite
 
+### Functional Testing Strategy
+
+This codebase uses a **functional testing approach** where tests exercise complete workflows through public APIs only.
+
+#### Test Structure
+- **Single Entry Point**: `TestXXXX()` automatically runs all tests against multiple storage backends
+- **Nested Organization**: `t.Run("Category", func() { t.Run("TestName", func() { ... }) })`
+- **Path Pattern**: `TestQueue/<Backend>/Category/TestName` (e.g., `TestQueue/InMemory/Errors/QueueRetry/InvalidId`)
+
+#### Adding New Tests
+1. **Location**: Add tests inside the `testXXXX()` function in test files
+2. **Backend Coverage**: Tests automatically run against InMemory and BadgerDB - no extra work needed
+3. **Organization**:
+    - Happy path tests: Add as top-level `t.Run("TestName", ...)`
+    - Error tests: Add under `t.Run("Errors", func() { t.Run("QueueMethodName", ...) })`
+
+#### Test Patterns
+- **Setup**: Each test creates its own daemon and uses random queue names for isolation
+- **API Testing**: Use client (`c`) to make requests, never test internal methods directly
+- **Error Validation**: Use `duh.Error` type to validate error codes and messages
+- **Cleanup**: Each test handles its own `defer d.Shutdown(t)` and `defer tearDown()`
+
+#### Example Structure for New Endpoint Tests:
+  ```go
+  // Happy path test
+  t.Run("QueueRetryWorkflow", func(t *testing.T) {
+      // setup, produce, lease, retry, verify
+  })
+
+  // Error tests
+  t.Run("Errors", func(t *testing.T) {
+      t.Run("QueueRetry", func(t *testing.T) {
+          t.Run("InvalidId", func(t *testing.T) { ... })
+          t.Run("NotLeased", func(t *testing.T) { ... })
+          t.Run("DeadLetter", func(t *testing.T) { ... })
+      })
+  })
+```
+
+This structure ensures **every test automatically validates both storage backends** and maintains **complete functional
+coverage** through public API testing only.
+
 ### Running Individual Tests
 Use nested test paths from `go test ./... -v` output:
 ```bash
 # Run specific test
-go test ./... -run "^TestQueue/InMemory/Errors/QueueLease/DuplicateClientId$"
+go test ./... -run "^TestQueue/<Backend>/Errors/QueueLease/DuplicateClientId$"
+
+Where <Backend> is either `InMemory` or `BadgerDB`
 
 # Run test suite for specific storage backend
 go test ./... -v -run "^TestQueue/InMemory.*$"
 ```
+
+The test suite is designed to run ALL the tests using multiple backends. As such,
+the tests are all nested under a single test function.
 
 ## Architecture Overview
 

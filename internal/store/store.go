@@ -67,6 +67,12 @@ type Partition interface {
 	// items were marked as "complete"
 	Complete(ctx context.Context, batch types.Batch[types.CompleteRequest]) error
 
+	// Retry retries items in the batch. Items can be retried immediately, scheduled for future retry,
+	// or marked as dead for placement in the dead letter queue. If the underlying data storage fails
+	// for some reason, this call returns an error. In that case the caller should assume none of the
+	// batched items were retried.
+	Retry(ctx context.Context, batch types.Batch[types.RetryRequest]) error
+
 	// List lists items in a queue. limit and offset allow the user to page through all the items
 	// in the queue.
 	List(ctx context.Context, items *[]*types.Item, opts types.ListOptions) error

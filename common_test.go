@@ -399,3 +399,22 @@ func createRandomQueues(t *testing.T, ctx context.Context, c *que.Client, count 
 	}
 	return items
 }
+
+func createQueueAndWait(t *testing.T, ctx context.Context, c *que.Client, info *pb.QueueInfo) {
+	t.Helper()
+
+	require.NoError(t, c.QueuesCreate(ctx, info))
+
+	// Wait for the partitions to become available
+	err := retry.On(ctx, RetryTenTimes, func(ctx context.Context, i int) error {
+		var resp pb.QueueStatsResponse
+		require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: info.QueueName}, &resp))
+		for _, p := range resp.LogicalQueues[0].Partitions {
+			if p.Failures != 0 {
+				return fmt.Errorf("partition '%d' never became available", p.Partition)
+			}
+		}
+		return nil
+	})
+	require.NoError(t, err)
+}

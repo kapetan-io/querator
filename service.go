@@ -192,6 +192,34 @@ func (s *Service) QueueComplete(ctx context.Context, req *proto.QueueCompleteReq
 	return nil
 }
 
+func (s *Service) QueueRetry(ctx context.Context, req *proto.QueueRetryRequest) error {
+	queue, err := s.queues.Get(ctx, req.QueueName)
+	if err != nil {
+		return err
+	}
+
+	proxy, logical, err := queue.GetByPartition(int(req.Partition))
+	if err != nil {
+		return err
+	}
+
+	if proxy != nil {
+		return proxy.QueueRetry(ctx, req)
+	}
+
+	var r types.RetryRequest
+	if err := s.validateQueueRetryProto(req, &r); err != nil {
+		return err
+	}
+
+	// Retry will block until success, context cancel or timeout
+	if err := logical.Retry(ctx, &r); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // TODO(reload)
 func (s *Service) QueueReload(ctx context.Context, req *proto.QueueClearRequest) error {
 	queue, err := s.queues.Get(ctx, req.QueueName)

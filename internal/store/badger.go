@@ -243,6 +243,93 @@ nextBatch:
 	return nil
 }
 
+func (b *BadgerPartition) Retry(_ context.Context, batch types.Batch[types.RetryRequest]) error {
+	var done bool
+
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	txn := db.NewTransaction(true)
+
+	defer func() {
+		if !done {
+			txn.Discard()
+		}
+	}()
+
+nextBatch:
+	for i := range batch.Requests {
+		for _, retryItem := range batch.Requests[i].Items {
+			if err = b.validateID(retryItem.ID); err != nil {
+				batch.Requests[i].Err = transport.NewInvalidOption("invalid storage id; '%s': %s", retryItem.ID, err)
+				continue nextBatch
+			}
+
+			kvItem, err := txn.Get(retryItem.ID)
+			if err != nil {
+				batch.Requests[i].Err = transport.NewInvalidOption("invalid storage id; '%s' does not exist", retryItem.ID)
+				continue nextBatch
+			}
+			var v []byte
+			v, err = kvItem.ValueCopy(v)
+			if err != nil {
+				batch.Requests[i].Err = transport.NewInvalidOption("invalid storage id; '%s' does not exist", retryItem.ID)
+				continue nextBatch
+			}
+
+			item := new(types.Item) // TODO: memory pool
+			if err = gob.NewDecoder(bytes.NewReader(v)).Decode(item); err != nil {
+				return errors.Errorf("during Decode(): %w", err)
+			}
+
+			if !item.IsLeased {
+				batch.Requests[i].Err = transport.NewConflict("item(s) cannot be retried; '%s' is not "+
+					"marked as leased", retryItem.ID)
+				continue nextBatch
+			}
+
+			// Clear lease status (attempts incremented on next lease)
+			
+			item.IsLeased = false
+			item.LeaseDeadline = clock.Time{}
+
+			if retryItem.Dead {
+				// TODO: Move to dead letter queue when implemented
+				// For now, just delete the item
+				if err = txn.Delete(retryItem.ID); err != nil {
+					return errors.Errorf("during Delete(%s): %w", retryItem.ID, err)
+				}
+			} else {
+				// For scheduled retry or immediate retry, update the item
+				if !retryItem.RetryAt.IsZero() {
+					// Schedule for future retry
+					item.EnqueueAt = retryItem.RetryAt
+				}
+				// For immediate retry (empty RetryAt), item stays in queue with incremented attempts
+
+				// Update the item in storage
+				var buf bytes.Buffer
+				if err := gob.NewEncoder(&buf).Encode(item); err != nil {
+					return errors.Errorf("during gob.Encode(): %w", err)
+				}
+				if err := txn.Set(retryItem.ID, buf.Bytes()); err != nil {
+					return errors.Errorf("during Set(%s): %w", retryItem.ID, err)
+				}
+			}
+		}
+	}
+
+	err = txn.Commit()
+	if err != nil {
+		return errors.Errorf("during Commit(): %w", err)
+	}
+
+	done = true
+	return nil
+}
+
 func (b *BadgerPartition) List(_ context.Context, items *[]*types.Item, opts types.ListOptions) error {
 	db, err := b.getDB()
 	if err != nil {

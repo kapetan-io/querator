@@ -90,6 +90,29 @@ func (s *Service) validateQueueCompleteProto(in *proto.QueueCompleteRequest, out
 	return nil
 }
 
+func (s *Service) validateQueueRetryProto(in *proto.QueueRetryRequest, out *types.RetryRequest) error {
+	// Note: RequestTimeout field is not defined in proto, using default timeout
+	// TODO: Add RequestTimeout field to QueueRetryRequest proto definition
+	out.RequestTimeout = clock.Duration(5 * clock.Minute)
+
+	for _, item := range in.Items {
+		retryItem := types.RetryItem{
+			ID:   []byte(item.Id),
+			Dead: item.Dead,
+		}
+		
+		if item.RetryAt != nil {
+			retryItem.RetryAt = clock.Time(item.RetryAt.AsTime())
+		}
+		
+		out.Items = append(out.Items, retryItem)
+	}
+
+	out.Partition = int(in.Partition)
+
+	return nil
+}
+
 func (s *Service) validateQueueOptionsProto(in *proto.QueueInfo, out *types.QueueInfo) error {
 	var err error
 

@@ -30,6 +30,7 @@ type Remote interface {
 	QueueLease(ctx context.Context, req *proto.QueueLeaseRequest, res *proto.QueueLeaseResponse) error
 	QueueProduce(ctx context.Context, req *proto.QueueProduceRequest) error
 	QueueComplete(ctx context.Context, req *proto.QueueCompleteRequest) error
+	QueueRetry(ctx context.Context, req *proto.QueueRetryRequest) error
 	StorageItemsList(ctx context.Context, req *proto.StorageItemsListRequest,
 		res *proto.StorageItemsListResponse) error
 	StorageItemsImport(ctx context.Context, req *proto.StorageItemsImportRequest,

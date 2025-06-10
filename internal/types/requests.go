@@ -73,6 +73,32 @@ type CompleteRequest struct {
 	// The error to be returned to the caller
 	Err error
 }
+
+type RetryRequest struct {
+	// How long the caller expects Retry() to block before returning
+	RequestTimeout clock.Duration
+	// The context of the requesting client
+	Context context.Context
+	// Partition is the partition the retry request is for
+	Partition int
+	// The retry items with their retry timestamps and dead flags
+	Items []RetryItem
+	// The RequestDeadline calculated from RequestTimeout
+	RequestDeadline clock.Time
+	// Used to wait for this request to complete
+	ReadyCh chan struct{}
+	// The error to be returned to the caller
+	Err error
+}
+
+type RetryItem struct {
+	// The item id to retry
+	ID []byte
+	// The timestamp when the item should be retried
+	RetryAt clock.Time
+	// If true, item goes to dead letter queue regardless of retry timestamp
+	Dead bool
+}
 type ReloadRequest struct {
 	// Partitions is a list of partitions to reload
 	Partitions []int

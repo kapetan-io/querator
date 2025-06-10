@@ -132,6 +132,57 @@ nextBatch:
 	return nil
 }
 
+func (m *MemoryPartition) Retry(ctx context.Context, batch types.Batch[types.RetryRequest]) error {
+	defer m.mu.Unlock()
+	m.mu.Lock()
+
+nextBatch:
+	for i := range batch.Requests {
+		for _, retryItem := range batch.Requests[i].Items {
+			if err := m.validateID(retryItem.ID); err != nil {
+				batch.Requests[i].Err = transport.NewInvalidOption("invalid storage id; '%s': %s", retryItem.ID, err)
+				continue nextBatch
+			}
+
+			idx, ok := m.findID(retryItem.ID)
+			if !ok {
+				batch.Requests[i].Err = transport.NewInvalidOption("invalid storage id; '%s' does not exist", retryItem.ID)
+				continue nextBatch
+			}
+
+			// This should not happen, but we need to handle it anyway.
+			if !m.mem[idx].EnqueueAt.IsZero() {
+				m.log.LogAttrs(ctx, slog.LevelWarn, "attempted to retry a scheduled item; reported does not exist",
+					slog.String("id", string(m.mem[idx].ID)))
+				batch.Requests[i].Err = transport.NewInvalidOption("invalid storage id; '%s' does not exist", retryItem.ID)
+				continue nextBatch
+			}
+
+			if !m.mem[idx].IsLeased {
+				batch.Requests[i].Err = transport.NewConflict("item(s) cannot be retried; '%s' is not "+
+					"marked as leased", retryItem.ID)
+				continue nextBatch
+			}
+
+			// Clear lease status (attempts incremented on next lease)
+			
+			m.mem[idx].IsLeased = false
+			m.mem[idx].LeaseDeadline = clock.Time{}
+
+			if retryItem.Dead {
+				// TODO: Move to dead letter queue when implemented
+				// For now, just remove the item
+				m.mem = append(m.mem[:idx], m.mem[idx+1:]...)
+			} else if !retryItem.RetryAt.IsZero() {
+				// Schedule for future retry
+				m.mem[idx].EnqueueAt = retryItem.RetryAt
+			}
+			// For immediate retry (empty RetryAt), item stays in queue with incremented attempts
+		}
+	}
+	return nil
+}
+
 func (m *MemoryPartition) validateID(id []byte) error {
 	_, err := ksuid.Parse(string(id))
 	if err != nil {

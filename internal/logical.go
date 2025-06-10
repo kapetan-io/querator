@@ -34,6 +34,7 @@ const (
 	MethodProduce
 	MethodLease
 	MethodComplete
+	MethodRetry
 	MethodLifeCycle
 	MethodPartitionStateChange
 	MethodReloadPartitions
@@ -293,6 +294,49 @@ func (l *Logical) Complete(ctx context.Context, req *types.CompleteRequest) erro
 	select {
 	case l.hotRequestCh <- &Request{
 		Method:  MethodComplete,
+		Request: req,
+	}:
+	default:
+		return transport.NewRetryRequest(MsgQueueOverLoaded)
+	}
+
+	// Wait until the request has been processed
+	<-req.ReadyCh
+	return req.Err
+}
+
+func (l *Logical) Retry(ctx context.Context, req *types.RetryRequest) error {
+	if l.inShutdown.Load() {
+		return ErrQueueShutdown
+	}
+	l.inFlight.Add(1)
+	defer l.inFlight.Add(-1)
+
+	if len(req.Items) == 0 {
+		return transport.NewInvalidOption("items is invalid; list of items cannot be empty")
+	}
+
+	if len(req.Items) > l.conf.MaxCompleteBatchSize {
+		return transport.NewInvalidOption("items is invalid; max_complete_batch_size is"+
+			" %d but received %d", l.conf.MaxCompleteBatchSize, len(req.Items))
+	}
+
+	if req.RequestTimeout > maxRequestTimeout {
+		return transport.NewInvalidOption("request timeout is invalid; maximum timeout is '15m' but '%s' "+
+			"requested", req.RequestTimeout.String())
+	}
+
+	if req.RequestTimeout == clock.Duration(0) {
+		return transport.NewInvalidOption("request timeout is required; '5m' is recommended, 15m is the maximum")
+	}
+
+	req.RequestDeadline = l.conf.Clock.Now().UTC().Add(req.RequestTimeout)
+	req.ReadyCh = make(chan struct{})
+	req.Context = ctx
+
+	select {
+	case l.hotRequestCh <- &Request{
+		Method:  MethodRetry,
 		Request: req,
 	}:
 	default:
@@ -585,6 +629,7 @@ func (l *Logical) prepareQueueState(state *QueueState) {
 type QueueState struct {
 	LifeCycles        types.Batch[types.LifeCycleRequest]
 	Completes         types.Batch[types.CompleteRequest]
+	Retries           types.Batch[types.RetryRequest]
 	Producers         types.ProduceBatch
 	Leases            types.LeaseBatch
 	NextMaintenanceCh <-chan clock.Time
@@ -694,6 +739,7 @@ func (l *Logical) handleHotRequests(state *QueueState, req *Request) {
 	state.Leases.FilterNils()
 	state.Producers.Reset()
 	state.Completes.Reset()
+	state.Retries.Reset()
 
 	// Handle any request timeouts and update our next run timer
 	l.handleRequestTimeouts(state)
@@ -729,6 +775,8 @@ func (l *Logical) reqToState(req *Request, state *QueueState) {
 		state.Producers.Add(req.Request.(*types.ProduceRequest))
 	case MethodComplete:
 		state.Completes.Add(req.Request.(*types.CompleteRequest))
+	case MethodRetry:
+		state.Retries.Add(req.Request.(*types.RetryRequest))
 	case MethodLifeCycle:
 		state.LifeCycles.Add(req.Request.(*types.LifeCycleRequest))
 		close(req.ReadyCh)
@@ -767,6 +815,8 @@ func (l *Logical) assignToPartitions(state *QueueState) {
 	l.assignLeaseRequests(state)
 	// ==== Complete ====
 	l.assignCompleteRequests(state)
+	// ==== Retry ====
+	l.assignRetryRequests(state)
 }
 
 // notifyScheduled iterates through the produced items. If any are scheduled
@@ -830,6 +880,9 @@ func (l *Logical) assignProduceRequests(state *QueueState) {
 func (l *Logical) assignLeaseRequests(state *QueueState) {
 	// Assign lease requests to StoragePartitions
 	for _, req := range state.Leases.Requests {
+		if req == nil {
+			continue
+		}
 		// Perform a reverse search through state.Partitions finding the first partition where b.State.Failures == 0
 		var assigned *Partition
 		for i := len(state.Partitions) - 1; i >= 0; i-- {
@@ -876,6 +929,9 @@ func (l *Logical) assignLeaseRequests(state *QueueState) {
 func (l *Logical) assignCompleteRequests(state *QueueState) {
 nextRequest:
 	for _, req := range state.Completes.Requests {
+		if req == nil {
+			continue
+		}
 		var found bool
 		for i, p := range state.Partitions {
 			// Assign the complete request to the partition if found
@@ -896,6 +952,32 @@ nextRequest:
 	}
 }
 
+func (l *Logical) assignRetryRequests(state *QueueState) {
+nextRequest:
+	for _, req := range state.Retries.Requests {
+		if req == nil {
+			continue
+		}
+		var found bool
+		for i, p := range state.Partitions {
+			// Assign the retry request to the partition if found
+			if req.Partition == p.Info.PartitionNum {
+				if p.State.Failures != 0 {
+					req.Err = transport.NewRetryRequest("partition not available;"+
+						" partition '%d' is failing, retry again", req.Partition)
+					continue nextRequest
+				}
+				state.Partitions[i].RetryRequests.Add(req)
+				found = true
+			}
+		}
+		if !found {
+			req.Err = transport.NewRetryRequest("partition not found;"+
+				" partition '%d' may have moved, retry again", req.Partition)
+		}
+	}
+}
+
 func (l *Logical) finalizeRequests(state *QueueState) {
 	for _, req := range state.Producers.Requests {
 		if !req.Assigned {
@@ -905,7 +987,15 @@ func (l *Logical) finalizeRequests(state *QueueState) {
 	}
 
 	for _, req := range state.Completes.Requests {
-		close(req.ReadyCh)
+		if req != nil {
+			close(req.ReadyCh)
+		}
+	}
+
+	for _, req := range state.Retries.Requests {
+		if req != nil {
+			close(req.ReadyCh)
+		}
 	}
 
 	for i, req := range state.Leases.Requests {
@@ -989,6 +1079,20 @@ func (l *Logical) applyToPartitions(state *QueueState) {
 			for _, req := range p.CompleteRequests.Requests {
 				// TODO: We likely want to inform the client they should retry
 				//  instead of return an internal error
+				req.Err = ErrInternalRetry
+			}
+			// TODO: Handle degradation
+		}
+
+		// ==== Retry ====
+		if err := p.Store.Retry(ctx, p.RetryRequests); err != nil {
+			l.log.Error("while calling store.Partition.Retry()",
+				"partition", p.Info.PartitionNum,
+				"queueName", l.conf.Name,
+				"error", err)
+
+			// Retries are similar to completes, they are FOR a specific partition
+			for _, req := range p.RetryRequests.Requests {
 				req.Err = ErrInternalRetry
 			}
 			// TODO: Handle degradation
@@ -1217,6 +1321,10 @@ func (l *Logical) handleShutdown(state *QueueState, req *types.ShutdownRequest) 
 				o := r.Request.(*types.CompleteRequest)
 				o.Err = ErrQueueShutdown
 				close(o.ReadyCh)
+			case MethodRetry:
+				o := r.Request.(*types.RetryRequest)
+				o.Err = ErrQueueShutdown
+				close(o.ReadyCh)
 			case MethodLifeCycle:
 				o := r.Request.(*Request)
 				o.Err = ErrQueueShutdown
@@ -1320,7 +1428,7 @@ func addIfUnique(r *types.LeaseBatch, req *types.LeaseRequest) {
 		return
 	}
 	for _, existing := range r.Requests {
-		if existing.ClientID == req.ClientID {
+		if existing != nil && existing.ClientID == req.ClientID {
 			req.Err = transport.NewInvalidOption(MsgDuplicateClientID)
 			close(req.ReadyCh)
 			return

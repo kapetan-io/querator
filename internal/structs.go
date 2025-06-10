@@ -20,6 +20,8 @@ type Partition struct {
 	LeaseRequests types.LeaseBatch
 	// CompleteRequests is the batch of complete requests that are assigned to this partition
 	CompleteRequests types.Batch[types.CompleteRequest]
+	// RetryRequests is the batch of retry requests that are assigned to this partition
+	RetryRequests types.Batch[types.RetryRequest]
 	// LifeCycleRequests is a batch of lifecycle requests that are assigned to this partition
 	LifeCycleRequests types.Batch[types.LifeCycleRequest]
 	// Store is the storage for this partition
@@ -36,6 +38,7 @@ func (p *Partition) Reset() {
 	p.ProduceRequests.Reset()
 	p.LeaseRequests.Reset()
 	p.CompleteRequests.Reset()
+	p.RetryRequests.Reset()
 	p.LifeCycleRequests.Reset()
 }
 

@@ -86,6 +86,7 @@ type Service interface {
 	QueueProduce(context.Context, *pb.QueueProduceRequest) error
 	QueueLease(context.Context, *pb.QueueLeaseRequest, *pb.QueueLeaseResponse) error
 	QueueComplete(context.Context, *pb.QueueCompleteRequest) error
+	QueueRetry(context.Context, *pb.QueueRetryRequest) error
 	QueueStats(context.Context, *pb.QueueStatsRequest, *pb.QueueStatsResponse) error
 	QueueClear(context.Context, *pb.QueueClearRequest) error
 
@@ -155,6 +156,8 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.QueueLease(ctx, w, r)
 		return
 	case RPCQueueRetry:
+		h.QueueRetry(ctx, w, r)
+		return
 	case RPCQueueComplete:
 		h.QueueComplete(ctx, w, r)
 		return
@@ -232,6 +235,20 @@ func (h *HTTPHandler) QueueComplete(ctx context.Context, w http.ResponseWriter, 
 	}
 
 	if err := h.service.QueueComplete(ctx, &req); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
+}
+
+func (h *HTTPHandler) QueueRetry(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.QueueRetryRequest
+	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	if err := h.service.QueueRetry(ctx, &req); err != nil {
 		h.ReplyError(w, r, err)
 		return
 	}

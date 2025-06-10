@@ -81,9 +81,9 @@ partitions in a round-robin fashion as they become available. As the number of c
 automatically adjusts and rebalances the consumers to partitions to ensure even distribution, even if the number
 of consumers exceeds the total number of partitions. This is achieved through "Logical Queues," which dynamically
 grow and shrink based on the number of consumers and available partitions.
-See [ADR 0016 Queue Partitions](doc/adr/0016-queue-partitions.md) for details
+See [ADR 0016 Queue Partitions](docs/adr/0016-queue-partitions.md) for details
 
-![](doc/Querator%20Logical%20Queue%20Diagram.png)
+![](docs/Querator%20Logical%20Queue%20Diagram.png)
 
 ##### Disaggregated Storage Backends
 Each partition is supported by a user-selected data store backend. This separation of storage from processing gives
@@ -142,7 +142,7 @@ the `daemon` package or invoke `querator.NewService()` directly to get a new ins
 See [Querator API Reference](https://querator.io/api) for and idea of what the API looks like.
 
 ### Design
-See our [Architecture Decision Docs](doc/adr) for details on our current implementation design.
+See our [Architecture Decision Docs](docs/adr) for details on our current implementation design.
 
 ### Contributing 
 - See the [Querator Trello Board](https://trello.com/b/cey2cB3i/querator) for work status and progress and things to do

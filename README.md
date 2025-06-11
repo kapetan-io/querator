@@ -1,17 +1,20 @@
+# Querator
+
+[![Build Status](https://github.com/kapetan-io/querator/workflows/CI/badge.svg)](https://github.com/kapetan-io/querator/actions)
+[![Go Report Card](https://goreportcard.com/badge/github.com/kapetan-io/querator)](https://goreportcard.com/report/github.com/kapetan-io/querator)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![Coverage Status](https://coveralls.io/repos/github/kapetan-io/querator/badge.svg?branch=main)](https://coveralls.io/github/kapetan-io/querator?branch=main)
+[![Go Reference](https://pkg.go.dev/badge/github.com/kapetan-io/querator.svg)](https://pkg.go.dev/github.com/kapetan-io/querator)
+
 > NOTE: Querator is currently still in early development
 
-## Querator
-Querator is a **Distributed Durable Execution System** built on top of an **Almost Exactly Once Delivery**
-(AEOD) Queue.
+Querator is a highly scalable, high performance **Almost Exactly Once
+Delivery** (AEOD) Queue system designed to enable developers to build
+event-driven, highly resilient, distributed, high-performance applications. The
+project is inspired by production systems that we developed to scale SaaS companies like
+Mailgun from millions to billions of events per day.
 
-Querator addresses both **Durable Execution** and **Exactly Once Delivery Queues**, which together form a
-symbiotic relationship that enables developers to build event-driven, highly resilient, distributed, 
-high-performance applications.
-
-### Durable Execution With Querator
-TODO: Details on this are still evolving.
-
-### Exactly Once Delivery With Querator
+### Almost Exactly Once Delivery With Querator
 At the heart of Querator is the Almost Exactly Once Delivery FIFO queue, backed by a database of your choice.
 
 We say **“Almost” Exactly Once** because [Exactly Once Delivery (EOD) is theoretically impossible](https://bravenewgeek.com/you-cannot-have-exactly-once-delivery/).
@@ -39,7 +42,6 @@ primitive for processing items. A Consumer can hold on to the lease until the ag
 off marking the lease as complete until it has processed the item that it consumed. As a result, you can use the
 locking primitive the lease provides to solve several distributed problems.
 
-- Implement multi-step, durable execution functions.
 - Implement the Saga Pattern for distributed transactions
 - Use it as a FIFO queue with ordered delivery of messages
 - Use it as a limit locking system, where items in the queue represent a limited lockable resource
@@ -114,41 +116,6 @@ or in limited resource environments where High Availability is not a concern.
 - SurrealDB
 - FoundationDB
 
-### Preserving FIFO Order
-Although a queue is implemented as a First-In-First-Out (FIFO) structure, the system's order cannot be maintained
-if there is more than one consumer accessing the queue.
-
-Consider a scenario with two consumers accessing a FIFO queue:
-
-- Consumer 1 retrieves an item.
-- Consumer 2 retrieves an item.
-- Consumer 2 finishes processing their item.
-- Consumer 1 finishes processing their item.
-
-In this situation, the system -— which includes the entire setup of client producers, Querator, and
-client consumers -— cannot reliably maintain the order of item processing when multiple consumers are
-involved. To ensure ordered processing, items which require preservation of order should be placed
-in the same queue, and that queue must have only one partition and one consumer.
-
-Even though Querator queues are designed to deliver items in the order they were produced (FIFO), this order is
-disrupted if multiple consumers process items out of sequence. If a user desires a strictly ordered and processed
-FIFO queue, they must create a queue with only one partition and ensure that only one consumer processes that queue.
-
-### Embedded Querator
-Querator is designed as a library which exposes all API functionality via `Service` method calls. Users can use
-the `daemon` package or invoke `querator.NewService()` directly to get a new instance of `Service` to interact with.
-
-### HTTP API
-See [Querator API Reference](https://querator.io/api) for and idea of what the API looks like.
-
-### Design
-See our [Architecture Decision Docs](docs/adr) for details on our current implementation design.
-
-### Contributing 
-- See the [Querator Trello Board](https://trello.com/b/cey2cB3i/querator) for work status and progress and things to do
-- Join our [Discord](https://discord.gg/XwfBdN9wdg)
-- Checkout [querator.io](https://querator.io/api) for the HTML OpenAPI docs
-
 ### Installation
 
 #### Homebrew (macOS/Linux)
@@ -161,6 +128,21 @@ brew install querator
 ```bash
 go install github.com/kapetan-io/querator/cmd/querator@latest
 ```
+
+### Embedded Querator
+Querator is designed as a library which exposes all API functionality via `Service` method calls. Users can use
+the `daemon` package or invoke `querator.NewService()` directly to get a new instance of `Service` to interact with.
+
+### HTTP API
+See [Querator API Reference](https://querator.io/api) for API documentation
+
+### Design
+See our [Architecture Decision Docs](docs/adr) for details on our current implementation design.
+
+### Contributing 
+- See the [Querator Trello Board](https://trello.com/b/cey2cB3i/querator) for work status and progress and things to do
+- Join our [Discord](https://discord.gg/XwfBdN9wdg)
+- Checkout [querator.io](https://querator.io/api) for the HTML OpenAPI docs
 
 ### Similar Projects
 * https://engineering.fb.com/2021/02/22/production-engineering/foqs-scaling-a-distributed-priority-queue/

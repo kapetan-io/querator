@@ -1,12 +1,15 @@
-# Querator
+<h2 align="center">
+<img src="docs/querator-logo.png" alt="Querator" width="800" /><br />
+</h2>
 
-[![Build Status](https://github.com/kapetan-io/querator/workflows/CI/badge.svg)](https://github.com/kapetan-io/querator/actions)
+> NOTE: Querator is currently still in early development
+
+[![Build Status](https://github.com/kapetan-io/querator/actions/workflows/release.yml/badge.svg)](https://github.com/kapetan-io/querator/actions)
 [![Go Report Card](https://goreportcard.com/badge/github.com/kapetan-io/querator)](https://goreportcard.com/report/github.com/kapetan-io/querator)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Coverage Status](https://coveralls.io/repos/github/kapetan-io/querator/badge.svg?branch=main)](https://coveralls.io/github/kapetan-io/querator?branch=main)
 [![Go Reference](https://pkg.go.dev/badge/github.com/kapetan-io/querator.svg)](https://pkg.go.dev/github.com/kapetan-io/querator)
 
-> NOTE: Querator is currently still in early development
 
 Querator is a highly scalable, high performance **Almost Exactly Once
 Delivery** (AEOD) Queue system designed to enable developers to build

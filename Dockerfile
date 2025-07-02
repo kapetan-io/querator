@@ -57,4 +57,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
     CMD wget --no-verbose --tries=1 --spider http://localhost:9090/health || exit 1
 
 # Default command - use default config if no config mounted
-CMD ["sh", "-c", "if [ -f /config/querator.yaml ]; then querator -config /config/querator.yaml; else querator -config /config/default.yaml; fi"]
+CMD ["sh", "-c", "if [ -f /config/querator.yaml ]; then querator server --config /config/querator.yaml; else querator server --config /config/default.yaml; fi"]

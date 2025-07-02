@@ -20,11 +20,11 @@ func TestInMemoryListener(t *testing.T) {
 	listener := daemon.NewInMemoryListener()
 	server := &http.Server{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			fmt.Fprintf(w, "Hello, %s!", r.URL.Path[1:])
+			_, _ = fmt.Fprintf(w, "Hello, %s!", r.URL.Path[1:])
 		}),
 	}
-	go server.Serve(listener)
-	defer server.Close()
+	go func() { _ = server.Serve(listener) }()
+	defer func() { _ = server.Close() }()
 
 	clientCount := 3
 	var wg sync.WaitGroup
@@ -34,7 +34,7 @@ func TestInMemoryListener(t *testing.T) {
 			defer wg.Done()
 			// Each client gets its own net.Pipe
 			serverConn, clientConn := net.Pipe()
-			listener.ServeConn(serverConn)
+			_ = listener.ServeConn(serverConn)
 
 			// Custom DialContext returns the clientConn for this request
 			dialOnce := sync.Once{}
@@ -56,7 +56,7 @@ func TestInMemoryListener(t *testing.T) {
 				t.Errorf("client %d error: %v", id, err)
 				return
 			}
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }()
 			body, _ := io.ReadAll(resp.Body)
 			expected := fmt.Sprintf("Hello, client%d!", id)
 			if !strings.Contains(string(body), expected) {
@@ -65,7 +65,7 @@ func TestInMemoryListener(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
-	listener.Close()
+	_ = listener.Close()
 }
 
 func TestDaemonInMemoryListener(t *testing.T) {
@@ -76,7 +76,7 @@ func TestDaemonInMemoryListener(t *testing.T) {
 		InMemoryListener: true,
 	})
 	require.NoError(t, err)
-	defer d.Shutdown(ctx)
+	defer func() { _ = d.Shutdown(ctx) }()
 
 	// Get a client - should create a new net.Pipe connection
 	{

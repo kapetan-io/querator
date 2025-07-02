@@ -131,13 +131,13 @@ func (d *Daemon) Client() (*querator.Client, error) {
 		// Serve the server side of the pipe through the InMemoryListener
 		if inMemListener, ok := d.Listener.(*InMemoryListener); ok {
 			if err := inMemListener.ServeConn(serverConn); err != nil {
-				clientConn.Close()
-				serverConn.Close()
+				_ = clientConn.Close()
+				_ = serverConn.Close()
 				return nil, fmt.Errorf("failed to serve connection: %w", err)
 			}
 		} else {
-			clientConn.Close()
-			serverConn.Close()
+			_ = clientConn.Close()
+			_ = serverConn.Close()
 			return nil, fmt.Errorf("InMemoryListener is enabled but listener is not of type *InMemoryListener")
 		}
 

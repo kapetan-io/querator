@@ -14,6 +14,7 @@ import (
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/set"
 	"google.golang.org/protobuf/proto"
+	"net"
 	"net/http"
 )
 
@@ -394,6 +395,24 @@ func WithTLS(tls *tls.Config, address string) ClientConfig {
 				MaxConnsPerHost:     2_000,
 				MaxIdleConns:        2_000,
 				MaxIdleConnsPerHost: 2_000,
+				IdleConnTimeout:     60 * clock.Second,
+			},
+		},
+	}
+}
+
+// WithConn returns ClientConfig suitable for use with a custom net.Conn connection
+func WithConn(conn net.Conn) ClientConfig {
+	return ClientConfig{
+		Endpoint: "http://memory",
+		Client: &http.Client{
+			Transport: &http.Transport{
+				Dial: func(network, addr string) (net.Conn, error) {
+					return conn, nil
+				},
+				MaxConnsPerHost:     1,
+				MaxIdleConns:        1,
+				MaxIdleConnsPerHost: 1,
 				IdleConnTimeout:     60 * clock.Second,
 			},
 		},

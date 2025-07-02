@@ -25,6 +25,12 @@ type Config struct {
 	// single `/queue.produce` request including the size of all fields in the marshalled protobuf.
 	// The default size is 1MB.
 	MaxProducePayloadSize int64
+
+	// InMemoryListener is true if daemon should ignore ListenAddress and use net.Pipe to listen for
+	// and handle new connections. When true, calls to Daemon.Client() and Daemon.MustClient() will return
+	// a new instance of the client bound to the client portion of a net.Pipe. This is useful for testing
+	// querator where access to the loop back is not allowed, or when using testing/synctest
+	InMemoryListener bool
 }
 
 func (c *Config) ClientTLS() *tls.Config {

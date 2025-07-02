@@ -80,7 +80,11 @@ func (d *Daemon) Start(ctx context.Context) error {
 	), d.conf.MaxProducePayloadSize, d.conf.Log)
 	registry.MustRegister(handler)
 
-	if d.conf.ServerTLS() != nil {
+	if d.conf.InMemoryListener {
+		if err := d.spawnInMemory(ctx, handler); err != nil {
+			return err
+		}
+	} else if d.conf.ServerTLS() != nil {
 		if err := d.spawnHTTPS(ctx, handler); err != nil {
 			return err
 		}
@@ -114,12 +118,34 @@ func (d *Daemon) Service() *querator.Service {
 func (d *Daemon) MustClient() *querator.Client {
 	c, err := d.Client()
 	if err != nil {
-		panic(fmt.Sprintf("[%s] failed to init daemon client - '%d'", d.conf.InstanceID, err))
+		panic(fmt.Sprintf("[%s] failed to init daemon client - '%s'", d.conf.InstanceID, err))
 	}
 	return c
 }
 
 func (d *Daemon) Client() (*querator.Client, error) {
+	if d.conf.InMemoryListener {
+		// Create a new net.Pipe for each client connection
+		clientConn, serverConn := net.Pipe()
+
+		// Serve the server side of the pipe through the InMemoryListener
+		if inMemListener, ok := d.Listener.(*InMemoryListener); ok {
+			if err := inMemListener.ServeConn(serverConn); err != nil {
+				_ = clientConn.Close()
+				_ = serverConn.Close()
+				return nil, fmt.Errorf("failed to serve connection: %w", err)
+			}
+		} else {
+			_ = clientConn.Close()
+			_ = serverConn.Close()
+			return nil, fmt.Errorf("InMemoryListener is enabled but listener is not of type *InMemoryListener")
+		}
+
+		// Create a new client using the client side of the pipe
+		return querator.NewClient(querator.WithConn(clientConn))
+	}
+
+	// Original logic for non-InMemoryListener clients
 	var err error
 	if d.client != nil {
 		return d.client, nil
@@ -198,6 +224,30 @@ func (d *Daemon) spawnHTTP(ctx context.Context, h http.Handler) error {
 	}
 
 	d.conf.Log.Info("HTTP Server Started", "address", d.Listener.Addr().String())
+	d.servers = append(d.servers, srv)
+	return nil
+}
+
+func (d *Daemon) spawnInMemory(ctx context.Context, h http.Handler) error {
+	srv := &http.Server{
+		ErrorLog: slog.NewLogLogger(d.conf.Log.Handler(), slog.LevelError),
+		Handler:  h,
+	}
+
+	d.Listener = NewInMemoryListener()
+	srv.Addr = d.Listener.Addr().String()
+
+	d.wg.Add(1)
+	go func() {
+		defer d.wg.Done()
+		if err := srv.Serve(d.Listener); err != nil {
+			if !errors.Is(err, http.ErrServerClosed) {
+				d.conf.Log.Error("while starting InMemory server", "error", err)
+			}
+		}
+	}()
+
+	d.conf.Log.Info("InMemory Server Started", "address", d.Listener.Addr().String())
 	d.servers = append(d.servers, srv)
 	return nil
 }

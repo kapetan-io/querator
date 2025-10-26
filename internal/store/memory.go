@@ -317,11 +317,13 @@ func (m *MemoryPartition) UpdateQueueInfo(info types.QueueInfo) {
 }
 
 func (m *MemoryPartition) ScanForScheduled(_ clock.Duration, now clock.Time) iter.Seq[types.Action] {
-	defer m.mu.RUnlock()
 	m.mu.RLock()
+	memCopy := make([]types.Item, len(m.mem))
+	copy(memCopy, m.mem)
+	m.mu.RUnlock()
 
 	return func(yield func(types.Action) bool) {
-		for _, item := range m.mem {
+		for _, item := range memCopy {
 			// Skip non-scheduled items
 			if item.EnqueueAt.IsZero() {
 				continue
@@ -343,11 +345,13 @@ func (m *MemoryPartition) ScanForScheduled(_ clock.Duration, now clock.Time) ite
 }
 
 func (m *MemoryPartition) ScanForActions(_ clock.Duration, now clock.Time) iter.Seq[types.Action] {
-	defer m.mu.RUnlock()
 	m.mu.RLock()
+	memCopy := make([]types.Item, len(m.mem))
+	copy(memCopy, m.mem)
+	m.mu.RUnlock()
 
 	return func(yield func(types.Action) bool) {
-		for _, item := range m.mem {
+		for _, item := range memCopy {
 			// Skip scheduled items
 			if !item.EnqueueAt.IsZero() {
 				continue

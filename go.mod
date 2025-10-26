@@ -7,7 +7,7 @@ require (
 	github.com/duh-rpc/duh-go v0.9.1
 	github.com/dustin/go-humanize v1.0.1
 	github.com/kapetan-io/errors v0.4.0
-	github.com/kapetan-io/tackle v0.9.0
+	github.com/kapetan-io/tackle v0.13.0
 	github.com/prometheus/client_golang v1.19.1
 	github.com/segmentio/ksuid v1.0.4
 	github.com/spf13/cobra v1.9.1

@@ -58,8 +58,8 @@ github.com/inconshreveable/mousetrap v1.1.0 h1:wN+x4NVGpMsO7ErUn/mUI3vEoE6Jt13X2
 github.com/inconshreveable/mousetrap v1.1.0/go.mod h1:vpF70FUmC8bwa3OWnCshd2FqLfsEA9PFc4w1p2J65bw=
 github.com/kapetan-io/errors v0.4.0 h1:yzt6sYlXHvKQfPkE+T5uDtHwAgY2pJpNuNsRG+8QSKo=
 github.com/kapetan-io/errors v0.4.0/go.mod h1:Rc59bpJaA+YHiAyTY702+SmiL+iRQgpZXjR8S6mzyOg=
-github.com/kapetan-io/tackle v0.9.0 h1:TZQykrQXpX1U6BtEMezWLEnZySTLnQUK/f5PDpGJWqw=
-github.com/kapetan-io/tackle v0.9.0/go.mod h1:E7MpdJUog4MvyKkWtQyX8UjFe5tL4SHQ44ZGk+zDBM8=
+github.com/kapetan-io/tackle v0.13.0 h1:kcQTbgZN+4T89ktqlpW2TBATjiBmfjIyuZUukvRrYZU=
+github.com/kapetan-io/tackle v0.13.0/go.mod h1:5ZGq3U/Qgpq0ccxyx2+Zovg2ceM9yl6DOVL2R90of4g=
 github.com/kisielk/errcheck v1.5.0/go.mod h1:pFxgyoBC7bSaBwPgfKdkLd5X25qrDl4LWUI2bnpBCr8=
 github.com/kisielk/gotool v1.0.0/go.mod h1:XhKaO+MFFWcvkIS/tQcRk01m1F5IRFswLeQ+oQHNcck=
 github.com/klauspost/compress v1.17.9 h1:6KIumPrER1LHsvBVuDa0r5xaG0Es51mhhB9BQB2qeMA=

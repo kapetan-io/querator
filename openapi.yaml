@@ -95,6 +95,7 @@ paths:
         - Querator V1
       parameters: []
       requestBody:
+        required: true
         content:
           application/json:
             schema:
@@ -162,6 +163,7 @@ paths:
         - Querator V1
       parameters: []
       requestBody:
+        required: true
         content:
           application/json:
             schema:
@@ -218,6 +220,7 @@ paths:
         - Querator V1
       parameters: []
       requestBody:
+        required: true
         content:
           application/json:
             schema:
@@ -277,6 +280,7 @@ paths:
         - Querator V1
       parameters: []
       requestBody:
+        required: true
         content:
           application/json:
             schema:
@@ -313,6 +317,7 @@ paths:
         - Querator V1
       parameters: []
       requestBody:
+        required: true
         content:
           application/json:
             schema:
@@ -362,6 +367,7 @@ paths:
         - Querator V1
       parameters: []
       requestBody:
+        required: true
         content:
           application/json:
             schema: &ref_0
@@ -401,6 +407,7 @@ paths:
         - Querator V1
       parameters: []
       requestBody:
+        required: true
         content:
           application/json:
             schema: *ref_0
@@ -434,16 +441,11 @@ paths:
         - Querator V1
       parameters: []
       requestBody:
+        required: true
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                name:
-                  type: string
-                  description: The name of the queue to retrieve info about
-              required:
-                - name
+              $ref: '#/components/schemas/QueuesInfoRequest'
             example:
               name: queue-name
       responses:
@@ -479,6 +481,7 @@ paths:
         - Querator V1
       parameters: []
       requestBody:
+        required: true
         content:
           application/json:
             schema:
@@ -511,6 +514,7 @@ paths:
         - Querator V1
       parameters: []
       requestBody:
+        required: true
         content:
           application/json:
             schema:
@@ -568,6 +572,7 @@ paths:
         - Querator V1
       parameters: []
       requestBody:
+        required: true
         content:
           application/json:
             schema:
@@ -591,7 +596,7 @@ paths:
                     code: 200
           headers: {}
       security: []
-  /v1/storage/items.list:
+  /v1/storage.items-list:
     post:
       summary: List Items in a Partition
       deprecated: false
@@ -600,6 +605,7 @@ paths:
         - Querator V1
       parameters: []
       requestBody:
+        required: true
         content:
           application/json:
             schema:
@@ -613,7 +619,7 @@ paths:
                 $ref: '#/components/schemas/StorageItemsListResponse'
           headers: {}
       security: []
-  /v1/storage/items.import:
+  /v1/storage.items-import:
     post:
       summary: Import Items to a Partition
       deprecated: false
@@ -622,6 +628,7 @@ paths:
         - Querator V1
       parameters: []
       requestBody:
+        required: true
         content:
           application/json:
             schema:
@@ -635,7 +642,7 @@ paths:
                 $ref: '#/components/schemas/StorageItemsImportResponse'
           headers: {}
       security: []
-  /v1/storage/items.delete:
+  /v1/storage.items-delete:
     post:
       summary: Delete items from a partition
       deprecated: false
@@ -644,6 +651,7 @@ paths:
         - Querator V1
       parameters: []
       requestBody:
+        required: true
         content:
           application/json:
             schema:
@@ -663,7 +671,7 @@ paths:
       security: []
 components:
   schemas:
-    Inspect-Request:
+    InspectRequest:
       type: object
       properties:
         id:
@@ -848,6 +856,14 @@ components:
       required:
         - pivot
         - limit
+    QueuesInfoRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          description: The name of the queue to retrieve info about
+      required:
+        - name
     QueuesDeleteRequest:
       type: object
       properties:
@@ -1012,11 +1028,21 @@ components:
       required:
         - items
     StorageItemsListResponse:
-      type: array
-      items: *ref_2
+      type: object
+      properties:
+        items:
+          type: array
+          items: *ref_2
+      required:
+        - items
     StorageItemsImportResponse:
-      type: array
-      items: *ref_2
+      type: object
+      properties:
+        items:
+          type: array
+          items: *ref_2
+      required:
+        - items
     Reply:
       type: object
       properties:
@@ -1120,6 +1146,7 @@ components:
             out during processing by a consumer
         lease_deadline:
           type: string
+          format: date-time
           description: >-
             The date time that Querator will offer up this item to another
             consumer if the consumer reserving this item has not marked it
@@ -1127,6 +1154,7 @@ components:
             finalize it's work if the timeout date has expired.
         bytes:
           type: string
+          format: byte
           description: >-
             The payload of the item is an array of raw bytes without a
             predetermined character set. 
@@ -1306,16 +1334,24 @@ components:
           type: boolean
         lease_deadline:
           type: string
+          format: date-time
+          description: The deadline when the lease expires and item becomes available again
         dead_deadline:
           type: string
+          format: date-time
+          description: The deadline when this item will be moved to dead letter queue
         expire_deadline:
           type: string
           format: date-time
           description: The deadline when this item expires and moves to dead letter queue
         created_at:
           type: string
+          format: date-time
+          description: The timestamp when this item was created
         updated_at:
           type: string
+          format: date-time
+          description: The timestamp when this item was last updated
         enqueue_at:
           type: string
           format: date-time
@@ -1332,6 +1368,8 @@ components:
           type: string
         payload:
           type: string
+          format: byte
+          description: The payload as base64-encoded bytes
       required:
         - id
         - is_leased

@@ -73,7 +73,7 @@ func FuzzQueueInvariant(f *testing.F) {
 			RequestTimeout: "5s",
 		})
 		require.NoError(t, err)
-		if len(payload) >= 1_000_000 {
+		if len(payload) >= 5_000_000 {
 			t.Skip()
 		}
 

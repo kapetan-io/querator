@@ -23,7 +23,7 @@ type Config struct {
 	// MaxProducePayloadSize is the maximum size in bytes Querator will read from a client
 	// during the `/queue.produce` request. The Maximum size includes the entire payload for a
 	// single `/queue.produce` request including the size of all fields in the marshalled protobuf.
-	// The default size is 1MB.
+	// The default size is 5MB.
 	MaxProducePayloadSize int64
 
 	// InMemoryListener is true if daemon should ignore ListenAddress and use net.Pipe to listen for

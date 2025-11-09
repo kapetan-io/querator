@@ -112,7 +112,7 @@ type HTTPHandler struct {
 }
 
 func NewHTTPHandler(s Service, metrics http.Handler, maxProduceSize int64, log *slog.Logger) *HTTPHandler {
-	set.Default(&maxProduceSize, int64(duh.MegaByte))
+	set.Default(&maxProduceSize, int64(5*duh.MegaByte))
 
 	return &HTTPHandler{
 		duration: prometheus.NewSummaryVec(prometheus.SummaryOpts{

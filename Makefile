@@ -25,6 +25,20 @@ cover:
 	go tool cover -html=coverage.out -o coverage.html
 	open coverage.html
 
+.PHONY: benchmark
+benchmark:
+	@echo "Generating structured benchmark data..."
+	@mkdir -p benchmarks/benchmark_results
+	go test -v ./benchmarks -run TestRunAllBenchmarks -timeout 30m
+	@echo "Benchmark data saved to benchmarks/benchmark_results/"
+
+.PHONY: benchmark-throughput
+benchmark-throughput:
+	@echo "Running throughput benchmark (30s per config, ~2.5 minutes)..."
+	@mkdir -p benchmarks/benchmark_results
+	go test -v ./benchmarks -run TestThroughputBenchmark -timeout 10m
+	@echo "Throughput results saved to benchmarks/benchmark_results/throughput_results.csv"
+
 
 .PHONY: lint
 lint: $(LINT) ## Run Go linter

@@ -9,5 +9,5 @@ coverage.html
 .aider*
 .env
 docs/notes
-docs/plans
 testdata/
+benchmarks/benchmark_results/

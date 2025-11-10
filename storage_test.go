@@ -19,6 +19,7 @@ import (
 // TestQueueStorage tests the /storage/queue.* endpoints
 func TestQueueStorage(t *testing.T) {
 	badger := badgerTestSetup{Dir: t.TempDir()}
+	postgres := postgresTestSetup{}
 
 	for _, tc := range []struct {
 		Setup    NewStorageFunc
@@ -41,12 +42,18 @@ func TestQueueStorage(t *testing.T) {
 				badger.Teardown()
 			},
 		},
+		{
+			Name: "PostgreSQL",
+			Setup: func() store.Config {
+				return postgres.Setup(store.PostgresConfig{})
+			},
+			TearDown: func() {
+				postgres.Teardown()
+			},
+		},
 
 		//{
 		//	Name: "SurrealDB",
-		//},
-		//{
-		//	Name: "PostgresSQL",
 		//},
 	} {
 		t.Run(tc.Name, func(t *testing.T) {

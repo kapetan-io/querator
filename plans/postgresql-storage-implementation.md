@@ -1,5 +1,9 @@
 # PostgreSQL Storage Implementation Plan
 
+- [x] Phase 1: PostgreSQL Queues Implementation
+- [x] Phase 2: PostgreSQL Partition Implementation
+- [x] Phase 3: Test Integration
+
 ## Overview
 
 Add PostgreSQL support to the `internal/store` package, implementing the `Queues`, `PartitionStore`, and `Partition` interfaces. This will enable Querator to use PostgreSQL as a persistent storage backend alongside the existing in-memory and BadgerDB implementations.

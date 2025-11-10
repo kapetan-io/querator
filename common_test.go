@@ -17,6 +17,9 @@ import (
 	"github.com/kapetan-io/tackle/random"
 	"github.com/kapetan-io/tackle/set"
 	"github.com/stretchr/testify/require"
+	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/modules/postgres"
+	"github.com/testcontainers/testcontainers-go/wait"
 	"go.uber.org/goleak"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"io"
@@ -26,6 +29,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 )
 
 const (
@@ -141,6 +145,72 @@ func (b *badgerTestSetup) Setup(bc store.BadgerConfig) store.Config {
 func (b *badgerTestSetup) Teardown() {
 	if err := os.RemoveAll(b.Dir); err != nil {
 		panic(err)
+	}
+}
+
+// ---------------------------------------------------------------------
+// PostgreSQL test setup
+// ---------------------------------------------------------------------
+
+type postgresTestSetup struct {
+	container *postgres.PostgresContainer
+	dsn       string
+}
+
+func (p *postgresTestSetup) Setup(conf store.PostgresConfig) store.Config {
+	ctx := context.Background()
+
+	container, err := postgres.RunContainer(ctx,
+		testcontainers.WithImage("postgres:16-alpine"),
+		postgres.WithDatabase("querator_test"),
+		postgres.WithUsername("postgres"),
+		postgres.WithPassword("postgres"),
+		testcontainers.WithWaitStrategy(
+			wait.ForLog("database system is ready to accept connections").
+				WithOccurrence(2).
+				WithStartupTimeout(30*time.Second)),
+	)
+	if err != nil {
+		panic(fmt.Sprintf("failed to start postgres container: %v", err))
+	}
+
+	dsn, err := container.ConnectionString(ctx, "sslmode=disable")
+	if err != nil {
+		panic(fmt.Sprintf("failed to get connection string: %v", err))
+	}
+
+	p.container = container
+	p.dsn = dsn
+
+	conf.ConnectionString = dsn
+	conf.Log = log
+	conf.MaxConns = 10
+
+	// Verify connectivity
+	ctx2, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := conf.Ping(ctx2); err != nil {
+		panic(fmt.Sprintf("failed to ping postgres: %v", err))
+	}
+
+	var storageConf store.Config
+	storageConf.Queues = store.NewPostgresQueues(conf)
+	storageConf.PartitionStorage = []store.PartitionStorage{
+		{
+			PartitionStore: store.NewPostgresPartitionStore(conf),
+			Name:           "postgres-0",
+			Affinity:       1,
+		},
+	}
+	return storageConf
+}
+
+func (p *postgresTestSetup) Teardown() {
+	if p.container != nil {
+		ctx := context.Background()
+		if err := p.container.Terminate(ctx); err != nil {
+			panic(fmt.Sprintf("failed to terminate postgres container: %v", err))
+		}
 	}
 }
 

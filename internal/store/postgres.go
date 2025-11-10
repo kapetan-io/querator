@@ -1360,7 +1360,8 @@ func (p *PostgresPartition) ScanForActions(timeout clock.Duration, now clock.Tim
 			}
 
 			query := `
-				SELECT id, is_leased, attempts, lease_deadline, expire_deadline
+				SELECT id, is_leased, attempts, lease_deadline, expire_deadline,
+				       enqueue_at, created_at, max_attempts, reference, encoding, kind, payload
 				FROM ` + p.tableName() + `
 				WHERE (enqueue_at IS NULL OR enqueue_at <= $1)
 				  AND id > $2
@@ -1376,7 +1377,7 @@ func (p *PostgresPartition) ScanForActions(timeout clock.Duration, now clock.Tim
 			var items []types.Item
 			for rows.Next() {
 				var item types.Item
-				var leaseDeadline, expireDeadline sql.NullTime
+				var leaseDeadline, expireDeadline, enqueueAt, createdAt sql.NullTime
 
 				err := rows.Scan(
 					&item.ID,
@@ -1384,6 +1385,13 @@ func (p *PostgresPartition) ScanForActions(timeout clock.Duration, now clock.Tim
 					&item.Attempts,
 					&leaseDeadline,
 					&expireDeadline,
+					&enqueueAt,
+					&createdAt,
+					&item.MaxAttempts,
+					&item.Reference,
+					&item.Encoding,
+					&item.Kind,
+					&item.Payload,
 				)
 				if err != nil {
 					continue
@@ -1394,6 +1402,12 @@ func (p *PostgresPartition) ScanForActions(timeout clock.Duration, now clock.Tim
 				}
 				if expireDeadline.Valid {
 					item.ExpireDeadline = expireDeadline.Time
+				}
+				if enqueueAt.Valid {
+					item.EnqueueAt = enqueueAt.Time
+				}
+				if createdAt.Valid {
+					item.CreatedAt = createdAt.Time
 				}
 
 				items = append(items, item)
@@ -1467,16 +1481,48 @@ func (p *PostgresPartition) TakeAction(ctx context.Context, batch types.Batch[ty
 	pgxBatch := &pgx.Batch{}
 	actionCount := 0
 
+	p.mu.Lock()
 	for i := range batch.Requests {
 		for _, action := range batch.Requests[i].Actions {
 			switch action.Action {
 			case types.ActionLeaseExpired:
+				// Generate new ID for the requeued item
+				p.uid = p.uid.Next()
+				newID := p.uid.String()
+
+				// Truncate timestamps to microseconds to match PostgreSQL precision
+				createdAt := timeToMicroseconds(action.Item.CreatedAt)
+				expireDeadline := timeToMicroseconds(action.Item.ExpireDeadline)
+				enqueueAt := action.Item.EnqueueAt
+				if !enqueueAt.IsZero() {
+					enqueueAt = timeToMicroseconds(enqueueAt)
+				}
+
+				// Delete the old row
 				pgxBatch.Queue(`
-					UPDATE `+p.tableName()+`
-					SET is_leased = false,
-						lease_deadline = NULL
-					WHERE id = $1 AND is_leased = true`,
+					DELETE FROM `+p.tableName()+`
+					WHERE id = $1`,
 					action.Item.ID)
+				actionCount++
+
+				// Insert new row with new ID and reset lease fields
+				pgxBatch.Queue(`
+					INSERT INTO `+p.tableName()+` (
+						id, is_leased, lease_deadline, enqueue_at,
+						created_at, expire_deadline, attempts, max_attempts,
+						reference, encoding, kind, payload
+					)
+					VALUES ($1, false, NULL, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+					newID,
+					timeToNullable(enqueueAt),
+					createdAt,
+					expireDeadline,
+					action.Item.Attempts,
+					action.Item.MaxAttempts,
+					action.Item.Reference,
+					action.Item.Encoding,
+					action.Item.Kind,
+					action.Item.Payload)
 				actionCount++
 
 			case types.ActionItemExpired:
@@ -1503,6 +1549,7 @@ func (p *PostgresPartition) TakeAction(ctx context.Context, batch types.Batch[ty
 			}
 		}
 	}
+	p.mu.Unlock()
 
 	if actionCount > 0 {
 		br := pool.SendBatch(ctx, pgxBatch)
@@ -1512,9 +1559,12 @@ func (p *PostgresPartition) TakeAction(ctx context.Context, batch types.Batch[ty
 			_, err := br.Exec()
 			if err != nil {
 				if p.conf.Log != nil {
-					p.conf.Log.LogAttrs(ctx, slog.LevelWarn, "failed to execute action",
+					p.conf.Log.LogAttrs(ctx, slog.LevelError, "failed to execute action in batch",
+						slog.Int("batch_index", i),
+						slog.Int("action_count", actionCount),
 						slog.String("error", err.Error()))
 				}
+				return errors.Errorf("failed to execute batch action %d/%d: %w", i, actionCount, err)
 			}
 		}
 	}

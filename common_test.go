@@ -186,13 +186,6 @@ func (p *postgresTestSetup) Setup(conf store.PostgresConfig) store.Config {
 	conf.Log = log
 	conf.MaxConns = 10
 
-	// Verify connectivity
-	ctx2, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := conf.Ping(ctx2); err != nil {
-		panic(fmt.Sprintf("failed to ping postgres: %v", err))
-	}
-
 	var storageConf store.Config
 	storageConf.Queues = store.NewPostgresQueues(conf)
 	storageConf.PartitionStorage = []store.PartitionStorage{

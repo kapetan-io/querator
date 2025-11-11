@@ -48,7 +48,9 @@ func (r *BenchmarkRunner) RunProduceBenchmarks() error {
 
 func (r *BenchmarkRunner) runProduceBenchmark(payloadSize, batchSize, concurrency, queueDepth, iterations int) (BenchmarkMetrics, error) {
 	ctx := context.Background()
-	d, err := daemon.NewDaemon(ctx, daemon.Config{})
+	d, err := daemon.NewDaemon(ctx, daemon.Config{
+		ListenAddress: "localhost:0",
+	})
 	if err != nil {
 		return BenchmarkMetrics{}, err
 	}
@@ -118,7 +120,9 @@ func (r *BenchmarkRunner) RunLeaseBenchmarks() error {
 
 func (r *BenchmarkRunner) runLeaseBenchmark(payloadSize, batchSize, concurrency, queueDepth, iterations int) (BenchmarkMetrics, error) {
 	ctx := context.Background()
-	d, err := daemon.NewDaemon(ctx, daemon.Config{})
+	d, err := daemon.NewDaemon(ctx, daemon.Config{
+		ListenAddress: "localhost:0",
+	})
 	if err != nil {
 		return BenchmarkMetrics{}, err
 	}
@@ -215,7 +219,9 @@ func (r *BenchmarkRunner) RunCompleteBenchmarks() error {
 
 func (r *BenchmarkRunner) runCompleteBenchmark(payloadSize, batchSize, concurrency, queueDepth, iterations int) (BenchmarkMetrics, error) {
 	ctx := context.Background()
-	d, err := daemon.NewDaemon(ctx, daemon.Config{})
+	d, err := daemon.NewDaemon(ctx, daemon.Config{
+		ListenAddress: "localhost:0",
+	})
 	if err != nil {
 		return BenchmarkMetrics{}, err
 	}

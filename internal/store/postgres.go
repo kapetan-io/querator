@@ -619,16 +619,6 @@ func timeToMicroseconds(t time.Time) time.Time {
 	return t.Truncate(time.Microsecond)
 }
 
-func nullableToTime(val interface{}) time.Time {
-	if val == nil {
-		return time.Time{}
-	}
-	if t, ok := val.(time.Time); ok {
-		return t
-	}
-	return time.Time{}
-}
-
 func (p *PostgresPartition) Produce(ctx context.Context, batch types.ProduceBatch, now clock.Time) error {
 	pool, err := p.conf.getOrCreatePool(ctx)
 	if err != nil {
@@ -688,7 +678,7 @@ func (p *PostgresPartition) Produce(ctx context.Context, batch types.ProduceBatc
 	p.mu.Unlock()
 
 	br := pool.SendBatch(ctx, pgxBatch)
-	defer br.Close()
+	defer func() { _ = br.Close() }()
 
 	for range requestIndexes {
 		_, err := br.Exec()
@@ -714,7 +704,7 @@ func (p *PostgresPartition) Lease(ctx context.Context, batch types.LeaseBatch, o
 	if err != nil {
 		return errors.Errorf("begin transaction: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	query := `
 		SELECT id, is_leased, lease_deadline, expire_deadline, enqueue_at, created_at,
@@ -801,11 +791,11 @@ func (p *PostgresPartition) Lease(ctx context.Context, batch types.LeaseBatch, o
 	for i := 0; i < pgxBatch.Len(); i++ {
 		_, err := br.Exec()
 		if err != nil {
-			br.Close()
+			_ = br.Close()
 			return errors.Errorf("update leased item: %w", err)
 		}
 	}
-	br.Close()
+	_ = br.Close()
 
 	return tx.Commit(ctx)
 }
@@ -825,7 +815,7 @@ func (p *PostgresPartition) Complete(ctx context.Context, batch types.Batch[type
 		return errors.Errorf("postgres partition %s/%d: begin transaction: %w",
 			p.info.Queue.Name, p.info.PartitionNum, err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 
 nextBatch:
 	for i := range batch.Requests {
@@ -884,7 +874,7 @@ func (p *PostgresPartition) Retry(ctx context.Context, batch types.Batch[types.R
 	if err != nil {
 		return errors.Errorf("begin transaction: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 
 nextBatch:
 	for i := range batch.Requests {
@@ -1143,7 +1133,7 @@ func (p *PostgresPartition) Add(ctx context.Context, items []*types.Item, now cl
 	p.mu.Unlock()
 
 	br := pool.SendBatch(ctx, pgxBatch)
-	defer br.Close()
+	defer func() { _ = br.Close() }()
 
 	for range items {
 		_, err := br.Exec()
@@ -1180,7 +1170,7 @@ func (p *PostgresPartition) Delete(ctx context.Context, ids []types.ItemID) erro
 	}
 
 	br := pool.SendBatch(ctx, pgxBatch)
-	defer br.Close()
+	defer func() { _ = br.Close() }()
 
 	for range ids {
 		_, err := br.Exec()
@@ -1478,14 +1468,35 @@ func (p *PostgresPartition) TakeAction(ctx context.Context, batch types.Batch[ty
 		return err
 	}
 
-	pgxBatch := &pgx.Batch{}
-	actionCount := 0
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return errors.Errorf("begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	p.mu.Lock()
 	for i := range batch.Requests {
 		for _, action := range batch.Requests[i].Actions {
 			switch action.Action {
 			case types.ActionLeaseExpired:
+				// Check if the item still exists before processing
+				var exists bool
+				err := tx.QueryRow(ctx,
+					`SELECT EXISTS(SELECT 1 FROM `+p.tableName()+` WHERE id = $1)`,
+					string(action.Item.ID)).Scan(&exists)
+				if err != nil {
+					p.mu.Unlock()
+					return errors.Errorf("check item existence: %w", err)
+				}
+
+				if !exists {
+					if p.conf.Log != nil {
+						p.conf.Log.Warn("unable to find item while processing action; ignoring action",
+							"id", string(action.Item.ID), "action", types.ActionToString(action.Action))
+					}
+					continue
+				}
+
 				// Generate new ID for the requeued item
 				p.uid = p.uid.Next()
 				newID := p.uid.String()
@@ -1499,14 +1510,14 @@ func (p *PostgresPartition) TakeAction(ctx context.Context, batch types.Batch[ty
 				}
 
 				// Delete the old row
-				pgxBatch.Queue(`
-					DELETE FROM `+p.tableName()+`
-					WHERE id = $1`,
-					action.Item.ID)
-				actionCount++
+				_, err = tx.Exec(ctx, `DELETE FROM `+p.tableName()+` WHERE id = $1`, action.Item.ID)
+				if err != nil {
+					p.mu.Unlock()
+					return errors.Errorf("delete expired item: %w", err)
+				}
 
 				// Insert new row with new ID and reset lease fields
-				pgxBatch.Queue(`
+				_, err = tx.Exec(ctx, `
 					INSERT INTO `+p.tableName()+` (
 						id, is_leased, lease_deadline, enqueue_at,
 						created_at, expire_deadline, attempts, max_attempts,
@@ -1523,50 +1534,38 @@ func (p *PostgresPartition) TakeAction(ctx context.Context, batch types.Batch[ty
 					action.Item.Encoding,
 					action.Item.Kind,
 					action.Item.Payload)
-				actionCount++
+				if err != nil {
+					p.mu.Unlock()
+					return errors.Errorf("insert requeued item: %w", err)
+				}
 
 			case types.ActionItemExpired:
-				pgxBatch.Queue(`
-					DELETE FROM `+p.tableName()+`
-					WHERE id = $1`,
-					action.Item.ID)
-				actionCount++
+				_, err = tx.Exec(ctx, `DELETE FROM `+p.tableName()+` WHERE id = $1`, action.Item.ID)
+				if err != nil {
+					p.mu.Unlock()
+					return errors.Errorf("delete expired item: %w", err)
+				}
 
 			case types.ActionDeleteItem:
-				pgxBatch.Queue(`
-					DELETE FROM `+p.tableName()+`
-					WHERE id = $1`,
-					action.Item.ID)
-				actionCount++
+				_, err = tx.Exec(ctx, `DELETE FROM `+p.tableName()+` WHERE id = $1`, action.Item.ID)
+				if err != nil {
+					p.mu.Unlock()
+					return errors.Errorf("delete item: %w", err)
+				}
 
 			case types.ActionQueueScheduledItem:
-				pgxBatch.Queue(`
-					UPDATE `+p.tableName()+`
-					SET enqueue_at = NULL
-					WHERE id = $1`,
-					action.Item.ID)
-				actionCount++
+				_, err = tx.Exec(ctx, `UPDATE `+p.tableName()+` SET enqueue_at = NULL WHERE id = $1`, action.Item.ID)
+				if err != nil {
+					p.mu.Unlock()
+					return errors.Errorf("queue scheduled item: %w", err)
+				}
 			}
 		}
 	}
 	p.mu.Unlock()
 
-	if actionCount > 0 {
-		br := pool.SendBatch(ctx, pgxBatch)
-		defer br.Close()
-
-		for i := 0; i < actionCount; i++ {
-			_, err := br.Exec()
-			if err != nil {
-				if p.conf.Log != nil {
-					p.conf.Log.LogAttrs(ctx, slog.LevelError, "failed to execute action in batch",
-						slog.Int("batch_index", i),
-						slog.Int("action_count", actionCount),
-						slog.String("error", err.Error()))
-				}
-				return errors.Errorf("failed to execute batch action %d/%d: %w", i, actionCount, err)
-			}
-		}
+	if err := tx.Commit(ctx); err != nil {
+		return errors.Errorf("commit transaction: %w", err)
 	}
 
 	return nil

@@ -19,6 +19,7 @@ import (
 // TestQueueStorage tests the /storage/queue.* endpoints
 func TestQueueStorage(t *testing.T) {
 	badger := badgerTestSetup{Dir: t.TempDir()}
+	postgres := postgresTestSetup{}
 
 	for _, tc := range []struct {
 		Setup    NewStorageFunc
@@ -41,12 +42,18 @@ func TestQueueStorage(t *testing.T) {
 				badger.Teardown()
 			},
 		},
+		{
+			Name: "PostgreSQL",
+			Setup: func() store.Config {
+				return postgres.Setup(store.PostgresConfig{})
+			},
+			TearDown: func() {
+				postgres.Teardown()
+			},
+		},
 
 		//{
 		//	Name: "SurrealDB",
-		//},
-		//{
-		//	Name: "PostgresSQL",
 		//},
 	} {
 		t.Run(tc.Name, func(t *testing.T) {
@@ -107,8 +114,11 @@ func testQueueStorage(t *testing.T, setUp NewStorageFunc, tearDown func()) {
 		assert.NotEmpty(t, resp.Items[0].Id)
 		assert.NotEmpty(t, resp.Items[0].CreatedAt.AsTime())
 		assert.Equal(t, items[0].IsLeased, resp.Items[0].IsLeased)
-		assert.Equal(t, 0, resp.Items[0].ExpireDeadline.AsTime().Compare(items[0].ExpireDeadline.AsTime()))
-		assert.Equal(t, 0, resp.Items[0].LeaseDeadline.AsTime().Compare(items[0].LeaseDeadline.AsTime()))
+		// Compare timestamps with microsecond precision (PostgreSQL TIMESTAMPTZ precision)
+		assert.Equal(t, 0, resp.Items[0].ExpireDeadline.AsTime().Truncate(clock.Microsecond).Compare(
+			items[0].ExpireDeadline.AsTime().Truncate(clock.Microsecond)))
+		assert.Equal(t, 0, resp.Items[0].LeaseDeadline.AsTime().Truncate(clock.Microsecond).Compare(
+			items[0].LeaseDeadline.AsTime().Truncate(clock.Microsecond)))
 		assert.Equal(t, items[0].Attempts, resp.Items[0].Attempts)
 		assert.Equal(t, items[0].Reference, resp.Items[0].Reference)
 		assert.Equal(t, items[0].Encoding, resp.Items[0].Encoding)
@@ -118,8 +128,11 @@ func testQueueStorage(t *testing.T, setUp NewStorageFunc, tearDown func()) {
 		assert.NotEmpty(t, resp.Items[1].Id)
 		assert.NotEmpty(t, resp.Items[1].CreatedAt.AsTime())
 		assert.Equal(t, items[1].IsLeased, resp.Items[1].IsLeased)
-		assert.Equal(t, 0, resp.Items[1].ExpireDeadline.AsTime().Compare(items[1].ExpireDeadline.AsTime()))
-		assert.Equal(t, 0, resp.Items[1].LeaseDeadline.AsTime().Compare(items[1].LeaseDeadline.AsTime()))
+		// Compare timestamps with microsecond precision (PostgreSQL TIMESTAMPTZ precision)
+		assert.Equal(t, 0, resp.Items[1].ExpireDeadline.AsTime().Truncate(clock.Microsecond).Compare(
+			items[1].ExpireDeadline.AsTime().Truncate(clock.Microsecond)))
+		assert.Equal(t, 0, resp.Items[1].LeaseDeadline.AsTime().Truncate(clock.Microsecond).Compare(
+			items[1].LeaseDeadline.AsTime().Truncate(clock.Microsecond)))
 		assert.Equal(t, items[1].Attempts, resp.Items[1].Attempts)
 		assert.Equal(t, items[1].Reference, resp.Items[1].Reference)
 		assert.Equal(t, items[1].Encoding, resp.Items[1].Encoding)

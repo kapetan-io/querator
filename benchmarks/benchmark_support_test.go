@@ -185,12 +185,12 @@ func FormatAsText(results []BenchmarkMetrics) string {
 	var buf strings.Builder
 	w := tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)
 
-	fmt.Fprintln(w, "Operation\tPayload\tBatch\tConcur\tDepth\tOps\tItems\tOps/sec\tItems/sec\tP50(ms)\tP95(ms)\tP99(ms)\tMax(ms)")
+	_, _ = fmt.Fprintln(w, "Operation\tPayload\tBatch\tConcur\tDepth\tOps\tItems\tOps/sec\tItems/sec\tP50(ms)\tP95(ms)\tP99(ms)\tMax(ms)")
 
 	for _, r := range results {
 		opsPerSec, itemsPerSec := r.CalculateThroughput()
 
-		fmt.Fprintf(w, "%s\t%d\t%d\t%d\t%d\t%d\t%d\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\n",
+		_, _ = fmt.Fprintf(w, "%s\t%d\t%d\t%d\t%d\t%d\t%d\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\n",
 			r.Operation,
 			r.PayloadSize,
 			r.BatchSize,
@@ -207,7 +207,7 @@ func FormatAsText(results []BenchmarkMetrics) string {
 		)
 	}
 
-	w.Flush()
+	_ = w.Flush()
 	return buf.String()
 }
 
@@ -280,7 +280,7 @@ func FormatAsCSV(results []BenchmarkMetrics) string {
 	var buf strings.Builder
 	w := csv.NewWriter(&buf)
 
-	w.Write([]string{
+	_ = w.Write([]string{
 		"operation", "payload_size", "batch_size", "concurrency", "queue_depth",
 		"operations", "items", "ops_per_sec", "items_per_sec",
 		"p50_ns", "p95_ns", "p99_ns", "max_ns",
@@ -290,7 +290,7 @@ func FormatAsCSV(results []BenchmarkMetrics) string {
 	for _, r := range results {
 		opsPerSec, itemsPerSec := r.CalculateThroughput()
 
-		w.Write([]string{
+		_ = w.Write([]string{
 			string(r.Operation),
 			fmt.Sprintf("%d", r.PayloadSize),
 			fmt.Sprintf("%d", r.BatchSize),

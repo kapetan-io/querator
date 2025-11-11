@@ -254,7 +254,7 @@ func TestWriteBenchmarkResults(t *testing.T) {
 	}
 
 	tmpFile := "/tmp/benchmark_test_output.txt"
-	defer os.Remove(tmpFile)
+	defer func() { _ = os.Remove(tmpFile) }()
 
 	err := WriteBenchmarkResults(results, FormatText, tmpFile)
 	require.NoError(t, err)

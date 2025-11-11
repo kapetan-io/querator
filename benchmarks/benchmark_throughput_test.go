@@ -72,14 +72,14 @@ func TestThroughputBenchmark(t *testing.T) {
 
 func runThroughputTest(config ThroughputConfig) (ThroughputResult, error) {
 	ctx := context.Background()
-	d, err := daemon.NewDaemon(ctx, daemon.Config{})
+	d, err := daemon.NewDaemon(ctx, daemon.Config{
+		ListenAddress: "localhost:0",
+	})
 	if err != nil {
 		return ThroughputResult{}, err
 	}
 	defer func() {
-		if shutdownErr := d.Shutdown(ctx); shutdownErr != nil {
-			// Log but don't fail if shutdown has issues
-		}
+		_ = d.Shutdown(ctx)
 	}()
 
 	client := d.MustClient()

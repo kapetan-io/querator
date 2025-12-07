@@ -1,9 +1,10 @@
-# Build stage
-FROM golang:1.24-alpine AS builder
+# Build stage - use bookworm for better cross-platform QEMU emulation support
+FROM golang:1.24-bookworm AS builder
 
 # Install build dependencies
-RUN apk add --no-cache git ca-certificates
-
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
 WORKDIR /app
@@ -17,8 +18,8 @@ COPY . .
 
 ARG VERSION
 
-# Build the binary
-RUN go build -ldflags "-w -s -X main.Version=$VERSION" -o querator ./cmd/querator
+# Build the binary (static linking for distroless compatibility)
+RUN CGO_ENABLED=0 go build -ldflags "-w -s -X main.Version=$VERSION" -o querator ./cmd/querator
 
 # Final stage - use distroless for smaller image and better cross-platform support
 FROM gcr.io/distroless/static-debian12:nonroot

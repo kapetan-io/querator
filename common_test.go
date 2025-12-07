@@ -449,7 +449,6 @@ func createRandomQueues(t *testing.T, ctx context.Context, c *que.Client, count 
 		timeOuts := random.Slice(validTimeouts)
 		info := pb.QueueInfo{
 			QueueName:           fmt.Sprintf("queue-%05d", idx),
-			DeadQueue:           random.String("dead-", 10),
 			Reference:           random.String("ref-", 10),
 			MaxAttempts:         int32(rand.Intn(100)),
 			LeaseTimeout:        timeOuts.Lease,

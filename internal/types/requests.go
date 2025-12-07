@@ -175,9 +175,17 @@ type PartitionStats struct {
 	Scheduled int
 }
 
+// PartitionCompleter is an interface for completing items in a partition.
+// It is used to avoid import cycles between types and store packages.
+type PartitionCompleter interface {
+	Complete(ctx context.Context, batch Batch[CompleteRequest]) error
+}
+
 type LifeCycleRequest struct {
-	RequestTimeout clock.Duration
-	Actions        []Action
-	PartitionNum   int
+	RequestTimeout   clock.Duration
+	Actions          []Action
+	PartitionNum     int
+	PartitionInfo    PartitionInfo
+	PartitionStorage PartitionCompleter // The storage partition for completing items
 }
 

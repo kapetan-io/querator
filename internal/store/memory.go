@@ -23,12 +23,13 @@ var bucketName = []byte("partition")
 // ---------------------------------------------
 
 type MemoryPartition struct {
-	info types.PartitionInfo
-	conf Config
-	mem  []types.Item
-	mu   sync.RWMutex
-	log  *slog.Logger
-	uid  ksuid.KSUID
+	info       types.PartitionInfo
+	conf       Config
+	mem        []types.Item
+	bySourceID map[string]struct{}
+	mu         sync.RWMutex
+	log        *slog.Logger
+	uid        ksuid.KSUID
 }
 
 func (m *MemoryPartition) Produce(_ context.Context, batch types.ProduceBatch, now clock.Time) error {
@@ -37,6 +38,14 @@ func (m *MemoryPartition) Produce(_ context.Context, batch types.ProduceBatch, n
 
 	for _, r := range batch.Requests {
 		for _, item := range r.Items {
+			// Check for duplicate SourceID
+			if item.SourceID != nil {
+				if _, exists := m.bySourceID[string(item.SourceID)]; exists {
+					// Skip item - duplicate SourceID (idempotent)
+					continue
+				}
+			}
+
 			m.uid = m.uid.Next()
 			item.ID = []byte(m.uid.String())
 			item.CreatedAt = now
@@ -55,6 +64,11 @@ func (m *MemoryPartition) Produce(_ context.Context, batch types.ProduceBatch, n
 			}
 
 			m.mem = append(m.mem, *item)
+
+			// Add to SourceID index if set
+			if item.SourceID != nil {
+				m.bySourceID[string(item.SourceID)] = struct{}{}
+			}
 		}
 	}
 	return nil
@@ -254,11 +268,24 @@ func (m *MemoryPartition) Add(_ context.Context, items []*types.Item, now clock.
 	}
 
 	for _, item := range items {
+		// Check for duplicate SourceID
+		if item.SourceID != nil {
+			if _, exists := m.bySourceID[string(item.SourceID)]; exists {
+				// Skip item - duplicate SourceID (idempotent)
+				continue
+			}
+		}
+
 		m.uid = m.uid.Next()
 		item.ID = []byte(m.uid.String())
 		item.CreatedAt = now
 
 		m.mem = append(m.mem, *item)
+
+		// Add to SourceID index if set
+		if item.SourceID != nil {
+			m.bySourceID[string(item.SourceID)] = struct{}{}
+		}
 	}
 	return nil
 }
@@ -275,6 +302,11 @@ func (m *MemoryPartition) Delete(_ context.Context, ids []types.ItemID) error {
 		idx, ok := m.findID(id)
 		if !ok {
 			continue
+		}
+
+		// Remove from SourceID index if set
+		if m.mem[idx].SourceID != nil {
+			delete(m.bySourceID, string(m.mem[idx].SourceID))
 		}
 
 		// Remove the item from the array
@@ -715,11 +747,12 @@ func (m MemoryPartitionStore) Get(info types.PartitionInfo) Partition {
 	p, ok := m.partitions[info.HashKey()]
 	if !ok {
 		m.partitions[info.HashKey()] = &MemoryPartition{
-			log:  m.log.With("queue", info.Queue.Name, "partition", info.PartitionNum),
-			mem:  make([]types.Item, 0, 1_000),
-			uid:  ksuid.New(),
-			conf: m.conf,
-			info: info,
+			log:        m.log.With("queue", info.Queue.Name, "partition", info.PartitionNum),
+			mem:        make([]types.Item, 0, 1_000),
+			bySourceID: make(map[string]struct{}),
+			uid:        ksuid.New(),
+			conf:       m.conf,
+			info:       info,
 		}
 		return m.partitions[info.HashKey()]
 	}

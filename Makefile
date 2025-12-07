@@ -57,6 +57,10 @@ ci: tidy lint test
 vet:
 	go vet ./...
 
+.PHONY: fuzz
+fuzz: ## Run fuzz tests for 10 minutes
+	go test -fuzz=FuzzQueueInvariant -fuzztime=10m .
+
 .PHONY: docker
 docker: ## Build Docker image
 	docker build --build-arg VERSION=$(VERSION) -t ghcr.io/kapetan-io/querator:$(VERSION) .

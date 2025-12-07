@@ -41,12 +41,12 @@ func TestRetry(t *testing.T) {
 				badgerdb.Teardown()
 			},
 		},
-		//{
-		//	Name: "SurrealDB",
-		//},
-		//{
-		//	Name: "PostgresSQL",
-		//},
+		// {
+		// 	Name: "SurrealDB",
+		// },
+		// {
+		// 	Name: "PostgresSQL",
+		// },
 	} {
 		t.Run(tc.Name, func(t *testing.T) {
 			testRetry(t, tc.Setup, tc.TearDown)

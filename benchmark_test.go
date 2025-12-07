@@ -22,7 +22,7 @@ import (
 
 func BenchmarkProduce(b *testing.B) {
 	b.Logf("Current Operating System has '%d' CPUs\n", runtime.NumCPU())
-	//badgerdb := badgerTestSetup{Dir: b.TempDir()}
+	// badgerdb := badgerTestSetup{Dir: b.TempDir()}
 
 	log = slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError}))
 
@@ -38,22 +38,22 @@ func BenchmarkProduce(b *testing.B) {
 			},
 			TearDown: func() {},
 		},
-		//{
-		//	Name: "BadgerDB",
-		//	Setup: func() store.Config {
-		//		return badgerdb.Setup(store.BadgerConfig{})
-		//	},
-		//	TearDown: func() {
-		//		badgerdb.Teardown()
-		//	},
-		//},
+		// {
+		// 	Name: "BadgerDB",
+		// 	Setup: func() store.Config {
+		// 		return badgerdb.Setup(store.BadgerConfig{})
+		// 	},
+		// 	TearDown: func() {
+		// 		badgerdb.Teardown()
+		// 	},
+		// },
 
-		//{
-		//	Name: "SurrealDB",
-		//},
-		//{
-		//	Name: "PostgresSQL",
-		//},
+		// {
+		// 	Name: "SurrealDB",
+		// },
+		// {
+		// 	Name: "PostgresSQL",
+		// },
 	} {
 		b.Run(tc.Name, func(b *testing.B) {
 			items := generateProduceItems(1_000)
@@ -105,7 +105,7 @@ func BenchmarkProduce(b *testing.B) {
 			}
 		})
 
-		//b.Run(tc.Name, func(b *testing.B) {
+		// b.Run(tc.Name, func(b *testing.B) {
 		//	d, err := daemon.NewDaemon(context.Background(), daemon.Config{
 		//		ServiceConfig: querator.ServiceConfig{
 		//			Config: tc.Setup(clock.NewProvider()),
@@ -142,9 +142,9 @@ func BenchmarkProduce(b *testing.B) {
 		//		}
 		//
 		//		opsPerSec := float64(b.N) / clock.Since(start).Seconds()
-		//		b.ReportMetric(opsPerSec, "ops/s")
-		//	})
-		//})
+		// 		b.ReportMetric(opsPerSec, "ops/s")
+		// 	})
+		// })
 	}
 }
 

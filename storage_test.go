@@ -52,9 +52,9 @@ func TestQueueStorage(t *testing.T) {
 			},
 		},
 
-		//{
-		//	Name: "SurrealDB",
-		//},
+		// {
+		// 	Name: "SurrealDB",
+		// },
 	} {
 		t.Run(tc.Name, func(t *testing.T) {
 			testQueueStorage(t, tc.Setup, tc.TearDown)

@@ -1,0 +1,11 @@
+version: "2"
+
+linters:
+  enable:
+    - unused      # Unused code (functions, types, constants, variables)
+    - unparam     # Unused function parameters
+    - gocritic    # Includes unused parameter checks and more
+  settings:
+    unparam:
+      # Don't check exported functions (keep stable API)
+      check-exported: false

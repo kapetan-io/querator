@@ -238,6 +238,7 @@ func compareStorageItem(t *testing.T, l *pb.StorageItem, r *pb.StorageItem) {
 	require.Equal(t, l.Payload, r.Payload)
 }
 
+//nolint:unparam // conf param kept for consistency with other setup functions
 func setupMemoryStorage(conf store.Config) store.Config {
 	conf.Queues = store.NewMemoryQueues(log)
 	conf.PartitionStorage = []store.PartitionStorage{

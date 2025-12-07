@@ -540,10 +540,11 @@ func (b *BadgerPartition) UpdateQueueInfo(info types.QueueInfo) {
 	b.info.Queue = info
 }
 
-func (b *BadgerPartition) ScanForScheduled(_ clock.Duration, now clock.Time) iter.Seq[types.Action] {
-	return func(yield func(types.Action) bool) {
+func (b *BadgerPartition) ScanForScheduled(_ context.Context, now clock.Time) iter.Seq2[types.Action, error] {
+	return func(yield func(types.Action, error) bool) {
 		db, err := b.getDB()
 		if err != nil {
+			yield(types.Action{}, err)
 			return
 		}
 
@@ -575,7 +576,7 @@ func (b *BadgerPartition) ScanForScheduled(_ clock.Duration, now clock.Time) ite
 						PartitionNum: b.info.PartitionNum,
 						Queue:        b.info.Queue.Name,
 						Item:         *item,
-					}) {
+					}, nil) {
 						return nil
 					}
 				}
@@ -584,15 +585,16 @@ func (b *BadgerPartition) ScanForScheduled(_ clock.Duration, now clock.Time) ite
 		})
 
 		if err != nil {
-			b.conf.Log.Error("Error scanning for scheduled items", "error", err)
+			yield(types.Action{}, err)
 		}
 	}
 }
 
-func (b *BadgerPartition) ScanForActions(_ clock.Duration, now clock.Time) iter.Seq[types.Action] {
-	return func(yield func(types.Action) bool) {
+func (b *BadgerPartition) ScanForActions(_ context.Context, now clock.Time) iter.Seq2[types.Action, error] {
+	return func(yield func(types.Action, error) bool) {
 		db, err := b.getDB()
 		if err != nil {
+			yield(types.Action{}, err)
 			return
 		}
 
@@ -625,7 +627,7 @@ func (b *BadgerPartition) ScanForActions(_ clock.Duration, now clock.Time) iter.
 							PartitionNum: b.info.PartitionNum,
 							Queue:        b.info.Queue.Name,
 							Item:         *item,
-						}) {
+						}, nil) {
 							return nil
 						}
 						continue
@@ -636,7 +638,7 @@ func (b *BadgerPartition) ScanForActions(_ clock.Duration, now clock.Time) iter.
 							PartitionNum: b.info.PartitionNum,
 							Queue:        b.info.Queue.Name,
 							Item:         *item,
-						}) {
+						}, nil) {
 							return nil
 						}
 						continue
@@ -649,7 +651,7 @@ func (b *BadgerPartition) ScanForActions(_ clock.Duration, now clock.Time) iter.
 						PartitionNum: b.info.PartitionNum,
 						Queue:        b.info.Queue.Name,
 						Item:         *item,
-					}) {
+					}, nil) {
 						return nil
 					}
 					continue
@@ -659,7 +661,7 @@ func (b *BadgerPartition) ScanForActions(_ clock.Duration, now clock.Time) iter.
 		})
 
 		if err != nil {
-			b.conf.Log.Error("Error scanning for actions", "error", err)
+			yield(types.Action{}, err)
 		}
 	}
 }

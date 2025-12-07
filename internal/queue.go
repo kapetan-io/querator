@@ -17,7 +17,7 @@ type Queue struct {
 	ordered []*Logical
 	logical []*Logical
 	mutex   sync.RWMutex
-	//remote  []Remote
+	// remote  []Remote
 	idx int
 }
 

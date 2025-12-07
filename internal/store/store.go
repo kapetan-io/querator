@@ -93,25 +93,22 @@ type Partition interface {
 	// Stats returns stats about the queue
 	Stats(ctx context.Context, stats *types.PartitionStats, now clock.Time) error
 
-	// ScanForActions returns an iterator of actions that should be preformed for the partition life cycle.
-	// This method must be thread safe as it will be called by a go routine that is separate from the
-	// main request loop. If an error is encountered. returns an empty iterator. Issues with the
-	// underlying storage system are reported by LifeCycleInfo()
+	// ScanForActions returns an iterator of actions that should be performed for the partition lifecycle.
+	// Uses iter.Seq2 to yield (action, error) pairs - if error is non-nil, iteration should stop.
 	//
 	// ### Parameters
-	// - `timeout`: The read timeout for each read operation to the underlying storage system.
-	// If a read exceeds this timeout, the iterator is aborted.
+	// - `ctx`: Context for cancellation and timeout control.
 	// - `now`: The time used to determine which items need action.
-	ScanForActions(timeout clock.Duration, now clock.Time) iter.Seq[types.Action]
+	ScanForActions(ctx context.Context, now clock.Time) iter.Seq2[types.Action, error]
 
 	// ScanForScheduled returns an iterator of ONLY scheduled actions. This allows more efficient
 	// handling of scheduled items, which operate on different timers and schedule times.
+	// Uses iter.Seq2 to yield (action, error) pairs - if error is non-nil, iteration should stop.
 	//
 	// ### Parameters
-	// - `timeout`: The read timeout for each read operation to the underlying storage system.
-	// If a read exceeds this timeout, the iterator is aborted.
+	// - `ctx`: Context for cancellation and timeout control.
 	// - `now`: The time used to determine which items are ready to be queued.
-	ScanForScheduled(timeout clock.Duration, now clock.Time) iter.Seq[types.Action]
+	ScanForScheduled(ctx context.Context, now clock.Time) iter.Seq2[types.Action, error]
 
 	// TakeAction takes lifecycle requests and preforms the actions requested on the partition.
 	TakeAction(ctx context.Context, batch types.Batch[types.LifeCycleRequest], stats *types.PartitionState) error

@@ -116,7 +116,7 @@ type PostgresConfig struct {
 	poolAcquired     bool
 }
 
-func (c *PostgresConfig) getOrCreatePool(ctx context.Context) (*pgxpool.Pool, error) {
+func (c *PostgresConfig) getOrCreatePool(_ context.Context) (*pgxpool.Pool, error) {
 	if c.ConnectionString == "" {
 		return nil, errors.New("connection string is required")
 	}
@@ -179,7 +179,7 @@ func NewPostgresQueues(conf PostgresConfig) *PostgresQueues {
 	return &PostgresQueues{conf: conf}
 }
 
-func (p *PostgresQueues) ensureTable(ctx context.Context, pool *pgxpool.Pool) error {
+func (p *PostgresQueues) ensureTable(_ context.Context, pool *pgxpool.Pool) error {
 	// Use a context with reasonable timeout for table creation
 	bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -526,7 +526,7 @@ func (p *PostgresPartition) tableName() string {
 	return pgx.Identifier{name}.Sanitize()
 }
 
-func (p *PostgresPartition) ensureTable(ctx context.Context, pool *pgxpool.Pool) error {
+func (p *PostgresPartition) ensureTable(_ context.Context, pool *pgxpool.Pool) error {
 	p.tableOnce.Do(func() {
 		// Use a separate context with a reasonable timeout for table creation
 		// Don't use the passed context as it might have a short timeout
@@ -912,9 +912,10 @@ nextBatch:
 				continue nextBatch
 			}
 
-			if retryItem.Dead {
+			switch {
+			case retryItem.Dead:
 				_, err = tx.Exec(ctx, `DELETE FROM `+p.tableName()+` WHERE id = $1`, retryItem.ID)
-			} else if !retryItem.RetryAt.IsZero() {
+			case !retryItem.RetryAt.IsZero():
 				_, err = tx.Exec(ctx, `
 					UPDATE `+p.tableName()+`
 					SET is_leased = false,
@@ -922,7 +923,7 @@ nextBatch:
 						enqueue_at = $1
 					WHERE id = $2`,
 					timeToMicroseconds(retryItem.RetryAt), retryItem.ID)
-			} else {
+			default:
 				_, err = tx.Exec(ctx, `
 					UPDATE `+p.tableName()+`
 					SET is_leased = false,
@@ -1240,8 +1241,8 @@ func (p *PostgresPartition) Stats(ctx context.Context, stats *types.PartitionSta
 	return nil
 }
 
-func (p *PostgresPartition) ScanForScheduled(timeout clock.Duration, now clock.Time) iter.Seq[types.Action] {
-	return func(yield func(types.Action) bool) {
+func (p *PostgresPartition) ScanForScheduled(ctx context.Context, now clock.Time) iter.Seq2[types.Action, error] {
+	return func(yield func(types.Action, error) bool) {
 		batchSize := p.conf.ScanBatchSize
 		if batchSize == 0 {
 			batchSize = 1000
@@ -1249,16 +1250,19 @@ func (p *PostgresPartition) ScanForScheduled(timeout clock.Duration, now clock.T
 		var lastID string
 
 		for {
-			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			if ctx.Err() != nil {
+				yield(types.Action{}, ctx.Err())
+				return
+			}
 
 			pool, err := p.conf.getOrCreatePool(ctx)
 			if err != nil {
-				cancel()
+				yield(types.Action{}, err)
 				return
 			}
 
 			if err := p.ensureTable(ctx, pool); err != nil {
-				cancel()
+				yield(types.Action{}, err)
 				return
 			}
 
@@ -1273,7 +1277,7 @@ func (p *PostgresPartition) ScanForScheduled(timeout clock.Duration, now clock.T
 
 			rows, err := pool.Query(ctx, query, now, lastID, batchSize)
 			if err != nil {
-				cancel()
+				yield(types.Action{}, err)
 				return
 			}
 
@@ -1289,7 +1293,9 @@ func (p *PostgresPartition) ScanForScheduled(timeout clock.Duration, now clock.T
 					&expireDeadline,
 				)
 				if err != nil {
-					continue
+					rows.Close()
+					yield(types.Action{}, err)
+					return
 				}
 
 				if leaseDeadline.Valid {
@@ -1303,7 +1309,6 @@ func (p *PostgresPartition) ScanForScheduled(timeout clock.Duration, now clock.T
 				lastID = string(item.ID)
 			}
 			rows.Close()
-			cancel()
 
 			if len(items) == 0 {
 				return
@@ -1315,7 +1320,7 @@ func (p *PostgresPartition) ScanForScheduled(timeout clock.Duration, now clock.T
 					PartitionNum: p.info.PartitionNum,
 					Queue:        p.info.Queue.Name,
 					Item:         item,
-				}) {
+				}, nil) {
 					return
 				}
 			}
@@ -1327,8 +1332,8 @@ func (p *PostgresPartition) ScanForScheduled(timeout clock.Duration, now clock.T
 	}
 }
 
-func (p *PostgresPartition) ScanForActions(timeout clock.Duration, now clock.Time) iter.Seq[types.Action] {
-	return func(yield func(types.Action) bool) {
+func (p *PostgresPartition) ScanForActions(ctx context.Context, now clock.Time) iter.Seq2[types.Action, error] {
+	return func(yield func(types.Action, error) bool) {
 		batchSize := p.conf.ScanBatchSize
 		if batchSize == 0 {
 			batchSize = 1000
@@ -1336,16 +1341,19 @@ func (p *PostgresPartition) ScanForActions(timeout clock.Duration, now clock.Tim
 		var lastID string
 
 		for {
-			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			if ctx.Err() != nil {
+				yield(types.Action{}, ctx.Err())
+				return
+			}
 
 			pool, err := p.conf.getOrCreatePool(ctx)
 			if err != nil {
-				cancel()
+				yield(types.Action{}, err)
 				return
 			}
 
 			if err := p.ensureTable(ctx, pool); err != nil {
-				cancel()
+				yield(types.Action{}, err)
 				return
 			}
 
@@ -1360,7 +1368,7 @@ func (p *PostgresPartition) ScanForActions(timeout clock.Duration, now clock.Tim
 
 			rows, err := pool.Query(ctx, query, now, lastID, batchSize)
 			if err != nil {
-				cancel()
+				yield(types.Action{}, err)
 				return
 			}
 
@@ -1384,7 +1392,9 @@ func (p *PostgresPartition) ScanForActions(timeout clock.Duration, now clock.Tim
 					&item.Payload,
 				)
 				if err != nil {
-					continue
+					rows.Close()
+					yield(types.Action{}, err)
+					return
 				}
 
 				if leaseDeadline.Valid {
@@ -1404,7 +1414,6 @@ func (p *PostgresPartition) ScanForActions(timeout clock.Duration, now clock.Tim
 				lastID = string(item.ID)
 			}
 			rows.Close()
-			cancel()
 
 			if len(items) == 0 {
 				return
@@ -1417,7 +1426,7 @@ func (p *PostgresPartition) ScanForActions(timeout clock.Duration, now clock.Tim
 						PartitionNum: p.info.PartitionNum,
 						Queue:        p.info.Queue.Name,
 						Item:         item,
-					}) {
+					}, nil) {
 						return
 					}
 					continue
@@ -1433,7 +1442,7 @@ func (p *PostgresPartition) ScanForActions(timeout clock.Duration, now clock.Tim
 						PartitionNum: p.info.PartitionNum,
 						Queue:        p.info.Queue.Name,
 						Item:         item,
-					}) {
+					}, nil) {
 						return
 					}
 					continue
@@ -1445,7 +1454,7 @@ func (p *PostgresPartition) ScanForActions(timeout clock.Duration, now clock.Tim
 						PartitionNum: p.info.PartitionNum,
 						Queue:        p.info.Queue.Name,
 						Item:         item,
-					}) {
+					}, nil) {
 						return
 					}
 				}

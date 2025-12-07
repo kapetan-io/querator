@@ -3,6 +3,9 @@
 # Querator currently supports "badger" and "memory" storage drivers
 # TODO: Need to document all options for each storage driver
 
+# HTTP server listen address (use 0.0.0.0 for Docker)
+address: 0.0.0.0:2319
+
 logging:
   # The logging handler; options are 'color', 'text', 'json'
   handler: text

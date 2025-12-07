@@ -26,7 +26,7 @@ import (
 
 type File struct {
 	// TODO(thrawn01): Add support for TLS config
-	// TODO(thrawn01): Add support for changing the bind address and port
+	Address          string             `yaml:"address"`
 	Logging          Logging            `yaml:"logging"`
 	PartitionStorage []PartitionStorage `yaml:"partition-storage"`
 	QueueStorage     QueueStorage       `yaml:"queue-storage"`
@@ -81,6 +81,10 @@ func ApplyConfigFile(ctx context.Context, conf *daemon.Config, file File, w io.W
 
 	if err := setupQueueStorage(ctx, file, conf); err != nil {
 		return err
+	}
+
+	if file.Address != "" {
+		conf.ListenAddress = file.Address
 	}
 
 	// Apply defaults if there are required config items missing from the provided config file

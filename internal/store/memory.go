@@ -40,8 +40,7 @@ func (m *MemoryPartition) Produce(_ context.Context, batch types.ProduceBatch, n
 		for _, item := range r.Items {
 			// Check for duplicate SourceID
 			if item.SourceID != nil {
-				sourceKey := string(item.SourceID)
-				if _, exists := m.bySourceID[sourceKey]; exists {
+				if _, exists := m.bySourceID[string(item.SourceID)]; exists {
 					// Skip item - duplicate SourceID (idempotent)
 					continue
 				}
@@ -271,8 +270,7 @@ func (m *MemoryPartition) Add(_ context.Context, items []*types.Item, now clock.
 	for _, item := range items {
 		// Check for duplicate SourceID
 		if item.SourceID != nil {
-			sourceKey := string(item.SourceID)
-			if _, exists := m.bySourceID[sourceKey]; exists {
+			if _, exists := m.bySourceID[string(item.SourceID)]; exists {
 				// Skip item - duplicate SourceID (idempotent)
 				continue
 			}

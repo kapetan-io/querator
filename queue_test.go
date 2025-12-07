@@ -1817,6 +1817,267 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			require.True(t, found)
 		})
 	})
+
+	t.Run("DeadLetterQueue", func(t *testing.T) {
+		t.Run("MaxAttempts", func(t *testing.T) {
+			now := clock.NewProvider()
+			now.Freeze(clock.Now())
+			defer now.UnFreeze()
+
+			var queueName = random.String("queue-", 10)
+			var dlqName = random.String("dlq-", 10)
+			d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: setup(), Clock: now})
+			defer func() {
+				d.Shutdown(t)
+				tearDown()
+			}()
+
+			// Create DLQ queue (no DLQ of its own)
+			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+				QueueName:           dlqName,
+				LeaseTimeout:        "1m",
+				ExpireTimeout:       ExpireTimeout,
+				MaxAttempts:         10,
+				RequestedPartitions: 1,
+			}))
+
+			// Create source queue with DLQ configured, max_attempts = 2, lease_timeout = 1m
+			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+				QueueName:           queueName,
+				LeaseTimeout:        "1m",
+				ExpireTimeout:       ExpireTimeout,
+				MaxAttempts:         2,
+				DeadQueue:           dlqName,
+				RequestedPartitions: 1,
+			}))
+
+			// Produce an item
+			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+				QueueName:      queueName,
+				RequestTimeout: "5m",
+				Items: []*pb.QueueProduceItem{
+					{
+						Reference: "max-attempts-test",
+						Encoding:  "text",
+						Kind:      "test",
+						Bytes:     []byte("test payload"),
+					},
+				},
+			}))
+
+			// Lease item (attempt 1)
+			var lease1 pb.QueueLeaseResponse
+			require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+				QueueName:      queueName,
+				RequestTimeout: "5m",
+				ClientId:       "client-1",
+				BatchSize:      10,
+			}, &lease1))
+			require.Len(t, lease1.Items, 1)
+
+			// Advance time to expire lease (attempt 1 expires)
+			now.Advance(2 * clock.Minute)
+
+			// Wait for item to be re-queued after lease expiry
+			require.Eventually(t, func() bool {
+				var resp pb.StorageItemsListResponse
+				if err := c.StorageItemsList(ctx, queueName, 0, &resp, nil); err != nil {
+					return false
+				}
+				if len(resp.Items) == 0 {
+					return false
+				}
+				// Item should no longer be leased and have 1 attempt
+				return !resp.Items[0].IsLeased && resp.Items[0].Attempts == 1
+			}, 5*clock.Second, 100*clock.Millisecond)
+
+			// Lease item again (attempt 2)
+			var lease2 pb.QueueLeaseResponse
+			require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+				QueueName:      queueName,
+				RequestTimeout: "5m",
+				ClientId:       "client-2",
+				BatchSize:      10,
+			}, &lease2))
+			require.Len(t, lease2.Items, 1)
+
+			// Advance time to expire lease (attempt 2 expires, item now at max_attempts)
+			now.Advance(2 * clock.Minute)
+
+			// Wait for lifecycle to process the dead item and move to DLQ
+			require.Eventually(t, func() bool {
+				var dlqResp pb.StorageItemsListResponse
+				if err := c.StorageItemsList(ctx, dlqName, 0, &dlqResp, nil); err != nil {
+					return false
+				}
+				return len(dlqResp.Items) == 1
+			}, 5*clock.Second, 100*clock.Millisecond)
+
+			// Verify item in DLQ has correct properties
+			var dlqResp pb.StorageItemsListResponse
+			require.NoError(t, c.StorageItemsList(ctx, dlqName, 0, &dlqResp, nil))
+			require.Len(t, dlqResp.Items, 1)
+
+			dlqItem := dlqResp.Items[0]
+			assert.Equal(t, "max-attempts-test", dlqItem.Reference)
+			assert.NotEmpty(t, dlqItem.SourceId)
+			assert.False(t, dlqItem.IsLeased)
+			assert.Equal(t, int32(0), dlqItem.Attempts)
+
+			// Verify item is no longer in source queue
+			var sourceResp pb.StorageItemsListResponse
+			require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &sourceResp, nil))
+			assert.Empty(t, sourceResp.Items)
+		})
+
+		t.Run("NoDLQConfigured", func(t *testing.T) {
+			now := clock.NewProvider()
+			now.Freeze(clock.Now())
+			defer now.UnFreeze()
+
+			var queueName = random.String("queue-", 10)
+			d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: setup(), Clock: now})
+			defer func() {
+				d.Shutdown(t)
+				tearDown()
+			}()
+
+			// Create queue with no DLQ configured, max_attempts = 2, lease_timeout = 1m
+			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+				QueueName:           queueName,
+				LeaseTimeout:        "1m",
+				ExpireTimeout:       ExpireTimeout,
+				MaxAttempts:         2,
+				RequestedPartitions: 1,
+			}))
+
+			// Produce an item
+			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+				QueueName:      queueName,
+				RequestTimeout: "5m",
+				Items: []*pb.QueueProduceItem{
+					{
+						Reference: "no-dlq-test",
+						Encoding:  "text",
+						Kind:      "test",
+						Bytes:     []byte("test payload"),
+					},
+				},
+			}))
+
+			// Lease item (attempt 1)
+			var lease1 pb.QueueLeaseResponse
+			require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+				QueueName:      queueName,
+				RequestTimeout: "5m",
+				ClientId:       "client-1",
+				BatchSize:      10,
+			}, &lease1))
+			require.Len(t, lease1.Items, 1)
+
+			// Advance time to expire lease (attempt 1 expires)
+			now.Advance(2 * clock.Minute)
+
+			// Wait for item to be re-queued after lease expiry
+			require.Eventually(t, func() bool {
+				var resp pb.StorageItemsListResponse
+				if err := c.StorageItemsList(ctx, queueName, 0, &resp, nil); err != nil {
+					return false
+				}
+				if len(resp.Items) == 0 {
+					return false
+				}
+				return !resp.Items[0].IsLeased && resp.Items[0].Attempts == 1
+			}, 5*clock.Second, 100*clock.Millisecond)
+
+			// Lease item again (attempt 2)
+			var lease2 pb.QueueLeaseResponse
+			require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+				QueueName:      queueName,
+				RequestTimeout: "5m",
+				ClientId:       "client-2",
+				BatchSize:      10,
+			}, &lease2))
+			require.Len(t, lease2.Items, 1)
+
+			// Advance time to expire lease (attempt 2 expires, item now at max_attempts)
+			now.Advance(2 * clock.Minute)
+
+			// Wait for lifecycle to delete the item (no DLQ configured)
+			require.Eventually(t, func() bool {
+				var resp pb.StorageItemsListResponse
+				if err := c.StorageItemsList(ctx, queueName, 0, &resp, nil); err != nil {
+					return false
+				}
+				return len(resp.Items) == 0
+			}, 5*clock.Second, 100*clock.Millisecond)
+		})
+
+		t.Run("Idempotency", func(t *testing.T) {
+			var dlqName = random.String("dlq-", 10)
+			d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: setup()})
+			defer func() {
+				d.Shutdown(t)
+				tearDown()
+			}()
+
+			// Create DLQ queue
+			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+				QueueName:         dlqName,
+				LeaseTimeout:      LeaseTimeout,
+				ExpireTimeout:     ExpireTimeout,
+				MaxAttempts:       10,
+				RequestedPartitions: 1,
+			}))
+
+			const sourceID = "source-item-123"
+
+			// Import item with SourceID
+			var importResp pb.StorageItemsImportResponse
+			require.NoError(t, c.StorageItemsImport(ctx, &pb.StorageItemsImportRequest{
+				QueueName: dlqName,
+				Items: []*pb.StorageItem{
+					{
+						Reference:      "idempotency-test-1",
+						Encoding:       "text",
+						Kind:           "test",
+						Payload:        []byte("test payload 1"),
+						SourceId:       sourceID,
+						ExpireDeadline: timestamppb.New(clock.Now().UTC().Add(1 * clock.Hour)),
+						MaxAttempts:    3,
+					},
+				},
+			}, &importResp))
+
+			// Attempt to import another item with same SourceID
+			var importResp2 pb.StorageItemsImportResponse
+			require.NoError(t, c.StorageItemsImport(ctx, &pb.StorageItemsImportRequest{
+				QueueName: dlqName,
+				Items: []*pb.StorageItem{
+					{
+						Reference:      "idempotency-test-2",
+						Encoding:       "text",
+						Kind:           "test",
+						Payload:        []byte("test payload 2"),
+						SourceId:       sourceID,
+						ExpireDeadline: timestamppb.New(clock.Now().UTC().Add(1 * clock.Hour)),
+						MaxAttempts:    3,
+					},
+				},
+			}, &importResp2))
+
+			// Verify only one item exists
+			var resp pb.StorageItemsListResponse
+			require.NoError(t, c.StorageItemsList(ctx, dlqName, 0, &resp, nil))
+			assert.Len(t, resp.Items, 1, "should have exactly one item due to SourceID deduplication")
+
+			// Verify it's the first item (second was ignored)
+			if len(resp.Items) == 1 {
+				assert.Equal(t, "idempotency-test-1", resp.Items[0].Reference)
+				assert.Equal(t, sourceID, resp.Items[0].SourceId)
+			}
+		})
+	})
 }
 
 // TODO: Start the Service, produce some items, then Shutdown the service

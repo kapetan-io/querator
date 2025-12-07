@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/dustin/go-humanize"
+	"github.com/kapetan-io/errors"
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/transport"
@@ -345,6 +346,44 @@ func (l *Logical) Retry(ctx context.Context, req *types.RetryRequest) error {
 	return req.Err
 }
 
+// ProduceInternal writes items directly to storage without going through the request channel.
+// This method is used internally by the QueuesManager for DLQ item movement.
+// It bypasses client validation and writes directly to the selected partition.
+func (l *Logical) ProduceInternal(ctx context.Context, items []*types.Item) error {
+	if l.inShutdown.Load() {
+		return ErrQueueShutdown
+	}
+
+	if len(items) == 0 {
+		return nil
+	}
+
+	// Use first partition for DLQ writes (simple approach)
+	if len(l.conf.StoragePartitions) == 0 {
+		return errors.New("no storage partitions available")
+	}
+
+	partition := l.conf.StoragePartitions[0]
+
+	// Assign ExpireTimeout to each item
+	now := l.conf.Clock.Now().UTC()
+	for _, item := range items {
+		item.ExpireDeadline = now.Add(l.conf.ExpireTimeout)
+	}
+
+	// Create a produce batch for storage
+	batch := types.ProduceBatch{}
+	batch.Add(&types.ProduceRequest{
+		Items: items,
+	})
+
+	// Write directly to storage
+	if err := partition.Produce(ctx, batch, now); err != nil {
+		return errors.Errorf("failed to produce items to partition: %w", err)
+	}
+
+	return nil
+}
 
 // QueueStats retrieves stats about the queue and items in storage
 func (l *Logical) QueueStats(ctx context.Context, stats *types.LogicalStats) error {
@@ -1346,16 +1385,33 @@ func (l *Logical) runLifecycle(state *QueueState) {
 		}
 		partition.Lifecycle.Failures = 0
 
+		// Batch DLQ actions for manager processing
+		var dlqActions []types.Action
+
 		for _, a := range actions {
 			switch a.Action {
 			case types.ActionLeaseExpired:
-				if a.Item.Attempts >= partition.Info.Queue.MaxAttempts {
-					a.Action = types.ActionDeleteItem
+				// Check if max attempts exceeded - route to DLQ or delete
+				if partition.Info.Queue.MaxAttempts != 0 && a.Item.Attempts >= partition.Info.Queue.MaxAttempts {
+					if partition.Info.Queue.DeadQueue != "" {
+						// Route to DLQ via manager
+						a.Action = types.ActionItemMaxAttempts
+						dlqActions = append(dlqActions, a)
+					} else {
+						// No DLQ - delete the item
+						a.Action = types.ActionDeleteItem
+						partition.LifeCycleRequests.Add(&types.LifeCycleRequest{
+							PartitionNum: partition.Info.PartitionNum,
+							Actions:      []types.Action{a},
+						})
+					}
+				} else {
+					// Normal lease expiry - re-queue item
+					partition.LifeCycleRequests.Add(&types.LifeCycleRequest{
+						PartitionNum: partition.Info.PartitionNum,
+						Actions:      []types.Action{a},
+					})
 				}
-				partition.LifeCycleRequests.Add(&types.LifeCycleRequest{
-					PartitionNum: partition.Info.PartitionNum,
-					Actions:      []types.Action{a},
-				})
 			case types.ActionItemExpired, types.ActionItemMaxAttempts:
 				if partition.Info.Queue.DeadQueue == "" {
 					a.Action = types.ActionDeleteItem
@@ -1364,19 +1420,8 @@ func (l *Logical) runLifecycle(state *QueueState) {
 						Actions:      []types.Action{a},
 					})
 				} else {
-					ctx, cancel := context.WithTimeout(context.Background(), l.conf.WriteTimeout)
-					req := &types.LifeCycleRequest{
-						PartitionNum:   partition.Info.PartitionNum,
-						RequestTimeout: l.conf.WriteTimeout,
-						Actions:        []types.Action{a},
-					}
-					err := l.conf.Manager.LifeCycle(ctx, req)
-					cancel()
-					if err != nil {
-						l.log.Warn("manager lifecycle failed",
-							"partition", partition.Info.PartitionNum,
-							"error", err)
-					}
+					// Batch DLQ actions for single manager call
+					dlqActions = append(dlqActions, a)
 				}
 			case types.ActionDeleteItem:
 				partition.LifeCycleRequests.Add(&types.LifeCycleRequest{
@@ -1388,6 +1433,26 @@ func (l *Logical) runLifecycle(state *QueueState) {
 					PartitionNum: partition.Info.PartitionNum,
 					Actions:      []types.Action{a},
 				})
+			}
+		}
+
+		// Process batched DLQ actions if any
+		if len(dlqActions) > 0 {
+			ctx, cancel := context.WithTimeout(context.Background(), l.conf.WriteTimeout)
+			req := &types.LifeCycleRequest{
+				RequestTimeout:   l.conf.WriteTimeout,
+				PartitionInfo:    partition.Info,
+				PartitionNum:     partition.Info.PartitionNum,
+				Actions:          dlqActions,
+				PartitionStorage: partition.Store,
+			}
+			err := l.conf.Manager.LifeCycle(ctx, req)
+			cancel()
+			if err != nil {
+				l.log.Warn("manager lifecycle failed",
+					"partition", partition.Info.PartitionNum,
+					"num_actions", len(dlqActions),
+					"error", err)
 			}
 		}
 

@@ -229,7 +229,105 @@ func (qm *QueuesManager) Update(ctx context.Context, info types.QueueInfo) error
 }
 
 func (qm *QueuesManager) LifeCycle(ctx context.Context, req *types.LifeCycleRequest) error {
-	return nil // TODO(lifecycle)
+	// Get the queue info from the request's partition info
+	queueInfo := req.PartitionInfo.Queue
+	deadQueueName := queueInfo.DeadQueue
+
+	// Collect all dead items (ItemExpired and ItemMaxAttempts actions)
+	var deadItems []*types.Item
+	for _, action := range req.Actions {
+		if action.Action == types.ActionItemExpired || action.Action == types.ActionItemMaxAttempts {
+			deadItems = append(deadItems, &action.Item)
+		}
+	}
+
+	// If no dead items, nothing to do
+	if len(deadItems) == 0 {
+		return nil
+	}
+
+	// Validate that partition storage was provided
+	if req.PartitionStorage == nil {
+		return errors.Errorf("PartitionStorage is required for lifecycle operations")
+	}
+
+	// If no DLQ configured, delete items and log warnings
+	if deadQueueName == "" {
+		for _, item := range deadItems {
+			qm.log.Warn("item exceeded limits, deleting (no dead_queue configured)",
+				"item_id", string(item.ID),
+				"queue", queueInfo.Name,
+				"partition", req.PartitionNum)
+		}
+
+		// Delete items from source partition
+		var itemIDs [][]byte
+		for _, item := range deadItems {
+			itemIDs = append(itemIDs, item.ID)
+		}
+		batch := types.Batch[types.CompleteRequest]{}
+		batch.Add(&types.CompleteRequest{Ids: itemIDs})
+		if err := req.PartitionStorage.Complete(ctx, batch); err != nil {
+			return errors.Errorf("failed to delete items from source partition: %w", err)
+		}
+		return nil
+	}
+
+	// DLQ is configured - prepare items for DLQ
+	for _, item := range deadItems {
+		// Set SourceID to original ID for idempotency
+		item.SourceID = item.ID
+		// Clear ID so DLQ storage generates a new one
+		item.ID = nil
+		// Reset state for DLQ
+		item.IsLeased = false
+		item.LeaseDeadline = clock.Time{}
+		item.Attempts = 0
+	}
+
+	// Produce items to DLQ
+	if err := qm.ProduceToQueue(ctx, deadQueueName, deadItems); err != nil {
+		qm.log.Error("failed to produce to dead_queue",
+			"dead_queue", deadQueueName,
+			"source_queue", queueInfo.Name,
+			"error", err)
+		return err
+	}
+
+	// Delete items from source partition after successful DLQ produce
+	var itemIDs [][]byte
+	for _, item := range deadItems {
+		// Use SourceID since we cleared ID when preparing for DLQ
+		itemIDs = append(itemIDs, item.SourceID)
+	}
+	batch := types.Batch[types.CompleteRequest]{}
+	batch.Add(&types.CompleteRequest{Ids: itemIDs})
+	if err := req.PartitionStorage.Complete(ctx, batch); err != nil {
+		// Log error but don't fail - items are already in DLQ
+		// Next lifecycle will attempt cleanup again (DLQ will dedupe via SourceID)
+		qm.log.Error("failed to delete items from source partition after DLQ produce",
+			"source_queue", queueInfo.Name,
+			"partition", req.PartitionNum,
+			"error", err)
+	}
+
+	return nil
+}
+
+// ProduceToQueue produces items to the specified queue by name.
+// Used for DLQ item movement during lifecycle processing.
+func (qm *QueuesManager) ProduceToQueue(ctx context.Context, queueName string, items []*types.Item) error {
+	q, err := qm.get(ctx, queueName)
+	if err != nil {
+		return errors.Errorf("failed to get queue '%s': %w", queueName, err)
+	}
+
+	_, logical := q.GetNext()
+	if err := logical.ProduceInternal(ctx, items); err != nil {
+		return errors.Errorf("failed to produce to queue '%s': %w", queueName, err)
+	}
+
+	return nil
 }
 
 // validateDeadQueue validates that a dead queue configuration is valid.

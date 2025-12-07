@@ -1,6 +1,4 @@
 .DEFAULT_GOAL := build
-LINT = $(GOPATH)/bin/golangci-lint
-LINT_VERSION = v2.2.1
 VERSION=$(shell git describe --tags --exact-match 2>/dev/null || echo "dev-build")
 
 .PHONY: install
@@ -10,9 +8,6 @@ install: ## Install querator binary with version
 .PHONY: proto
 proto: ## Build protos
 	./buf.gen.yaml
-
-$(LINT): ## Download Go linter
-	curl -sfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(GOPATH)/bin $(LINT_VERSION)
 
 .PHONY: test
 test:
@@ -41,8 +36,8 @@ benchmark-throughput:
 
 
 .PHONY: lint
-lint: $(LINT) ## Run Go linter
-	$(LINT) run -v ./...
+lint: ## Run Go linter
+	golangci-lint run -v ./...
 
 .PHONY: tidy
 tidy:

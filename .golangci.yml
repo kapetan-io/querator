@@ -5,16 +5,7 @@ linters:
     - unused      # Unused code (functions, types, constants, variables)
     - unparam     # Unused function parameters
     - gocritic    # Includes unused parameter checks and more
-
-linters-settings:
-  unused:
-    # Check for unused exported identifiers (stricter)
-    exported-is-used: false
-    # Check for unused fields in structs
-    field-writes-are-uses: false
-    # Treat assignment to a var as a "use"
-    post-statements-are-reads: false
-
-  unparam:
-    # Report unused parameters even if they are named _
-    check-exported: true
+  settings:
+    unparam:
+      # Don't check exported functions (keep stable API)
+      check-exported: false

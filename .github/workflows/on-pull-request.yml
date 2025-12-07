@@ -1,4 +1,4 @@
-name: OnPullRequest
+name: CI
 
 on:
   push:
@@ -10,9 +10,12 @@ on:
       - master
       - main
 
+env:
+  GOLANGCI_LINT_VERSION: v2.5.0
+
 jobs:
-  test:
-    name: OnPullRequest
+  ci:
+    name: CI
     strategy:
       matrix:
         go-version:
@@ -27,17 +30,21 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go-version }}
+          cache: true
 
-      - name: Cache deps
+      - name: Cache golangci-lint
         uses: actions/cache@v4
         with:
-          path: ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-
+          path: ~/.local/bin/golangci-lint
+          key: ${{ runner.os }}-golangci-lint-${{ env.GOLANGCI_LINT_VERSION }}
 
-      - name: Install deps
-        run: go mod download
+      - name: Install golangci-lint
+        run: |
+          if [ ! -f ~/.local/bin/golangci-lint ]; then
+            mkdir -p ~/.local/bin
+            curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b ~/.local/bin ${{ env.GOLANGCI_LINT_VERSION }}
+          fi
+          echo ~/.local/bin >> $GITHUB_PATH
 
-      - name: Test
-        run: make test
+      - name: Run CI
+        run: make ci

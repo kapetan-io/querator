@@ -38,15 +38,6 @@ type Remote interface {
 	StorageItemsDelete(ctx context.Context, req *proto.StorageItemsDeleteRequest) error
 }
 
-// TODO: It is the job of the QueueManager to adjust the number of Logical Queues depending on the
-//  number of consumers and partitions available.
-
-// TODO: If there is only one client, and multiple Logical Queues, then we
-//  should reduce the number of Logical Queues automatically. Using a congestion detection algorithm
-//  similar to https://www.usenix.org/conference/nsdi19/presentation/ousterhout
-
-// TODO: We need to figure out how clients register themselves as consumers before allowing
-//  lease calls.
 
 // QueuesManager manages queues in use, and information about that queue.
 type QueuesManager struct {
@@ -166,8 +157,7 @@ func (qm *QueuesManager) get(ctx context.Context, name string) (*Queue, error) {
 		partitions = append(partitions, b.PartitionStore.Get(info))
 	}
 
-	// We currently start with a single logical queue, contention detection will eventually adjust the
-	// number of logical queues as consumers join.
+	// Single logical queue per queue. Multi-logical support deferred until demonstrated need.
 	l, err := SpawnLogicalQueue(LogicalConfig{
 		MaxProduceBatchSize:  qm.conf.LogicalConfig.MaxProduceBatchSize,
 		MaxLeaseBatchSize:    qm.conf.LogicalConfig.MaxLeaseBatchSize,
@@ -187,11 +177,6 @@ func (qm *QueuesManager) get(ctx context.Context, name string) (*Queue, error) {
 	qm.queues[queue.Name] = NewQueue(queue).AddLogical(l)
 	return qm.queues[queue.Name], nil
 }
-
-//func (qm *QueuesManager) rebalanceLogical(info types.QueueInfo) error {
-//	// TODO: See adr/0017-cluster-operation.md
-//	return nil
-//}
 
 func (qm *QueuesManager) List(ctx context.Context, items *[]types.QueueInfo, opts types.ListOptions) error {
 	if qm.inShutdown.Load() {

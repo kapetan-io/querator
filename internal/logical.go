@@ -104,10 +104,7 @@ type Logical struct {
 	//  can check for this flag and avoid routing clients to this Logical Queue.
 	// Failures      atomic.Bool
 
-	// Hot request channel is for requests this is included in congestion detection
-	hotRequestCh chan *Request
-	// Cold request channel is for requests that is NOT included in congestion detection
-	coldRequestCh chan *Request
+	requestCh chan *Request
 
 	shutdownCh chan *types.ShutdownRequest
 	wg         sync.WaitGroup
@@ -130,19 +127,12 @@ func SpawnLogicalQueue(conf LogicalConfig) (*Logical, error) {
 	set.Default(&conf.Clock, clock.NewProvider())
 
 	l := &Logical{
-		// Shutdowns require special handling in the sync loop
 		shutdownCh: make(chan *types.ShutdownRequest),
-		// Logical requests are any request that doesn't require special batch processing
-		coldRequestCh: make(chan *Request),
-		instanceID:    random.Alpha("", 10),
-		conf:          conf,
+		requestCh:  make(chan *Request, conf.MaxRequestsPerQueue),
+		instanceID: random.Alpha("", 10),
+		conf:       conf,
 	}
 	l.log = conf.Log.With("code.namespace", "Logical", "queue", conf.Name, "instance-id", l.instanceID)
-
-	// These are request queues that queue requests from clients until the sync loop has
-	// time to process them. When they get processed, every request in the queue is handled
-	// in a batch.
-	l.hotRequestCh = make(chan *Request, conf.MaxRequestsPerQueue)
 
 	l.log.LogAttrs(context.Background(), LevelDebugAll, "logical queue started")
 	l.wg.Add(1)
@@ -188,7 +178,7 @@ func (l *Logical) Produce(ctx context.Context, req *types.ProduceRequest) error 
 	req.Context = ctx
 
 	select {
-	case l.hotRequestCh <- &Request{
+	case l.requestCh <- &Request{
 		Method:  MethodProduce,
 		Request: req,
 	}:
@@ -255,7 +245,7 @@ func (l *Logical) Lease(ctx context.Context, req *types.LeaseRequest) error {
 	req.Context = ctx
 
 	select {
-	case l.hotRequestCh <- &Request{
+	case l.requestCh <- &Request{
 		Method:  MethodLease,
 		Request: req,
 	}:
@@ -301,7 +291,7 @@ func (l *Logical) Complete(ctx context.Context, req *types.CompleteRequest) erro
 	req.Context = ctx
 
 	select {
-	case l.hotRequestCh <- &Request{
+	case l.requestCh <- &Request{
 		Method:  MethodComplete,
 		Request: req,
 	}:
@@ -344,7 +334,7 @@ func (l *Logical) Retry(ctx context.Context, req *types.RetryRequest) error {
 	req.Context = ctx
 
 	select {
-	case l.hotRequestCh <- &Request{
+	case l.requestCh <- &Request{
 		Method:  MethodRetry,
 		Request: req,
 	}:
@@ -374,7 +364,7 @@ func (l *Logical) PartitionStateChange(ctx context.Context, partitionNum int, st
 	}
 
 	select {
-	case l.coldRequestCh <- &r:
+	case l.requestCh <- &r:
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -400,7 +390,7 @@ func (l *Logical) LifeCycle(ctx context.Context, req *types.LifeCycleRequest) er
 	}
 
 	select {
-	case l.hotRequestCh <- &r:
+	case l.requestCh <- &r:
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -483,8 +473,7 @@ func (l *Logical) UpdateInfo(ctx context.Context, info types.QueueInfo) error {
 }
 
 // UpdatePartitions is called whenever the list of partitions this Logical Queue is responsible for changes.
-// It is called during initialization of Logical struct and is intended to be called whenever the QueueManager
-// rebalances partitions
+// It is called during initialization of Logical struct.
 func (l *Logical) UpdatePartitions(ctx context.Context, p []store.Partition) error {
 	r := Request{
 		Method:  MethodUpdatePartitions,
@@ -587,9 +576,6 @@ func (l *Logical) prepareQueueState(state *QueueState) {
 	//  QueueInfo.StoragePartitions.UnLeased is accurate. If it's not accurate, we MUST re-count all the items
 	//  in the partition in order to accurately distribute items.
 
-	// TODO(rebalance): This needs to please partitions counts and current in flight lease requests
-	//  when a partition is added or removed. Do the simple thing right now, in case this all changes
-	//  later.
 	state.Partitions = make([]*Partition, len(l.conf.StoragePartitions))
 
 	for i, p := range l.conf.StoragePartitions {
@@ -626,19 +612,7 @@ func (l *Logical) prepareQueueState(state *QueueState) {
 	state.LifecycleTimer = l.conf.Clock.NewTimer(0)
 	state.ScheduledTimer = l.conf.Clock.NewTimer(humanize.LongTime)
 
-	slices.SortFunc(state.Partitions, func(a, b *Partition) int {
-		// Ensure failed Partitions are sorted last
-		if a.State.Failures < b.State.Failures {
-			return -1
-		}
-		if a.State.UnLeased < b.State.UnLeased {
-			return -1
-		}
-		if a.State.UnLeased > b.State.UnLeased {
-			return +1
-		}
-		return 0
-	})
+	sortPartitionsByLoad(state.Partitions)
 
 }
 
@@ -676,8 +650,7 @@ func (l *Logical) requestLoop() {
 
 	for {
 		l.log.LogAttrs(context.Background(), LevelDebugAll, "Logical.requestLoop()",
-			slog.Int("HotRequests", len(l.hotRequestCh)),
-			slog.Int("ColdRequests", len(l.coldRequestCh)),
+			slog.Int("Requests", len(l.requestCh)),
 			slog.Int("Leases", len(state.Leases.Requests)),
 			slog.Int("Producers", len(state.Producers.Requests)),
 			slog.Int("Completes", len(state.Completes.Requests)),
@@ -686,12 +659,8 @@ func (l *Logical) requestLoop() {
 		)
 
 		select {
-		case req := <-l.hotRequestCh:
-			l.handleHotRequests(&state, req)
-
-		case req := <-l.coldRequestCh:
-			l.handleColdRequests(&state, req)
-			// If a cold request initiated a shutdown, exit immediately
+		case req := <-l.requestCh:
+			l.handleRequest(&state, req)
 			if l.inShutdown.Load() {
 				return
 			}
@@ -713,6 +682,19 @@ func (l *Logical) requestLoop() {
 		case <-state.NextMaintenanceCh:
 			l.handleRequestTimeouts(&state)
 		}
+	}
+}
+
+func (l *Logical) handleRequest(state *QueueState, req *Request) {
+	switch req.Method {
+	case MethodProduce, MethodLease, MethodComplete, MethodRetry, MethodLifeCycle:
+		l.handleHotRequests(state, req)
+	case MethodStorageItemsList, MethodStorageItemsImport, MethodStorageItemsDelete,
+		MethodQueueStats, MethodQueuePause, MethodQueueClear, MethodUpdateInfo,
+		MethodUpdatePartitions, MethodPartitionStateChange, MethodReloadPartitions:
+		l.handleColdRequests(state, req)
+	default:
+		panic(fmt.Sprintf("undefined request method '%d'", req.Method))
 	}
 }
 
@@ -784,16 +766,55 @@ func (l *Logical) handleHotRequests(state *QueueState, req *Request) {
 	l.handleRequestTimeouts(state)
 }
 
+func (l *Logical) isHotRequest(req *Request) bool {
+	switch req.Method {
+	case MethodProduce, MethodLease, MethodComplete, MethodRetry, MethodLifeCycle:
+		return true
+	default:
+		return false
+	}
+}
+
+// sortPartitionsByLoad sorts partitions by failures (ascending) then UnLeased (ascending)
+// This implements the Opportunistic Distribution algorithm - see docs/adr/0019-partition-items-distribution.md
+func sortPartitionsByLoad(partitions []*Partition) {
+	slices.SortFunc(partitions, func(a, b *Partition) int {
+		// Ensure failed Partitions are sorted last
+		if a.State.Failures < b.State.Failures {
+			return -1
+		}
+		if a.State.UnLeased < b.State.UnLeased {
+			return -1
+		}
+		if a.State.UnLeased > b.State.UnLeased {
+			return +1
+		}
+		return 0
+	})
+}
+
 func (l *Logical) consumeHotCh(state *QueueState, req *Request) {
 	// Add the first request from the channel to the client request state
 	l.reqToState(req, state)
 
 EMPTY:
-	// Add any requests in the hotRequestCh to the client requests state
+	// Add any hot requests in the requestCh to the client requests state
 	for {
 		select {
-		case req := <-l.hotRequestCh:
-			l.reqToState(req, state)
+		case req := <-l.requestCh:
+			// Only consume hot requests (produce, lease, complete, retry, lifecycle)
+			if l.isHotRequest(req) {
+				l.reqToState(req, state)
+			} else {
+				// Put cold request back on channel for later processing
+				select {
+				case l.requestCh <- req:
+				default:
+					// Channel full, handle it now
+					l.handleColdRequests(state, req)
+				}
+				break EMPTY
+			}
 		default:
 			break EMPTY
 		}
@@ -904,19 +925,7 @@ func (l *Logical) assignProduceRequests(state *QueueState) {
 		// Preform Opportunistic Partition Distribution
 		// See docs/adr/0019-partition-items-distribution.md for details
 		state.Partitions[0].Produce(req)
-		slices.SortFunc(state.Partitions, func(a, b *Partition) int {
-			// Ensure failed Partitions are sorted last
-			if a.State.Failures < b.State.Failures {
-				return -1
-			}
-			if a.State.UnLeased < b.State.UnLeased {
-				return -1
-			}
-			if a.State.UnLeased > b.State.UnLeased {
-				return +1
-			}
-			return 0
-		})
+		sortPartitionsByLoad(state.Partitions)
 	}
 }
 
@@ -953,19 +962,7 @@ func (l *Logical) assignLeaseRequests(state *QueueState) {
 
 		// Perform Opportunistic Partition Distribution
 		// See docs/adr/0019-partition-items-distribution.md for details
-		slices.SortFunc(state.Partitions, func(a, b *Partition) int {
-			// Ensure failed Partitions are sorted last
-			if a.State.Failures < b.State.Failures {
-				return -1
-			}
-			if a.State.UnLeased < b.State.UnLeased {
-				return -1
-			}
-			if a.State.UnLeased > b.State.UnLeased {
-				return +1
-			}
-			return 0
-		})
+		sortPartitionsByLoad(state.Partitions)
 	}
 }
 
@@ -1196,10 +1193,10 @@ func (l *Logical) handleColdRequests(state *QueueState, req *Request) {
 			slog.Int("failures", state.Partitions[p.PartitionNum].State.Failures),
 			slog.Int("partition", p.PartitionNum))
 		close(req.ReadyCh)
-		// Ensure the hot path handler runs on the chance there is a produce or
+		// Ensure the request handler runs on the chance there is a produce or
 		// lease request waiting for a partition to become available.
 		select {
-		case l.hotRequestCh <- req:
+		case l.requestCh <- req:
 		default:
 		}
 	case MethodReloadPartitions:
@@ -1219,7 +1216,7 @@ func (l *Logical) queueRequest(ctx context.Context, r *Request) error {
 	r.Context = ctx
 
 	select {
-	case l.coldRequestCh <- r:
+	case l.requestCh <- r:
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -1314,9 +1311,10 @@ func (l *Logical) handlePause(state *QueueState, r *Request) {
 	l.log.Debug("paused", "logical", l.instanceID)
 	defer l.log.Debug("un-paused", "logical", l.instanceID)
 
-	for {
-		select {
-		case req := <-l.coldRequestCh:
+	for req := range l.requestCh {
+		if l.isHotRequest(req) {
+			l.consumeHotCh(state, req)
+		} else {
 			switch req.Method {
 			case MethodQueuePause:
 				pr := req.Request.(*types.PauseRequest)
@@ -1333,8 +1331,6 @@ func (l *Logical) handlePause(state *QueueState, r *Request) {
 			default:
 				l.handleColdRequests(state, req)
 			}
-		case req := <-l.hotRequestCh:
-			l.consumeHotCh(state, req)
 		}
 	}
 }
@@ -1350,7 +1346,7 @@ func (l *Logical) handleShutdown(state *QueueState, req *types.ShutdownRequest) 
 	// Consume all requests currently in flight
 	for l.inFlight.Load() != 0 {
 		select {
-		case r := <-l.hotRequestCh:
+		case r := <-l.requestCh:
 			switch r.Method {
 			case MethodProduce:
 				o := r.Request.(*types.ProduceRequest)
@@ -1376,7 +1372,7 @@ func (l *Logical) handleShutdown(state *QueueState, req *types.ShutdownRequest) 
 				panic(fmt.Sprintf("undefined request method '%d'", r.Method))
 			}
 		default:
-			// If there is a hot request still in flight, it is possible
+			// If there is a request still in flight, it is possible
 			// it hasn't been added to the channel yet, so we continue trying
 			// until there are no more waiting requests.
 		}

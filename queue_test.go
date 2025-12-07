@@ -1590,6 +1590,53 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			require.NoError(t, err)
 		})
 
+		// Create a queue with short ExpireTimeout for testing
+		queueName = random.String("queue-", 10)
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			LeaseTimeout:        "5s",
+			ExpireTimeout:       "10s",
+			QueueName:           queueName,
+			RequestedPartitions: 1,
+		})
+
+		t.Run("ExpireTimeout", func(t *testing.T) {
+			// Produce an item (without leasing it)
+			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+				QueueName:      queueName,
+				RequestTimeout: "1m",
+				Items: []*pb.QueueProduceItem{
+					{
+						Reference: "applejack@honesty.com",
+						Encoding:  "apples",
+						Kind:      "bucking",
+						Bytes:     []byte("The truth will set you free"),
+					},
+				}}))
+
+			// Verify item exists in storage
+			var resp pb.StorageItemsListResponse
+			err := c.StorageItemsList(ctx, queueName, 0, &resp, nil)
+			require.NoError(t, err)
+			item := findInStorageList("applejack@honesty.com", &resp)
+			require.NotNil(t, item)
+
+			// Advance time past ExpireDeadline (ExpireTimeout is 10s, advance 15s)
+			now.Advance(15 * clock.Second)
+
+			// Wait until the item is deleted
+			err = retry.On(ctx, RetryTenTimes, func(ctx context.Context, i int) error {
+				var resp pb.StorageItemsListResponse
+				if err := c.StorageItemsList(ctx, queueName, 0, &resp, nil); err != nil {
+					return err
+				}
+				if findInStorageList("applejack@honesty.com", &resp) != nil {
+					return fmt.Errorf("expected item to be deleted")
+				}
+				return nil
+			})
+			require.NoError(t, err)
+		})
+
 		// t.Run("UntilDeadLetter", func(t *testing.T) {
 		// 	// Produce an item
 		// 	// Lease it

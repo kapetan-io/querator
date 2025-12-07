@@ -37,7 +37,6 @@ const (
 	MethodLease
 	MethodComplete
 	MethodRetry
-	MethodLifeCycle
 	MethodPartitionStateChange
 	MethodReloadPartitions
 	MethodNotify
@@ -377,32 +376,6 @@ func (l *Logical) PartitionStateChange(ctx context.Context, partitionNum int, st
 	}
 }
 
-func (l *Logical) LifeCycle(ctx context.Context, req *types.LifeCycleRequest) error {
-	if l.inShutdown.Load() {
-		return ErrQueueShutdown
-	}
-
-	r := Request{
-		ReadyCh: make(chan struct{}),
-		Method:  MethodLifeCycle,
-		Context: ctx,
-		Request: req,
-	}
-
-	select {
-	case l.requestCh <- &r:
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-
-	select {
-	case <-r.ReadyCh:
-		return r.Err
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
 // QueueStats retrieves stats about the queue and items in storage
 func (l *Logical) QueueStats(ctx context.Context, stats *types.LogicalStats) error {
 	if l.inShutdown.Load() {
@@ -687,7 +660,7 @@ func (l *Logical) requestLoop() {
 
 func (l *Logical) handleRequest(state *QueueState, req *Request) {
 	switch req.Method {
-	case MethodProduce, MethodLease, MethodComplete, MethodRetry, MethodLifeCycle:
+	case MethodProduce, MethodLease, MethodComplete, MethodRetry:
 		l.handleHotRequests(state, req)
 	case MethodStorageItemsList, MethodStorageItemsImport, MethodStorageItemsDelete,
 		MethodQueueStats, MethodQueuePause, MethodQueueClear, MethodUpdateInfo,
@@ -768,7 +741,7 @@ func (l *Logical) handleHotRequests(state *QueueState, req *Request) {
 
 func (l *Logical) isHotRequest(req *Request) bool {
 	switch req.Method {
-	case MethodProduce, MethodLease, MethodComplete, MethodRetry, MethodLifeCycle:
+	case MethodProduce, MethodLease, MethodComplete, MethodRetry:
 		return true
 	default:
 		return false
@@ -837,9 +810,6 @@ func (l *Logical) reqToState(req *Request, state *QueueState) {
 		state.Completes.Add(req.Request.(*types.CompleteRequest))
 	case MethodRetry:
 		state.Retries.Add(req.Request.(*types.RetryRequest))
-	case MethodLifeCycle:
-		state.LifeCycles.Add(req.Request.(*types.LifeCycleRequest))
-		close(req.ReadyCh)
 	case MethodLease:
 		addIfUnique(&state.Leases, req.Request.(*types.LeaseRequest))
 	case MethodPartitionStateChange:
@@ -1362,10 +1332,6 @@ func (l *Logical) handleShutdown(state *QueueState, req *types.ShutdownRequest) 
 				close(o.ReadyCh)
 			case MethodRetry:
 				o := r.Request.(*types.RetryRequest)
-				o.Err = ErrQueueShutdown
-				close(o.ReadyCh)
-			case MethodLifeCycle:
-				o := r.Request.(*Request)
 				o.Err = ErrQueueShutdown
 				close(o.ReadyCh)
 			default:

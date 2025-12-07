@@ -37,7 +37,6 @@ const (
 	MethodLease
 	MethodComplete
 	MethodRetry
-	MethodPartitionStateChange
 	MethodReloadPartitions
 	MethodNotify
 	MethodNotifyScheduled
@@ -346,35 +345,6 @@ func (l *Logical) Retry(ctx context.Context, req *types.RetryRequest) error {
 	return req.Err
 }
 
-// PartitionStateChange updates the state of a partition
-func (l *Logical) PartitionStateChange(ctx context.Context, partitionNum int, state types.PartitionState) error {
-	if l.inShutdown.Load() {
-		return ErrQueueShutdown
-	}
-
-	r := Request{
-		ReadyCh: make(chan struct{}),
-		Method:  MethodPartitionStateChange,
-		Context: ctx,
-		Request: types.PartitionStateChange{
-			PartitionNum: partitionNum,
-			State:        state,
-		},
-	}
-
-	select {
-	case l.requestCh <- &r:
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-
-	select {
-	case <-r.ReadyCh:
-		return r.Err
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
 
 // QueueStats retrieves stats about the queue and items in storage
 func (l *Logical) QueueStats(ctx context.Context, stats *types.LogicalStats) error {
@@ -664,7 +634,7 @@ func (l *Logical) handleRequest(state *QueueState, req *Request) {
 		l.handleHotRequests(state, req)
 	case MethodStorageItemsList, MethodStorageItemsImport, MethodStorageItemsDelete,
 		MethodQueueStats, MethodQueuePause, MethodQueueClear, MethodUpdateInfo,
-		MethodUpdatePartitions, MethodPartitionStateChange, MethodReloadPartitions:
+		MethodUpdatePartitions, MethodReloadPartitions:
 		l.handleColdRequests(state, req)
 	default:
 		panic(fmt.Sprintf("undefined request method '%d'", req.Method))
@@ -812,11 +782,6 @@ func (l *Logical) reqToState(req *Request, state *QueueState) {
 		state.Retries.Add(req.Request.(*types.RetryRequest))
 	case MethodLease:
 		addIfUnique(&state.Leases, req.Request.(*types.LeaseRequest))
-	case MethodPartitionStateChange:
-		// Do nothing. This request is intended to force requestLoop to cycle
-		// when a partition state changes, so any waiting produce or lease
-		// requests have a chance consider the changed partition in order to
-		// fulfill their waiting requests.
 	default:
 		panic(fmt.Sprintf("undefined request method '%d'", req.Method))
 	}
@@ -1146,29 +1111,6 @@ func (l *Logical) handleColdRequests(state *QueueState, req *Request) {
 		p := req.Request.([]store.Partition)
 		l.conf.StoragePartitions = p
 		close(req.ReadyCh)
-	case MethodPartitionStateChange:
-		p := req.Request.(types.PartitionStateChange)
-		if p.State.Failures != types.UnSet {
-			state.Partitions[p.PartitionNum].State.Failures = p.State.Failures
-		}
-		if p.State.UnLeased != types.UnSet {
-			state.Partitions[p.PartitionNum].State.UnLeased = p.State.UnLeased
-		}
-		if p.State.NumLeased != types.UnSet {
-			state.Partitions[p.PartitionNum].State.NumLeased = p.State.NumLeased
-		}
-		l.log.LogAttrs(context.Background(), LevelDebugAll, "partition state changed",
-			slog.Int("num_leased", state.Partitions[p.PartitionNum].State.NumLeased),
-			slog.Int("unleased", state.Partitions[p.PartitionNum].State.UnLeased),
-			slog.Int("failures", state.Partitions[p.PartitionNum].State.Failures),
-			slog.Int("partition", p.PartitionNum))
-		close(req.ReadyCh)
-		// Ensure the request handler runs on the chance there is a produce or
-		// lease request waiting for a partition to become available.
-		select {
-		case l.requestCh <- req:
-		default:
-		}
 	case MethodReloadPartitions:
 		// TODO(reload) Reload the partitions
 		// TODO: Move all the inline code into handleXXX methods

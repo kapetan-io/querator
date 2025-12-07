@@ -20,41 +20,23 @@ ARG VERSION
 # Build the binary
 RUN go build -ldflags "-w -s -X main.Version=$VERSION" -o querator ./cmd/querator
 
-# Final stage
-FROM alpine:latest
+# Final stage - use distroless for smaller image and better cross-platform support
+FROM gcr.io/distroless/static-debian12:nonroot
 
 LABEL org.opencontainers.image.source="https://github.com/kapetan-io/querator"
 
-# Install runtime dependencies
-RUN apk --no-cache add ca-certificates tzdata
-
-# Create app user
-RUN addgroup -g 1001 -S querator && \
-    adduser -u 1001 -S querator -G querator
-
-# Create directories for data and config
-RUN mkdir -p /data /config && \
-    chown -R querator:querator /data /config
-
-# Copy binary from builder
+# Copy binary and config from builder
 COPY --from=builder /app/querator /usr/local/bin/querator
 COPY --from=builder /app/example.yaml /config/default.yaml
-
-# Set permissions
-RUN chmod +x /usr/local/bin/querator
-
-# Switch to non-root user
-USER querator
-
-# Set working directory
-WORKDIR /data
 
 # Expose port (default querator port)
 EXPOSE 2319
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:2319/metrics || exit 1
+# Run as nonroot user (provided by distroless)
+USER nonroot:nonroot
 
-# Default command - use default config if no config mounted
-CMD ["sh", "-c", "if [ -f /config/querator.yaml ]; then querator server --config /config/querator.yaml; else querator server --config /config/default.yaml; fi"]
+# Set working directory
+WORKDIR /data
+
+# Default command
+ENTRYPOINT ["/usr/local/bin/querator", "server", "--config", "/config/default.yaml"]

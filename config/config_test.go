@@ -106,7 +106,6 @@ func TestApplyConfigFile(t *testing.T) {
 				Name:                "queue-1",
 				LeaseTimeout:        10 * time.Minute,
 				ExpireTimeout:       10 * time.Minute,
-				DeadQueue:           "queue-1-dead",
 				MaxAttempts:         10,
 				Reference:           "test",
 				RequestedPartitions: 1,
@@ -139,7 +138,7 @@ func TestApplyConfigFile(t *testing.T) {
 	assert.Equal(t, "queue-1", info.Name)
 	assert.Equal(t, 10*time.Minute, info.LeaseTimeout)
 	assert.Equal(t, 10*time.Minute, info.ExpireTimeout)
-	assert.Equal(t, "queue-1-dead", info.DeadQueue)
+	assert.Equal(t, "", info.DeadQueue)
 	assert.Equal(t, 10, info.MaxAttempts)
 	assert.Equal(t, "test", info.Reference)
 	assert.Equal(t, 1, info.RequestedPartitions)

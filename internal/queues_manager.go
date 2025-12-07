@@ -11,8 +11,10 @@ import (
 	"github.com/kapetan-io/tackle/set"
 	"log/slog"
 	"math"
+	"strings"
 	"sync"
 	"sync/atomic"
+	"unicode"
 )
 
 const MsgServiceInShutdown = "service is shutting down"
@@ -81,6 +83,11 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Que
 	q, ok := qm.queues[info.Name]
 	if ok {
 		return q, transport.NewInvalidOption("invalid queue; '%s' already exists", info.Name)
+	}
+
+	// Validate DLQ configuration before creating queue
+	if err := qm.validateDeadQueue(ctx, info); err != nil {
+		return nil, err
 	}
 
 	// When creating a new Queue, info.PartitionInfo should have no details, but should
@@ -195,6 +202,11 @@ func (qm *QueuesManager) Update(ctx context.Context, info types.QueueInfo) error
 	defer qm.mutex.Unlock()
 	qm.mutex.Lock()
 
+	// Validate DLQ configuration before updating queue
+	if err := qm.validateDeadQueue(ctx, info); err != nil {
+		return err
+	}
+
 	// Update the queue info in the data store
 	info.UpdatedAt = qm.conf.LogicalConfig.Clock.Now().UTC()
 	if err := qm.conf.StorageConfig.Queues.Update(ctx, info); err != nil {
@@ -218,6 +230,52 @@ func (qm *QueuesManager) Update(ctx context.Context, info types.QueueInfo) error
 
 func (qm *QueuesManager) LifeCycle(ctx context.Context, req *types.LifeCycleRequest) error {
 	return nil // TODO(lifecycle)
+}
+
+// validateDeadQueue validates that a dead queue configuration is valid.
+// Returns nil if validation passes, error otherwise.
+func (qm *QueuesManager) validateDeadQueue(ctx context.Context, info types.QueueInfo) error {
+	// No DLQ configured is valid
+	if info.DeadQueue == "" {
+		return nil
+	}
+
+	// Validate DeadQueue format first (before checking existence)
+	const maxQueueNameLength = 500
+	if len(info.DeadQueue) > maxQueueNameLength {
+		return transport.NewInvalidOption("dead queue is invalid; cannot be greater than '%d' characters", maxQueueNameLength)
+	}
+
+	if strings.ContainsFunc(info.DeadQueue, unicode.IsSpace) {
+		return transport.NewInvalidOption("dead queue is invalid; '%s' cannot contain whitespace", info.DeadQueue)
+	}
+
+	if strings.Contains(info.DeadQueue, "~") {
+		return transport.NewInvalidOption("dead queue is invalid; '%s' cannot contain '~' character", info.DeadQueue)
+	}
+
+	// Prevent self-reference
+	if info.DeadQueue == info.Name {
+		return transport.NewInvalidOption("dead_queue cannot reference itself")
+	}
+
+	// Fetch the DLQ to ensure it exists
+	dlq, err := qm.get(ctx, info.DeadQueue)
+	if err != nil {
+		if errors.Is(err, store.ErrQueueNotExist) ||
+		   (func() bool { var e *transport.ErrInvalidOption; return errors.As(err, &e) })() {
+			return transport.NewInvalidOption("dead_queue '%s' does not exist; create it first", info.DeadQueue)
+		}
+		return err
+	}
+
+	// Enforce no DLQ chains: a DLQ cannot have its own DLQ
+	dlqInfo := dlq.Info()
+	if dlqInfo.DeadQueue != "" {
+		return transport.NewInvalidOption("dead_queue '%s' cannot have its own dead_queue", info.DeadQueue)
+	}
+
+	return nil
 }
 
 func (qm *QueuesManager) Delete(ctx context.Context, name string) error {

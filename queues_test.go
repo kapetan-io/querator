@@ -64,10 +64,21 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		t.Run("Create", func(t *testing.T) {
 			var queueName = random.String("queue-", 10)
+			var deadQueueName = queueName + "-dead"
 			now := clock.Now().UTC()
+
+			// Create DLQ first
+			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+				QueueName:           deadQueueName,
+				LeaseTimeout:        "1m",
+				ExpireTimeout:       "10m",
+				RequestedPartitions: 1,
+			}))
+
+			// Create queue with DLQ reference
 			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
 				QueueName:           queueName,
-				DeadQueue:           queueName + "-dead",
+				DeadQueue:           deadQueueName,
 				Reference:           "CreateTestRef",
 				LeaseTimeout:        "1m",
 				ExpireTimeout:       "10m",
@@ -76,7 +87,10 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			}))
 
 			var list pb.QueuesListResponse
-			require.NoError(t, c.QueuesList(ctx, &list, nil))
+			require.NoError(t, c.QueuesList(ctx, &list, &que.ListOptions{
+				Pivot: queueName,
+				Limit: 1,
+			}))
 			require.Equal(t, 1, len(list.Items))
 			assert.Equal(t, queueName, list.Items[0].QueueName)
 			assert.NotEmpty(t, list.Items[0].CreatedAt)
@@ -86,7 +100,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			assert.Equal(t, int32(10), list.Items[0].MaxAttempts)
 			assert.Equal(t, "1m0s", list.Items[0].LeaseTimeout)
 			assert.Equal(t, "10m0s", list.Items[0].ExpireTimeout)
-			assert.Equal(t, queueName+"-dead", list.Items[0].DeadQueue)
+			assert.Equal(t, deadQueueName, list.Items[0].DeadQueue)
 			assert.Equal(t, "CreateTestRef", list.Items[0].Reference)
 		})
 
@@ -294,12 +308,106 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		})
 
 		t.Run("DeadLetterQueue", func(t *testing.T) {
-			// TODO: Test Create with Named DeadLetter queue
-			// Ensure the dead letter queue already exists when specified
-			// dead letter queues MUST be created manually (I think?)
-			t.Run("AvoidCircularQueue", func(t *testing.T) {
-				// TODO: A dead letter queue cannot point to an other queue which itself has a dead letter queue
-				//  a dead letter queue cannot point to it's self.
+			t.Run("Validation", func(t *testing.T) {
+				t.Run("NonExistentDLQ", func(t *testing.T) {
+					queueName := random.String("queue-", 10)
+					err := c.QueuesCreate(ctx, &pb.QueueInfo{
+						QueueName:           queueName,
+						DeadQueue:           "nonexistent-dlq",
+						ExpireTimeout:       "10m",
+						LeaseTimeout:        "1m",
+						RequestedPartitions: 1,
+					})
+					require.Error(t, err)
+					var duhErr duh.Error
+					require.True(t, errors.As(err, &duhErr))
+					assert.Equal(t, duh.CodeBadRequest, duhErr.Code())
+					assert.Contains(t, duhErr.Message(), "does not exist")
+				})
+
+				t.Run("SelfReference", func(t *testing.T) {
+					queueName := random.String("queue-", 10)
+					err := c.QueuesCreate(ctx, &pb.QueueInfo{
+						QueueName:           queueName,
+						DeadQueue:           queueName,
+						ExpireTimeout:       "10m",
+						LeaseTimeout:        "1m",
+						RequestedPartitions: 1,
+					})
+					require.Error(t, err)
+					var duhErr duh.Error
+					require.True(t, errors.As(err, &duhErr))
+					assert.Equal(t, duh.CodeBadRequest, duhErr.Code())
+					assert.Contains(t, duhErr.Message(), "cannot reference itself")
+				})
+
+				t.Run("DLQHasDLQ", func(t *testing.T) {
+					queueC := random.String("queue-c-", 10)
+					queueB := random.String("queue-b-", 10)
+					queueA := random.String("queue-a-", 10)
+
+					// Create queue C (no DLQ)
+					require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+						QueueName:           queueC,
+						ExpireTimeout:       "10m",
+						LeaseTimeout:        "1m",
+						RequestedPartitions: 1,
+					}))
+
+					// Create queue B with DeadQueue = C
+					require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+						QueueName:           queueB,
+						DeadQueue:           queueC,
+						ExpireTimeout:       "10m",
+						LeaseTimeout:        "1m",
+						RequestedPartitions: 1,
+					}))
+
+					// Attempt to create queue A with DeadQueue = B (should fail)
+					err := c.QueuesCreate(ctx, &pb.QueueInfo{
+						QueueName:           queueA,
+						DeadQueue:           queueB,
+						ExpireTimeout:       "10m",
+						LeaseTimeout:        "1m",
+						RequestedPartitions: 1,
+					})
+					require.Error(t, err)
+					var duhErr duh.Error
+					require.True(t, errors.As(err, &duhErr))
+					assert.Equal(t, duh.CodeBadRequest, duhErr.Code())
+					assert.Contains(t, duhErr.Message(), "cannot have its own dead_queue")
+				})
+
+				t.Run("ValidDLQ", func(t *testing.T) {
+					dlqName := random.String("dlq-", 10)
+					queueName := random.String("queue-", 10)
+
+					// Create DLQ queue (no DLQ of its own)
+					require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+						QueueName:           dlqName,
+						ExpireTimeout:       "10m",
+						LeaseTimeout:        "1m",
+						RequestedPartitions: 1,
+					}))
+
+					// Create source queue with valid DeadQueue reference
+					require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+						QueueName:           queueName,
+						DeadQueue:           dlqName,
+						ExpireTimeout:       "10m",
+						LeaseTimeout:        "1m",
+						RequestedPartitions: 1,
+					}))
+
+					// Verify queue was created with correct DLQ
+					var list pb.QueuesListResponse
+					require.NoError(t, c.QueuesList(ctx, &list, &que.ListOptions{
+						Pivot: queueName,
+						Limit: 1,
+					}))
+					require.Equal(t, 1, len(list.Items))
+					assert.Equal(t, dlqName, list.Items[0].DeadQueue)
+				})
 			})
 		})
 
@@ -399,7 +507,6 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		var queueName = random.String("queue-", 10)
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
 			QueueName:           queueName,
-			DeadQueue:           queueName + "-dead",
 			Reference:           "CreateTestRef",
 			LeaseTimeout:        "1m",
 			ExpireTimeout:       "10m",
@@ -829,7 +936,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 				// Verify that we got valid queue info back
 				assert.Equal(t, queueName, resp.QueueName)
-				assert.Equal(t, queueName+"-dead", resp.DeadQueue)
+				assert.Equal(t, "", resp.DeadQueue)
 				assert.Equal(t, "CreateTestRef", resp.Reference)
 				assert.Equal(t, "1m0s", resp.LeaseTimeout)
 				assert.Equal(t, "10m0s", resp.ExpireTimeout)

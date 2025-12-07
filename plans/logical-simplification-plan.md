@@ -361,6 +361,50 @@ go build ./...
 - Action types: `internal/types/actions.go:3-9`
 - Backoff: `lifecycleBackOff.Next(failures)` using `github.com/kapetan-io/tackle/retry.IntervalBackOff` (500ms min, 5s max, factor 1.5, 20% jitter)
 
+### Implementation Issues Discovered (Not in Original Plan)
+
+The following issues were discovered during implementation and required additional fixes:
+
+#### Issue 1: Lifecycle Actions Not Written to Storage
+
+**Problem**: `runLifecycle()` added actions to `partition.LifeCycleRequests`, but the actions were never executed against storage. In the old design, the lifecycle goroutine sent actions to the logical queue via `l.logical.LifeCycle()`, which triggered `applyToPartitions()` to call `TakeAction()`. With the inline approach, there was no mechanism to execute the collected actions.
+
+**Solution**: Added explicit `TakeAction()` calls in both `runLifecycle()` and `runScheduled()` after collecting actions:
+```go
+if len(partition.LifeCycleRequests.Requests) > 0 {
+    ctx, cancel := context.WithTimeout(context.Background(), l.conf.WriteTimeout)
+    partition.Store.TakeAction(ctx, partition.LifeCycleRequests, &partition.State)
+    cancel()
+    partition.LifeCycleRequests.Reset()
+}
+```
+
+#### Issue 2: Timer Not Reset After Lease Notification
+
+**Problem**: When items are leased, the old code called `p.LifeCycle.Notify(leaseDeadline)` to inform the lifecycle when to wake up for expired leases. The new implementation updated `p.Lifecycle.NextLifecycleRun` but did not reset the timer, so the timer would fire at its previously scheduled time (potentially hours in the future).
+
+**Solution**: Added timer reset in `handleHotRequests()` after updating partition lifecycle state:
+```go
+lifecycleUpdated := false
+for _, p := range state.Partitions {
+    if p.State.NumLeased != 0 {
+        now := l.conf.Clock.Now().UTC()
+        if p.State.MostRecentDeadline.After(now) && p.State.MostRecentDeadline.Before(p.Lifecycle.NextLifecycleRun) {
+            p.Lifecycle.NextLifecycleRun = p.State.MostRecentDeadline
+            lifecycleUpdated = true
+        }
+    }
+    p.Reset()
+}
+if lifecycleUpdated {
+    state.LifecycleTimer.Reset(l.minNextLifecycleRun(state))
+}
+```
+
+#### Issue 3: Existing Notification Code in handleHotRequests
+
+**Discovery**: The codebase already had lifecycle notification code at lines 757-766 in the original `handleHotRequests()`. This handled updating `NextLifecycleRun` when leases were created, but the timer reset was missing. No duplication was needed in `applyToPartitions()`.
+
 ---
 
 ## Phase 2: Remove Dual-Channel and Multi-Logical Stubs

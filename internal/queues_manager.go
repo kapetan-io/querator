@@ -179,6 +179,7 @@ func (qm *QueuesManager) get(ctx context.Context, name string) (*Queue, error) {
 		Log:                  qm.conf.Log,
 		StoragePartitions:    partitions,
 		QueueInfo:            queue,
+		Manager:              qm,
 	})
 	if err != nil {
 		return nil, errors.Wrap(err)

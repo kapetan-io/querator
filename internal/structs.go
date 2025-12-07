@@ -4,6 +4,7 @@ import (
 	"context"
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
+	"github.com/kapetan-io/tackle/clock"
 	"log/slog"
 )
 
@@ -11,6 +12,13 @@ const (
 	LevelDebugAll = slog.LevelDebug
 	LevelDebug    = slog.LevelDebug + 1
 )
+
+// PartitionLifecycleState tracks lifecycle timing per partition
+type PartitionLifecycleState struct {
+	NextLifecycleRun clock.Time
+	NextScheduledRun clock.Time
+	Failures         int
+}
 
 // Partition is the in memory representation of the state of a partition.
 type Partition struct {
@@ -26,10 +34,10 @@ type Partition struct {
 	LifeCycleRequests types.Batch[types.LifeCycleRequest]
 	// Store is the storage for this partition
 	Store store.Partition
-	// State is the current state of the partition. It is updated by LifeCycle and storage backends
+	// State is the current state of the partition. It is updated by lifecycle and storage backends
 	State types.PartitionState
-	// LifeCycle is the active life cycle associated with this partition
-	LifeCycle *LifeCycle
+	// Lifecycle tracks per-partition lifecycle timing state
+	Lifecycle PartitionLifecycleState
 	// Info is the info associated with this partition
 	Info types.PartitionInfo
 }

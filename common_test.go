@@ -160,8 +160,8 @@ type postgresTestSetup struct {
 func (p *postgresTestSetup) Setup(conf store.PostgresConfig) store.Config {
 	ctx := context.Background()
 
-	container, err := postgres.RunContainer(ctx,
-		testcontainers.WithImage("postgres:16-alpine"),
+	container, err := postgres.Run(ctx,
+		"postgres:16-alpine",
 		postgres.WithDatabase("querator_test"),
 		postgres.WithUsername("postgres"),
 		postgres.WithPassword("postgres"),

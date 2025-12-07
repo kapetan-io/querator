@@ -815,25 +815,30 @@ func (l *Logical) assignToPartitions(state *QueueState) {
 }
 
 // notifyScheduled iterates through the produced items. If any are scheduled
-// items, then update the partition lifecycle state for the provided partition
-func (l *Logical) notifyScheduled(p *Partition) {
-	// Find the most recent scheduled item in the requests
-	var mostRecentScheduled time.Time
+// items, then update the partition lifecycle state for the provided partition.
+// Returns true if NextScheduledRun was updated.
+func (l *Logical) notifyScheduled(p *Partition) bool {
+	// Find the earliest scheduled item in the requests
+	var earliestScheduled time.Time
 	for _, r := range p.ProduceRequests.Requests {
 		for _, item := range r.Items {
-			if item.EnqueueAt.Before(mostRecentScheduled) {
-				mostRecentScheduled = item.EnqueueAt
+			if !item.EnqueueAt.IsZero() {
+				if earliestScheduled.IsZero() || item.EnqueueAt.Before(earliestScheduled) {
+					earliestScheduled = item.EnqueueAt
+				}
 			}
 		}
 	}
-	if mostRecentScheduled.IsZero() {
-		return
+	if earliestScheduled.IsZero() {
+		return false
 	}
 
 	now := l.conf.Clock.Now().UTC()
-	if mostRecentScheduled.After(now) && mostRecentScheduled.Before(p.Lifecycle.NextScheduledRun) {
-		p.Lifecycle.NextScheduledRun = mostRecentScheduled
+	if earliestScheduled.After(now) && earliestScheduled.Before(p.Lifecycle.NextScheduledRun) {
+		p.Lifecycle.NextScheduledRun = earliestScheduled
+		return true
 	}
+	return false
 }
 
 func (l *Logical) assignProduceRequests(state *QueueState) {
@@ -1001,6 +1006,7 @@ func (l *Logical) applyToPartitions(state *QueueState) {
 	//  writes simultaneously. If one of the partitions is slow, it won't hold up the other
 	//  partitions?
 
+	scheduledUpdated := false
 	for _, p := range state.Partitions {
 		ctx, cancel := context.WithTimeout(context.Background(), l.conf.WriteTimeout)
 
@@ -1013,7 +1019,9 @@ func (l *Logical) applyToPartitions(state *QueueState) {
 			}
 			// Only if Produce was successful
 			p.State.MostRecentDeadline = l.conf.Clock.Now().UTC().Add(l.conf.ExpireTimeout)
-			l.notifyScheduled(p)
+			if l.notifyScheduled(p) {
+				scheduledUpdated = true
+			}
 		}
 
 		// ==== Lease ====
@@ -1082,6 +1090,11 @@ func (l *Logical) applyToPartitions(state *QueueState) {
 
 		}
 		cancel()
+	}
+
+	// Reset scheduled timer if any partition's NextScheduledRun was updated
+	if scheduledUpdated {
+		state.ScheduledTimer.Reset(l.minNextScheduledRun(state))
 	}
 }
 

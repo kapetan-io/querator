@@ -18,7 +18,6 @@ import (
 	"math/rand"
 	"sync"
 	"testing"
-	"time"
 )
 
 func TestQueue(t *testing.T) {
@@ -352,40 +351,92 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			}
 			lastItem = list.Items[len(list.Items)-1]
 		})
+	})
 
-		t.Run("Scheduled", func(t *testing.T) {
-			now := clock.Now().UTC()
-			enqueueAt := now.Add(time.Minute)
-			var items []*pb.QueueProduceItem
-			for i := 0; i < 100; i++ {
-				items = append(items, &pb.QueueProduceItem{
-					Reference: random.String("ref-", 10),
-					Encoding:  random.String("enc-", 10),
-					Kind:      random.String("kind-", 10),
-					Utf8:      fmt.Sprintf("message-%d", i),
-					EnqueueAt: timestamppb.New(enqueueAt),
-				})
-			}
-			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
-				QueueName:      queueName,
-				RequestTimeout: "1m",
-				Items:          items,
-			}))
+	t.Run("Produce/Scheduled", func(t *testing.T) {
+		now := clock.NewProvider()
+		now.Freeze(clock.Now())
+		defer now.UnFreeze()
 
-			// Listing items in the queue should return no new items
-			var list pb.StorageItemsListResponse
-			err := c.StorageItemsList(ctx, queueName, 0, &list,
-				&que.ListOptions{Pivot: lastItem.Id, Limit: 101})
-			require.NoError(t, err)
-			require.Equal(t, 1, len(list.Items))
-
-			produced := list.Items[1:]
-			for i := range produced {
-				assert.False(t, produced[i].EnqueueAt.AsTime().IsZero())
-			}
-
-			// TODO(next): Call ListScheduled and confirm the items were produced as scheduled items
+		var queueName = random.String("queue-", 10)
+		d, c, ctx := newDaemon(t, 60*clock.Second, que.ServiceConfig{
+			StorageConfig: setup(),
+			Clock:         now,
 		})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			RequestedPartitions: 1,
+			LeaseTimeout:        "1m0s",
+			ExpireTimeout:       "24h0m0s",
+			QueueName:           queueName,
+		})
+
+		const numItems = 100
+		enqueueAt := now.Now().Add(1 * clock.Minute)
+		var items []*pb.QueueProduceItem
+		for i := 0; i < numItems; i++ {
+			items = append(items, &pb.QueueProduceItem{
+				Reference: random.String("ref-", 10),
+				Encoding:  random.String("enc-", 10),
+				Kind:      random.String("kind-", 10),
+				Utf8:      fmt.Sprintf("message-%d", i),
+				EnqueueAt: timestamppb.New(enqueueAt),
+			})
+		}
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			RequestTimeout: "1m",
+			QueueName:      queueName,
+			Items:          items,
+		}))
+
+		// Items should appear in StorageScheduledList
+		var scheduled pb.StorageItemsListResponse
+		err := c.StorageScheduledList(ctx, queueName, 0, &scheduled, &que.ListOptions{Limit: 150})
+		require.NoError(t, err)
+		require.Len(t, scheduled.Items, numItems)
+
+		// Items should NOT appear in StorageItemsList
+		var list pb.StorageItemsListResponse
+		err = c.StorageItemsList(ctx, queueName, 0, &list, nil)
+		require.NoError(t, err)
+		require.Empty(t, list.Items)
+
+		// Advance clock past EnqueueAt
+		now.Advance(2 * clock.Minute)
+
+		// Wait for items to appear in StorageItemsList
+		retryPolicy := retry.Policy{Interval: retry.Sleep(100 * clock.Millisecond), Attempts: 50}
+		err = retry.On(ctx, retryPolicy, func(ctx context.Context, i int) error {
+			var resp pb.StorageItemsListResponse
+			if err := c.StorageItemsList(ctx, queueName, 0, &resp, nil); err != nil {
+				return err
+			}
+			if len(resp.Items) != numItems {
+				return fmt.Errorf("expected %d items, got %d", numItems, len(resp.Items))
+			}
+			return nil
+		})
+		require.NoError(t, err)
+
+		// Items should be removed from StorageScheduledList
+		err = c.StorageScheduledList(ctx, queueName, 0, &scheduled, nil)
+		require.NoError(t, err)
+		require.Empty(t, scheduled.Items)
+
+		// Items should now be leasable
+		var lease pb.QueueLeaseResponse
+		err = c.QueueLease(ctx, &pb.QueueLeaseRequest{
+			ClientId:       random.String("client-", 10),
+			RequestTimeout: "5s",
+			QueueName:      queueName,
+			BatchSize:      numItems,
+		}, &lease)
+		require.NoError(t, err)
+		require.Len(t, lease.Items, numItems)
 	})
 
 	t.Run("Lease", func(t *testing.T) {
@@ -1533,6 +1584,53 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				}
 				if item := findInStorageList("durp@pony.com", &resp); item != nil {
 					return fmt.Errorf("expected leased item to be deleted, for '%s'", resp.Items[0].Reference)
+				}
+				return nil
+			})
+			require.NoError(t, err)
+		})
+
+		// Create a queue with short ExpireTimeout for testing
+		queueName = random.String("queue-", 10)
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			LeaseTimeout:        "5s",
+			ExpireTimeout:       "10s",
+			QueueName:           queueName,
+			RequestedPartitions: 1,
+		})
+
+		t.Run("ExpireTimeout", func(t *testing.T) {
+			// Produce an item (without leasing it)
+			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+				QueueName:      queueName,
+				RequestTimeout: "1m",
+				Items: []*pb.QueueProduceItem{
+					{
+						Reference: "applejack@honesty.com",
+						Encoding:  "apples",
+						Kind:      "bucking",
+						Bytes:     []byte("The truth will set you free"),
+					},
+				}}))
+
+			// Verify item exists in storage
+			var resp pb.StorageItemsListResponse
+			err := c.StorageItemsList(ctx, queueName, 0, &resp, nil)
+			require.NoError(t, err)
+			item := findInStorageList("applejack@honesty.com", &resp)
+			require.NotNil(t, item)
+
+			// Advance time past ExpireDeadline (ExpireTimeout is 10s, advance 15s)
+			now.Advance(15 * clock.Second)
+
+			// Wait until the item is deleted
+			err = retry.On(ctx, RetryTenTimes, func(ctx context.Context, i int) error {
+				var resp pb.StorageItemsListResponse
+				if err := c.StorageItemsList(ctx, queueName, 0, &resp, nil); err != nil {
+					return err
+				}
+				if findInStorageList("applejack@honesty.com", &resp) != nil {
+					return fmt.Errorf("expected item to be deleted")
 				}
 				return nil
 			})

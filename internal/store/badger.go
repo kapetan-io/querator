@@ -74,6 +74,19 @@ func (b *BadgerPartition) Produce(_ context.Context, batch types.ProduceBatch, n
 	return db.Update(func(txn *badger.Txn) error {
 		for _, r := range batch.Requests {
 			for _, item := range r.Items {
+				// Check for duplicate SourceID
+				if item.SourceID != nil {
+					sourceKey := []byte("source:" + string(item.SourceID))
+					_, err := txn.Get(sourceKey)
+					if err == nil {
+						// Skip item - duplicate SourceID (idempotent)
+						continue
+					}
+					if !errors.Is(err, badger.ErrKeyNotFound) {
+						return errors.Errorf("checking SourceID: %w", err)
+					}
+				}
+
 				b.uid = b.uid.Next()
 				item.ID = []byte(b.uid.String())
 				item.CreatedAt = now
@@ -99,6 +112,14 @@ func (b *BadgerPartition) Produce(_ context.Context, batch types.ProduceBatch, n
 
 				if err := txn.Set(item.ID, buf.Bytes()); err != nil {
 					return errors.Errorf("during Set(): %w", err)
+				}
+
+				// Add SourceID index if set
+				if item.SourceID != nil {
+					sourceKey := []byte("source:" + string(item.SourceID))
+					if err := txn.Set(sourceKey, item.ID); err != nil {
+						return errors.Errorf("setting SourceID index: %w", err)
+					}
 				}
 			}
 		}
@@ -128,6 +149,13 @@ func (b *BadgerPartition) Lease(_ context.Context, batch types.LeaseBatch, opts 
 		for iter.Rewind(); iter.Valid(); iter.Next() {
 			if count >= batch.TotalRequested {
 				break
+			}
+
+			key := iter.Item().Key()
+
+			// Skip secondary index keys (source:xxx)
+			if bytes.HasPrefix(key, []byte("source:")) {
+				continue
 			}
 
 			var v []byte
@@ -355,6 +383,13 @@ func (b *BadgerPartition) List(_ context.Context, items *[]*types.Item, opts typ
 		}
 
 		for ; iter.Valid(); iter.Next() {
+			key := iter.Item().Key()
+
+			// Skip secondary index keys (source:xxx)
+			if bytes.HasPrefix(key, []byte("source:")) {
+				continue
+			}
+
 			var v []byte
 			v, err := iter.Item().ValueCopy(v)
 			if err != nil {
@@ -406,6 +441,13 @@ func (b *BadgerPartition) ListScheduled(_ context.Context, items *[]*types.Item,
 		}
 
 		for ; iter.Valid(); iter.Next() {
+			key := iter.Item().Key()
+
+			// Skip secondary index keys (source:xxx)
+			if bytes.HasPrefix(key, []byte("source:")) {
+				continue
+			}
+
 			var v []byte
 			v, err := iter.Item().ValueCopy(v)
 			if err != nil {
@@ -446,6 +488,19 @@ func (b *BadgerPartition) Add(_ context.Context, items []*types.Item, now clock.
 	return db.Update(func(txn *badger.Txn) error {
 
 		for _, item := range items {
+			// Check for duplicate SourceID
+			if item.SourceID != nil {
+				sourceKey := []byte("source:" + string(item.SourceID))
+				_, err := txn.Get(sourceKey)
+				if err == nil {
+					// Skip item - duplicate SourceID (idempotent)
+					continue
+				}
+				if !errors.Is(err, badger.ErrKeyNotFound) {
+					return errors.Errorf("checking SourceID: %w", err)
+				}
+			}
+
 			b.uid = b.uid.Next()
 			item.ID = []byte(b.uid.String())
 			item.CreatedAt = now
@@ -458,6 +513,14 @@ func (b *BadgerPartition) Add(_ context.Context, items []*types.Item, now clock.
 
 			if err := txn.Set(item.ID, buf.Bytes()); err != nil {
 				return errors.Errorf("during Put(): %w", err)
+			}
+
+			// Add SourceID index if set
+			if item.SourceID != nil {
+				sourceKey := []byte("source:" + string(item.SourceID))
+				if err := txn.Set(sourceKey, item.ID); err != nil {
+					return errors.Errorf("setting SourceID index: %w", err)
+				}
 			}
 		}
 		return nil
@@ -476,6 +539,33 @@ func (b *BadgerPartition) Delete(_ context.Context, ids []types.ItemID) error {
 			if err := b.validateID(id); err != nil {
 				return transport.NewInvalidOption("invalid storage id; '%s': %s", id, err)
 			}
+
+			// Get the item to check for SourceID
+			kvItem, err := txn.Get(id)
+			if err != nil {
+				if errors.Is(err, badger.ErrKeyNotFound) {
+					// Item doesn't exist, nothing to delete
+					continue
+				}
+				return errors.Errorf("getting item for delete: %w", err)
+			}
+
+			var item types.Item
+			err = kvItem.Value(func(val []byte) error {
+				return gob.NewDecoder(bytes.NewReader(val)).Decode(&item)
+			})
+			if err != nil {
+				return errors.Errorf("decoding item for delete: %w", err)
+			}
+
+			// Delete SourceID index if set
+			if item.SourceID != nil {
+				sourceKey := []byte("source:" + string(item.SourceID))
+				if err := txn.Delete(sourceKey); err != nil {
+					return errors.Errorf("deleting SourceID index: %w", err)
+				}
+			}
+
 			if err := txn.Delete(id); err != nil {
 				return errors.Errorf("during delete: %w", err)
 			}
@@ -553,6 +643,13 @@ func (b *BadgerPartition) ScanForScheduled(_ context.Context, now clock.Time) it
 			defer iter.Close()
 
 			for iter.Rewind(); iter.Valid(); iter.Next() {
+				key := iter.Item().Key()
+
+				// Skip secondary index keys (source:xxx)
+				if bytes.HasPrefix(key, []byte("source:")) {
+					continue
+				}
+
 				var v []byte
 				v, err := iter.Item().ValueCopy(v)
 				if err != nil {
@@ -603,6 +700,13 @@ func (b *BadgerPartition) ScanForActions(_ context.Context, now clock.Time) iter
 			defer iter.Close()
 
 			for iter.Rewind(); iter.Valid(); iter.Next() {
+				key := iter.Item().Key()
+
+				// Skip secondary index keys (source:xxx)
+				if bytes.HasPrefix(key, []byte("source:")) {
+					continue
+				}
+
 				var v []byte
 				v, err := iter.Item().ValueCopy(v)
 				if err != nil {
@@ -842,6 +946,13 @@ func (b *BadgerPartition) Stats(_ context.Context, stats *types.PartitionStats, 
 		defer iter.Close()
 
 		for iter.Rewind(); iter.Valid(); iter.Next() {
+			key := iter.Item().Key()
+
+			// Skip secondary index keys (source:xxx)
+			if bytes.HasPrefix(key, []byte("source:")) {
+				continue
+			}
+
 			var v []byte
 			v, err := iter.Item().ValueCopy(v)
 			if err != nil {

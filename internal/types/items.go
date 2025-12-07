@@ -24,6 +24,8 @@ type Item struct {
 	// ID is unique to each item in the data store. The ID style is different depending on the data store
 	// implementation, and does not include the queue name.
 	ID ItemID
+	// SourceID is the original ID from the source queue (only set for DLQ items, nil otherwise)
+	SourceID ItemID
 	// IsLeased is true if the item has been leased by a client
 	// TODO: Change this to a time stamp, which if non zero is the timestamp when the item was leased
 	IsLeased bool
@@ -60,6 +62,9 @@ type Item struct {
 // TODO: Remove if not needed
 func (i *Item) Compare(r *Item) bool {
 	if !bytes.Equal(i.ID, r.ID) {
+		return false
+	}
+	if !bytes.Equal(i.SourceID, r.SourceID) {
 		return false
 	}
 	if i.IsLeased != r.IsLeased {
@@ -104,6 +109,7 @@ func (i *Item) ToProto(in *pb.StorageItem) *pb.StorageItem {
 	in.Payload = i.Payload
 	in.Kind = i.Kind
 	in.Id = string(i.ID)
+	in.SourceId = string(i.SourceID)
 	return in
 }
 
@@ -119,6 +125,9 @@ func (i *Item) FromProto(in *pb.StorageItem) *Item {
 	i.Payload = in.Payload
 	i.Kind = in.Kind
 	i.ID = []byte(in.Id)
+	if in.SourceId != "" {
+		i.SourceID = []byte(in.SourceId)
+	}
 	return i
 }
 

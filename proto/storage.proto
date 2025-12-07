@@ -51,17 +51,18 @@ message StorageItemsDeleteRequest {
 // StorageItem maps directly to the internal.types.Item and allows users to inspect items in storage
 message StorageItem {
   string id = 1;
-  bool isLeased = 2  [json_name = "is_leased"];
-  google.protobuf.Timestamp leaseDeadline = 3 [json_name = "lease_deadline"];
-  google.protobuf.Timestamp expireDeadline = 4 [json_name = "expire_deadline"];
-  google.protobuf.Timestamp deadDeadline = 5 [json_name = "dead_deadline"];
-  google.protobuf.Timestamp createdAt = 6 [json_name = "created_at"];
-  google.protobuf.Timestamp updatedAt = 7 [json_name = "updated_at"];
-  google.protobuf.Timestamp enqueueAt = 8 [json_name = "enqueue_at"];
-  int32 attempts = 9;
-  int32 maxAttempts = 10 [json_name = "max_attempts"];
-  string reference = 11;
-  string encoding = 12;
-  string kind = 13;
-  bytes payload = 14;
+  string source_id = 2 [json_name = "source_id"];
+  bool isLeased = 3  [json_name = "is_leased"];
+  google.protobuf.Timestamp leaseDeadline = 4 [json_name = "lease_deadline"];
+  google.protobuf.Timestamp expireDeadline = 5 [json_name = "expire_deadline"];
+  google.protobuf.Timestamp deadDeadline = 6 [json_name = "dead_deadline"];
+  google.protobuf.Timestamp createdAt = 7 [json_name = "created_at"];
+  google.protobuf.Timestamp updatedAt = 8 [json_name = "updated_at"];
+  google.protobuf.Timestamp enqueueAt = 9 [json_name = "enqueue_at"];
+  int32 attempts = 10;
+  int32 maxAttempts = 11 [json_name = "max_attempts"];
+  string reference = 12;
+  string encoding = 13;
+  string kind = 14;
+  bytes payload = 15;
 }

@@ -1649,6 +1649,174 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	// t.Run("ExpireTimeout", func(t *testing.T) {
 	// 	// TODO: Test with and without a dead letter queue
 	// })
+
+	t.Run("SourceID", func(t *testing.T) {
+		var queueName = random.String("queue-", 10)
+		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: setup()})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			LeaseTimeout:        LeaseTimeout,
+			ExpireTimeout:       ExpireTimeout,
+			QueueName:           queueName,
+			RequestedPartitions: 1,
+		})
+
+		t.Run("ImportWithSourceID", func(t *testing.T) {
+			sourceID := random.String("source-", 10)
+
+			// Import an item with SourceID set
+			var importResp pb.StorageItemsImportResponse
+			require.NoError(t, c.StorageItemsImport(ctx, &pb.StorageItemsImportRequest{
+				QueueName: queueName,
+				Partition: 0,
+				Items: []*pb.StorageItem{
+					{
+						SourceId:       sourceID,
+						Reference:      "test-ref",
+						Encoding:       "test-enc",
+						Kind:           "test-kind",
+						Payload:        []byte("test payload"),
+						ExpireDeadline: timestamppb.New(clock.Now().UTC().Add(1 * clock.Hour)),
+						MaxAttempts:    3,
+					},
+				},
+			}, &importResp))
+
+			// List items and verify SourceID is preserved
+			var resp pb.StorageItemsListResponse
+			require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &resp, nil))
+			require.Len(t, resp.Items, 1)
+			assert.Equal(t, sourceID, resp.Items[0].SourceId)
+			assert.Equal(t, "test-ref", resp.Items[0].Reference)
+		})
+
+		t.Run("DuplicateSourceIDIgnored", func(t *testing.T) {
+			sourceID := random.String("source-", 10)
+
+			// Import first item with SourceID
+			var importResp1 pb.StorageItemsImportResponse
+			require.NoError(t, c.StorageItemsImport(ctx, &pb.StorageItemsImportRequest{
+				QueueName: queueName,
+				Partition: 0,
+				Items: []*pb.StorageItem{
+					{
+						SourceId:       sourceID,
+						Reference:      "first-ref",
+						Encoding:       "test-enc",
+						Kind:           "test-kind",
+						Payload:        []byte("first payload"),
+						ExpireDeadline: timestamppb.New(clock.Now().UTC().Add(1 * clock.Hour)),
+						MaxAttempts:    3,
+					},
+				},
+			}, &importResp1))
+
+			// Import second item with same SourceID
+			var importResp2 pb.StorageItemsImportResponse
+			require.NoError(t, c.StorageItemsImport(ctx, &pb.StorageItemsImportRequest{
+				QueueName: queueName,
+				Partition: 0,
+				Items: []*pb.StorageItem{
+					{
+						SourceId:       sourceID,
+						Reference:      "second-ref",
+						Encoding:       "test-enc",
+						Kind:           "test-kind",
+						Payload:        []byte("second payload"),
+						ExpireDeadline: timestamppb.New(clock.Now().UTC().Add(1 * clock.Hour)),
+						MaxAttempts:    3,
+					},
+				},
+			}, &importResp2))
+
+			// Verify only one item exists (duplicate was ignored)
+			var resp pb.StorageItemsListResponse
+			require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &resp, nil))
+
+			// Find items with this SourceID
+			var count int
+			for _, item := range resp.Items {
+				if item.SourceId == sourceID {
+					count++
+					assert.Equal(t, "first-ref", item.Reference)
+				}
+			}
+			assert.Equal(t, 1, count)
+		})
+
+		t.Run("SourceIDPreservedOnList", func(t *testing.T) {
+			sourceID := random.String("source-", 10)
+
+			// Import item with SourceID
+			var importResp pb.StorageItemsImportResponse
+			require.NoError(t, c.StorageItemsImport(ctx, &pb.StorageItemsImportRequest{
+				QueueName: queueName,
+				Partition: 0,
+				Items: []*pb.StorageItem{
+					{
+						SourceId:       sourceID,
+						Reference:      "preserve-test",
+						Encoding:       "test-enc",
+						Kind:           "test-kind",
+						Payload:        []byte("test payload"),
+						ExpireDeadline: timestamppb.New(clock.Now().UTC().Add(1 * clock.Hour)),
+						MaxAttempts:    3,
+					},
+				},
+			}, &importResp))
+
+			// List items via public API
+			var resp pb.StorageItemsListResponse
+			require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &resp, nil))
+
+			// Find and verify our item
+			var found bool
+			for _, item := range resp.Items {
+				if item.Reference == "preserve-test" {
+					found = true
+					assert.Equal(t, sourceID, item.SourceId)
+				}
+			}
+			require.True(t, found)
+		})
+
+		t.Run("ItemsWithoutSourceID", func(t *testing.T) {
+			// Import item without SourceID
+			var importResp pb.StorageItemsImportResponse
+			require.NoError(t, c.StorageItemsImport(ctx, &pb.StorageItemsImportRequest{
+				QueueName: queueName,
+				Partition: 0,
+				Items: []*pb.StorageItem{
+					{
+						Reference:      "no-source-id",
+						Encoding:       "test-enc",
+						Kind:           "test-kind",
+						Payload:        []byte("test payload"),
+						ExpireDeadline: timestamppb.New(clock.Now().UTC().Add(1 * clock.Hour)),
+						MaxAttempts:    3,
+					},
+				},
+			}, &importResp))
+
+			// List items and verify SourceID is empty/nil for regular items
+			var resp pb.StorageItemsListResponse
+			require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &resp, nil))
+
+			// Find and verify our item
+			var found bool
+			for _, item := range resp.Items {
+				if item.Reference == "no-source-id" {
+					found = true
+					assert.Empty(t, item.SourceId)
+				}
+			}
+			require.True(t, found)
+		})
+	})
 }
 
 // TODO: Start the Service, produce some items, then Shutdown the service

@@ -552,6 +552,7 @@ func (p *PostgresPartition) createTableAndIndexes(ctx context.Context, pool *pgx
 	_, err := pool.Exec(ctx, fmt.Sprintf(`
 		CREATE TABLE IF NOT EXISTS %s (
 			id TEXT COLLATE "C" PRIMARY KEY,
+			source_id TEXT,
 			is_leased BOOLEAN NOT NULL DEFAULT false,
 			lease_deadline TIMESTAMPTZ,
 			expire_deadline TIMESTAMPTZ NOT NULL,
@@ -569,6 +570,14 @@ func (p *PostgresPartition) createTableAndIndexes(ctx context.Context, pool *pgx
 			p.conf.Log.Error("Failed to create PostgreSQL table", "error", err, "table", table)
 		}
 		return errors.Errorf("create table: %w", err)
+	}
+
+	// Add partial unique index for source_id
+	sourceIdxName := pgx.Identifier{fmt.Sprintf("idx_%s_%d_src", hash, p.info.PartitionNum)}.Sanitize()
+	_, err = pool.Exec(ctx, fmt.Sprintf(`
+		CREATE UNIQUE INDEX IF NOT EXISTS %s ON %s (source_id) WHERE source_id IS NOT NULL`, sourceIdxName, table))
+	if err != nil {
+		return errors.Errorf("create source_id index: %w", err)
 	}
 
 	_, err = pool.Exec(ctx, fmt.Sprintf(`
@@ -653,12 +662,30 @@ func (p *PostgresPartition) Produce(ctx context.Context, batch types.ProduceBatc
 				item.EnqueueAt = timeToMicroseconds(item.EnqueueAt)
 			}
 
-			pgxBatch.Queue(`
-				INSERT INTO `+p.tableName()+` (
-					id, is_leased, lease_deadline, expire_deadline, enqueue_at, created_at,
-					attempts, max_attempts, reference, encoding, kind, payload
-				) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+			var sourceID interface{}
+			if item.SourceID != nil {
+				sourceID = string(item.SourceID)
+			}
+
+			var query string
+			if sourceID != nil {
+				query = `
+					INSERT INTO ` + p.tableName() + ` (
+						id, source_id, is_leased, lease_deadline, expire_deadline, enqueue_at, created_at,
+						attempts, max_attempts, reference, encoding, kind, payload
+					) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+					ON CONFLICT (source_id) WHERE source_id IS NOT NULL DO NOTHING`
+			} else {
+				query = `
+					INSERT INTO ` + p.tableName() + ` (
+						id, source_id, is_leased, lease_deadline, expire_deadline, enqueue_at, created_at,
+						attempts, max_attempts, reference, encoding, kind, payload
+					) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`
+			}
+
+			pgxBatch.Queue(query,
 				string(item.ID),
+				sourceID,
 				item.IsLeased,
 				timeToNullable(item.LeaseDeadline),
 				item.ExpireDeadline,
@@ -707,7 +734,7 @@ func (p *PostgresPartition) Lease(ctx context.Context, batch types.LeaseBatch, o
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	query := `
-		SELECT id, is_leased, lease_deadline, expire_deadline, enqueue_at, created_at,
+		SELECT id, source_id, is_leased, lease_deadline, expire_deadline, enqueue_at, created_at,
 		       attempts, max_attempts, reference, encoding, kind, payload
 		FROM ` + p.tableName() + `
 		WHERE is_leased = false AND enqueue_at IS NULL
@@ -727,9 +754,11 @@ func (p *PostgresPartition) Lease(ctx context.Context, batch types.LeaseBatch, o
 	for rows.Next() {
 		var item types.Item
 		var leaseDeadline, enqueueAt sql.NullTime
+		var sourceID sql.NullString
 
 		err := rows.Scan(
 			&item.ID,
+			&sourceID,
 			&item.IsLeased,
 			&leaseDeadline,
 			&item.ExpireDeadline,
@@ -746,6 +775,9 @@ func (p *PostgresPartition) Lease(ctx context.Context, batch types.LeaseBatch, o
 			return errors.Errorf("scan item: %w", err)
 		}
 
+		if sourceID.Valid {
+			item.SourceID = []byte(sourceID.String)
+		}
 		if leaseDeadline.Valid {
 			item.LeaseDeadline = leaseDeadline.Time
 		}
@@ -965,7 +997,7 @@ func (p *PostgresPartition) List(ctx context.Context, items *[]*types.Item, opts
 	}
 
 	query := `
-		SELECT id, is_leased, lease_deadline, expire_deadline, enqueue_at, created_at,
+		SELECT id, source_id, is_leased, lease_deadline, expire_deadline, enqueue_at, created_at,
 		       attempts, max_attempts, reference, encoding, kind, payload
 		FROM ` + p.tableName() + `
 		WHERE enqueue_at IS NULL AND id >= $1
@@ -981,9 +1013,11 @@ func (p *PostgresPartition) List(ctx context.Context, items *[]*types.Item, opts
 	for rows.Next() {
 		item := new(types.Item)
 		var leaseDeadline, enqueueAt sql.NullTime
+		var sourceID sql.NullString
 
 		err := rows.Scan(
 			&item.ID,
+			&sourceID,
 			&item.IsLeased,
 			&leaseDeadline,
 			&item.ExpireDeadline,
@@ -1000,6 +1034,9 @@ func (p *PostgresPartition) List(ctx context.Context, items *[]*types.Item, opts
 			return errors.Errorf("scan item: %w", err)
 		}
 
+		if sourceID.Valid {
+			item.SourceID = []byte(sourceID.String)
+		}
 		if leaseDeadline.Valid {
 			item.LeaseDeadline = leaseDeadline.Time
 		}
@@ -1032,7 +1069,7 @@ func (p *PostgresPartition) ListScheduled(ctx context.Context, items *[]*types.I
 	}
 
 	query := `
-		SELECT id, is_leased, lease_deadline, expire_deadline, enqueue_at, created_at,
+		SELECT id, source_id, is_leased, lease_deadline, expire_deadline, enqueue_at, created_at,
 		       attempts, max_attempts, reference, encoding, kind, payload
 		FROM ` + p.tableName() + `
 		WHERE enqueue_at IS NOT NULL AND id >= $1
@@ -1048,9 +1085,11 @@ func (p *PostgresPartition) ListScheduled(ctx context.Context, items *[]*types.I
 	for rows.Next() {
 		item := new(types.Item)
 		var leaseDeadline, enqueueAt sql.NullTime
+		var sourceID sql.NullString
 
 		err := rows.Scan(
 			&item.ID,
+			&sourceID,
 			&item.IsLeased,
 			&leaseDeadline,
 			&item.ExpireDeadline,
@@ -1067,6 +1106,9 @@ func (p *PostgresPartition) ListScheduled(ctx context.Context, items *[]*types.I
 			return errors.Errorf("scan item: %w", err)
 		}
 
+		if sourceID.Valid {
+			item.SourceID = []byte(sourceID.String)
+		}
 		if leaseDeadline.Valid {
 			item.LeaseDeadline = leaseDeadline.Time
 		}
@@ -1112,12 +1154,30 @@ func (p *PostgresPartition) Add(ctx context.Context, items []*types.Item, now cl
 			item.EnqueueAt = timeToMicroseconds(item.EnqueueAt)
 		}
 
-		pgxBatch.Queue(`
-			INSERT INTO `+p.tableName()+` (
-				id, is_leased, lease_deadline, expire_deadline, enqueue_at, created_at,
-				attempts, max_attempts, reference, encoding, kind, payload
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+		var sourceID interface{}
+		if item.SourceID != nil {
+			sourceID = string(item.SourceID)
+		}
+
+		var query string
+		if sourceID != nil {
+			query = `
+				INSERT INTO ` + p.tableName() + ` (
+					id, source_id, is_leased, lease_deadline, expire_deadline, enqueue_at, created_at,
+					attempts, max_attempts, reference, encoding, kind, payload
+				) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+				ON CONFLICT (source_id) WHERE source_id IS NOT NULL DO NOTHING`
+		} else {
+			query = `
+				INSERT INTO ` + p.tableName() + ` (
+					id, source_id, is_leased, lease_deadline, expire_deadline, enqueue_at, created_at,
+					attempts, max_attempts, reference, encoding, kind, payload
+				) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`
+		}
+
+		pgxBatch.Queue(query,
 			string(item.ID),
+			sourceID,
 			item.IsLeased,
 			timeToNullable(item.LeaseDeadline),
 			item.ExpireDeadline,

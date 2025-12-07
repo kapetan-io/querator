@@ -94,9 +94,3 @@ type StorageRequest struct {
 	// ListKind the kind of item to list
 	ListKind types.ListKind
 }
-
-func Assert(condition bool, message string) {
-	if !condition {
-		panic(message)
-	}
-}

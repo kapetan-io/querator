@@ -53,10 +53,6 @@ func GenerateProduceItems(count int, payloadSize PayloadSize, seed int) []*pb.Qu
 	return items
 }
 
-func GenerateBatchSizes() []int {
-	return []int{1, 10, 100, 1000}
-}
-
 type OperationType string
 
 const (

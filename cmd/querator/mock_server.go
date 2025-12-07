@@ -15,10 +15,11 @@ import (
 )
 
 // MockServer captures HTTP requests for testing CLI commands.
-// This mock server implementation provides a better testing approach compared to 
+// This mock server implementation provides a better testing approach compared to
 // running full querator instances. It captures all requests sent by CLI commands
 // and returns appropriate mock responses, allowing tests to verify that CLI
 // commands send correct API requests without requiring a full server setup.
+// TODO: Remove this and prefer starting a REAL querator instance
 type MockServer struct {
 	server   *httptest.Server
 	mu       sync.RWMutex

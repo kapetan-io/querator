@@ -181,7 +181,3 @@ type LifeCycleRequest struct {
 	PartitionNum   int
 }
 
-type PartitionStateChange struct {
-	State        PartitionState
-	PartitionNum int
-}

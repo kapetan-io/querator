@@ -140,12 +140,12 @@ func (ms *MockServer) respondToRequest(w http.ResponseWriter, r *http.Request, r
 	}
 }
 
-func (ms *MockServer) handleQueueProduce(w http.ResponseWriter, req CapturedRequest) {
+func (ms *MockServer) handleQueueProduce(w http.ResponseWriter, _ CapturedRequest) {
 	reply := &v1.Reply{Code: duh.CodeOK}
 	ms.writeProtoResponse(w, reply)
 }
 
-func (ms *MockServer) handleQueueLease(w http.ResponseWriter, req CapturedRequest) {
+func (ms *MockServer) handleQueueLease(w http.ResponseWriter, _ CapturedRequest) {
 	resp := &proto.QueueLeaseResponse{
 		QueueName: "test-queue",
 		Partition: 0,
@@ -154,17 +154,17 @@ func (ms *MockServer) handleQueueLease(w http.ResponseWriter, req CapturedReques
 	ms.writeProtoResponse(w, resp)
 }
 
-func (ms *MockServer) handleQueueComplete(w http.ResponseWriter, req CapturedRequest) {
+func (ms *MockServer) handleQueueComplete(w http.ResponseWriter, _ CapturedRequest) {
 	reply := &v1.Reply{Code: duh.CodeOK}
 	ms.writeProtoResponse(w, reply)
 }
 
-func (ms *MockServer) handleQueuesCreate(w http.ResponseWriter, req CapturedRequest) {
+func (ms *MockServer) handleQueuesCreate(w http.ResponseWriter, _ CapturedRequest) {
 	reply := &v1.Reply{Code: duh.CodeOK}
 	ms.writeProtoResponse(w, reply)
 }
 
-func (ms *MockServer) handleQueuesList(w http.ResponseWriter, req CapturedRequest) {
+func (ms *MockServer) handleQueuesList(w http.ResponseWriter, _ CapturedRequest) {
 	resp := &proto.QueuesListResponse{
 		Items: []*proto.QueueInfo{
 			{
@@ -178,17 +178,17 @@ func (ms *MockServer) handleQueuesList(w http.ResponseWriter, req CapturedReques
 	ms.writeProtoResponse(w, resp)
 }
 
-func (ms *MockServer) handleQueuesUpdate(w http.ResponseWriter, req CapturedRequest) {
+func (ms *MockServer) handleQueuesUpdate(w http.ResponseWriter, _ CapturedRequest) {
 	reply := &v1.Reply{Code: duh.CodeOK}
 	ms.writeProtoResponse(w, reply)
 }
 
-func (ms *MockServer) handleQueuesDelete(w http.ResponseWriter, req CapturedRequest) {
+func (ms *MockServer) handleQueuesDelete(w http.ResponseWriter, _ CapturedRequest) {
 	reply := &v1.Reply{Code: duh.CodeOK}
 	ms.writeProtoResponse(w, reply)
 }
 
-func (ms *MockServer) handleQueuesInfo(w http.ResponseWriter, req CapturedRequest) {
+func (ms *MockServer) handleQueuesInfo(w http.ResponseWriter, _ CapturedRequest) {
 	resp := &proto.QueueInfo{
 		QueueName:           "test-queue",
 		LeaseTimeout:        "1m",

@@ -28,15 +28,16 @@ import (
 	pb "github.com/kapetan-io/querator/proto"
 )
 
+//nolint:gocritic // exitAfterDefer: we manually call cancel() before each log.Fatalf
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	// Create daemon with default config (localhost:2319, in-memory storage)
 	d, err := daemon.NewDaemon(ctx, daemon.Config{})
 	if err != nil {
+		cancel()
 		log.Fatalf("Failed to create daemon: %v", err)
 	}
+	defer cancel()
 
 	// Setup graceful shutdown
 	sigChan := make(chan os.Signal, 1)
@@ -71,6 +72,7 @@ func main() {
 		Reference:     "embedded-example",
 	})
 	if err != nil {
+		cancel()
 		log.Fatalf("Failed to create queue: %v", err)
 	}
 	log.Printf("Created queue: %s", queueName)
@@ -93,6 +95,7 @@ func main() {
 		},
 	})
 	if err != nil {
+		cancel()
 		log.Fatalf("Failed to produce items: %v", err)
 	}
 	log.Println("Produced 2 items to queue")
@@ -106,6 +109,7 @@ func main() {
 		RequestTimeout: "30s",
 	}, &leaseResp)
 	if err != nil {
+		cancel()
 		log.Fatalf("Failed to lease items: %v", err)
 	}
 
@@ -132,6 +136,7 @@ func main() {
 			Ids:            itemIds,
 		})
 		if err != nil {
+			cancel()
 			log.Fatalf("Failed to complete items: %v", err)
 		}
 		log.Printf("Completed %d items", len(itemIds))

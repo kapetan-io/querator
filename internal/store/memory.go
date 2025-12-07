@@ -316,13 +316,13 @@ func (m *MemoryPartition) UpdateQueueInfo(info types.QueueInfo) {
 	m.info.Queue = info
 }
 
-func (m *MemoryPartition) ScanForScheduled(_ clock.Duration, now clock.Time) iter.Seq[types.Action] {
+func (m *MemoryPartition) ScanForScheduled(_ context.Context, now clock.Time) iter.Seq2[types.Action, error] {
 	m.mu.RLock()
 	memCopy := make([]types.Item, len(m.mem))
 	copy(memCopy, m.mem)
 	m.mu.RUnlock()
 
-	return func(yield func(types.Action) bool) {
+	return func(yield func(types.Action, error) bool) {
 		for _, item := range memCopy {
 			// Skip non-scheduled items
 			if item.EnqueueAt.IsZero() {
@@ -332,25 +332,26 @@ func (m *MemoryPartition) ScanForScheduled(_ clock.Duration, now clock.Time) ite
 			// NOTE: Different implementations might not include the entire item in the action if
 			// only the id is needed to enqueue the item in place.
 			if now.After(item.EnqueueAt) {
-				yield(types.Action{
+				if !yield(types.Action{
 					Action:       types.ActionQueueScheduledItem,
 					PartitionNum: m.info.PartitionNum,
 					Queue:        m.info.Queue.Name,
 					Item:         item,
-				})
-				continue
+				}, nil) {
+					return
+				}
 			}
 		}
 	}
 }
 
-func (m *MemoryPartition) ScanForActions(_ clock.Duration, now clock.Time) iter.Seq[types.Action] {
+func (m *MemoryPartition) ScanForActions(_ context.Context, now clock.Time) iter.Seq2[types.Action, error] {
 	m.mu.RLock()
 	memCopy := make([]types.Item, len(m.mem))
 	copy(memCopy, m.mem)
 	m.mu.RUnlock()
 
-	return func(yield func(types.Action) bool) {
+	return func(yield func(types.Action, error) bool) {
 		for _, item := range memCopy {
 			// Skip scheduled items
 			if !item.EnqueueAt.IsZero() {
@@ -359,12 +360,14 @@ func (m *MemoryPartition) ScanForActions(_ clock.Duration, now clock.Time) iter.
 			// Is the leased item expired?
 			if item.IsLeased {
 				if now.After(item.LeaseDeadline) {
-					yield(types.Action{
+					if !yield(types.Action{
 						Action:       types.ActionLeaseExpired,
 						PartitionNum: m.info.PartitionNum,
 						Queue:        m.info.Queue.Name,
 						Item:         item,
-					})
+					}, nil) {
+						return
+					}
 					continue
 				}
 				// NOTE: This wll catch any items which may have been left in the data store
@@ -372,23 +375,27 @@ func (m *MemoryPartition) ScanForActions(_ clock.Duration, now clock.Time) iter.
 				// defined and retry inserted the item into the dead letter, but failed to remove it
 				// due to partition error or catastrophic failure of querator before it could be removed.
 				if m.info.Queue.MaxAttempts != 0 && item.Attempts >= m.info.Queue.MaxAttempts {
-					yield(types.Action{
+					if !yield(types.Action{
 						Action:       types.ActionItemMaxAttempts,
 						PartitionNum: m.info.PartitionNum,
 						Queue:        m.info.Queue.Name,
 						Item:         item,
-					})
+					}, nil) {
+						return
+					}
 					continue
 				}
 			}
 			// Is the item expired?
 			if now.After(item.ExpireDeadline) {
-				yield(types.Action{
+				if !yield(types.Action{
 					Action:       types.ActionItemExpired,
 					PartitionNum: m.info.PartitionNum,
 					Queue:        m.info.Queue.Name,
 					Item:         item,
-				})
+				}, nil) {
+					return
+				}
 				continue
 			}
 		}

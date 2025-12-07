@@ -55,9 +55,9 @@ func TestQueue(t *testing.T) {
 				postgres.Teardown()
 			},
 		},
-		//{
-		//	Name: "SurrealDB",
-		//},
+		// {
+		// 	Name: "SurrealDB",
+		// },
 	} {
 		t.Run(tc.Name, func(t *testing.T) {
 			testQueue(t, tc.Setup, tc.TearDown)
@@ -684,90 +684,90 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		})
 	})
 
-	//t.Run("Scheduled", func(t *testing.T) {
-	//	now := clock.NewProvider()
-	//	now.Freeze(clock.Now())
-	//	defer now.UnFreeze()
+	// t.Run("Scheduled", func(t *testing.T) {
+	// 	now := clock.NewProvider()
+	// 	now.Freeze(clock.Now())
+	// 	defer now.UnFreeze()
 	//
-	//	var queueName = random.String("queue-", 10)
-	//	d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: setup(), Clock: now})
-	//defer func() {
-	//	d.Shutdown(t)
-	//	tearDown()
-	//}()
+	// 	var queueName = random.String("queue-", 10)
+	// 	d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: setup(), Clock: now})
+	// defer func() {
+	// 	d.Shutdown(t)
+	// 	tearDown()
+	// }()
 	//
-	//	// Create a queue
-	//	createQueueAndWait(t, ctx, c, &pb.QueueInfo{
-	//		LeaseTimeout:        LeaseTimeout,
-	//		ExpireTimeout:       ExpireTimeout,
-	//		QueueName:           queueName,
-	//		RequestedPartitions: 1,
-	//	})
+	// 	// Create a queue
+	// 	createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+	// 		LeaseTimeout:        LeaseTimeout,
+	// 		ExpireTimeout:       ExpireTimeout,
+	// 		QueueName:           queueName,
+	// 		RequestedPartitions: 1,
+	// 	})
 	//
-	//	// Produce a single message
-	//	ref := random.String("ref-", 10)
-	//	enc := random.String("enc-", 10)
-	//	kind := random.String("kind-", 10)
-	//	payload := []byte("I didn't learn a thing. I was right all along")
-	//	require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
-	//		QueueName:      queueName,
-	//		RequestTimeout: "1m",
-	//		Items: []*pb.QueueProduceItem{
-	//			{
-	//				Reference: ref,
-	//				Encoding:  enc,
-	//				Kind:      kind,
-	//				Bytes:     payload,
-	//			},
-	//		},
-	//	}))
+	// 	// Produce a single message
+	// 	ref := random.String("ref-", 10)
+	// 	enc := random.String("enc-", 10)
+	// 	kind := random.String("kind-", 10)
+	// 	payload := []byte("I didn't learn a thing. I was right all along")
+	// 	require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+	// 		QueueName:      queueName,
+	// 		RequestTimeout: "1m",
+	// 		Items: []*pb.QueueProduceItem{
+	// 			{
+	// 				Reference: ref,
+	// 				Encoding:  enc,
+	// 				Kind:      kind,
+	// 				Bytes:     payload,
+	// 			},
+	// 		},
+	// 	}))
 	//
-	//	// TODO(scheduled) Produce a scheduled item in the future
-	//	// TODO: Lease should only return the item produced, and no others
-	//	// TODO: Advance time until scheduled items are placed into the queue
-	//	// TODO: Should lease the items scheduled for produce.
+	// 	// TODO(scheduled) Produce a scheduled item in the future
+	// 	// TODO: Lease should only return the item produced, and no others
+	// 	// TODO: Advance time until scheduled items are placed into the queue
+	// 	// TODO: Should lease the items scheduled for produce.
 	//
-	//	// Lease a single message
-	//	var lease pb.QueueLeaseResponse
-	//	require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
-	//		ClientId:       random.String("client-", 10),
-	//		RequestTimeout: "5s",
-	//		QueueName:      queueName,
-	//		BatchSize:      1,
-	//	}, &lease))
+	// 	// Lease a single message
+	// 	var lease pb.QueueLeaseResponse
+	// 	require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+	// 		ClientId:       random.String("client-", 10),
+	// 		RequestTimeout: "5s",
+	// 		QueueName:      queueName,
+	// 		BatchSize:      1,
+	// 	}, &lease))
 	//
-	//	// Ensure we got the item we produced
-	//	assert.Equal(t, 1, len(lease.Items))
-	//	item := lease.Items[0]
-	//	assert.Equal(t, ref, item.Reference)
-	//	assert.Equal(t, enc, item.Encoding)
-	//	assert.Equal(t, kind, item.Kind)
-	//	assert.Equal(t, int32(1), item.Attempts)
-	//	assert.Equal(t, payload, item.Bytes)
+	// 	// Ensure we got the item we produced
+	// 	assert.Equal(t, 1, len(lease.Items))
+	// 	item := lease.Items[0]
+	// 	assert.Equal(t, ref, item.Reference)
+	// 	assert.Equal(t, enc, item.Encoding)
+	// 	assert.Equal(t, kind, item.Kind)
+	// 	assert.Equal(t, int32(1), item.Attempts)
+	// 	assert.Equal(t, payload, item.Bytes)
 	//
-	//	// TODO(scheduled) Add a StorageScheduledList() client and endpoint
+	// 	// TODO(scheduled) Add a StorageScheduledList() client and endpoint
 	//
-	//	// Partition storage should have scheduled items
-	//	//var list pb.StorageItemsListResponse
-	//	//require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, &que.ListOptions{Limit: 10}))
-	//	//require.Equal(t, 1, len(list.Items))
+	// 	// Partition storage should have scheduled items
+	// 	// var list pb.StorageItemsListResponse
+	// 	// require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, &que.ListOptions{Limit: 10}))
+	// 	// require.Equal(t, 1, len(list.Items))
 	//
-	//	//inspect := list.Items[0]
-	//	//assert.Equal(t, ref, inspect.Reference)
-	//	//assert.Equal(t, kind, inspect.Kind)
-	//	//assert.Equal(t, int32(1), inspect.Attempts)
-	//	//assert.Equal(t, payload, inspect.Payload)
-	//	//assert.Equal(t, item.Id, inspect.Id)
-	//	//assert.Equal(t, true, inspect.IsLeased)
+	// 	// inspect := list.Items[0]
+	// 	// assert.Equal(t, ref, inspect.Reference)
+	// 	// assert.Equal(t, kind, inspect.Kind)
+	// 	// assert.Equal(t, int32(1), inspect.Attempts)
+	// 	// assert.Equal(t, payload, inspect.Payload)
+	// 	// assert.Equal(t, item.Id, inspect.Id)
+	// 	// assert.Equal(t, true, inspect.IsLeased)
 	//
-	//	// Remove queue
-	//	require.NoError(t, c.QueuesDelete(ctx, &pb.QueuesDeleteRequest{QueueName: queueName}))
-	//	var queues pb.QueuesListResponse
-	//	require.NoError(t, c.QueuesList(ctx, &queues, &que.ListOptions{Limit: 10}))
-	//	for _, q := range queues.Items {
-	//		assert.NotEqual(t, q.QueueName, queueName)
-	//	}
-	//})
+	// 	// Remove queue
+	// 	require.NoError(t, c.QueuesDelete(ctx, &pb.QueuesDeleteRequest{QueueName: queueName}))
+	// 	var queues pb.QueuesListResponse
+	// 	require.NoError(t, c.QueuesList(ctx, &queues, &que.ListOptions{Limit: 10}))
+	// 	for _, q := range queues.Items {
+	// 		assert.NotEqual(t, q.QueueName, queueName)
+	// 	}
+	// })
 
 	t.Run("Stats", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
@@ -793,7 +793,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		require.NoError(t, c.QueueProduce(ctx, &produce))
 
 		// TODO: Reload the partition now that new items have been added to the underlying storage.
-		//c.QueueReload(ctx, queueName)
+		// c.QueueReload(ctx, queueName)
 
 		req := pb.QueueLeaseRequest{
 			ClientId:       clientID,
@@ -1539,18 +1539,18 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			require.NoError(t, err)
 		})
 
-		//t.Run("UntilDeadLetter", func(t *testing.T) {
-		//	// Produce an item
-		//	// Lease it
-		//	// Wait for the Timeout
-		//	// Repeat until max attempts reached
-		//})
+		// t.Run("UntilDeadLetter", func(t *testing.T) {
+		// 	// Produce an item
+		// 	// Lease it
+		// 	// Wait for the Timeout
+		// 	// Repeat until max attempts reached
+		// })
 	})
 
-	//t.Run("RequestTimeouts", func(t *testing.T) {})
-	//t.Run("ExpireTimeout", func(t *testing.T) {
-	//	// TODO: Test with and without a dead letter queue
-	//})
+	// t.Run("RequestTimeouts", func(t *testing.T) {})
+	// t.Run("ExpireTimeout", func(t *testing.T) {
+	// 	// TODO: Test with and without a dead letter queue
+	// })
 }
 
 // TODO: Start the Service, produce some items, then Shutdown the service

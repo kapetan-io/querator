@@ -80,15 +80,16 @@ func (d *Daemon) Start(ctx context.Context) error {
 	), d.conf.MaxProducePayloadSize, d.conf.Log)
 	registry.MustRegister(handler)
 
-	if d.conf.InMemoryListener {
+	switch {
+	case d.conf.InMemoryListener:
 		if err := d.spawnInMemory(ctx, handler); err != nil {
 			return err
 		}
-	} else if d.conf.ServerTLS() != nil {
+	case d.conf.ServerTLS() != nil:
 		if err := d.spawnHTTPS(ctx, handler); err != nil {
 			return err
 		}
-	} else {
+	default:
 		if err := d.spawnHTTP(ctx, handler); err != nil {
 			return err
 		}
@@ -228,7 +229,7 @@ func (d *Daemon) spawnHTTP(ctx context.Context, h http.Handler) error {
 	return nil
 }
 
-func (d *Daemon) spawnInMemory(ctx context.Context, h http.Handler) error {
+func (d *Daemon) spawnInMemory(_ context.Context, h http.Handler) error {
 	srv := &http.Server{
 		ErrorLog: slog.NewLogLogger(d.conf.Log.Handler(), slog.LevelError),
 		Handler:  h,

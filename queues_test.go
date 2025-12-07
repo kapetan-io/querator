@@ -39,12 +39,12 @@ func TestQueuesStorage(t *testing.T) {
 				badger.Teardown()
 			},
 		},
-		//{
-		//	Name: "SurrealDB",
-		//},
-		//{
-		//	Name: "PostgresSQL",
-		//},
+		// {
+		// 	Name: "SurrealDB",
+		// },
+		// {
+		// 	Name: "PostgresSQL",
+		// },
 	} {
 		t.Run(tc.Name, func(t *testing.T) {
 			testQueues(t, tc.Setup, tc.TearDown)

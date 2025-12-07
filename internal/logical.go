@@ -91,7 +91,7 @@ type LogicalConfig struct {
 	Clock *clock.Provider
 	// The storage partitions handled by the LogicalQueue
 	StoragePartitions []store.Partition
-	// Manager is the QueuesManager used by partition life cycles to move items to a dead letter
+	// Manager is the QueuesManager used by lifecycle processing to move items to a dead letter queue
 	Manager *QueuesManager
 }
 
@@ -347,7 +347,7 @@ func (l *Logical) Retry(ctx context.Context, req *types.RetryRequest) error {
 	return req.Err
 }
 
-// PartitionStateChange is called by LifeCycle to update the state of the partition
+// PartitionStateChange updates the state of a partition
 func (l *Logical) PartitionStateChange(ctx context.Context, partitionNum int, state types.PartitionState) error {
 	if l.inShutdown.Load() {
 		return ErrQueueShutdown
@@ -1060,7 +1060,7 @@ func (l *Logical) applyToPartitions(state *QueueState) {
 	//  Partitions[].State.UnLeased when re-assigning)
 
 	// TODO: Identify a degradation vs a failure and set Partition[].Failures as appropriate,
-	//  and tell LifeCycle and Adjust the item count in state.Partitions for failed partitions
+	//  and adjust the item count in state.Partitions for failed partitions
 
 	// TODO: Interaction with each partition should probably be async so we can send multiple
 	//  writes simultaneously. If one of the partitions is slow, it won't hold up the other
@@ -1409,7 +1409,9 @@ func (l *Logical) runLifecycle(state *QueueState) {
 			}
 		}
 
-		actions, err := l.scanPartitionLifecycle(partition)
+		ctx, cancel := context.WithTimeout(context.Background(), l.conf.ReadTimeout)
+		actions, err := l.scanPartitionLifecycle(ctx, partition)
+		cancel()
 		if err != nil {
 			partition.Lifecycle.Failures++
 			retryIn := lifecycleBackOff.Next(partition.Lifecycle.Failures)
@@ -1421,7 +1423,6 @@ func (l *Logical) runLifecycle(state *QueueState) {
 				"error", err)
 			continue
 		}
-
 		partition.Lifecycle.Failures = 0
 
 		for _, a := range actions {
@@ -1482,7 +1483,7 @@ func (l *Logical) runLifecycle(state *QueueState) {
 			partition.LifeCycleRequests.Reset()
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), l.conf.ReadTimeout)
+		ctx, cancel = context.WithTimeout(context.Background(), l.conf.ReadTimeout)
 		var info types.LifeCycleInfo
 		err = partition.Store.LifeCycleInfo(ctx, &info)
 		cancel()
@@ -1515,7 +1516,9 @@ func (l *Logical) runScheduled(state *QueueState) {
 			continue
 		}
 
-		actions, err := l.scanPartitionScheduled(partition)
+		ctx, cancel := context.WithTimeout(context.Background(), l.conf.ReadTimeout)
+		actions, err := l.scanPartitionScheduled(ctx, partition)
+		cancel()
 		if err != nil {
 			partition.Lifecycle.Failures++
 			retryIn := lifecycleBackOff.Next(partition.Lifecycle.Failures)
@@ -1526,7 +1529,6 @@ func (l *Logical) runScheduled(state *QueueState) {
 				"error", err)
 			continue
 		}
-
 		partition.Lifecycle.Failures = 0
 
 		for _, a := range actions {
@@ -1636,11 +1638,14 @@ func (l *Logical) recoverPartition(partition *Partition, now clock.Time) bool {
 }
 
 // scanPartitionLifecycle scans a partition for lifecycle actions
-func (l *Logical) scanPartitionLifecycle(partition *Partition) ([]types.Action, error) {
+func (l *Logical) scanPartitionLifecycle(ctx context.Context, partition *Partition) ([]types.Action, error) {
 	now := l.conf.Clock.Now().UTC()
 	actions := make([]types.Action, 0, 1_000)
 
-	for a := range partition.Store.ScanForActions(l.conf.ReadTimeout, now) {
+	for a, err := range partition.Store.ScanForActions(ctx, now) {
+		if err != nil {
+			return actions, err
+		}
 		actions = append(actions, a)
 	}
 
@@ -1648,11 +1653,14 @@ func (l *Logical) scanPartitionLifecycle(partition *Partition) ([]types.Action, 
 }
 
 // scanPartitionScheduled scans a partition for scheduled items
-func (l *Logical) scanPartitionScheduled(partition *Partition) ([]types.Action, error) {
+func (l *Logical) scanPartitionScheduled(ctx context.Context, partition *Partition) ([]types.Action, error) {
 	now := l.conf.Clock.Now().UTC()
 	actions := make([]types.Action, 0, 1_000)
 
-	for a := range partition.Store.ScanForScheduled(l.conf.ReadTimeout, now) {
+	for a, err := range partition.Store.ScanForScheduled(ctx, now) {
+		if err != nil {
+			return actions, err
+		}
 		actions = append(actions, a)
 	}
 
@@ -1708,16 +1716,16 @@ func (l *Logical) nextTimeout(r *types.LeaseBatch) clock.Duration {
 }
 
 // Useful for debugging, do not remove thrawn(2025-03-31)
-//func (l *Logical) dumpPartitionOrder(state *QueueState) string {
-//	out := strings.Builder{}
-//	out.WriteString("Partition Order:\n")
-//	for _, req := range state.Partitions {
-//		fmt.Fprintf(&out, "  %02d - UnLeased: %d NumLeased: %d Failures: %d\n",
-//			req.Info.PartitionNum, req.State.UnLeased, req.State.NumLeased,
-//			req.State.Failures)
-//	}
-//	return out.String()
-//}
+// func (l *Logical) dumpPartitionOrder(state *QueueState) string {
+// 	out := strings.Builder{}
+// 	out.WriteString("Partition Order:\n")
+// 	for _, req := range state.Partitions {
+// 		fmt.Fprintf(&out, "  %02d - UnLeased: %d NumLeased: %d Failures: %d\n",
+// 			req.Info.PartitionNum, req.State.UnLeased, req.State.NumLeased,
+// 			req.State.Failures)
+// 	}
+// 	return out.String()
+// }
 
 // addIfUnique adds a LeaseRequest to the batch. Returns false if the LeaseRequest.ClientID is a duplicate
 // and the request was not added to the batch

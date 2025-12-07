@@ -70,9 +70,9 @@ func (s *Service) validateQueueCompleteProto(in *proto.QueueCompleteRequest, out
 	var err error
 
 	// TODO: Move this into Queue.Complete()
-	//if strings.TrimSpace(in.QueueName) == "" {
-	//	return transport.NewInvalidOption("'queue_name' cannot be empty")
-	//}
+	// if strings.TrimSpace(in.QueueName) == "" {
+	// 	return transport.NewInvalidOption("'queue_name' cannot be empty")
+	// }
 
 	if in.RequestTimeout != "" {
 		out.RequestTimeout, err = clock.ParseDuration(in.RequestTimeout)

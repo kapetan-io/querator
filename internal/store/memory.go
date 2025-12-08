@@ -108,7 +108,7 @@ func (m *MemoryPartition) Lease(_ context.Context, batch types.LeaseBatch, opts 
 	return nil
 }
 
-func (m *MemoryPartition) Complete(ctx context.Context, batch types.Batch[types.CompleteRequest]) error {
+func (m *MemoryPartition) Complete(ctx context.Context, batch types.CompleteBatch) error {
 	defer m.mu.Unlock()
 	m.mu.Lock()
 
@@ -146,7 +146,7 @@ nextBatch:
 	return nil
 }
 
-func (m *MemoryPartition) Retry(ctx context.Context, batch types.Batch[types.RetryRequest]) error {
+func (m *MemoryPartition) Retry(ctx context.Context, batch types.RetryBatch) error {
 	defer m.mu.Unlock()
 	m.mu.Lock()
 
@@ -434,7 +434,7 @@ func (m *MemoryPartition) ScanForActions(_ context.Context, now clock.Time) iter
 	}
 }
 
-func (m *MemoryPartition) TakeAction(_ context.Context, batch types.Batch[types.LifeCycleRequest],
+func (m *MemoryPartition) TakeAction(_ context.Context, batch types.LifeCycleBatch,
 	state *types.PartitionState) error {
 
 	if len(batch.Requests) == 0 {

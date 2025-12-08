@@ -604,9 +604,9 @@ func (l *Logical) prepareQueueState(state *QueueState) {
 // -------------------------------------------------
 
 type QueueState struct {
-	LifeCycles        types.Batch[types.LifeCycleRequest]
-	Completes         types.Batch[types.CompleteRequest]
-	Retries           types.Batch[types.RetryRequest]
+	LifeCycles        types.LifeCycleBatch
+	Completes         types.CompleteBatch
+	Retries           types.RetryBatch
 	Producers         types.ProduceBatch
 	Leases            types.LeaseBatch
 	NextMaintenanceCh <-chan clock.Time

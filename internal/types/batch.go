@@ -133,3 +133,84 @@ func (it *LeaseBatchIterator) Next(item *Item) bool {
 	}
 	return false
 }
+
+// CompleteBatch is a batch of complete requests
+type CompleteBatch struct {
+	Requests []*CompleteRequest
+}
+
+func (b *CompleteBatch) Add(req *CompleteRequest) {
+	if req == nil {
+		return
+	}
+	b.Requests = append(b.Requests, req)
+}
+
+func (b *CompleteBatch) Remove(req *CompleteRequest) {
+	n := 0
+	for _, i := range b.Requests {
+		if i != req {
+			b.Requests[n] = i
+			n++
+		}
+	}
+	b.Requests = b.Requests[:n]
+}
+
+func (b *CompleteBatch) Reset() {
+	b.Requests = b.Requests[:0]
+}
+
+// RetryBatch is a batch of retry requests
+type RetryBatch struct {
+	Requests []*RetryRequest
+}
+
+func (b *RetryBatch) Add(req *RetryRequest) {
+	if req == nil {
+		return
+	}
+	b.Requests = append(b.Requests, req)
+}
+
+func (b *RetryBatch) Remove(req *RetryRequest) {
+	n := 0
+	for _, i := range b.Requests {
+		if i != req {
+			b.Requests[n] = i
+			n++
+		}
+	}
+	b.Requests = b.Requests[:n]
+}
+
+func (b *RetryBatch) Reset() {
+	b.Requests = b.Requests[:0]
+}
+
+// LifeCycleBatch is a batch of lifecycle requests
+type LifeCycleBatch struct {
+	Requests []*LifeCycleRequest
+}
+
+func (b *LifeCycleBatch) Add(req *LifeCycleRequest) {
+	if req == nil {
+		return
+	}
+	b.Requests = append(b.Requests, req)
+}
+
+func (b *LifeCycleBatch) Remove(req *LifeCycleRequest) {
+	n := 0
+	for _, i := range b.Requests {
+		if i != req {
+			b.Requests[n] = i
+			n++
+		}
+	}
+	b.Requests = b.Requests[:n]
+}
+
+func (b *LifeCycleBatch) Reset() {
+	b.Requests = b.Requests[:0]
+}

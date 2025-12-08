@@ -203,7 +203,7 @@ func (b *BadgerPartition) Lease(_ context.Context, batch types.LeaseBatch, opts 
 	})
 }
 
-func (b *BadgerPartition) Complete(_ context.Context, batch types.Batch[types.CompleteRequest]) error {
+func (b *BadgerPartition) Complete(_ context.Context, batch types.CompleteBatch) error {
 	var done bool
 
 	db, err := b.getDB()
@@ -271,7 +271,7 @@ nextBatch:
 	return nil
 }
 
-func (b *BadgerPartition) Retry(_ context.Context, batch types.Batch[types.RetryRequest]) error {
+func (b *BadgerPartition) Retry(_ context.Context, batch types.RetryBatch) error {
 	var done bool
 
 	db, err := b.getDB()
@@ -770,7 +770,7 @@ func (b *BadgerPartition) ScanForActions(_ context.Context, now clock.Time) iter
 	}
 }
 
-func (b *BadgerPartition) TakeAction(_ context.Context, batch types.Batch[types.LifeCycleRequest],
+func (b *BadgerPartition) TakeAction(_ context.Context, batch types.LifeCycleBatch,
 	state *types.PartitionState) error {
 
 	if len(batch.Requests) == 0 {

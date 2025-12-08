@@ -176,6 +176,69 @@ The release workflow runs quickstart validation after building the Docker image 
    docker run --rm ghcr.io/kapetan-io/querator:v1.0.0 version
    ```
 
+## Homebrew
+
+Querator is published to Homebrew via the [kapetan-io/homebrew-kapetan](https://github.com/kapetan-io/homebrew-kapetan) tap.
+
+### Installing via Homebrew
+
+```bash
+brew tap kapetan-io/kapetan
+brew install querator
+```
+
+### Tap Repository
+
+The Homebrew formula is maintained in a separate repository:
+- **Repository**: https://github.com/kapetan-io/homebrew-kapetan
+- **Formula**: `Formula/querator.rb`
+
+### Updating the Formula
+
+After creating a new release, update the Homebrew formula:
+
+1. **Calculate the SHA256** of the release tarball:
+   ```bash
+   curl -sL https://github.com/kapetan-io/querator/archive/v1.0.0.tar.gz | shasum -a 256
+   ```
+
+2. **Update the formula** in the homebrew-kapetan repository:
+   ```ruby
+   class Querator < Formula
+     desc "An Almost Exactly Once Delivery Queue"
+     homepage "https://github.com/kapetan-io/querator"
+     url "https://github.com/kapetan-io/querator/archive/v1.0.0.tar.gz"
+     sha256 "<new-sha256-hash>"
+     license "Apache-2.0"
+     head "https://github.com/kapetan-io/querator.git", branch: "main"
+
+     depends_on "go" => :build
+
+     def install
+       system "go", "build", *std_go_args(ldflags: "-s -w -X github.com/kapetan-io/querator.Version=#{version}"), "./cmd/querator"
+     end
+
+     test do
+       assert_match version.to_s, shell_output("#{bin}/querator version")
+     end
+   end
+   ```
+
+3. **Commit and push** to the homebrew-kapetan repository.
+
+4. **Test the update**:
+   ```bash
+   brew update
+   brew upgrade querator
+   querator version
+   ```
+
+### Important Notes
+
+- The `ldflags` path must be `-X github.com/kapetan-io/querator.Version=#{version}` (not `main.Version`)
+- The test command should be `querator version` (not `--version`)
+- GitHub automatically creates tarballs for tags at `https://github.com/kapetan-io/querator/archive/vX.Y.Z.tar.gz`
+
 ## Troubleshooting
 
 ### Version Shows "dev-build"

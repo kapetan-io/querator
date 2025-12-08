@@ -37,6 +37,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/kapetan-io/querator"
@@ -203,15 +204,22 @@ func waitForHealth(endpoint string, timeout time.Duration) error {
 func runQueueWorkflow(client *querator.Client) error {
 	ctx := context.Background()
 
-	if err := client.QueuesCreate(ctx, &pb.QueueInfo{
+	err := client.QueuesCreate(ctx, &pb.QueueInfo{
 		QueueName:           queueName,
 		ExpireTimeout:       "24h0m0s",
 		LeaseTimeout:        "1m0s",
 		RequestedPartitions: 1,
-	}); err != nil {
-		return fmt.Errorf("failed to create queue: %w", err)
+	})
+	if err != nil {
+		// Queue may already exist from previous run - that's OK
+		if strings.Contains(err.Error(), "already exists") {
+			printCheck(fmt.Sprintf("Queue %q already exists (reusing)", queueName))
+		} else {
+			return fmt.Errorf("failed to create queue: %w", err)
+		}
+	} else {
+		printCheck(fmt.Sprintf("Queue %q created", queueName))
 	}
-	printCheck(fmt.Sprintf("Queue %q created", queueName))
 
 	items := make([]*pb.QueueProduceItem, numItems)
 	for i := 0; i < numItems; i++ {

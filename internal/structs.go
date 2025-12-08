@@ -27,11 +27,11 @@ type Partition struct {
 	// LeaseRequests is the batch of lease requests that are assigned to this partition
 	LeaseRequests types.LeaseBatch
 	// CompleteRequests is the batch of complete requests that are assigned to this partition
-	CompleteRequests types.Batch[types.CompleteRequest]
+	CompleteRequests types.CompleteBatch
 	// RetryRequests is the batch of retry requests that are assigned to this partition
-	RetryRequests types.Batch[types.RetryRequest]
+	RetryRequests types.RetryBatch
 	// LifeCycleRequests is a batch of lifecycle requests that are assigned to this partition
-	LifeCycleRequests types.Batch[types.LifeCycleRequest]
+	LifeCycleRequests types.LifeCycleBatch
 	// Store is the storage for this partition
 	Store store.Partition
 	// State is the current state of the partition. It is updated by lifecycle and storage backends

@@ -832,7 +832,7 @@ func (p *PostgresPartition) Lease(ctx context.Context, batch types.LeaseBatch, o
 	return tx.Commit(ctx)
 }
 
-func (p *PostgresPartition) Complete(ctx context.Context, batch types.Batch[types.CompleteRequest]) error {
+func (p *PostgresPartition) Complete(ctx context.Context, batch types.CompleteBatch) error {
 	pool, err := p.conf.getOrCreatePool(ctx)
 	if err != nil {
 		return err
@@ -892,7 +892,7 @@ nextBatch:
 	return nil
 }
 
-func (p *PostgresPartition) Retry(ctx context.Context, batch types.Batch[types.RetryRequest]) error {
+func (p *PostgresPartition) Retry(ctx context.Context, batch types.RetryBatch) error {
 	pool, err := p.conf.getOrCreatePool(ctx)
 	if err != nil {
 		return err
@@ -1527,7 +1527,7 @@ func (p *PostgresPartition) ScanForActions(ctx context.Context, now clock.Time) 
 	}
 }
 
-func (p *PostgresPartition) TakeAction(ctx context.Context, batch types.Batch[types.LifeCycleRequest], state *types.PartitionState) error {
+func (p *PostgresPartition) TakeAction(ctx context.Context, batch types.LifeCycleBatch, state *types.PartitionState) error {
 	pool, err := p.conf.getOrCreatePool(ctx)
 	if err != nil {
 		return err

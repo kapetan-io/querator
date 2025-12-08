@@ -13,8 +13,9 @@ import (
 )
 
 type Config struct {
-	// See ServiceConfig for a list of possible options
-	querator.ServiceConfig
+	// Explicit composition instead of embedding
+	Service querator.ServiceConfig
+
 	// TLS is the TLS config used for public server and clients
 	TLS *duh.TLSConfig
 	// ListenAddress is the address:port that Querator will listen on for public HTTP requests
@@ -48,18 +49,18 @@ func (c *Config) ServerTLS() *tls.Config {
 }
 
 func (c *Config) SetDefaults() {
-	set.Default(&c.Clock, clock.NewProvider())
-	set.Default(&c.Log, slog.Default())
+	set.Default(&c.Service.Clock, clock.NewProvider())
+	set.Default(&c.Service.Log, slog.Default())
 	set.Default(&c.ListenAddress, "localhost:2319")
-	set.Default(&c.MaxLeaseBatchSize, internal.DefaultMaxLeaseBatchSize)
-	set.Default(&c.MaxProduceBatchSize, internal.DefaultMaxProduceBatchSize)
-	set.Default(&c.MaxCompleteBatchSize, internal.DefaultMaxCompleteBatchSize)
-	set.Default(&c.MaxRequestsPerQueue, internal.DefaultMaxRequestsPerQueue)
-	set.Default(&c.MaxConcurrentRequests, internal.DefaultMaxConcurrentConnections)
-	set.Default(&c.StorageConfig.Queues, store.NewMemoryQueues(c.Log))
-	set.Default(&c.StorageConfig.PartitionStorage, []store.PartitionStorage{
+	set.Default(&c.Service.MaxLeaseBatchSize, internal.DefaultMaxLeaseBatchSize)
+	set.Default(&c.Service.MaxProduceBatchSize, internal.DefaultMaxProduceBatchSize)
+	set.Default(&c.Service.MaxCompleteBatchSize, internal.DefaultMaxCompleteBatchSize)
+	set.Default(&c.Service.MaxRequestsPerQueue, internal.DefaultMaxRequestsPerQueue)
+	set.Default(&c.Service.MaxConcurrentRequests, internal.DefaultMaxConcurrentConnections)
+	set.Default(&c.Service.StorageConfig.Queues, store.NewMemoryQueues(c.Service.Log))
+	set.Default(&c.Service.StorageConfig.PartitionStorage, []store.PartitionStorage{
 		{
-			PartitionStore: store.NewMemoryPartitionStore(c.StorageConfig, c.Log),
+			PartitionStore: store.NewMemoryPartitionStore(c.Service.StorageConfig, c.Service.Log),
 			Name:           "mem-0",
 			Affinity:       1,
 		},

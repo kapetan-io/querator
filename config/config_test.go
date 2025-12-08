@@ -126,15 +126,15 @@ func TestApplyConfigFile(t *testing.T) {
 	require.NoError(t, err)
 
 	// Check if the config is reflected correctly
-	assert.Equal(t, true, conf.Log.Handler().Enabled(ctx, slog.LevelDebug))
-	assert.Len(t, conf.StorageConfig.PartitionStorage, 1)
-	assert.Equal(t, "mem-00", conf.StorageConfig.PartitionStorage[0].Name)
-	assert.Equal(t, float64(0), conf.StorageConfig.PartitionStorage[0].Affinity)
-	assert.IsType(t, &store.MemoryQueues{}, conf.StorageConfig.Queues)
+	assert.Equal(t, true, conf.Service.Log.Handler().Enabled(ctx, slog.LevelDebug))
+	assert.Len(t, conf.Service.StorageConfig.PartitionStorage, 1)
+	assert.Equal(t, "mem-00", conf.Service.StorageConfig.PartitionStorage[0].Name)
+	assert.Equal(t, float64(0), conf.Service.StorageConfig.PartitionStorage[0].Affinity)
+	assert.IsType(t, &store.MemoryQueues{}, conf.Service.StorageConfig.Queues)
 
 	// Check if the queue is created in daemon.Config
 	var info types.QueueInfo
-	require.NoError(t, conf.StorageConfig.Queues.Get(ctx, "queue-1", &info))
+	require.NoError(t, conf.Service.StorageConfig.Queues.Get(ctx, "queue-1", &info))
 	assert.Equal(t, "queue-1", info.Name)
 	assert.Equal(t, 10*time.Minute, info.LeaseTimeout)
 	assert.Equal(t, 10*time.Minute, info.ExpireTimeout)
@@ -181,13 +181,13 @@ queues:
 	require.NoError(t, err)
 
 	// Verify the configuration
-	assert.Len(t, conf.StorageConfig.PartitionStorage, 1)
-	assert.Equal(t, "mem-00", conf.StorageConfig.PartitionStorage[0].Name)
-	assert.IsType(t, &store.MemoryQueues{}, conf.StorageConfig.Queues)
+	assert.Len(t, conf.Service.StorageConfig.PartitionStorage, 1)
+	assert.Equal(t, "mem-00", conf.Service.StorageConfig.PartitionStorage[0].Name)
+	assert.IsType(t, &store.MemoryQueues{}, conf.Service.StorageConfig.Queues)
 	ctx := context.Background()
 
 	var info types.QueueInfo
-	require.NoError(t, conf.StorageConfig.Queues.Get(ctx, "queue-1", &info))
+	require.NoError(t, conf.Service.StorageConfig.Queues.Get(ctx, "queue-1", &info))
 	assert.Equal(t, "queue-1", info.Name)
 	assert.Equal(t, 10*time.Minute, info.LeaseTimeout)
 	assert.Equal(t, 10*time.Minute, info.ExpireTimeout)
@@ -223,9 +223,9 @@ queue-storage:
 	err = config.ApplyConfigFile(ctx, &conf, file, io.Discard)
 	require.NoError(t, err)
 	assert.Equal(t, "/tmp/badger1",
-		conf.StorageConfig.PartitionStorage[0].PartitionStore.(*store.BadgerPartitionStore).Config().StorageDir)
+		conf.Service.StorageConfig.PartitionStorage[0].PartitionStore.(*store.BadgerPartitionStore).Config().StorageDir)
 	assert.Equal(t, "/tmp/queue-storage",
-		conf.StorageConfig.Queues.(*store.BadgerQueues).Config().StorageDir)
+		conf.Service.StorageConfig.Queues.(*store.BadgerQueues).Config().StorageDir)
 }
 
 // TODO: Add config tests for the other storage drivers as we add them

@@ -265,7 +265,7 @@ func (qm *QueuesManager) LifeCycle(ctx context.Context, req *types.LifeCycleRequ
 		for _, item := range deadItems {
 			itemIDs = append(itemIDs, item.ID)
 		}
-		batch := types.Batch[types.CompleteRequest]{}
+		batch := types.CompleteBatch{}
 		batch.Add(&types.CompleteRequest{Ids: itemIDs})
 		if err := req.PartitionStorage.Complete(ctx, batch); err != nil {
 			return errors.Errorf("failed to delete items from source partition: %w", err)
@@ -300,7 +300,7 @@ func (qm *QueuesManager) LifeCycle(ctx context.Context, req *types.LifeCycleRequ
 		// Use SourceID since we cleared ID when preparing for DLQ
 		itemIDs = append(itemIDs, item.SourceID)
 	}
-	batch := types.Batch[types.CompleteRequest]{}
+	batch := types.CompleteBatch{}
 	batch.Add(&types.CompleteRequest{Ids: itemIDs})
 	if err := req.PartitionStorage.Complete(ctx, batch); err != nil {
 		// Log error but don't fail - items are already in DLQ

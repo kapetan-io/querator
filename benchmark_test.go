@@ -60,7 +60,7 @@ func BenchmarkProduce(b *testing.B) {
 			mask := len(items) - 1
 
 			d, err := daemon.NewDaemon(context.Background(), daemon.Config{
-				ServiceConfig: querator.ServiceConfig{
+				Service: querator.ServiceConfig{
 					StorageConfig: tc.Setup(),
 					Log:           log,
 				},

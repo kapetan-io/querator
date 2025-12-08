@@ -178,7 +178,7 @@ func newFuzzDaemon(t *testing.T, conf que.ServiceConfig) (*testDaemon, *que.Clie
 	td.ctx, td.cancel = context.WithTimeout(context.Background(), 10*time.Second)
 	td.d, err = daemon.NewDaemon(td.ctx, daemon.Config{
 		ListenAddress: "localhost:0",
-		ServiceConfig: conf,
+		Service:       conf,
 	})
 	require.NoError(t, err)
 	return td, td.d.MustClient(), td.ctx

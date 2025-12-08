@@ -65,13 +65,13 @@ type Partition interface {
 	// Complete marks item ids in the batch as complete. If the underlying data storage fails for some
 	// reason, this call returns an error. In that case the caller should assume none of the batched
 	// items were marked as "complete"
-	Complete(ctx context.Context, batch types.Batch[types.CompleteRequest]) error
+	Complete(ctx context.Context, batch types.CompleteBatch) error
 
 	// Retry retries items in the batch. Items can be retried immediately, scheduled for future retry,
 	// or marked as dead for placement in the dead letter queue. If the underlying data storage fails
 	// for some reason, this call returns an error. In that case the caller should assume none of the
 	// batched items were retried.
-	Retry(ctx context.Context, batch types.Batch[types.RetryRequest]) error
+	Retry(ctx context.Context, batch types.RetryBatch) error
 
 	// List lists items in a queue. limit and offset allow the user to page through all the items
 	// in the queue.
@@ -111,7 +111,7 @@ type Partition interface {
 	ScanForScheduled(ctx context.Context, now clock.Time) iter.Seq2[types.Action, error]
 
 	// TakeAction takes lifecycle requests and preforms the actions requested on the partition.
-	TakeAction(ctx context.Context, batch types.Batch[types.LifeCycleRequest], stats *types.PartitionState) error
+	TakeAction(ctx context.Context, batch types.LifeCycleBatch, stats *types.PartitionState) error
 
 	// LifeCycleInfo fills out the LifeCycleInfo struct which is used to decide when the
 	// next life cycle should run

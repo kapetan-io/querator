@@ -44,27 +44,16 @@ type Daemon struct {
 }
 
 func NewDaemon(ctx context.Context, conf Config) (*Daemon, error) {
-	set.Default(&conf.Log, slog.Default())
+	set.Default(&conf.Service.Log, slog.Default())
 
 	conf.SetDefaults()
 
-	s, err := querator.NewService(querator.ServiceConfig{
-		MaxCompleteBatchSize: conf.MaxCompleteBatchSize,
-		MaxLeaseBatchSize:    conf.MaxLeaseBatchSize,
-		MaxProduceBatchSize:  conf.MaxProduceBatchSize,
-		MaxRequestsPerQueue:  conf.MaxRequestsPerQueue,
-		WriteTimeout:         conf.WriteTimeout,
-		ReadTimeout:          conf.ReadTimeout,
-		InstanceID:           conf.InstanceID,
-		StorageConfig:        conf.StorageConfig,
-		Log:                  conf.Log,
-		Clock:                conf.Clock,
-	})
+	s, err := querator.NewService(conf.Service)
 	if err != nil {
 		return nil, err
 	}
 
-	conf.Log = conf.Log.With("code.namespace", "Daemon")
+	conf.Service.Log = conf.Service.Log.With("code.namespace", "Daemon")
 	d := &Daemon{
 		conf:    conf,
 		service: s,
@@ -77,7 +66,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 
 	handler := transport.NewHTTPHandler(d.service, promhttp.InstrumentMetricHandler(
 		registry, promhttp.HandlerFor(registry, promhttp.HandlerOpts{}),
-	), d.conf.MaxProducePayloadSize, d.conf.Log)
+	), d.conf.MaxProducePayloadSize, d.conf.Service.Log)
 	registry.MustRegister(handler)
 
 	switch {
@@ -104,9 +93,9 @@ func (d *Daemon) Shutdown(ctx context.Context) error {
 		return err
 	}
 	for _, srv := range d.servers {
-		d.conf.Log.LogAttrs(ctx, internal.LevelDebugAll, "Shutting down HTTP server", slog.String("address", srv.Addr))
+		d.conf.Service.Log.LogAttrs(ctx, internal.LevelDebugAll, "Shutting down HTTP server", slog.String("address", srv.Addr))
 		_ = srv.Shutdown(ctx)
-		d.conf.Log.Info("HTTP Server shutdown", "address", srv.Addr)
+		d.conf.Service.Log.Info("HTTP Server shutdown", "address", srv.Addr)
 	}
 	d.servers = nil
 	return nil
@@ -119,7 +108,7 @@ func (d *Daemon) Service() *querator.Service {
 func (d *Daemon) MustClient() *querator.Client {
 	c, err := d.Client()
 	if err != nil {
-		panic(fmt.Sprintf("[%s] failed to init daemon client - '%s'", d.conf.InstanceID, err))
+		panic(fmt.Sprintf("[%s] failed to init daemon client - '%s'", d.conf.Service.InstanceID, err))
 	}
 	return c
 }
@@ -162,7 +151,7 @@ func (d *Daemon) Client() (*querator.Client, error) {
 
 func (d *Daemon) spawnHTTPS(ctx context.Context, mux http.Handler) error {
 	srv := &http.Server{
-		ErrorLog:  slog.NewLogLogger(d.conf.Log.Handler(), slog.LevelError),
+		ErrorLog:  slog.NewLogLogger(d.conf.Service.Log.Handler(), slog.LevelError),
 		TLSConfig: d.conf.ServerTLS().Clone(),
 		Addr:      d.conf.ListenAddress,
 		Handler:   mux,
@@ -173,16 +162,16 @@ func (d *Daemon) spawnHTTPS(ctx context.Context, mux http.Handler) error {
 	if err != nil {
 		return fmt.Errorf("while starting HTTPS listener: %w", err)
 	}
-	d.Listener = netutil.LimitListener(l, d.conf.MaxConcurrentRequests)
+	d.Listener = netutil.LimitListener(l, d.conf.Service.MaxConcurrentRequests)
 	srv.Addr = d.Listener.Addr().String()
 
 	d.wg.Add(1)
 	go func() {
 		defer d.wg.Done()
-		d.conf.Log.Info("HTTPS Listening ...", "address", d.Listener.Addr().String())
+		d.conf.Service.Log.Info("HTTPS Listening ...", "address", d.Listener.Addr().String())
 		if err := srv.ServeTLS(d.Listener, "", ""); err != nil {
 			if !errors.Is(err, http.ErrServerClosed) {
-				d.conf.Log.Error("while starting TLS HTTP server", "error", err)
+				d.conf.Service.Log.Error("while starting TLS HTTP server", "error", err)
 			}
 		}
 	}()
@@ -197,7 +186,7 @@ func (d *Daemon) spawnHTTPS(ctx context.Context, mux http.Handler) error {
 
 func (d *Daemon) spawnHTTP(ctx context.Context, h http.Handler) error {
 	srv := &http.Server{
-		ErrorLog: slog.NewLogLogger(d.conf.Log.Handler(), slog.LevelError),
+		ErrorLog: slog.NewLogLogger(d.conf.Service.Log.Handler(), slog.LevelError),
 		Addr:     d.conf.ListenAddress,
 		Handler:  h,
 	}
@@ -207,7 +196,7 @@ func (d *Daemon) spawnHTTP(ctx context.Context, h http.Handler) error {
 		return fmt.Errorf("while starting HTTP listener: %w", err)
 	}
 	// Limit the number of concurrent connections allowed to avoid abusing our resources.
-	d.Listener = netutil.LimitListener(l, d.conf.MaxConcurrentRequests)
+	d.Listener = netutil.LimitListener(l, d.conf.Service.MaxConcurrentRequests)
 	srv.Addr = d.Listener.Addr().String()
 
 	d.wg.Add(1)
@@ -215,7 +204,7 @@ func (d *Daemon) spawnHTTP(ctx context.Context, h http.Handler) error {
 		defer d.wg.Done()
 		if err := srv.Serve(d.Listener); err != nil {
 			if !errors.Is(err, http.ErrServerClosed) {
-				d.conf.Log.Error("while starting HTTP server", "error", err)
+				d.conf.Service.Log.Error("while starting HTTP server", "error", err)
 			}
 		}
 	}()
@@ -224,14 +213,14 @@ func (d *Daemon) spawnHTTP(ctx context.Context, h http.Handler) error {
 		return err
 	}
 
-	d.conf.Log.Info("HTTP Server Started", "address", d.Listener.Addr().String())
+	d.conf.Service.Log.Info("HTTP Server Started", "address", d.Listener.Addr().String())
 	d.servers = append(d.servers, srv)
 	return nil
 }
 
 func (d *Daemon) spawnInMemory(_ context.Context, h http.Handler) error {
 	srv := &http.Server{
-		ErrorLog: slog.NewLogLogger(d.conf.Log.Handler(), slog.LevelError),
+		ErrorLog: slog.NewLogLogger(d.conf.Service.Log.Handler(), slog.LevelError),
 		Handler:  h,
 	}
 
@@ -243,12 +232,12 @@ func (d *Daemon) spawnInMemory(_ context.Context, h http.Handler) error {
 		defer d.wg.Done()
 		if err := srv.Serve(d.Listener); err != nil {
 			if !errors.Is(err, http.ErrServerClosed) {
-				d.conf.Log.Error("while starting InMemory server", "error", err)
+				d.conf.Service.Log.Error("while starting InMemory server", "error", err)
 			}
 		}
 	}()
 
-	d.conf.Log.Info("InMemory Server Started", "address", d.Listener.Addr().String())
+	d.conf.Service.Log.Info("InMemory Server Started", "address", d.Listener.Addr().String())
 	d.servers = append(d.servers, srv)
 	return nil
 }

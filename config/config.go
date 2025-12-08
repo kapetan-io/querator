@@ -91,7 +91,7 @@ func ApplyConfigFile(ctx context.Context, conf *daemon.Config, file File, w io.W
 	conf.SetDefaults()
 
 	if file.ConfigFile != "" {
-		conf.Log.Info("Loaded config from file", "file", file.ConfigFile)
+		conf.Service.Log.Info("Loaded config from file", "file", file.ConfigFile)
 	}
 	return nil
 }
@@ -99,7 +99,7 @@ func ApplyConfigFile(ctx context.Context, conf *daemon.Config, file File, w io.W
 func setupLogger(file File, w io.Writer, d *daemon.Config) error {
 	switch file.Logging.Handler {
 	case "color", "":
-		d.Log = slog.New(color.NewLog(&color.LogOptions{
+		d.Service.Log = slog.New(color.NewLog(&color.LogOptions{
 			HandlerOptions: slog.HandlerOptions{
 				Level: toLogLevel(file.Logging.Level),
 			},
@@ -107,12 +107,12 @@ func setupLogger(file File, w io.Writer, d *daemon.Config) error {
 		}))
 		return nil
 	case "text":
-		d.Log = slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{
+		d.Service.Log = slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{
 			Level: toLogLevel(file.Logging.Level),
 		}))
 		return nil
 	case "json":
-		d.Log = slog.New(slog.NewJSONHandler(w, &slog.HandlerOptions{
+		d.Service.Log = slog.New(slog.NewJSONHandler(w, &slog.HandlerOptions{
 			Level: toLogLevel(file.Logging.Level),
 		}))
 		return nil
@@ -143,17 +143,17 @@ func setupPartitionStorage(file File, d *daemon.Config) error {
 
 		switch strings.ToLower(ps.Driver) {
 		case "memory":
-			s = store.NewMemoryPartitionStore(store.Config{}, d.Log)
+			s = store.NewMemoryPartitionStore(store.Config{}, d.Service.Log)
 		case "badger":
 			s = store.NewBadgerPartitionStore(store.BadgerConfig{
 				StorageDir: ps.Config["storage-dir"], // TODO(thrawn01): validate badger config options
-				Log:        d.Log,
+				Log:        d.Service.Log,
 			})
 		default:
 			return fmt.Errorf("invalid driver; '%s' is not one of (Memory, Badger)", ps.Driver)
 		}
 
-		d.StorageConfig.PartitionStorage = append(d.StorageConfig.PartitionStorage, store.PartitionStorage{
+		d.Service.StorageConfig.PartitionStorage = append(d.Service.StorageConfig.PartitionStorage, store.PartitionStorage{
 			Name:           ps.Name,
 			Affinity:       float64(ps.Affinity),
 			PartitionStore: s,
@@ -165,11 +165,11 @@ func setupPartitionStorage(file File, d *daemon.Config) error {
 func setupQueueStorage(ctx context.Context, file File, conf *daemon.Config) error {
 	switch strings.ToLower(file.QueueStorage.Driver) {
 	case "memory", "":
-		conf.StorageConfig.Queues = store.NewMemoryQueues(conf.Log)
+		conf.Service.StorageConfig.Queues = store.NewMemoryQueues(conf.Service.Log)
 	case "badger":
-		conf.StorageConfig.Queues = store.NewBadgerQueues(store.BadgerConfig{
+		conf.Service.StorageConfig.Queues = store.NewBadgerQueues(store.BadgerConfig{
 			StorageDir: file.QueueStorage.Config["storage-dir"], // TODO(thrawn01): validate bolt config options
-			Log:        conf.Log,
+			Log:        conf.Service.Log,
 		})
 	default:
 		return fmt.Errorf("invalid driver; '%s' is not one of (Memory, Badger)", file.QueueStorage.Driver)
@@ -178,7 +178,7 @@ func setupQueueStorage(ctx context.Context, file File, conf *daemon.Config) erro
 	for _, queue := range file.Queues {
 		for _, p := range queue.Partitions {
 			// Ensure the storage name referenced in the partition exists
-			found := store.Find(p.StorageName, conf.StorageConfig.PartitionStorage)
+			found := store.Find(p.StorageName, conf.Service.StorageConfig.PartitionStorage)
 			if found.Name == "" {
 				return fmt.Errorf("invalid partition storage; queue '%s' references '%s' which is undefined",
 					queue.Name, p.StorageName)
@@ -186,7 +186,7 @@ func setupQueueStorage(ctx context.Context, file File, conf *daemon.Config) erro
 			p.StorageName = found.Name
 		}
 
-		if err := conf.StorageConfig.Queues.Add(ctx, queue.ToQueueInfo()); err != nil {
+		if err := conf.Service.StorageConfig.Queues.Add(ctx, queue.ToQueueInfo()); err != nil {
 			// Skip if the queue already exists, so pre-existing queues do not keep Querator from starting
 			if errors.Is(err, store.ErrQueueAlreadyExists) {
 				// TODO(thrawn01): We should probably update the queue if

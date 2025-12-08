@@ -73,36 +73,6 @@ const (
 	RPCStorageScheduledDelete   = "/v1/storage/scheduled.delete"
 )
 
-// Service is an abstraction separating the public protocol from the underlying implementation.
-//
-// Abstraction rules dictate that the `transport` package should NOT access any other public interfaces or types.
-// To expose new public interface capabilities via the HTTP interface, we must first add that capability to the
-// `Service` first.
-//
-// Golang circular dependency rules work with us to help remind developers that we should not break our
-// abstraction of HTTP code from the implementation. Any attempt to add a non-public facing method or types
-// from other Querator packages will result in a circular dependency warning.
-type Service interface {
-	QueueProduce(context.Context, *pb.QueueProduceRequest) error
-	QueueLease(context.Context, *pb.QueueLeaseRequest, *pb.QueueLeaseResponse) error
-	QueueComplete(context.Context, *pb.QueueCompleteRequest) error
-	QueueRetry(context.Context, *pb.QueueRetryRequest) error
-	QueueStats(context.Context, *pb.QueueStatsRequest, *pb.QueueStatsResponse) error
-	QueueClear(context.Context, *pb.QueueClearRequest) error
-
-	QueuesCreate(context.Context, *pb.QueueInfo) error
-	QueuesList(context.Context, *pb.QueuesListRequest, *pb.QueuesListResponse) error
-	QueuesUpdate(context.Context, *pb.QueueInfo) error
-	QueuesDelete(context.Context, *pb.QueuesDeleteRequest) error
-	QueuesInfo(context.Context, *pb.QueuesInfoRequest, *pb.QueueInfo) error
-
-	StorageItemsList(context.Context, *pb.StorageItemsListRequest, *pb.StorageItemsListResponse) error
-	StorageItemsImport(context.Context, *pb.StorageItemsImportRequest, *pb.StorageItemsImportResponse) error
-	StorageItemsDelete(context.Context, *pb.StorageItemsDeleteRequest) error
-
-	StorageScheduledList(context.Context, *pb.StorageItemsListRequest, *pb.StorageItemsListResponse) error
-}
-
 type HTTPHandler struct {
 	duration       *prometheus.SummaryVec
 	log            *slog.Logger

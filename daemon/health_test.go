@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/daemon"
 	"github.com/kapetan-io/querator/transport"
 	"github.com/stretchr/testify/assert"
@@ -18,7 +19,6 @@ func TestHealthEndpoint(t *testing.T) {
 
 	d, err := daemon.NewDaemon(ctx, daemon.Config{
 		InMemoryListener: true,
-		Version:          "test-version",
 	})
 	require.NoError(t, err)
 	defer func() { _ = d.Shutdown(ctx) }()
@@ -45,7 +45,7 @@ func TestHealthEndpoint(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, transport.HealthStatusPass, health.Status)
-	assert.Equal(t, "test-version", health.Version)
+	assert.Equal(t, querator.Version, health.Version)
 	assert.NotEmpty(t, health.Checks)
 
 	checks, ok := health.Checks["queues:storage"]

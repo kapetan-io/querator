@@ -130,7 +130,11 @@ For example:
 - `items_5d41402abc4b_000000` - Partition 0 for a queue
 - `items_5d41402abc4b_000001` - Partition 1 for the same queue
 
-The hash is derived from the queue name to ensure unique table names across queues.
+Table names are hashed for two reasons:
+1. PostgreSQL has a 63-character identifier limit for table and index names
+2. Queue names may contain special characters that are not valid in SQL identifiers
+
+The 10-character base62 hash ensures table names stay well under the limit while allowing any valid queue name.
 
 ## Next Steps
 

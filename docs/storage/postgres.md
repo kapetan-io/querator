@@ -4,16 +4,6 @@ PostgreSQL is a powerful, open-source relational database. Querator uses Postgre
 
 ## Overview
 
-PostgreSQL provides:
-- **Persistence**: Reliable, ACID-compliant data storage
-- **Distributed**: Multiple Querator instances can share the same database
-- **High Availability**: Use PostgreSQL replication for HA setups
-- **Connection Pooling**: Efficient connection management with pgxpool
-- **Automatic Schema**: Tables and indexes created automatically
-- **Advanced Features**: Partial indexes, JSONB support, full-text search (future)
-
-## Use Cases
-
 PostgreSQL is ideal for:
 - **Production Deployments**: Mission-critical workloads requiring reliability
 - **Horizontal Scaling**: Multiple Querator instances sharing partition storage
@@ -30,6 +20,7 @@ PostgreSQL is ideal for:
 queue-storage:
   driver: postgres
   config:
+    # sslmode=disable for local development only; use sslmode=require or higher in production
     connection-string: "postgres://user:pass@localhost:5432/querator?sslmode=disable"
 
 partition-storage:
@@ -256,62 +247,6 @@ Querator uses partial indexes to optimize common queries:
 
 These indexes keep leasing fast even with millions of items.
 
-### Write Performance
-
-PostgreSQL handles high write throughput:
-- **Batching**: Querator batches produce operations for efficiency
-- **Transactions**: ACID guarantees for item operations
-- **WAL**: Write-ahead logging for durability
-
-Expect:
-- **Produce**: 5,000-20,000 items/sec per Querator instance
-- **Lease**: 2,000-10,000 items/sec
-- **Complete**: 2,000-10,000 items/sec
-
-Actual performance depends on PostgreSQL hardware, network latency, and item size.
-
-### Query Optimization
-
-For best performance:
-- Ensure indexes are used (check with `EXPLAIN ANALYZE`)
-- Keep item payloads reasonably sized (<1MB)
-- Use connection pooling
-- Consider read replicas for scaling reads
-
-### Scaling Strategies
-
-**Vertical Scaling:**
-- Increase PostgreSQL server CPU/RAM/disk
-- Use faster storage (NVMe SSDs)
-- Tune PostgreSQL settings (`shared_buffers`, `work_mem`, etc.)
-
-**Horizontal Scaling:**
-- Use PostgreSQL replication (read replicas)
-- Distribute partitions across multiple Querator instances
-- Consider sharding across multiple databases
-
-## High Availability
-
-### PostgreSQL Replication
-
-Use PostgreSQL replication for HA:
-
-```
-Primary (Read/Write) --> Standby (Read-Only)
-```
-
-Configure Querator to connect to the primary:
-
-```yaml
-partition-storage:
-  - name: postgres-01
-    driver: postgres
-    config:
-      connection-string: "postgres://user:pass@primary.db:5432/querator"
-```
-
-Use a connection pooler (PgBouncer, pgpool-II) or load balancer to handle failover.
-
 ### Managed Services
 
 Cloud providers offer managed PostgreSQL with HA:
@@ -329,133 +264,6 @@ partition-storage:
     config:
       connection-string: "postgres://user:pass@managed-postgres.cloud:5432/querator?sslmode=require"
 ```
-
-## Backup and Recovery
-
-### Backup Strategies
-
-**Option 1: PostgreSQL pg_dump**
-
-```bash
-pg_dump -h localhost -U querator_user -d querator -F c -f querator_backup.dump
-```
-
-**Option 2: Continuous Archiving (WAL)**
-
-Configure PostgreSQL for point-in-time recovery (PITR):
-- Enable WAL archiving
-- Use `pg_basebackup` for base backups
-- Archive WAL files to S3/GCS
-
-**Option 3: Managed Service Backups**
-
-Use your cloud provider's automated backup features:
-- AWS RDS: Automated backups and snapshots
-- Google Cloud SQL: Automated backups with retention
-- Azure Database: Automated backups with PITR
-
-### Recovery
-
-**From pg_dump:**
-
-```bash
-pg_restore -h localhost -U querator_user -d querator querator_backup.dump
-```
-
-**From PITR:**
-
-Follow PostgreSQL's point-in-time recovery process:
-1. Restore base backup
-2. Replay WAL files to desired point in time
-3. Promote to primary
-
-## Monitoring
-
-### Key Metrics
-
-Monitor these PostgreSQL metrics:
-- **Connection Count**: Ensure pool is not exhausted
-- **Query Latency**: P95/P99 latency for lease/produce operations
-- **Table Size**: Growth rate of `items_*` tables
-- **Index Usage**: Verify indexes are used efficiently
-- **WAL Size**: Monitor write-ahead log disk usage
-
-### Useful Queries
-
-**Check connection count:**
-
-```sql
-SELECT count(*) FROM pg_stat_activity WHERE datname = 'querator';
-```
-
-**Check table sizes:**
-
-```sql
-SELECT
-    schemaname,
-    tablename,
-    pg_size_pretty(pg_total_relation_size(schemaname||'.'||tablename)) AS size
-FROM pg_tables
-WHERE tablename LIKE 'items_%'
-ORDER BY pg_total_relation_size(schemaname||'.'||tablename) DESC;
-```
-
-**Check index usage:**
-
-```sql
-SELECT
-    schemaname,
-    tablename,
-    indexname,
-    idx_scan
-FROM pg_stat_user_indexes
-WHERE tablename LIKE 'items_%'
-ORDER BY idx_scan DESC;
-```
-
-## Troubleshooting
-
-### Connection Pool Exhausted
-
-```
-Error: failed to acquire connection: all connections in pool are busy
-```
-
-**Solutions:**
-1. Increase `max-conns` in configuration
-2. Increase PostgreSQL's `max_connections` setting
-3. Scale horizontally with more Querator instances
-
-### Slow Queries
-
-If operations are slow:
-1. Check query plans with `EXPLAIN ANALYZE`
-2. Ensure indexes are being used
-3. Increase PostgreSQL resources (CPU, RAM)
-4. Check network latency between Querator and PostgreSQL
-
-### Table Size Growth
-
-If tables grow too large:
-1. Implement expiry on items (`expire_timeout` in queue config)
-2. Use dead letter queues to remove failed items
-3. Archive old items to cold storage
-4. Increase `VACUUM` frequency
-
-## Migration
-
-### From InMemory to PostgreSQL
-
-Change the configuration and restart Querator. Existing queues will be lost (InMemory has no persistence).
-
-### From BadgerDB to PostgreSQL
-
-Currently, there is no automated migration tool. To migrate:
-1. Set up PostgreSQL backend
-2. Create queues in new setup
-3. Drain old queues (process all items)
-4. Switch to PostgreSQL configuration
-5. Start producing to new queues
 
 ## Additional Resources
 

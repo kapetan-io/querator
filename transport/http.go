@@ -80,10 +80,9 @@ type HTTPHandler struct {
 	metrics        http.Handler
 	service        Service
 	maxProduceSize int64
-	version        string
 }
 
-func NewHTTPHandler(s Service, metrics http.Handler, maxProduceSize int64, version string, log *slog.Logger) *HTTPHandler {
+func NewHTTPHandler(s Service, metrics http.Handler, maxProduceSize int64, log *slog.Logger) *HTTPHandler {
 	set.Default(&maxProduceSize, int64(5*duh.MegaByte))
 
 	return &HTTPHandler{
@@ -97,7 +96,6 @@ func NewHTTPHandler(s Service, metrics http.Handler, maxProduceSize int64, versi
 		}, []string{"path"}),
 		maxProduceSize: maxProduceSize,
 		metrics:        metrics,
-		version:        version,
 		log:            log,
 		service:        s,
 	}
@@ -399,7 +397,7 @@ func (h *HTTPHandler) StorageItemsDelete(ctx context.Context, w http.ResponseWri
 }
 
 func (h *HTTPHandler) Health(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-	health, err := h.service.Health(ctx, h.version)
+	health, err := h.service.Health(ctx)
 	if err != nil {
 		h.ReplyError(w, r, err)
 		return

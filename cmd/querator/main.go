@@ -2,14 +2,13 @@ package main
 
 import (
 	"fmt"
-	"github.com/spf13/cobra"
 	"os"
+
+	"github.com/kapetan-io/querator"
+	"github.com/spf13/cobra"
 )
 
-var (
-	Version = "dev-build"
-	flags   FlagParams
-)
+var flags FlagParams
 
 type FlagParams struct {
 	// Global Flags
@@ -83,7 +82,7 @@ to interact with a running Querator instance via its HTTP API.`,
 		Short: "Print the version number",
 		Long:  "Print the version number of Querator",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Printf("querator %s\n", Version)
+			fmt.Printf("querator %s\n", querator.Version)
 		},
 	})
 

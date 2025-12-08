@@ -18,6 +18,9 @@ package querator
 
 import (
 	"context"
+	"log/slog"
+	"time"
+
 	"github.com/kapetan-io/querator/internal"
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
@@ -26,9 +29,12 @@ import (
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/set"
 	"google.golang.org/protobuf/types/known/timestamppb"
-	"log/slog"
-	"time"
 )
+
+// Version is the current version of Querator, set at build time via ldflags:
+//
+//	go build -ldflags "-X github.com/kapetan-io/querator.Version=1.0.0"
+var Version = "dev-build"
 
 const (
 	DefaultListLimit = 1_000
@@ -515,7 +521,7 @@ func (s *Service) QueueStats(ctx context.Context, req *proto.QueueStatsRequest,
 	return nil
 }
 
-func (s *Service) Health(ctx context.Context, version string) (*transport.HealthResponse, error) {
+func (s *Service) Health(ctx context.Context) (*transport.HealthResponse, error) {
 	const healthTimeout = 5 * time.Second
 
 	healthCtx, cancel := context.WithTimeout(ctx, healthTimeout)
@@ -523,7 +529,7 @@ func (s *Service) Health(ctx context.Context, version string) (*transport.Health
 
 	response := &transport.HealthResponse{
 		Status:  transport.HealthStatusPass,
-		Version: version,
+		Version: Version,
 		Checks:  make(map[string][]transport.Check),
 	}
 

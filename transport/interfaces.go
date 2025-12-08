@@ -38,4 +38,5 @@ type Service interface {
 	QueueOps
 	QueueAdmin
 	StorageInspector
+	Health(context.Context) (*HealthResponse, error)
 }

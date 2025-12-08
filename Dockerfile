@@ -19,7 +19,7 @@ COPY . .
 ARG VERSION
 
 # Build the binary (static linking for distroless compatibility)
-RUN CGO_ENABLED=0 go build -ldflags "-w -s -X main.Version=$VERSION" -o querator ./cmd/querator
+RUN CGO_ENABLED=0 go build -ldflags "-w -s -X github.com/kapetan-io/querator.Version=$VERSION" -o querator ./cmd/querator
 
 # Final stage - use distroless for smaller image and better cross-platform support
 FROM gcr.io/distroless/static-debian12:nonroot

@@ -10,7 +10,6 @@
 [![Coverage Status](https://coveralls.io/repos/github/kapetan-io/querator/badge.svg?branch=main)](https://coveralls.io/github/kapetan-io/querator?branch=main)
 [![Go Reference](https://pkg.go.dev/badge/github.com/kapetan-io/querator.svg)](https://pkg.go.dev/github.com/kapetan-io/querator)
 
-
 Querator is a highly scalable, high performance **Almost Exactly Once
 Delivery** (AEOD) Queue system designed to enable developers to build
 event-driven, highly resilient, distributed, high-performance applications. The
@@ -61,34 +60,40 @@ messages a day in a very efficient and cost-effective manner, Meta (aka FaceBook
 scaled to billions of messages. The closed source version of Querator we ran at mailgun was such a success I'm was 
 surprised to find no similar projects available in the open source community, so I'm building one!
 
-### Architecture Overview
-Querator enables API users to interact with queues created by the user, where each queue can consist of one or more
-partitions. Each partition is backed by a single table, collection, or bucket provided by the chosen backend storage.
+## Quick Start
 
-Partitions are a fundamental component of Querator, enabling the Querator to scale horizontally and handle high volumes
-of data efficiently. Partitions provide the following benefits.
+Get started with Querator in seconds using Docker:
 
-##### Scalability
-Partitions allow a single queue to be distributed across multiple Querator instances in a cluster. This distribution
-prevents any single instance from being overwhelmed by data volume, enabling the system to manage larger data volumes
-than a single server could handle. By dividing a queue into multiple partitions, Querator can scale beyond the limits
-of a single machine, making it suitable for large-scale distributed systems.
+### Prerequisites
+- [Docker](https://docs.docker.com/get-docker/) installed
 
-##### Parallel Distribution
-Partitions serve as units of parallelism, allowing multiple consumer instances to process different partitions
-concurrently. This significantly increases overall processing throughput. Unlike some legacy streaming and queuing
-platforms, clients are not assigned specific partitions. Instead, clients interact with Querator endpoints, which 
-automatically distribute producers and consumers requests across partitions as needed. This automation eliminates the
-need for operators to manage the number of consumers per partition to achieve even work distribution.
+### Start Querator
+```bash
+# Clone the repository
+git clone https://github.com/kapetan-io/querator.git
+cd querator
 
-For example, if there are 100 partitions and only one consumer, the single consumer will receive items from all 100
-partitions in a round-robin fashion as they become available. As the number of consumers increases, Querator
-automatically adjusts and rebalances the consumers to partitions to ensure even distribution, even if the number
-of consumers exceeds the total number of partitions. This is achieved through "Logical Queues," which dynamically
-grow and shrink based on the number of consumers and available partitions.
-See [ADR 0016 Queue Partitions](docs/adr/0016-queue-partitions.md) for details
+# Start Querator with docker compose
+docker compose up -d
+```
 
-![](docs/Querator%20Logical%20Queue%20Diagram.png)
+### Verify Health
+Check that Querator is running and healthy:
+```bash
+curl -s http://localhost:2319/health | jq .
+```
+
+Expected output:
+```json
+{
+  "status": "pass",
+  "version": "1.0.0",
+  "checks": {
+    "queues:storage": [{"status": "pass", "componentType": "datastore"}]
+  }
+}
+```
+
 
 ##### Disaggregated Storage Backends
 Each partition is supported by a user-selected data store backend. This separation of storage from processing gives
@@ -105,21 +110,28 @@ The only requirement for databases is support for ordered primary keys. With jus
 work with any database that implements the storage backend interface. Support for transactions and secondary
 indexes is not required, but can be used to improve Querator’s reliability and performance.
 
+### Storage Backends
+Querator supports multiple storage backends for different deployment scenarios. See the
+[Storage Documentation](docs/storage/README.md) for detailed configuration options for BadgerDB, PostgreSQL,
+and InMemory backends.
+
 ##### InMemory
 This backend stores all queues and items into RAM memory. This is useful when testing and creating a baseline for 
 benchmarking Querator operation. It can also be used in ephemeral environments where speed is valued over durability.
 
 ##### BadgerDB
 This backend uses [BadgerDB from DGraph](https://github.com/dgraph-io/badger) and is intended to be used for embedded
-or in limited resource environments where High Availability is not a concern. 
+or in limited resource environments where High Availability is not a concern.
+
+##### PostgreSQL
+This backend uses PostgreSQL for production deployments requiring high availability and horizontal scaling.
+See [PostgreSQL Storage Documentation](docs/storage/postgres.md) for configuration details.
 
 ##### Planned Backends
-- PostgreSQL
 - MySQL
-- SurrealDB
-- FoundationDB
+- MongoDB
 
-### Installation
+## Installation
 
 #### Homebrew (macOS/Linux)
 ```bash
@@ -131,6 +143,36 @@ brew install querator
 ```bash
 go install github.com/kapetan-io/querator/cmd/querator@latest
 ```
+
+## Architecture Overview
+Querator enables API users to interact with queues created by the user, where each queue can consist of one or more
+partitions. Each partition is backed by a single table, collection, or bucket provided by the chosen backend storage.
+
+Partitions are a fundamental component of Querator, enabling the Querator to scale horizontally and handle high volumes
+of data efficiently. Partitions provide the following benefits.
+
+##### Scalability
+Partitions allow a single queue to be distributed across multiple Querator instances in a cluster. This distribution
+prevents any single instance from being overwhelmed by data volume, enabling the system to manage larger data volumes
+than a single server could handle. By dividing a queue into multiple partitions, Querator can scale beyond the limits
+of a single machine, making it suitable for large-scale distributed systems.
+
+##### Parallel Distribution
+Partitions serve as units of parallelism, allowing multiple consumer instances to process different partitions
+concurrently. This significantly increases overall processing throughput. Unlike some legacy streaming and queuing
+platforms, clients are not assigned specific partitions. Instead, clients interact with Querator endpoints, which
+automatically distribute producers and consumers requests across partitions as needed. This automation eliminates the
+need for operators to manage the number of consumers per partition to achieve even work distribution.
+
+For example, if there are 100 partitions and only one consumer, the single consumer will receive items from all 100
+partitions in a round-robin fashion as they become available. As the number of consumers increases, Querator
+automatically adjusts and rebalances the consumers to partitions to ensure even distribution, even if the number
+of consumers exceeds the total number of partitions. This is achieved through "Logical Queues," which dynamically
+grow and shrink based on the number of consumers and available partitions.
+See [ADR 0016 Queue Partitions](docs/adr/0016-queue-partitions.md) for details
+
+![](docs/Querator%20Logical%20Queue%20Diagram.png)
+
 
 ### Embedded Querator
 Querator is designed as a library which exposes all API functionality via `Service` method calls. Users can use

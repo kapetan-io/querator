@@ -54,3 +54,33 @@ jobs:
             VERSION=${{ steps.version.outputs.VERSION }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  validate:
+    needs: docker
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Pull released image
+        run: docker pull ghcr.io/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+
+      - name: Update docker-compose to use released image
+        run: |
+          # Remove build section and use the released image directly
+          sed -i '/build:/,/VERSION:/d' docker-compose.yml
+          sed -i "s|image: ghcr.io/kapetan-io/querator:latest|image: ghcr.io/${{ env.IMAGE_NAME }}:${{ github.ref_name }}|" docker-compose.yml
+
+      - name: Run quickstart validation
+        run: go run ./cmd/quickstart --cleanup
+
+      - name: Verify version in container
+        run: |
+          docker run --rm ghcr.io/${{ env.IMAGE_NAME }}:${{ github.ref_name }} version | grep -q "${{ github.ref_name }}"
+          echo "Version verified: ${{ github.ref_name }}"

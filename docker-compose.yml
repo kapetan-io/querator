@@ -1,11 +1,16 @@
 services:
   querator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: dev-build
     image: ghcr.io/kapetan-io/querator:latest
     ports:
       - "2319:2319"
     volumes:
-      # Mount local data directory for persistent storage
-      - ./data:/data
+      # Mount to /tmp for ephemeral quick-start usage
+      - /tmp/querator:/data
     environment:
       - TZ=UTC
     restart: unless-stopped

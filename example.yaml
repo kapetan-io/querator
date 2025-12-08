@@ -16,7 +16,7 @@ logging:
 queue-storage:
   driver: badger
   config:
-    storage-dir: /tmp/badger-queue.db
+    storage-dir: /data/queues
 
 # Partition Storage defines where partitions are stored
 partition-storage:
@@ -24,7 +24,7 @@ partition-storage:
     driver: badger
     affinity: 1
     config:
-      storage-dir: /tmp/badger-01.db
+      storage-dir: /data/partitions
 
 #  - name: postgres-01
 #    driver: postgres
@@ -56,18 +56,18 @@ partition-storage:
 
 # Queues is a convenience that allows users to define queues without needing
 # to call the /v1/queues.create after querator starts.
-queues:
-  - name: queue-1
-    lease-timeout: 10m
-    expire-timeout: 10m
-    dead-queue: queue-1-dead
-    max-attempts: 10
-    reference: test
-    requested-partitions: 20
-    partitions:
-      - partition: 0
-        read-only: false
-        storage-name: badger-01
+#queues:
+#  - name: queue-1
+#    lease-timeout: 10m
+#    expire-timeout: 10m
+#    dead-queue: queue-1-dead
+#    max-attempts: 10
+#    reference: test
+#    requested-partitions: 20
+#    partitions:
+#      - partition: 0
+#        read-only: false
+#        storage-name: badger-01
 #      - partition: 1
 #        read-only: false
 #        storage-name: postgres-01

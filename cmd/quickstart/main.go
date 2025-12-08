@@ -185,11 +185,11 @@ func waitForHealth(endpoint string, timeout time.Duration) error {
 
 			var health transport.HealthResponse
 			if err := json.NewDecoder(resp.Body).Decode(&health); err != nil {
-				resp.Body.Close()
+				_ = resp.Body.Close()
 				verboseLog("Failed to decode health response, retrying: %v", err)
 				continue
 			}
-			resp.Body.Close()
+			_ = resp.Body.Close()
 
 			if health.Status == transport.HealthStatusPass {
 				return nil

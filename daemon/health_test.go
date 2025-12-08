@@ -35,7 +35,7 @@ func TestHealthEndpoint(t *testing.T) {
 
 	resp, err := client.Get("http://inmemory/health")
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, "application/health+json", resp.Header.Get("Content-Type"))

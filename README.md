@@ -10,6 +10,59 @@
 [![Coverage Status](https://coveralls.io/repos/github/kapetan-io/querator/badge.svg?branch=main)](https://coveralls.io/github/kapetan-io/querator?branch=main)
 [![Go Reference](https://pkg.go.dev/badge/github.com/kapetan-io/querator.svg)](https://pkg.go.dev/github.com/kapetan-io/querator)
 
+## Quick Start
+
+Get started with Querator in seconds using Docker:
+
+### Prerequisites
+- [Docker](https://docs.docker.com/get-docker/) installed
+
+### Start Querator
+```bash
+# Clone the repository
+git clone https://github.com/kapetan-io/querator.git
+cd querator
+
+# Start Querator with docker compose
+docker compose up -d
+```
+
+### Verify Health
+Check that Querator is running and healthy:
+```bash
+curl -s http://localhost:2319/health | jq .
+```
+
+Expected output:
+```json
+{
+  "status": "pass",
+  "version": "1.0.0",
+  "checks": {
+    "queues:storage": [{"status": "pass", "componentType": "datastore"}]
+  }
+}
+```
+
+### Queue Operations
+The `/health` endpoint uses JSON for easy verification, but all queue operations use an efficient protobuf API.
+For complete workflow examples including creating queues, producing items, leasing, and completing:
+
+- **Go Client**: Use the [Querator Go client](https://pkg.go.dev/github.com/kapetan-io/querator)
+- **Validation Script**: Run `go run quickstart.go` in the repo root for a complete working example
+- **API Documentation**: See the [API Reference](https://querator.io/api) for all endpoints
+
+### Stop Querator
+```bash
+docker compose down
+```
+
+### Storage Backends
+Querator supports multiple storage backends for different deployment scenarios. See the
+[Storage Documentation](docs/storage/README.md) for detailed configuration options for BadgerDB, PostgreSQL,
+and InMemory backends.
+
+---
 
 Querator is a highly scalable, high performance **Almost Exactly Once
 Delivery** (AEOD) Queue system designed to enable developers to build
@@ -111,10 +164,13 @@ benchmarking Querator operation. It can also be used in ephemeral environments w
 
 ##### BadgerDB
 This backend uses [BadgerDB from DGraph](https://github.com/dgraph-io/badger) and is intended to be used for embedded
-or in limited resource environments where High Availability is not a concern. 
+or in limited resource environments where High Availability is not a concern.
+
+##### PostgreSQL
+This backend uses PostgreSQL for production deployments requiring high availability and horizontal scaling.
+See [PostgreSQL Storage Documentation](docs/storage/postgres.md) for configuration details.
 
 ##### Planned Backends
-- PostgreSQL
 - MySQL
 - SurrealDB
 - FoundationDB

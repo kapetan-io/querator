@@ -20,6 +20,8 @@ type Config struct {
 	TLS *duh.TLSConfig
 	// ListenAddress is the address:port that Querator will listen on for public HTTP requests
 	ListenAddress string
+	// Version is the version string for this instance of Querator
+	Version string
 
 	// MaxProducePayloadSize is the maximum size in bytes Querator will read from a client
 	// during the `/queue.produce` request. The Maximum size includes the entire payload for a

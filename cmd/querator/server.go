@@ -60,6 +60,7 @@ func StartServer(ctx context.Context, w io.Writer) error {
 		return fmt.Errorf("while applying config file: %w", err)
 	}
 
+	conf.Version = Version
 	conf.Service.Log.Info(fmt.Sprintf("Querator %s (%s/%s)", Version, runtime.GOARCH, runtime.GOOS))
 	d, err := daemon.NewDaemon(ctx, conf)
 	if err != nil {

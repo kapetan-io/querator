@@ -18,6 +18,7 @@ package transport
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/duh-rpc/duh-go"
@@ -79,9 +80,10 @@ type HTTPHandler struct {
 	metrics        http.Handler
 	service        Service
 	maxProduceSize int64
+	version        string
 }
 
-func NewHTTPHandler(s Service, metrics http.Handler, maxProduceSize int64, log *slog.Logger) *HTTPHandler {
+func NewHTTPHandler(s Service, metrics http.Handler, maxProduceSize int64, version string, log *slog.Logger) *HTTPHandler {
 	set.Default(&maxProduceSize, int64(5*duh.MegaByte))
 
 	return &HTTPHandler{
@@ -95,6 +97,7 @@ func NewHTTPHandler(s Service, metrics http.Handler, maxProduceSize int64, log *
 		}, []string{"path"}),
 		maxProduceSize: maxProduceSize,
 		metrics:        metrics,
+		version:        version,
 		log:            log,
 		service:        s,
 	}
@@ -106,6 +109,11 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if r.URL.Path == "/metrics" && r.Method == http.MethodGet {
 		h.metrics.ServeHTTP(w, r)
+		return
+	}
+
+	if r.URL.Path == "/health" && r.Method == http.MethodGet {
+		h.Health(ctx, w, r)
 		return
 	}
 
@@ -388,6 +396,26 @@ func (h *HTTPHandler) StorageItemsDelete(ctx context.Context, w http.ResponseWri
 		return
 	}
 	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
+}
+
+func (h *HTTPHandler) Health(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	health, err := h.service.Health(ctx, h.version)
+	if err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/health+json")
+
+	statusCode := http.StatusOK
+	if health.Status == HealthStatusFail {
+		statusCode = http.StatusServiceUnavailable
+	}
+
+	w.WriteHeader(statusCode)
+	if err := json.NewEncoder(w).Encode(health); err != nil {
+		h.log.Error("failed to encode health response", "error", err)
+	}
 }
 
 // Describe fetches prometheus metrics to be registered

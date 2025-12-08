@@ -66,7 +66,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 
 	handler := transport.NewHTTPHandler(d.service, promhttp.InstrumentMetricHandler(
 		registry, promhttp.HandlerFor(registry, promhttp.HandlerOpts{}),
-	), d.conf.MaxProducePayloadSize, d.conf.Service.Log)
+	), d.conf.MaxProducePayloadSize, d.conf.Version, d.conf.Service.Log)
 	registry.MustRegister(handler)
 
 	switch {

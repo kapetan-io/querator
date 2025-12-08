@@ -22,6 +22,7 @@ import (
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/proto"
+	"github.com/kapetan-io/querator/transport"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/set"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -512,6 +513,39 @@ func (s *Service) QueueStats(ctx context.Context, req *proto.QueueStatsRequest,
 		res.LogicalQueues = append(res.LogicalQueues, ls)
 	}
 	return nil
+}
+
+func (s *Service) Health(ctx context.Context, version string) (*transport.HealthResponse, error) {
+	const healthTimeout = 5 * time.Second
+
+	healthCtx, cancel := context.WithTimeout(ctx, healthTimeout)
+	defer cancel()
+
+	response := &transport.HealthResponse{
+		Status:  transport.HealthStatusPass,
+		Version: version,
+		Checks:  make(map[string][]transport.Check),
+	}
+
+	var queues []types.QueueInfo
+	err := s.queues.List(healthCtx, &queues, types.ListOptions{Limit: 1})
+
+	check := transport.Check{
+		ComponentType: "datastore",
+		Time:          time.Now().UTC().Format(time.RFC3339),
+	}
+
+	if err != nil {
+		check.Status = transport.HealthStatusFail
+		check.Output = err.Error()
+		response.Status = transport.HealthStatusFail
+	} else {
+		check.Status = transport.HealthStatusPass
+	}
+
+	response.Checks["queues:storage"] = []transport.Check{check}
+
+	return response, nil
 }
 
 func (s *Service) Shutdown(ctx context.Context) error {

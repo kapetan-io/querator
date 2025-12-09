@@ -1,9 +1,9 @@
-package querator_test
+package service_test
 
 import (
 	"errors"
 	"github.com/duh-rpc/duh-go"
-	que "github.com/kapetan-io/querator"
+	svc "github.com/kapetan-io/querator/service"
 	"github.com/kapetan-io/querator/internal/store"
 	pb "github.com/kapetan-io/querator/proto"
 	"github.com/kapetan-io/tackle/clock"
@@ -59,7 +59,7 @@ func testRetry(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 	t.Run("QueueRetry", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: setup()})
+		d, c, ctx := newDaemon(t, 10*clock.Second, svc.ServiceConfig{StorageConfig: setup()})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
@@ -223,7 +223,7 @@ func testRetry(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		t.Run("QueueRetry", func(t *testing.T) {
 			var queueName = random.String("queue-", 10)
-			d, c, ctx := newDaemon(t, 5*clock.Second, que.ServiceConfig{StorageConfig: storage})
+			d, c, ctx := newDaemon(t, 5*clock.Second, svc.ServiceConfig{StorageConfig: storage})
 			defer d.Shutdown(t)
 
 			createQueueAndWait(t, ctx, c, &pb.QueueInfo{

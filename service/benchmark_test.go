@@ -1,9 +1,9 @@
-package querator_test
+package service_test
 
 import (
 	"context"
 	"fmt"
-	"github.com/kapetan-io/querator"
+	svc "github.com/kapetan-io/querator/service"
 	"github.com/kapetan-io/querator/daemon"
 	"github.com/kapetan-io/querator/internal/store"
 	pb "github.com/kapetan-io/querator/proto"
@@ -60,7 +60,7 @@ func BenchmarkProduce(b *testing.B) {
 			mask := len(items) - 1
 
 			d, err := daemon.NewDaemon(context.Background(), daemon.Config{
-				Service: querator.ServiceConfig{
+				Service: svc.ServiceConfig{
 					StorageConfig: tc.Setup(),
 					Log:           log,
 				},
@@ -107,7 +107,7 @@ func BenchmarkProduce(b *testing.B) {
 
 		// b.Run(tc.Name, func(b *testing.B) {
 		//	d, err := daemon.NewDaemon(context.Background(), daemon.Config{
-		//		ServiceConfig: querator.ServiceConfig{
+		//		ServiceConfig: svc.ServiceConfig{
 		//			Config: tc.Setup(clock.NewProvider()),
 		//			Log:           log,
 		//		},

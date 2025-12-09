@@ -1,10 +1,10 @@
-package querator_test
+package service_test
 
 import (
 	"context"
 	"fmt"
 	"github.com/duh-rpc/duh-go/retry"
-	que "github.com/kapetan-io/querator"
+	svc "github.com/kapetan-io/querator/service"
 	"github.com/kapetan-io/querator/internal/store"
 	pb "github.com/kapetan-io/querator/proto"
 	"github.com/kapetan-io/tackle/clock"
@@ -54,7 +54,7 @@ func TestPartitions(t *testing.T) {
 
 func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	defer goleak.VerifyNone(t)
-	d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: setup()})
+	d, c, ctx := newDaemon(t, 10*clock.Second, svc.ServiceConfig{StorageConfig: setup()})
 	defer func() {
 		d.Shutdown(t)
 		tearDown()
@@ -435,7 +435,7 @@ type Partition struct {
 	NotLeased int
 }
 
-func assertPartition(t *testing.T, ctx context.Context, c *que.Client, name string, expected Partition) {
+func assertPartition(t *testing.T, ctx context.Context, c *svc.Client, name string, expected Partition) {
 	t.Helper()
 	var list pb.StorageItemsListResponse
 	var leased, notLeased int

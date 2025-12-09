@@ -1,9 +1,9 @@
-package querator_test
+package service_test
 
 import (
 	"errors"
 	"github.com/duh-rpc/duh-go"
-	que "github.com/kapetan-io/querator"
+	svc "github.com/kapetan-io/querator/service"
 	"github.com/kapetan-io/querator/internal/store"
 	pb "github.com/kapetan-io/querator/proto"
 	"github.com/kapetan-io/tackle/clock"
@@ -56,7 +56,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	defer goleak.VerifyNone(t)
 
 	t.Run("CRUD", func(t *testing.T) {
-		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: setup()})
+		d, c, ctx := newDaemon(t, 10*clock.Second, svc.ServiceConfig{StorageConfig: setup()})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
@@ -87,7 +87,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			}))
 
 			var list pb.QueuesListResponse
-			require.NoError(t, c.QueuesList(ctx, &list, &que.ListOptions{
+			require.NoError(t, c.QueuesList(ctx, &list, &svc.ListOptions{
 				Pivot: queueName,
 				Limit: 1,
 			}))
@@ -110,7 +110,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		t.Run("GetByPartition", func(t *testing.T) {
 			var list pb.QueuesListResponse
 			l := queues[10]
-			require.NoError(t, c.QueuesList(ctx, &list, &que.ListOptions{
+			require.NoError(t, c.QueuesList(ctx, &list, &svc.ListOptions{
 				Pivot: l.QueueName,
 				Limit: 1,
 			}))
@@ -137,7 +137,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				}))
 
 				var list pb.QueuesListResponse
-				require.NoError(t, c.QueuesList(ctx, &list, &que.ListOptions{
+				require.NoError(t, c.QueuesList(ctx, &list, &svc.ListOptions{
 					Pivot: l.QueueName,
 					Limit: 1,
 				}))
@@ -169,7 +169,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				}))
 
 				var list pb.QueuesListResponse
-				require.NoError(t, c.QueuesList(ctx, &list, &que.ListOptions{
+				require.NoError(t, c.QueuesList(ctx, &list, &svc.ListOptions{
 					Pivot: l.QueueName,
 					Limit: 1,
 				}))
@@ -199,7 +199,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				}))
 
 				var list pb.QueuesListResponse
-				require.NoError(t, c.QueuesList(ctx, &list, &que.ListOptions{
+				require.NoError(t, c.QueuesList(ctx, &list, &svc.ListOptions{
 					Pivot: l.QueueName,
 					Limit: 1,
 				}))
@@ -225,7 +225,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				}))
 
 				var list pb.QueuesListResponse
-				require.NoError(t, c.QueuesList(ctx, &list, &que.ListOptions{
+				require.NoError(t, c.QueuesList(ctx, &list, &svc.ListOptions{
 					Pivot: l.QueueName,
 					Limit: 1,
 				}))
@@ -260,7 +260,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				}))
 
 				var list pb.QueuesListResponse
-				require.NoError(t, c.QueuesList(ctx, &list, &que.ListOptions{
+				require.NoError(t, c.QueuesList(ctx, &list, &svc.ListOptions{
 					Pivot: l.QueueName,
 					Limit: 1,
 				}))
@@ -284,7 +284,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 			// Ensure the queue still exists
 			var list pb.QueuesListResponse
-			require.NoError(t, c.QueuesList(ctx, &list, &que.ListOptions{
+			require.NoError(t, c.QueuesList(ctx, &list, &svc.ListOptions{
 				Pivot: l.QueueName,
 				Limit: 1,
 			}))
@@ -295,7 +295,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			require.NoError(t, c.QueuesDelete(ctx, &pb.QueuesDeleteRequest{QueueName: l.QueueName}))
 
 			// Partition should no longer exist
-			require.NoError(t, c.QueuesList(ctx, &list, &que.ListOptions{
+			require.NoError(t, c.QueuesList(ctx, &list, &svc.ListOptions{
 				Pivot: l.QueueName,
 				Limit: 1,
 			}))
@@ -401,7 +401,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 					// Verify queue was created with correct DLQ
 					var list pb.QueuesListResponse
-					require.NoError(t, c.QueuesList(ctx, &list, &que.ListOptions{
+					require.NoError(t, c.QueuesList(ctx, &list, &svc.ListOptions{
 						Pivot: queueName,
 						Limit: 1,
 					}))
@@ -414,7 +414,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	})
 
 	t.Run("List", func(t *testing.T) {
-		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: setup()})
+		d, c, ctx := newDaemon(t, 10*clock.Second, svc.ServiceConfig{StorageConfig: setup()})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
@@ -428,7 +428,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		t.Run("MoreThanAvailable", func(t *testing.T) {
 			var more pb.QueuesListResponse
-			require.NoError(t, c.QueuesList(ctx, &more, &que.ListOptions{Limit: 20_000}))
+			require.NoError(t, c.QueuesList(ctx, &more, &svc.ListOptions{Limit: 20_000}))
 			assert.Equal(t, 50, len(more.Items))
 
 			compareQueueInfo(t, queues[0], more.Items[0])
@@ -436,7 +436,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		})
 		t.Run("LessThanAvailable", func(t *testing.T) {
 			var less pb.QueuesListResponse
-			require.NoError(t, c.QueuesList(ctx, &less, &que.ListOptions{Limit: 30}))
+			require.NoError(t, c.QueuesList(ctx, &less, &svc.ListOptions{Limit: 30}))
 			assert.Equal(t, 30, len(less.Items))
 
 			compareQueueInfo(t, queues[0], less.Items[0])
@@ -444,14 +444,14 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		})
 		t.Run("GetOne", func(t *testing.T) {
 			var one pb.QueuesListResponse
-			require.NoError(t, c.QueuesList(ctx, &one, &que.ListOptions{Pivot: queues[20].QueueName, Limit: 1}))
+			require.NoError(t, c.QueuesList(ctx, &one, &svc.ListOptions{Pivot: queues[20].QueueName, Limit: 1}))
 			assert.Equal(t, 1, len(one.Items))
 
 			compareQueueInfo(t, queues[20], one.Items[len(one.Items)-1])
 		})
 		t.Run("First", func(t *testing.T) {
 			var first pb.QueuesListResponse
-			require.NoError(t, c.QueuesList(ctx, &first, &que.ListOptions{Limit: 1}))
+			require.NoError(t, c.QueuesList(ctx, &first, &svc.ListOptions{Limit: 1}))
 			assert.Equal(t, 1, len(first.Items))
 
 			compareQueueInfo(t, queues[0], first.Items[len(first.Items)-1])
@@ -459,7 +459,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		t.Run("WithPivot", func(t *testing.T) {
 			name := queues[20].QueueName
 			var pivot pb.QueuesListResponse
-			err := c.QueuesList(ctx, &pivot, &que.ListOptions{Pivot: name, Limit: 10})
+			err := c.QueuesList(ctx, &pivot, &svc.ListOptions{Pivot: name, Limit: 10})
 			require.NoError(t, err)
 
 			assert.Equal(t, 10, len(pivot.Items))
@@ -470,14 +470,14 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			t.Run("PageThroughItems", func(t *testing.T) {
 				name := queues[0].QueueName
 				var page pb.QueuesListResponse
-				err := c.QueuesList(ctx, &page, &que.ListOptions{Pivot: name, Limit: 10})
+				err := c.QueuesList(ctx, &page, &svc.ListOptions{Pivot: name, Limit: 10})
 				require.NoError(t, err)
 				compareQueueInfo(t, queues[0], page.Items[0])
 				compareQueueInfo(t, queues[9], page.Items[9])
 
 				t.Run("PageIncludesPivot", func(t *testing.T) {
 					name = queues[9].QueueName
-					err = c.QueuesList(ctx, &page, &que.ListOptions{Pivot: name, Limit: 10})
+					err = c.QueuesList(ctx, &page, &svc.ListOptions{Pivot: name, Limit: 10})
 					require.NoError(t, err)
 					compareQueueInfo(t, queues[9], page.Items[0])
 					compareQueueInfo(t, queues[18], page.Items[9])
@@ -488,7 +488,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		t.Run("PivotNotFound", func(t *testing.T) {
 			var page pb.QueuesListResponse
 			require.NoError(t, c.QueuesList(ctx, &page,
-				&que.ListOptions{Pivot: "pueue-00000", Limit: 1}))
+				&svc.ListOptions{Pivot: "pueue-00000", Limit: 1}))
 
 			// Should return the first queue in the list
 			assert.Equal(t, 1, len(page.Items))
@@ -498,7 +498,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	})
 
 	t.Run("Errors", func(t *testing.T) {
-		d, c, ctx := newDaemon(t, 10*clock.Second, que.ServiceConfig{StorageConfig: setup()})
+		d, c, ctx := newDaemon(t, 10*clock.Second, svc.ServiceConfig{StorageConfig: setup()})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
@@ -693,13 +693,13 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		t.Run("QueuesList", func(t *testing.T) {
 			for _, test := range []struct {
 				Name string
-				Opts *que.ListOptions
+				Opts *svc.ListOptions
 				Msg  string
 				Code int
 			}{
 				{
 					Name: "InvalidLimit",
-					Opts: &que.ListOptions{
+					Opts: &svc.ListOptions{
 						Limit: -1,
 					},
 					Msg:  "limit is invalid; limit cannot be negative",
@@ -707,7 +707,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				},
 				{
 					Name: "InvalidLimit",
-					Opts: &que.ListOptions{
+					Opts: &svc.ListOptions{
 						Limit: math.MaxInt32,
 					},
 					Msg:  "limit is invalid; cannot be greater than 65536",
@@ -715,7 +715,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				},
 				{
 					Name: "InvalidPivot",
-					Opts: &que.ListOptions{
+					Opts: &svc.ListOptions{
 						Pivot: "invalid~queue",
 					},
 					Msg:  "pivot is invalid; 'invalid~queue' cannot contain '~' character",

@@ -1,4 +1,4 @@
-package querator
+package service
 
 import (
 	"github.com/kapetan-io/querator/internal/types"

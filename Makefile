@@ -11,28 +11,26 @@ proto: ## Build protos
 
 .PHONY: test
 test:
-	go test -timeout 10m -v -p=1 -count=1 -race -logging=ci ./...
+	TEST_LOGGING=ci go test -timeout 10m -v -p=1 -count=1 -race $$(go list ./... | grep -v /benchmarks)
 
 .PHONY: cover
 cover:
 	-rm coverage.html coverage.out
-	go test -timeout 10m -v -p=1 -count=1 -logging=ci --coverprofile=coverage.out -covermode=atomic -coverpkg=./... ./...
+	TEST_LOGGING=ci go test -timeout 10m -v -p=1 -count=1 --coverprofile=coverage.out -covermode=atomic -coverpkg=./... $$(go list ./... | grep -v /benchmarks)
 	go tool cover -html=coverage.out -o coverage.html
 	open coverage.html
 
 .PHONY: benchmark
-benchmark:
-	@echo "Generating structured benchmark data..."
-	@mkdir -p benchmarks/benchmark_results
-	go test -v ./benchmarks -run TestRunAllBenchmarks -timeout 30m
-	@echo "Benchmark data saved to benchmarks/benchmark_results/"
+benchmark: ## Run all benchmarks
+	go test -bench=. -benchmem -timeout 30m ./benchmarks/...
+
+.PHONY: benchmark-produce
+benchmark-produce: ## Run produce benchmarks only
+	go test -bench=BenchmarkProduceOperations -benchmem -timeout 10m ./benchmarks/...
 
 .PHONY: benchmark-throughput
-benchmark-throughput:
-	@echo "Running throughput benchmark (30s per config, ~2.5 minutes)..."
-	@mkdir -p benchmarks/benchmark_results
-	go test -v ./benchmarks -run TestThroughputBenchmark -timeout 10m
-	@echo "Throughput results saved to benchmarks/benchmark_results/throughput_results.csv"
+benchmark-throughput: ## Run throughput benchmarks
+	go test -bench=BenchmarkThroughput -benchmem -timeout 10m ./benchmarks/...
 
 
 .PHONY: lint
@@ -54,7 +52,7 @@ vet:
 
 .PHONY: fuzz
 fuzz: ## Run fuzz tests for 10 minutes
-	go test -fuzz=FuzzQueueInvariant -fuzztime=10m .
+	go test -fuzz=FuzzQueueInvariant -fuzztime=10m ./service/...
 
 .PHONY: docker
 docker: ## Build Docker image

@@ -3,7 +3,6 @@ package service_test
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"github.com/duh-rpc/duh-go"
 	"github.com/duh-rpc/duh-go/retry"
@@ -45,22 +44,19 @@ type NewStorageFunc func() store.Config
 var log *slog.Logger
 
 func TestMain(m *testing.M) {
-
-	logFlag := flag.String("logging", "", "indicates the type of logging during tests. "+
-		"If unset tests run with debug level colored text log output. "+
-		"If set to 'ci' discards logs during tests which greatly reduces logs during CI runs")
-	flag.Parse()
-
-	switch *logFlag {
-	case "":
+	// TEST_LOGGING env var controls log output:
+	// - unset or empty: debug level colored text log output
+	// - "ci": discards logs (reduces noise during CI runs)
+	switch os.Getenv("TEST_LOGGING") {
+	case "ci":
+		log = slog.New(slog.NewTextHandler(io.Discard, nil))
+	default:
 		log = slog.New(color.NewLog(&color.LogOptions{
 			HandlerOptions: slog.HandlerOptions{
 				ReplaceAttr: color.SuppressAttrs(slog.TimeKey),
 				Level:       internal.LevelDebugAll,
 			},
 		}))
-	case "ci":
-		log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 
 	goleak.VerifyTestMain(m)

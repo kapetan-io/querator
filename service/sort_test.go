@@ -1,165 +1,12 @@
 package service_test
 
 import (
-	"context"
-	"fmt"
-	svc "github.com/kapetan-io/querator/service"
-	"github.com/kapetan-io/querator/daemon"
-	"github.com/kapetan-io/querator/internal/store"
-	pb "github.com/kapetan-io/querator/proto"
-	"github.com/kapetan-io/tackle/clock"
-	"github.com/kapetan-io/tackle/random"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"io"
-	"log/slog"
-	"math/rand"
-	"runtime"
 	"slices"
 	"sort"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
-
-func BenchmarkProduce(b *testing.B) {
-	b.Logf("Current Operating System has '%d' CPUs\n", runtime.NumCPU())
-	// badgerdb := badgerTestSetup{Dir: b.TempDir()}
-
-	log = slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelError}))
-
-	for _, tc := range []struct {
-		Setup    NewStorageFunc
-		TearDown func()
-		Name     string
-	}{
-		{
-			Name: "InMemory",
-			Setup: func() store.Config {
-				return setupMemoryStorage(store.Config{})
-			},
-			TearDown: func() {},
-		},
-		// {
-		// 	Name: "BadgerDB",
-		// 	Setup: func() store.Config {
-		// 		return badgerdb.Setup(store.BadgerConfig{})
-		// 	},
-		// 	TearDown: func() {
-		// 		badgerdb.Teardown()
-		// 	},
-		// },
-
-		// {
-		// 	Name: "SurrealDB",
-		// },
-		// {
-		// 	Name: "PostgresSQL",
-		// },
-	} {
-		b.Run(tc.Name, func(b *testing.B) {
-			items := generateProduceItems(1_000)
-			mask := len(items) - 1
-
-			d, err := daemon.NewDaemon(context.Background(), daemon.Config{
-				Service: svc.ServiceConfig{
-					StorageConfig: tc.Setup(),
-					Log:           log,
-				},
-			})
-			require.NoError(b, err)
-			defer func() {
-				_ = d.Shutdown(context.Background())
-			}()
-			s := d.Service()
-			require.NoError(b, s.QueuesCreate(context.Background(), &pb.QueueInfo{
-				QueueName:           "bench-queue",
-				ExpireTimeout:       "24h0m0s",
-				LeaseTimeout:        "1m0s",
-				RequestedPartitions: 1,
-			}))
-
-			for _, p := range []int{1, 8, 24, 32} {
-				b.Run(fmt.Sprintf("Produce_%d", p), func(b *testing.B) {
-					runtime.GOMAXPROCS(p)
-					start := clock.Now()
-					b.ResetTimer()
-
-					b.RunParallel(func(p *testing.PB) {
-						index := int(rand.Uint32() & uint32(mask))
-
-						for p.Next() {
-							err := s.QueueProduce(context.Background(), &pb.QueueProduceRequest{
-								Items:          items[index&mask : index+1&mask],
-								QueueName:      "bench-queue",
-								RequestTimeout: "1m",
-							})
-							if err != nil {
-								b.Error(err)
-								return
-							}
-						}
-
-					})
-					opsPerSec := float64(b.N) / clock.Since(start).Seconds()
-					b.ReportMetric(opsPerSec, "ops/s")
-				})
-			}
-		})
-
-		// b.Run(tc.Name, func(b *testing.B) {
-		//	d, err := daemon.NewDaemon(context.Background(), daemon.Config{
-		//		ServiceConfig: svc.ServiceConfig{
-		//			Config: tc.Setup(clock.NewProvider()),
-		//			Log:           log,
-		//		},
-		//	})
-		//	require.NoError(b, err)
-		//	defer func() {
-		//		_ = d.Shutdown(context.Background())
-		//	}()
-		//	s := d.Service()
-		//
-		//	b.Run("QueuesCreate", func(b *testing.B) {
-		//		start := clock.Now()
-		//		b.ResetTimer()
-		//
-		//		for n := 0; n < b.N; n++ {
-		//			timeOuts := random.Slice(validTimeouts)
-		//			info := pb.QueueInfo{
-		//				QueueName:           random.String("queue-", 10),
-		//				DeadQueue:           random.String("dead-", 10),
-		//				Reference:           random.String("ref-", 10),
-		//				MaxAttempts:         int32(rand.Intn(100)),
-		//				LeaseTimeout:      timeOuts.Lease,
-		//				ExpireTimeout:         timeOuts.Dead,
-		//				RequestedPartitions: 1,
-		//			}
-		//
-		//			err = s.QueuesCreate(context.Background(), &info)
-		//			if err != nil {
-		//				b.Error(err)
-		//				return
-		//			}
-		//		}
-		//
-		//		opsPerSec := float64(b.N) / clock.Since(start).Seconds()
-		// 		b.ReportMetric(opsPerSec, "ops/s")
-		// 	})
-		// })
-	}
-}
-
-func generateProduceItems(size int) []*pb.QueueProduceItem {
-	items := make([]*pb.QueueProduceItem, 0, size)
-	for i := 0; i < size; i++ {
-		items = append(items, &pb.QueueProduceItem{
-			Bytes:     []byte(fmt.Sprintf("%d-%s", i, random.String("payload-", 256))),
-			Reference: random.String("ref-", 10),
-			Encoding:  random.String("enc-", 10),
-			Kind:      random.String("kind-", 10),
-		})
-	}
-	return items
-}
 
 // ----------------------------------
 // Sort Benchmarks
@@ -224,7 +71,7 @@ func (m *method) Failures() int64 {
 	return m.failures
 }
 
-// Ensure sorts items with failures last
+// TestSort ensures sorts items with failures last
 func TestSort(t *testing.T) {
 	o := []MethodCount{
 		&method{count: -1},

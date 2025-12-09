@@ -76,9 +76,20 @@ jobs:
           # Remove build section and use the released image directly
           sed -i '/build:/,/VERSION:/d' docker-compose.yml
           sed -i "s|image: ghcr.io/kapetan-io/querator:latest|image: ghcr.io/${{ env.IMAGE_NAME }}:${{ github.ref_name }}|" docker-compose.yml
+          echo "Modified docker-compose.yml:"
+          cat docker-compose.yml
 
       - name: Run quickstart validation
-        run: go run ./cmd/quickstart --cleanup
+        run: go run ./cmd/quickstart --cleanup --verbose
+        timeout-minutes: 5
+
+      - name: Show container logs on failure
+        if: failure()
+        run: |
+          echo "=== Docker Compose Logs ==="
+          docker compose logs --tail=100 || true
+          echo "=== Docker PS ==="
+          docker ps -a || true
 
       - name: Verify version in container
         run: |

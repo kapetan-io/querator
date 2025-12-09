@@ -49,15 +49,15 @@ const (
 	defaultEndpoint = "http://localhost:2319"
 	queueName       = "quickstart-test"
 	numItems        = 3
-	healthTimeout   = 30 * time.Second
 	healthRetry     = 1 * time.Second
 )
 
 var (
-	endpoint   = flag.String("endpoint", defaultEndpoint, "Querator endpoint")
-	skipDocker = flag.Bool("skip-docker", false, "Skip docker compose up/down (use existing instance)")
-	cleanup    = flag.Bool("cleanup", false, "Run docker compose down after tests")
-	verbose    = flag.Bool("verbose", false, "Print detailed output")
+	endpoint      = flag.String("endpoint", defaultEndpoint, "Querator endpoint")
+	skipDocker    = flag.Bool("skip-docker", false, "Skip docker compose up/down (use existing instance)")
+	cleanup       = flag.Bool("cleanup", false, "Run docker compose down after tests")
+	verbose       = flag.Bool("verbose", false, "Print detailed output")
+	healthTimeout = flag.Duration("health-timeout", 60*time.Second, "Timeout for health check")
 )
 
 func main() {
@@ -98,7 +98,7 @@ func run() error {
 		printCheck("Docker compose started")
 	}
 
-	if err := waitForHealth(*endpoint, healthTimeout); err != nil {
+	if err := waitForHealth(*endpoint, *healthTimeout); err != nil {
 		return err
 	}
 	printCheck("Health check passed (status: pass)")

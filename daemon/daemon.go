@@ -49,7 +49,7 @@ func NewDaemon(ctx context.Context, conf Config) (*Daemon, error) {
 
 	conf.SetDefaults()
 
-	s, err := service.NewService(conf.Service)
+	s, err := service.New(conf.Service)
 	if err != nil {
 		return nil, err
 	}

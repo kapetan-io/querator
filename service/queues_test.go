@@ -58,7 +58,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	defer goleak.VerifyNone(t)
 
 	t.Run("CRUD", func(t *testing.T) {
-		d, c, ctx := newDaemon(t, 10*clock.Second, svc.ServiceConfig{StorageConfig: setup()})
+		d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
@@ -416,7 +416,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	})
 
 	t.Run("List", func(t *testing.T) {
-		d, c, ctx := newDaemon(t, 10*clock.Second, svc.ServiceConfig{StorageConfig: setup()})
+		d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
@@ -500,7 +500,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	})
 
 	t.Run("Errors", func(t *testing.T) {
-		d, c, ctx := newDaemon(t, 10*clock.Second, svc.ServiceConfig{StorageConfig: setup()})
+		d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()

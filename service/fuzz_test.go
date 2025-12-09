@@ -37,7 +37,7 @@ func FuzzQueueInvariant(f *testing.F) {
 			itemCount < 1 || batchSize < 1 || len(payload) < 1 {
 			t.Skip()
 		}
-		d, c, ctx := newFuzzDaemon(t, svc.ServiceConfig{
+		d, c, ctx := newFuzzDaemon(t, svc.Config{
 			StorageConfig: setupMemoryStorage(store.Config{}),
 		})
 		defer d.Shutdown(t)
@@ -169,7 +169,7 @@ func FuzzQueueInvariant(f *testing.F) {
 	})
 }
 
-func newFuzzDaemon(t *testing.T, conf svc.ServiceConfig) (*testDaemon, *querator.Client, context.Context) {
+func newFuzzDaemon(t *testing.T, conf svc.Config) (*testDaemon, *querator.Client, context.Context) {
 	t.Helper()
 
 	set.Default(&conf.Log, log)

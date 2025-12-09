@@ -49,7 +49,7 @@ func BenchmarkProduce(b *testing.B) {
 			mask := len(items) - 1
 
 			d, err := daemon.NewDaemon(context.Background(), daemon.Config{
-				Service: svc.ServiceConfig{
+				Service: svc.Config{
 					StorageConfig: tc.Setup(),
 					Log:           log,
 				},

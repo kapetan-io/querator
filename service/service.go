@@ -36,7 +36,7 @@ const (
 	DefaultListLimit = 1_000
 )
 
-type ServiceConfig struct {
+type Config struct {
 	// Log is the logging implementation used by this Querator instance
 	Log *slog.Logger
 	// StorageConfig is the configured storage backends
@@ -65,10 +65,10 @@ type ServiceConfig struct {
 
 type Service struct {
 	queues *internal.QueuesManager
-	conf   ServiceConfig
+	conf   Config
 }
 
-func NewService(conf ServiceConfig) (*Service, error) {
+func New(conf Config) (*Service, error) {
 	set.Default(&conf.Log, slog.Default())
 	set.Default(&conf.ReadTimeout, 3*time.Second)
 	set.Default(&conf.WriteTimeout, 3*time.Second)

@@ -14,7 +14,7 @@ import (
 
 type Config struct {
 	// Explicit composition instead of embedding
-	Service service.ServiceConfig
+	Service service.Config
 
 	// TLS is the TLS config used for public server and clients
 	TLS *duh.TLSConfig

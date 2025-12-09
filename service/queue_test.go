@@ -71,7 +71,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 	t.Run("ProduceAndLease", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 10*clock.Second, svc.ServiceConfig{StorageConfig: setup()})
+		d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
@@ -158,7 +158,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 	t.Run("Produce", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 10*clock.Second, svc.ServiceConfig{StorageConfig: setup()})
+		d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
@@ -361,7 +361,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer now.UnFreeze()
 
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 60*clock.Second, svc.ServiceConfig{
+		d, c, ctx := newDaemon(t, 60*clock.Second, svc.Config{
 			StorageConfig: setup(),
 			Clock:         now,
 		})
@@ -444,7 +444,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	t.Run("Lease", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
 		clientID := random.String("client-", 10)
-		d, c, ctx := newDaemon(t, 30*clock.Second, svc.ServiceConfig{StorageConfig: setup()})
+		d, c, ctx := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: setup()})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
@@ -654,7 +654,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	t.Run("Complete", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
 		clientID := random.String("client-", 10)
-		d, c, ctx := newDaemon(t, 30*clock.Second, svc.ServiceConfig{StorageConfig: setup()})
+		d, c, ctx := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: setup()})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
@@ -743,7 +743,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	// 	defer now.UnFreeze()
 	//
 	// 	var queueName = random.String("queue-", 10)
-	// 	d, c, ctx := newDaemon(t, 10*clock.Second, svc.ServiceConfig{StorageConfig: setup(), Clock: now})
+	// 	d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup(), Clock: now})
 	// defer func() {
 	// 	d.Shutdown(t)
 	// 	tearDown()
@@ -825,7 +825,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	t.Run("Stats", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
 		clientID := random.String("client-", 10)
-		d, c, ctx := newDaemon(t, 30*clock.Second, svc.ServiceConfig{StorageConfig: setup()})
+		d, c, ctx := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: setup()})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
@@ -875,7 +875,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 	t.Run("QueueClear", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 10*clock.Second, svc.ServiceConfig{StorageConfig: setup()})
+		d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
@@ -950,7 +950,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		t.Run("QueueProduce", func(t *testing.T) {
 			var queueName = random.String("queue-", 10)
-			d, c, ctx := newDaemon(t, 5*clock.Second, svc.ServiceConfig{StorageConfig: storage})
+			d, c, ctx := newDaemon(t, 5*clock.Second, svc.Config{StorageConfig: storage})
 			defer d.Shutdown(t)
 			maxItems := produceRandomItems(1_001)
 
@@ -1076,7 +1076,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		t.Run("QueueLease", func(t *testing.T) {
 			var queueName = random.String("queue-", 10)
 			var clientID = random.String("client-", 10)
-			d, c, ctx := newDaemon(t, 10*clock.Second, svc.ServiceConfig{StorageConfig: storage})
+			d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: storage})
 			defer d.Shutdown(t)
 
 			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -1238,7 +1238,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		})
 		t.Run("QueueComplete", func(t *testing.T) {
 			var queueName = random.String("queue-", 10)
-			d, c, ctx := newDaemon(t, 5*clock.Second, svc.ServiceConfig{StorageConfig: storage})
+			d, c, ctx := newDaemon(t, 5*clock.Second, svc.Config{StorageConfig: storage})
 			defer d.Shutdown(t)
 
 			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
@@ -1364,7 +1364,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer now.UnFreeze()
 
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 10*clock.Second, svc.ServiceConfig{StorageConfig: setup(), Clock: now})
+		d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup(), Clock: now})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
@@ -1654,7 +1654,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 	t.Run("SourceID", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 10*clock.Second, svc.ServiceConfig{StorageConfig: setup()})
+		d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
@@ -1828,7 +1828,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 			var queueName = random.String("queue-", 10)
 			var dlqName = random.String("dlq-", 10)
-			d, c, ctx := newDaemon(t, 10*clock.Second, svc.ServiceConfig{StorageConfig: setup(), Clock: now})
+			d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup(), Clock: now})
 			defer func() {
 				d.Shutdown(t)
 				tearDown()
@@ -1938,7 +1938,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			defer now.UnFreeze()
 
 			var queueName = random.String("queue-", 10)
-			d, c, ctx := newDaemon(t, 10*clock.Second, svc.ServiceConfig{StorageConfig: setup(), Clock: now})
+			d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup(), Clock: now})
 			defer func() {
 				d.Shutdown(t)
 				tearDown()
@@ -2017,7 +2017,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		t.Run("Idempotency", func(t *testing.T) {
 			var dlqName = random.String("dlq-", 10)
-			d, c, ctx := newDaemon(t, 10*clock.Second, svc.ServiceConfig{StorageConfig: setup()})
+			d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
 			defer func() {
 				d.Shutdown(t)
 				tearDown()

@@ -91,7 +91,7 @@ func (td *testDaemon) Service() *svc.Service {
 	return td.d.Service()
 }
 
-func newDaemon(t *testing.T, duration clock.Duration, conf svc.ServiceConfig) (*testDaemon, *querator.Client, context.Context) {
+func newDaemon(t *testing.T, duration clock.Duration, conf svc.Config) (*testDaemon, *querator.Client, context.Context) {
 	t.Helper()
 
 	set.Default(&conf.Log, log)

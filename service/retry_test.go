@@ -59,7 +59,7 @@ func testRetry(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 	t.Run("QueueRetry", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 10*clock.Second, svc.ServiceConfig{StorageConfig: setup()})
+		d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
@@ -223,7 +223,7 @@ func testRetry(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		t.Run("QueueRetry", func(t *testing.T) {
 			var queueName = random.String("queue-", 10)
-			d, c, ctx := newDaemon(t, 5*clock.Second, svc.ServiceConfig{StorageConfig: storage})
+			d, c, ctx := newDaemon(t, 5*clock.Second, svc.Config{StorageConfig: storage})
 			defer d.Shutdown(t)
 
 			createQueueAndWait(t, ctx, c, &pb.QueueInfo{

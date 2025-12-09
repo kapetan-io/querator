@@ -68,9 +68,12 @@ func main() {
 
 	if err := run(); err != nil {
 		fmt.Printf("\n[✗] Error: %v\n", err)
-		if *cleanup && !*skipDocker {
-			fmt.Println("\n[~] Attempting cleanup...")
-			_ = stopDocker()
+		if !*skipDocker {
+			showDockerLogs()
+			if *cleanup {
+				fmt.Println("\n[~] Attempting cleanup...")
+				_ = stopDocker()
+			}
 		}
 		os.Exit(1)
 	}
@@ -163,6 +166,20 @@ func stopDocker() error {
 	return nil
 }
 
+func showDockerLogs() {
+	fmt.Println("\n[~] === Docker Compose Logs ===")
+	cmd := exec.Command("docker", "compose", "logs", "--tail=100")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	_ = cmd.Run()
+
+	fmt.Println("\n[~] === Docker PS ===")
+	cmd = exec.Command("docker", "ps", "-a")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	_ = cmd.Run()
+}
+
 func waitForHealth(endpoint string, timeout time.Duration) error {
 	verboseLog("Waiting for health endpoint...")
 
@@ -196,7 +213,21 @@ func waitForHealth(endpoint string, timeout time.Duration) error {
 				return nil
 			}
 
-			verboseLog("Health status not ready: %s", health.Status)
+			// Print health check details when status is fail
+			if health.Status == transport.HealthStatusFail {
+				verboseLog("Health status: %s", health.Status)
+				for name, checks := range health.Checks {
+					for _, check := range checks {
+						if check.Output != "" {
+							verboseLog("  %s: %s - %s", name, check.Status, check.Output)
+						} else {
+							verboseLog("  %s: %s", name, check.Status)
+						}
+					}
+				}
+			} else {
+				verboseLog("Health status not ready: %s", health.Status)
+			}
 		}
 	}
 }

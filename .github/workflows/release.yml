@@ -144,14 +144,6 @@ jobs:
         run: ./quickstart --cleanup --verbose
         timeout-minutes: 5
 
-      - name: Show container logs on failure
-        if: failure()
-        run: |
-          echo "=== Docker Compose Logs ==="
-          docker compose logs --tail=100 || true
-          echo "=== Docker PS ==="
-          docker ps -a || true
-
       - name: Verify version in container
         run: |
           docker run --rm ghcr.io/${{ env.IMAGE_NAME }}:${{ github.ref_name }} version | grep -q "${{ github.ref_name }}"

@@ -192,17 +192,62 @@ brew install querator
 The Homebrew formula is maintained in a separate repository:
 - **Repository**: https://github.com/kapetan-io/homebrew-kapetan
 - **Formula**: `Formula/querator.rb`
+- **Local path** (if tapped): `/opt/homebrew/Library/Taps/kapetan-io/homebrew-kapetan`
 
-### Updating the Formula
+### How Homebrew Builds Work
 
-After creating a new release, update the Homebrew formula:
+Understanding how Homebrew builds from source is important:
 
-1. **Calculate the SHA256** of the release tarball:
+1. **Tarball download**: When you run `brew install querator`, Homebrew downloads the tarball from the URL specified in the formula (e.g., `https://github.com/kapetan-io/querator/archive/v1.0.0.tar.gz`)
+
+2. **Source code snapshot**: The tarball contains the source code as it existed when the tag was created. This means:
+   - Formula changes (like fixing ldflags) only affect *future* releases
+   - Existing releases contain the code from when they were tagged
+   - To test formula changes, you must use `--HEAD` or create a new release
+
+3. **Build execution**: Homebrew runs the `install` block, which compiles the binary with the specified ldflags
+
+### Testing Formula Changes with HEAD
+
+Before creating a new release, test formula changes using HEAD (builds from latest main):
+
+```bash
+# Uninstall current version first
+brew uninstall querator
+
+# Install from HEAD (latest main branch)
+brew install --HEAD kapetan-io/kapetan/querator
+
+# Verify version shows git commit hash
+querator version
+# Output: querator HEAD-91b35be
+```
+
+This confirms the formula's ldflags path is correct before creating a tagged release.
+
+### Complete Release Workflow for Homebrew
+
+After creating a GitHub release, follow these steps to update Homebrew:
+
+1. **Clone or navigate to the homebrew-kapetan repository**:
+   ```bash
+   cd ~/Development/homebrew-kapetan
+   # Or clone if not present:
+   # git clone git@github.com:kapetan-io/homebrew-kapetan.git
+   ```
+
+2. **Ensure you're on main and up to date**:
+   ```bash
+   git checkout main
+   git pull
+   ```
+
+3. **Calculate the SHA256** of the new release tarball:
    ```bash
    curl -sL https://github.com/kapetan-io/querator/archive/v1.0.0.tar.gz | shasum -a 256
    ```
 
-2. **Update the formula** in the homebrew-kapetan repository:
+4. **Update the formula** (`Formula/querator.rb`):
    ```ruby
    class Querator < Formula
      desc "An Almost Exactly Once Delivery Queue"
@@ -224,20 +269,45 @@ After creating a new release, update the Homebrew formula:
    end
    ```
 
-3. **Commit and push** to the homebrew-kapetan repository.
+5. **Commit and push**:
+   ```bash
+   git add Formula/querator.rb
+   git commit -m "Update querator to v1.0.0"
+   git push
+   ```
 
-4. **Test the update**:
+6. **Test the update locally**:
    ```bash
    brew update
    brew upgrade querator
    querator version
+   # Should output: querator v1.0.0
    ```
 
-### Important Notes
+### Formula Requirements
 
-- The `ldflags` path must be `-X github.com/kapetan-io/querator.Version=#{version}` (not `main.Version`)
-- The test command should be `querator version` (not `--version`)
-- GitHub automatically creates tarballs for tags at `https://github.com/kapetan-io/querator/archive/vX.Y.Z.tar.gz`
+The formula must have these specific settings:
+
+| Setting | Value | Notes |
+|---------|-------|-------|
+| `ldflags` | `-X github.com/kapetan-io/querator.Version=#{version}` | Package path, not `main.Version` |
+| `test command` | `querator version` | Not `--version` |
+| `head` | `branch: "main"` | For `--HEAD` installs |
+
+### Viewing Current Formula
+
+To see the installed formula:
+
+```bash
+# View formula info
+brew info kapetan-io/kapetan/querator
+
+# View formula source
+cat /opt/homebrew/Library/Taps/kapetan-io/homebrew-kapetan/Formula/querator.rb
+
+# Or fetch from GitHub
+curl -s https://raw.githubusercontent.com/kapetan-io/homebrew-kapetan/main/Formula/querator.rb
+```
 
 ## Troubleshooting
 
@@ -264,3 +334,48 @@ Common issues:
 - Port 2319 already in use
 - Docker not running
 - Previous test data causing conflicts (the script handles queue already existing)
+
+### Homebrew Version Incorrect After Formula Update
+
+If you update the formula but `querator version` still shows the old version or `dev-build`:
+
+1. **The tarball is from an older release**: Formula changes only affect the build process, not the source code. The source comes from the tarball URL. If you changed ldflags but the tarball is from before the code change, the version won't work correctly.
+
+   **Solution**: Create a new release with the updated code, then update the formula with the new version and SHA256.
+
+2. **Test with HEAD first**: Before releasing, verify formula changes work:
+   ```bash
+   brew uninstall querator
+   brew install --HEAD kapetan-io/kapetan/querator
+   querator version
+   ```
+
+3. **Brew cache issues**: Clear the cache and reinstall:
+   ```bash
+   brew uninstall querator
+   brew cleanup querator
+   brew install querator
+   ```
+
+### Homebrew Formula Not Updating
+
+If `brew upgrade querator` says "already installed":
+
+```bash
+# Force reinstall
+brew reinstall querator
+
+# Or uninstall and install fresh
+brew uninstall querator
+brew install querator
+```
+
+### Viewing Build Output
+
+To see what Homebrew is doing during install:
+
+```bash
+brew install --verbose querator
+```
+
+This shows the actual `go build` command being executed, useful for verifying ldflags are correct.

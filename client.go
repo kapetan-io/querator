@@ -18,6 +18,11 @@ import (
 	"net/http"
 )
 
+// Version is the current version of Querator, set at build time via ldflags:
+//
+//	go build -ldflags "-X github.com/kapetan-io/querator.Version=1.0.0"
+var Version = "dev-build"
+
 const (
 	MsgRequestTimeout    = internal.MsgRequestTimeout
 	MsgDuplicateClientID = internal.MsgDuplicateClientID

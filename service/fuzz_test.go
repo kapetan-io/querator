@@ -7,10 +7,11 @@ import (
 	"time"
 	"unicode/utf8"
 
-	svc "github.com/kapetan-io/querator/service"
+	"github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/daemon"
 	"github.com/kapetan-io/querator/internal/store"
 	pb "github.com/kapetan-io/querator/proto"
+	svc "github.com/kapetan-io/querator/service"
 	"github.com/kapetan-io/tackle/random"
 	"github.com/kapetan-io/tackle/set"
 	"github.com/stretchr/testify/assert"
@@ -87,7 +88,7 @@ func FuzzQueueInvariant(f *testing.F) {
 
 		// Verify all items are in storage
 		var list pb.StorageItemsListResponse
-		err = c.StorageItemsList(ctx, queueName, 0, &list, &svc.ListOptions{Limit: itemCount + 10})
+		err = c.StorageItemsList(ctx, queueName, 0, &list, &querator.ListOptions{Limit: itemCount + 10})
 		require.NoError(t, err)
 		assert.Equal(t, itemCount, len(list.Items))
 
@@ -146,7 +147,7 @@ func FuzzQueueInvariant(f *testing.F) {
 		assert.Equal(t, itemCount, completedCount)
 
 		// Verify queue is now empty
-		err = c.StorageItemsList(ctx, queueName, 0, &list, &svc.ListOptions{Limit: 10})
+		err = c.StorageItemsList(ctx, queueName, 0, &list, &querator.ListOptions{Limit: 10})
 		require.NoError(t, err)
 		assert.Equal(t, 0, len(list.Items),
 			"Queue should be empty after completing all items")
@@ -168,7 +169,7 @@ func FuzzQueueInvariant(f *testing.F) {
 	})
 }
 
-func newFuzzDaemon(t *testing.T, conf svc.ServiceConfig) (*testDaemon, *svc.Client, context.Context) {
+func newFuzzDaemon(t *testing.T, conf svc.ServiceConfig) (*testDaemon, *querator.Client, context.Context) {
 	t.Helper()
 
 	set.Default(&conf.Log, log)

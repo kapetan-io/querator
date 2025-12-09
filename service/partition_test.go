@@ -3,16 +3,18 @@ package service_test
 import (
 	"context"
 	"fmt"
+	"testing"
+
 	"github.com/duh-rpc/duh-go/retry"
-	svc "github.com/kapetan-io/querator/service"
+	"github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/internal/store"
 	pb "github.com/kapetan-io/querator/proto"
+	svc "github.com/kapetan-io/querator/service"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/random"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
-	"testing"
 )
 
 func TestPartitions(t *testing.T) {
@@ -435,7 +437,7 @@ type Partition struct {
 	NotLeased int
 }
 
-func assertPartition(t *testing.T, ctx context.Context, c *svc.Client, name string, expected Partition) {
+func assertPartition(t *testing.T, ctx context.Context, c *querator.Client, name string, expected Partition) {
 	t.Helper()
 	var list pb.StorageItemsListResponse
 	var leased, notLeased int

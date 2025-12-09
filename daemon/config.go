@@ -5,16 +5,16 @@ import (
 	"log/slog"
 
 	"github.com/duh-rpc/duh-go"
-	"github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/internal"
 	"github.com/kapetan-io/querator/internal/store"
+	"github.com/kapetan-io/querator/service"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/set"
 )
 
 type Config struct {
 	// Explicit composition instead of embedding
-	Service querator.ServiceConfig
+	Service service.ServiceConfig
 
 	// TLS is the TLS config used for public server and clients
 	TLS *duh.TLSConfig

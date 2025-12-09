@@ -4,20 +4,22 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand"
+	"sync"
+	"testing"
+
 	"github.com/duh-rpc/duh-go"
 	"github.com/duh-rpc/duh-go/retry"
-	svc "github.com/kapetan-io/querator/service"
+	"github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/internal/store"
 	pb "github.com/kapetan-io/querator/proto"
+	svc "github.com/kapetan-io/querator/service"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/random"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 	"google.golang.org/protobuf/types/known/timestamppb"
-	"math/rand"
-	"sync"
-	"testing"
 )
 
 func TestQueue(t *testing.T) {
@@ -121,7 +123,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		// Partition storage should have only one item
 		var list pb.StorageItemsListResponse
-		require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, &svc.ListOptions{Limit: 10}))
+		require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, &querator.ListOptions{Limit: 10}))
 		require.Equal(t, 1, len(list.Items))
 
 		inspect := list.Items[0]
@@ -142,13 +144,13 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		}))
 
 		// Partition storage should be empty
-		require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, &svc.ListOptions{Limit: 10}))
+		require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, &querator.ListOptions{Limit: 10}))
 		assert.Equal(t, 0, len(list.Items))
 
 		// Remove queue
 		require.NoError(t, c.QueuesDelete(ctx, &pb.QueuesDeleteRequest{QueueName: queueName}))
 		var queues pb.QueuesListResponse
-		require.NoError(t, c.QueuesList(ctx, &queues, &svc.ListOptions{Limit: 10}))
+		require.NoError(t, c.QueuesList(ctx, &queues, &querator.ListOptions{Limit: 10}))
 		for _, q := range queues.Items {
 			assert.NotEqual(t, q.QueueName, queueName)
 		}
@@ -215,7 +217,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			expireDeadline := clock.Now().UTC().Add(20 * clock.Hour)
 
 			var list pb.StorageItemsListResponse
-			err := c.StorageItemsList(ctx, queueName, 0, &list, &svc.ListOptions{Limit: 20, Pivot: lastItem.Id})
+			err := c.StorageItemsList(ctx, queueName, 0, &list, &querator.ListOptions{Limit: 20, Pivot: lastItem.Id})
 			require.NoError(t, err)
 			produced := list.Items[1:]
 
@@ -278,7 +280,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			// Ensure the items produced are in the data store
 			var list pb.StorageItemsListResponse
 			err := c.StorageItemsList(ctx, queueName, 0, &list,
-				&svc.ListOptions{Pivot: lastItem.Id, Limit: 20})
+				&querator.ListOptions{Pivot: lastItem.Id, Limit: 20})
 			require.NoError(t, err)
 			assert.Equal(t, len(items), len(list.Items[1:]))
 			produced := list.Items[1:]
@@ -325,7 +327,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			// List all the items we just produced
 			var list pb.StorageItemsListResponse
 			err := c.StorageItemsList(ctx, queueName, 0, &list,
-				&svc.ListOptions{Pivot: lastItem.Id, Limit: 101})
+				&querator.ListOptions{Pivot: lastItem.Id, Limit: 101})
 			require.NoError(t, err)
 
 			require.Len(t, items, 100)
@@ -395,7 +397,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		// Items should appear in StorageScheduledList
 		var scheduled pb.StorageItemsListResponse
-		err := c.StorageScheduledList(ctx, queueName, 0, &scheduled, &svc.ListOptions{Limit: 150})
+		err := c.StorageScheduledList(ctx, queueName, 0, &scheduled, &querator.ListOptions{Limit: 150})
 		require.NoError(t, err)
 		require.Len(t, scheduled.Items, numItems)
 
@@ -475,7 +477,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			leaseDeadline := clock.Now().UTC().Add(2 * clock.Minute)
 
 			// Ensure the items leased are marked as leased in the database
-			require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, &svc.ListOptions{Limit: 10_000}))
+			require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, &querator.ListOptions{Limit: 10_000}))
 
 			for i := range leased.Items {
 				assert.Equal(t, list.Items[i].Id, leased.Items[i].Id)
@@ -504,7 +506,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			combined = append(combined, leased.Items...)
 			combined = append(combined, secondLease.Items...)
 
-			require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, &svc.ListOptions{Limit: 10_000}))
+			require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, &querator.ListOptions{Limit: 10_000}))
 			assert.NotEqual(t, leased.Items[0].Id, secondLease.Items[0].Id)
 			assert.Equal(t, combined[0].Id, list.Items[0].Id)
 			require.Equal(t, 20, len(combined))
@@ -549,7 +551,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			assert.Equal(t, 20, len(responses[2].Items))
 
 			// Fetch items from storage, ensure items are leased
-			require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, &svc.ListOptions{Limit: 10_000}))
+			require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, &querator.ListOptions{Limit: 10_000}))
 			require.Equal(t, 10_000, len(list.Items))
 
 			var found int
@@ -683,7 +685,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			require.Equal(t, 10, len(leased.Items))
 
 			require.NoError(t, c.QueueComplete(ctx, &pb.QueueCompleteRequest{
-				Ids:            svc.CollectIDs(leased.Items),
+				Ids:            querator.CollectIDs(leased.Items),
 				QueueName:      queueName,
 				RequestTimeout: "1m",
 			}))
@@ -800,7 +802,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	//
 	// 	// Partition storage should have scheduled items
 	// 	// var list pb.StorageItemsListResponse
-	// 	// require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, &svc.ListOptions{Limit: 10}))
+	// 	// require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, &querator.ListOptions{Limit: 10}))
 	// 	// require.Equal(t, 1, len(list.Items))
 	//
 	// 	// inspect := list.Items[0]
@@ -814,7 +816,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	// 	// Remove queue
 	// 	require.NoError(t, c.QueuesDelete(ctx, &pb.QueuesDeleteRequest{QueueName: queueName}))
 	// 	var queues pb.QueuesListResponse
-	// 	require.NoError(t, c.QueuesList(ctx, &queues, &svc.ListOptions{Limit: 10}))
+	// 	require.NoError(t, c.QueuesList(ctx, &queues, &querator.ListOptions{Limit: 10}))
 	// 	for _, q := range queues.Items {
 	// 		assert.NotEqual(t, q.QueueName, queueName)
 	// 	}
@@ -1224,12 +1226,12 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				require.Error(t, err)
 				var e duh.Error
 				require.True(t, errors.As(err, &e))
-				assert.Equal(t, svc.MsgDuplicateClientID, e.Message())
+				assert.Equal(t, querator.MsgDuplicateClientID, e.Message())
 				assert.Equal(t, duh.CodeBadRequest, e.Code())
 				err = <-resultCh
 				require.Error(t, err)
 				require.True(t, errors.As(err, &e))
-				assert.Equal(t, svc.MsgRequestTimeout, e.Message())
+				assert.Equal(t, querator.MsgRequestTimeout, e.Message())
 				assert.Equal(t, duh.CodeRetryRequest, e.Code())
 				wg.Wait()
 			})
@@ -1403,7 +1405,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 			var resp pb.StorageItemsListResponse
 			err := c.StorageItemsList(ctx, queueName, 0, &resp,
-				&svc.ListOptions{Pivot: leased.Id, Limit: 1})
+				&querator.ListOptions{Pivot: leased.Id, Limit: 1})
 			require.NoError(t, err)
 			require.Equal(t, leased.Id, resp.Items[0].Id)
 			require.Equal(t, true, resp.Items[0].IsLeased)
@@ -1442,7 +1444,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			require.NoError(t, err)
 
 			err = c.StorageItemsList(ctx, queueName, 0, &resp,
-				&svc.ListOptions{Pivot: leased.Id, Limit: 5})
+				&querator.ListOptions{Pivot: leased.Id, Limit: 5})
 			require.NoError(t, err)
 			item := findInStorageList("flutter@shy.com", &resp)
 			require.NotNil(t, item)
@@ -1493,7 +1495,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 				// Ensure the item is marked as leased
 				err = c.StorageItemsList(ctx, queueName, 0, &resp,
-					&svc.ListOptions{Pivot: requeued.Id, Limit: 5})
+					&querator.ListOptions{Pivot: requeued.Id, Limit: 5})
 				require.NoError(t, err)
 				require.Equal(t, requeued.Id, resp.Items[0].Id)
 				assert.True(t, resp.Items[0].ExpireDeadline.AsTime().After(now.Now()))
@@ -1511,7 +1513,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 				// Ensure the item is removed from the queue
 				err = c.StorageItemsList(ctx, queueName, 0, &resp,
-					&svc.ListOptions{Pivot: requeued.Id, Limit: 5})
+					&querator.ListOptions{Pivot: requeued.Id, Limit: 5})
 				require.NoError(t, err)
 				require.Nil(t, findInStorageList("flutter@shy.com", &resp))
 			})

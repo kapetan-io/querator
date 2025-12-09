@@ -23,6 +23,7 @@ import (
 	"github.com/duh-rpc/duh-go"
 	"github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/internal"
+	"github.com/kapetan-io/querator/service"
 	"github.com/kapetan-io/querator/transport"
 	"github.com/kapetan-io/tackle/set"
 	"github.com/prometheus/client_golang/prometheus"
@@ -35,7 +36,7 @@ import (
 )
 
 type Daemon struct {
-	service  *querator.Service
+	service  *service.Service
 	client   *querator.Client
 	servers  []*http.Server
 	wg       sync.WaitGroup
@@ -48,7 +49,7 @@ func NewDaemon(ctx context.Context, conf Config) (*Daemon, error) {
 
 	conf.SetDefaults()
 
-	s, err := querator.NewService(conf.Service)
+	s, err := service.NewService(conf.Service)
 	if err != nil {
 		return nil, err
 	}
@@ -101,7 +102,7 @@ func (d *Daemon) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-func (d *Daemon) Service() *querator.Service {
+func (d *Daemon) Service() *service.Service {
 	return d.service
 }
 

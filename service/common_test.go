@@ -7,11 +7,12 @@ import (
 	"fmt"
 	"github.com/duh-rpc/duh-go"
 	"github.com/duh-rpc/duh-go/retry"
-	svc "github.com/kapetan-io/querator/service"
+	"github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/daemon"
 	"github.com/kapetan-io/querator/internal"
 	"github.com/kapetan-io/querator/internal/store"
 	pb "github.com/kapetan-io/querator/proto"
+	svc "github.com/kapetan-io/querator/service"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/color"
 	"github.com/kapetan-io/tackle/random"
@@ -82,7 +83,7 @@ func (td *testDaemon) Shutdown(t *testing.T) {
 	td.cancel()
 }
 
-func (td *testDaemon) MustClient() *svc.Client {
+func (td *testDaemon) MustClient() *querator.Client {
 	return td.d.MustClient()
 }
 
@@ -94,7 +95,7 @@ func (td *testDaemon) Service() *svc.Service {
 	return td.d.Service()
 }
 
-func newDaemon(t *testing.T, duration clock.Duration, conf svc.ServiceConfig) (*testDaemon, *svc.Client, context.Context) {
+func newDaemon(t *testing.T, duration clock.Duration, conf svc.ServiceConfig) (*testDaemon, *querator.Client, context.Context) {
 	t.Helper()
 
 	set.Default(&conf.Log, log)
@@ -292,7 +293,7 @@ func findInLeaseResp(ref string, resp *pb.QueueLeaseResponse) *pb.QueueLeaseItem
 	return nil
 }
 
-func writeRandomItems(t *testing.T, ctx context.Context, c *svc.Client,
+func writeRandomItems(t *testing.T, ctx context.Context, c *querator.Client,
 	name string, count int) []*pb.StorageItem {
 
 	t.Helper()
@@ -324,7 +325,7 @@ func randomSliceStrings(count int) []string {
 	return result
 }
 
-func pauseAndLease(t *testing.T, ctx context.Context, s *svc.Service, c *svc.Client, name string,
+func pauseAndLease(t *testing.T, ctx context.Context, s *svc.Service, c *querator.Client, name string,
 	requests []*pb.QueueLeaseRequest) []*pb.QueueLeaseResponse {
 	t.Helper()
 
@@ -390,7 +391,7 @@ func pauseAndLease(t *testing.T, ctx context.Context, s *svc.Service, c *svc.Cli
 	return responses
 }
 
-func untilLeaseClientWaiting(t *testing.T, c *svc.Client, queueName string, numWaiting int) error {
+func untilLeaseClientWaiting(t *testing.T, c *querator.Client, queueName string, numWaiting int) error {
 	_ctx, cancel := context.WithTimeout(context.Background(), 5*clock.Second)
 	defer cancel()
 	t.Helper()
@@ -440,7 +441,7 @@ var validTimeouts = []Pair{
 	},
 }
 
-func createRandomQueues(t *testing.T, ctx context.Context, c *svc.Client, count int) []*pb.QueueInfo {
+func createRandomQueues(t *testing.T, ctx context.Context, c *querator.Client, count int) []*pb.QueueInfo {
 	t.Helper()
 
 	var idx int
@@ -462,7 +463,7 @@ func createRandomQueues(t *testing.T, ctx context.Context, c *svc.Client, count 
 	return items
 }
 
-func createQueueAndWait(t *testing.T, ctx context.Context, c *svc.Client, info *pb.QueueInfo) {
+func createQueueAndWait(t *testing.T, ctx context.Context, c *querator.Client, info *pb.QueueInfo) {
 	t.Helper()
 
 	require.NoError(t, c.QueuesCreate(ctx, info))

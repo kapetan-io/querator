@@ -439,6 +439,18 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		}, &lease)
 		require.NoError(t, err)
 		require.Len(t, lease.Items, numItems)
+
+		// Complete all leased items
+		require.NoError(t, c.QueueComplete(ctx, &pb.QueueCompleteRequest{
+			RequestTimeout: "5s",
+			QueueName:      queueName,
+			Ids:            querator.CollectIDs(lease.Items),
+		}))
+
+		// Verify items are removed from queue
+		err = c.StorageItemsList(ctx, queueName, 0, &list, nil)
+		require.NoError(t, err)
+		assert.Empty(t, list.Items)
 	})
 
 	t.Run("Produce/Scheduled/Linearizability", func(t *testing.T) {

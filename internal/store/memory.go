@@ -315,20 +315,39 @@ func (m *MemoryPartition) Delete(_ context.Context, ids []types.ItemID) error {
 	return nil
 }
 
-func (m *MemoryPartition) Clear(_ context.Context, destructive bool) error {
+func (m *MemoryPartition) Clear(_ context.Context, req types.ClearRequest) error {
 	defer m.mu.Unlock()
 	m.mu.Lock()
 
-	if destructive {
+	if req.Destructive && req.Queue {
 		m.mem = make([]types.Item, 0, 1_000)
+		m.bySourceID = make(map[string]struct{})
 		return nil
 	}
 
 	mem := make([]types.Item, 0, len(m.mem))
 	for _, item := range m.mem {
-		if item.IsLeased {
+		shouldKeep := true
+
+		// Clear scheduled items
+		if req.Scheduled && !item.EnqueueAt.IsZero() {
+			shouldKeep = false
+		}
+
+		// Clear queue items (those with EnqueueAt zero or in past)
+		if req.Queue && item.EnqueueAt.IsZero() {
+			if req.Destructive || !item.IsLeased {
+				shouldKeep = false
+			}
+		}
+
+		if shouldKeep {
 			mem = append(mem, item)
-			continue
+		} else {
+			// Remove from SourceID index if set
+			if item.SourceID != nil {
+				delete(m.bySourceID, string(item.SourceID))
+			}
 		}
 	}
 	m.mem = mem

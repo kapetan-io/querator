@@ -111,7 +111,7 @@ type ClearRequest struct {
 	// Scheduled indicates any 'scheduled' items in the queue will be
 	// cleared. If true, any items scheduled to be enqueued at a future date
 	// will be removed.
-	Scheduled bool // TODO: Implement
+	Scheduled bool
 	// Queue indicates any items currently waiting in the FIFO queue will
 	// clear. If true, any items in the queue which have NOT been leased
 	// will be removed.

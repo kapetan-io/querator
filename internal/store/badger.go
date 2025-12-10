@@ -574,14 +574,14 @@ func (b *BadgerPartition) Delete(_ context.Context, ids []types.ItemID) error {
 	})
 }
 
-func (b *BadgerPartition) Clear(_ context.Context, destructive bool) error {
+func (b *BadgerPartition) Clear(_ context.Context, req types.ClearRequest) error {
 	db, err := b.getDB()
 	if err != nil {
 		return err
 	}
 
 	return db.Update(func(txn *badger.Txn) error {
-		if destructive {
+		if req.Destructive && req.Queue {
 			err := db.DropAll()
 			if err != nil {
 				return errors.Errorf("during destructive DropAll(): %w", err)
@@ -605,13 +605,24 @@ func (b *BadgerPartition) Clear(_ context.Context, destructive bool) error {
 				return errors.Errorf("during Decode(): %w", err)
 			}
 
-			// Skip leased items
-			if item.IsLeased {
-				continue
+			shouldDelete := false
+
+			// Clear scheduled items
+			if req.Scheduled && !item.EnqueueAt.IsZero() {
+				shouldDelete = true
 			}
 
-			if err := txn.Delete(k); err != nil {
-				return errors.Errorf("during Delete(): %w", err)
+			// Clear queue items (those with EnqueueAt zero or in past)
+			if req.Queue && item.EnqueueAt.IsZero() {
+				if req.Destructive || !item.IsLeased {
+					shouldDelete = true
+				}
+			}
+
+			if shouldDelete {
+				if err := txn.Delete(k); err != nil {
+					return errors.Errorf("during Delete(): %w", err)
+				}
 			}
 		}
 		return nil

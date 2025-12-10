@@ -1248,7 +1248,7 @@ func (p *PostgresPartition) Delete(ctx context.Context, ids []types.ItemID) erro
 	return nil
 }
 
-func (p *PostgresPartition) Clear(ctx context.Context, destructive bool) error {
+func (p *PostgresPartition) Clear(ctx context.Context, req types.ClearRequest) error {
 	pool, err := p.conf.getOrCreatePool(ctx)
 	if err != nil {
 		return err
@@ -1258,12 +1258,30 @@ func (p *PostgresPartition) Clear(ctx context.Context, destructive bool) error {
 		return err
 	}
 
-	if destructive {
-		_, err = pool.Exec(ctx, `DELETE FROM `+p.tableName())
-	} else {
-		_, err = pool.Exec(ctx, `DELETE FROM `+p.tableName()+` WHERE is_leased = false`)
+	var conditions []string
+
+	if req.Scheduled {
+		conditions = append(conditions, `enqueue_at IS NOT NULL`)
 	}
 
+	if req.Queue {
+		if req.Destructive {
+			conditions = append(conditions, `(enqueue_at IS NULL OR enqueue_at <= NOW())`)
+		} else {
+			conditions = append(conditions, `(enqueue_at IS NULL OR enqueue_at <= NOW()) AND is_leased = false`)
+		}
+	}
+
+	if len(conditions) == 0 {
+		return nil
+	}
+
+	query := `DELETE FROM ` + p.tableName() + ` WHERE ` + conditions[0]
+	for i := 1; i < len(conditions); i++ {
+		query += ` OR ` + conditions[i]
+	}
+
+	_, err = pool.Exec(ctx, query)
 	if err != nil {
 		return errors.Errorf("clear failed: %w", err)
 	}

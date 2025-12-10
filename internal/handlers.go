@@ -134,13 +134,11 @@ func (l *Logical) handleClear(_ *QueueState, req *Request) {
 	// version (V0), there is no cached data to sync, but this will likely change in the future.
 	cr := req.Request.(*types.ClearRequest)
 
-	if cr.Queue {
-		// Ask the store to clean up any items in the data store which are not currently out for lease
-		if err := l.conf.StoragePartitions[0].Clear(req.Context, cr.Destructive); err != nil {
+	if cr.Queue || cr.Scheduled {
+		if err := l.conf.StoragePartitions[0].Clear(req.Context, *cr); err != nil {
 			req.Err = err
 		}
 	}
-	// TODO(thrawn01): Support clearing retry and scheduled queues
 	close(req.ReadyCh)
 }
 

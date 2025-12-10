@@ -1687,20 +1687,26 @@ func (p *PostgresPartition) LifeCycleInfo(ctx context.Context, info *types.LifeC
 		return err
 	}
 
+	// Query for both lease expiry and item expiry
 	query := `
-		SELECT COALESCE(MIN(lease_deadline), '9999-12-31 23:59:59.999999+00'::timestamptz)
-		FROM ` + p.tableName() + `
-		WHERE is_leased = true`
+		SELECT
+			COALESCE(MIN(lease_deadline) FILTER (WHERE is_leased = true), '9999-12-31 23:59:59.999999+00'::timestamptz),
+			COALESCE(MIN(expire_deadline) FILTER (WHERE enqueue_at IS NULL OR enqueue_at <= NOW()), '9999-12-31 23:59:59.999999+00'::timestamptz)
+		FROM ` + p.tableName()
 
-	var nextExpiry time.Time
-	err = pool.QueryRow(ctx, query).Scan(&nextExpiry)
+	var nextLeaseExpiry, nextExpireDeadline time.Time
+	err = pool.QueryRow(ctx, query).Scan(&nextLeaseExpiry, &nextExpireDeadline)
 	if err != nil {
 		return errors.Errorf("query lifecycle info: %w", err)
 	}
 
 	sentinel := time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.UTC)
-	if nextExpiry.Before(sentinel) {
-		info.NextLeaseExpiry = nextExpiry
+	if nextLeaseExpiry.Before(sentinel) {
+		info.NextLeaseExpiry = nextLeaseExpiry
+	}
+
+	if nextExpireDeadline.Before(sentinel) {
+		info.NextExpireDeadline = nextExpireDeadline
 	}
 
 	return nil

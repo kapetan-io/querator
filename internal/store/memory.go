@@ -538,22 +538,31 @@ func (m *MemoryPartition) TakeAction(_ context.Context, batch types.LifeCycleBat
 func (m *MemoryPartition) LifeCycleInfo(ctx context.Context, info *types.LifeCycleInfo) error {
 	defer m.mu.RUnlock()
 	m.mu.RLock()
-	next := theFuture
+	nextLease := theFuture
+	nextExpire := theFuture
 
-	// Find the item that will expire next
+	// Find the item that will expire next (lease or item expiry)
 	for _, item := range m.mem {
 		// Skip scheduled items
 		if !item.EnqueueAt.IsZero() {
 			continue
 		}
 
-		if item.LeaseDeadline.Before(next) {
-			next = item.LeaseDeadline
+		if item.LeaseDeadline.Before(nextLease) {
+			nextLease = item.LeaseDeadline
+		}
+
+		if item.ExpireDeadline.Before(nextExpire) {
+			nextExpire = item.ExpireDeadline
 		}
 	}
 
-	if next != theFuture {
-		info.NextLeaseExpiry = next
+	if nextLease != theFuture {
+		info.NextLeaseExpiry = nextLease
+	}
+
+	if nextExpire != theFuture {
+		info.NextExpireDeadline = nextExpire
 	}
 	return nil
 }

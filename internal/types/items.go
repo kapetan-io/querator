@@ -223,5 +223,6 @@ func (i *QueueInfo) Update(r QueueInfo) bool {
 }
 
 type LifeCycleInfo struct {
-	NextLeaseExpiry clock.Time
+	NextLeaseExpiry  clock.Time
+	NextExpireDeadline clock.Time
 }

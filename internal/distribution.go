@@ -90,6 +90,30 @@ func (l *Logical) notifyScheduledRetry(p *Partition) bool {
 	return false
 }
 
+// notifyExpired iterates through the produced items and finds the earliest
+// ExpireDeadline. If it's sooner than the partition's NextLifecycleRun,
+// updates the lifecycle state. Returns true if NextLifecycleRun was updated.
+func (l *Logical) notifyExpired(p *Partition) bool {
+	var earliestExpire time.Time
+	for _, r := range p.ProduceRequests.Requests {
+		for _, item := range r.Items {
+			if earliestExpire.IsZero() || item.ExpireDeadline.Before(earliestExpire) {
+				earliestExpire = item.ExpireDeadline
+			}
+		}
+	}
+	if earliestExpire.IsZero() {
+		return false
+	}
+
+	now := l.conf.Clock.Now().UTC()
+	if earliestExpire.After(now) && earliestExpire.Before(p.Lifecycle.NextLifecycleRun) {
+		p.Lifecycle.NextLifecycleRun = earliestExpire
+		return true
+	}
+	return false
+}
+
 func (l *Logical) assignProduceRequests(state *QueueState) {
 	for _, req := range state.Producers.Requests {
 		// Assign a ExpireTimeout to each item
@@ -275,6 +299,7 @@ func (l *Logical) applyToPartitions(state *QueueState) {
 	//  partitions?
 
 	scheduledUpdated := false
+	lifecycleUpdated := false
 	for _, p := range state.Partitions {
 		ctx, cancel := context.WithTimeout(context.Background(), l.conf.WriteTimeout)
 
@@ -289,6 +314,9 @@ func (l *Logical) applyToPartitions(state *QueueState) {
 			p.State.MostRecentDeadline = l.conf.Clock.Now().UTC().Add(l.conf.ExpireTimeout)
 			if l.notifyScheduled(p) {
 				scheduledUpdated = true
+			}
+			if l.notifyExpired(p) {
+				lifecycleUpdated = true
 			}
 		}
 
@@ -366,5 +394,10 @@ func (l *Logical) applyToPartitions(state *QueueState) {
 	// Reset scheduled timer if any partition's NextScheduledRun was updated
 	if scheduledUpdated {
 		state.ScheduledTimer.Reset(l.minNextScheduledRun(state))
+	}
+
+	// Reset lifecycle timer if any partition's NextLifecycleRun was updated
+	if lifecycleUpdated {
+		state.LifecycleTimer.Reset(l.minNextLifecycleRun(state))
 	}
 }

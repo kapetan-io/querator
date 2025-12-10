@@ -918,7 +918,8 @@ func (b *BadgerPartition) LifeCycleInfo(_ context.Context, info *types.LifeCycle
 	}
 
 	return db.View(func(txn *badger.Txn) error {
-		next := theFuture
+		nextLease := theFuture
+		nextExpire := theFuture
 
 		iter := txn.NewIterator(badger.DefaultIteratorOptions)
 		defer iter.Close()
@@ -940,13 +941,21 @@ func (b *BadgerPartition) LifeCycleInfo(_ context.Context, info *types.LifeCycle
 				continue
 			}
 
-			if item.LeaseDeadline.Before(next) {
-				next = item.LeaseDeadline
+			if item.LeaseDeadline.Before(nextLease) {
+				nextLease = item.LeaseDeadline
+			}
+
+			if item.ExpireDeadline.Before(nextExpire) {
+				nextExpire = item.ExpireDeadline
 			}
 		}
 
-		if next != theFuture {
-			info.NextLeaseExpiry = next
+		if nextLease != theFuture {
+			info.NextLeaseExpiry = nextLease
+		}
+
+		if nextExpire != theFuture {
+			info.NextExpireDeadline = nextExpire
 		}
 		return nil
 	})

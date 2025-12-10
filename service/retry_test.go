@@ -304,6 +304,89 @@ func testRetry(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		assert.Equal(t, int32(2), retriedItem.Attempts)
 	})
 
+	t.Run("RetryWithPastTimestamp", func(t *testing.T) {
+		now := clock.NewProvider()
+		now.Freeze(clock.Now())
+		defer now.UnFreeze()
+
+		var queueName = random.String("queue-", 10)
+		d, c, ctx := newDaemon(t, 60*clock.Second, svc.Config{
+			StorageConfig: setup(),
+			Clock:         now,
+		})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			RequestedPartitions: 1,
+			LeaseTimeout:        "1m0s",
+			ExpireTimeout:       "24h0m0s",
+			QueueName:           queueName,
+		})
+
+		// Produce an item
+		reference := random.String("ref-", 10)
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			RequestTimeout: "1m",
+			QueueName:      queueName,
+			Items: []*pb.QueueProduceItem{
+				{
+					Reference: reference,
+					Encoding:  "utf8",
+					Kind:      "past-retry-test",
+					Bytes:     []byte("past retry timestamp test"),
+				},
+			},
+		}))
+
+		// Lease the item
+		var initialLease pb.QueueLeaseResponse
+		require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+			ClientId:       random.String("client-", 10),
+			RequestTimeout: "5s",
+			QueueName:      queueName,
+			BatchSize:      1,
+		}, &initialLease))
+		require.Len(t, initialLease.Items, 1)
+		leasedItem := initialLease.Items[0]
+
+		// Retry with past RetryAt timestamp
+		retryAt := now.Now().Add(-1 * clock.Minute)
+		require.NoError(t, c.QueueRetry(ctx, &pb.QueueRetryRequest{
+			QueueName: queueName,
+			Partition: initialLease.Partition,
+			Items: []*pb.QueueRetryItem{
+				{
+					Id:      leasedItem.Id,
+					RetryAt: timestamppb.New(retryAt),
+				},
+			},
+		}))
+
+		// Verify item NOT in StorageScheduledList
+		var scheduledList pb.StorageItemsListResponse
+		err := c.StorageScheduledList(ctx, queueName, 0, &scheduledList, nil)
+		require.NoError(t, err)
+		require.Empty(t, scheduledList.Items)
+
+		// Verify item immediately available for lease
+		var retryLease pb.QueueLeaseResponse
+		require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+			ClientId:       random.String("client-", 10),
+			RequestTimeout: "5s",
+			QueueName:      queueName,
+			BatchSize:      1,
+		}, &retryLease))
+		require.Len(t, retryLease.Items, 1)
+
+		// Verify Attempts incremented
+		retriedItem := retryLease.Items[0]
+		assert.Equal(t, reference, retriedItem.Reference)
+		assert.Equal(t, int32(2), retriedItem.Attempts)
+	})
+
 	t.Run("Errors", func(t *testing.T) {
 		storage := setup()
 		defer tearDown()

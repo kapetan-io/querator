@@ -332,8 +332,15 @@ nextBatch:
 			} else {
 				// For scheduled retry or immediate retry, update the item
 				if !retryItem.RetryAt.IsZero() {
-					// Schedule for future retry
-					item.EnqueueAt = retryItem.RetryAt
+					// If RetryAt is in the past or less than 100ms from now, treat as immediate retry
+					now := clock.Now().UTC()
+					if retryItem.RetryAt.Before(now.Add(time.Millisecond * 100)) {
+						// Immediate retry - EnqueueAt stays zero
+						item.EnqueueAt = clock.Time{}
+					} else {
+						// Schedule for future retry
+						item.EnqueueAt = retryItem.RetryAt
+					}
 				}
 				// For immediate retry (empty RetryAt), item stays in queue with incremented attempts
 

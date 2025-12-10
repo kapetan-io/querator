@@ -953,13 +953,27 @@ nextBatch:
 			case retryItem.Dead:
 				_, err = tx.Exec(ctx, `DELETE FROM `+p.tableName()+` WHERE id = $1`, retryItem.ID)
 			case !retryItem.RetryAt.IsZero():
-				_, err = tx.Exec(ctx, `
-					UPDATE `+p.tableName()+`
-					SET is_leased = false,
-						lease_deadline = NULL,
-						enqueue_at = $1
-					WHERE id = $2`,
-					timeToMicroseconds(retryItem.RetryAt), retryItem.ID)
+				// If RetryAt is in the past or less than 100ms from now, treat as immediate retry
+				now := clock.Now().UTC()
+				if retryItem.RetryAt.Before(now.Add(time.Millisecond * 100)) {
+					// Immediate retry - enqueue_at stays NULL
+					_, err = tx.Exec(ctx, `
+						UPDATE `+p.tableName()+`
+						SET is_leased = false,
+							lease_deadline = NULL,
+							enqueue_at = NULL
+						WHERE id = $1`,
+						retryItem.ID)
+				} else {
+					// Schedule for future retry
+					_, err = tx.Exec(ctx, `
+						UPDATE `+p.tableName()+`
+						SET is_leased = false,
+							lease_deadline = NULL,
+							enqueue_at = $1
+						WHERE id = $2`,
+						timeToMicroseconds(retryItem.RetryAt), retryItem.ID)
+				}
 			default:
 				_, err = tx.Exec(ctx, `
 					UPDATE `+p.tableName()+`

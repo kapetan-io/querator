@@ -19,6 +19,7 @@ import (
 
 func TestRetry(t *testing.T) {
 	badgerdb := badgerTestSetup{Dir: t.TempDir()}
+	postgres := postgresTestSetup{}
 
 	for _, tc := range []struct {
 		Setup    NewStorageFunc
@@ -41,11 +42,17 @@ func TestRetry(t *testing.T) {
 				badgerdb.Teardown()
 			},
 		},
+		{
+			Name: "PostgreSQL",
+			Setup: func() store.Config {
+				return postgres.Setup(store.PostgresConfig{})
+			},
+			TearDown: func() {
+				postgres.Teardown()
+			},
+		},
 		// {
 		// 	Name: "SurrealDB",
-		// },
-		// {
-		// 	Name: "PostgresSQL",
 		// },
 	} {
 		t.Run(tc.Name, func(t *testing.T) {

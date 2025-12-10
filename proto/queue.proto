@@ -284,6 +284,8 @@ message QueuePartitionStats {
   string averageAge = 5 [json_name = "average_age"];
   // AverageLeasedAge is the average age of leased items in the partition
   string averageLeasedAge = 6 [json_name = "average_leased_age"];
+  // Scheduled is the number of scheduled items in the partition
+  int32 scheduled = 7;
 }
 
 message QueueLogicalStats {

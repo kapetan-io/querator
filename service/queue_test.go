@@ -873,6 +873,79 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			p.Total, p.AverageAge, p.TotalLeased, p.AverageLeasedAge)
 	})
 
+	t.Run("Stats/Scheduled", func(t *testing.T) {
+		now := clock.NewProvider()
+		now.Freeze(clock.Now())
+		defer now.UnFreeze()
+
+		var queueName = random.String("queue-", 10)
+		d, c, ctx := newDaemon(t, 60*clock.Second, svc.Config{
+			StorageConfig: setup(),
+			Clock:         now,
+		})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			RequestedPartitions: 1,
+			LeaseTimeout:        "1m0s",
+			ExpireTimeout:       "24h0m0s",
+			QueueName:           queueName,
+		})
+
+		const numScheduled = 50
+		enqueueAt := now.Now().Add(1 * clock.Minute)
+		var items []*pb.QueueProduceItem
+		for i := 0; i < numScheduled; i++ {
+			items = append(items, &pb.QueueProduceItem{
+				Reference: random.String("ref-", 10),
+				Encoding:  random.String("enc-", 10),
+				Kind:      random.String("kind-", 10),
+				Utf8:      fmt.Sprintf("scheduled-%d", i),
+				EnqueueAt: timestamppb.New(enqueueAt),
+			})
+		}
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			RequestTimeout: "1m",
+			QueueName:      queueName,
+			Items:          items,
+		}))
+
+		// Verify scheduled count in stats
+		var stats pb.QueueStatsResponse
+		require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats))
+		require.Len(t, stats.LogicalQueues, 1)
+		require.Len(t, stats.LogicalQueues[0].Partitions, 1)
+		p := stats.LogicalQueues[0].Partitions[0]
+		assert.Equal(t, int32(numScheduled), p.Scheduled)
+		assert.Equal(t, int32(0), p.Total)
+
+		// Advance clock past EnqueueAt
+		now.Advance(2 * clock.Minute)
+
+		// Wait for items to move to ready queue
+		retryPolicy := retry.Policy{Interval: retry.Sleep(100 * clock.Millisecond), Attempts: 50}
+		err := retry.On(ctx, retryPolicy, func(ctx context.Context, i int) error {
+			var resp pb.StorageItemsListResponse
+			if err := c.StorageItemsList(ctx, queueName, 0, &resp, nil); err != nil {
+				return err
+			}
+			if len(resp.Items) != numScheduled {
+				return fmt.Errorf("expected %d items, got %d", numScheduled, len(resp.Items))
+			}
+			return nil
+		})
+		require.NoError(t, err)
+
+		// Verify scheduled count is now 0
+		require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats))
+		p = stats.LogicalQueues[0].Partitions[0]
+		assert.Equal(t, int32(0), p.Scheduled)
+		assert.Equal(t, int32(numScheduled), p.Total)
+	})
+
 	t.Run("QueueClear", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
 		d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})

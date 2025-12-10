@@ -86,9 +86,8 @@ type Partition interface {
 	// Delete removes the provided ids from the queue
 	Delete(ctx context.Context, ids []types.ItemID) error
 
-	// Clear removes all items from storage. If destructive is true it removes all items
-	// in the queue regardless of status
-	Clear(ctx context.Context, destructive bool) error
+	// Clear removes items from storage based on the ClearRequest flags
+	Clear(ctx context.Context, req types.ClearRequest) error
 
 	// Stats returns stats about the queue
 	Stats(ctx context.Context, stats *types.PartitionStats, now clock.Time) error

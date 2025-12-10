@@ -953,13 +953,27 @@ nextBatch:
 			case retryItem.Dead:
 				_, err = tx.Exec(ctx, `DELETE FROM `+p.tableName()+` WHERE id = $1`, retryItem.ID)
 			case !retryItem.RetryAt.IsZero():
-				_, err = tx.Exec(ctx, `
-					UPDATE `+p.tableName()+`
-					SET is_leased = false,
-						lease_deadline = NULL,
-						enqueue_at = $1
-					WHERE id = $2`,
-					timeToMicroseconds(retryItem.RetryAt), retryItem.ID)
+				// If RetryAt is in the past or less than 100ms from now, treat as immediate retry
+				now := clock.Now().UTC()
+				if retryItem.RetryAt.Before(now.Add(time.Millisecond * 100)) {
+					// Immediate retry - enqueue_at stays NULL
+					_, err = tx.Exec(ctx, `
+						UPDATE `+p.tableName()+`
+						SET is_leased = false,
+							lease_deadline = NULL,
+							enqueue_at = NULL
+						WHERE id = $1`,
+						retryItem.ID)
+				} else {
+					// Schedule for future retry
+					_, err = tx.Exec(ctx, `
+						UPDATE `+p.tableName()+`
+						SET is_leased = false,
+							lease_deadline = NULL,
+							enqueue_at = $1
+						WHERE id = $2`,
+						timeToMicroseconds(retryItem.RetryAt), retryItem.ID)
+				}
 			default:
 				_, err = tx.Exec(ctx, `
 					UPDATE `+p.tableName()+`
@@ -1248,7 +1262,7 @@ func (p *PostgresPartition) Delete(ctx context.Context, ids []types.ItemID) erro
 	return nil
 }
 
-func (p *PostgresPartition) Clear(ctx context.Context, destructive bool) error {
+func (p *PostgresPartition) Clear(ctx context.Context, req types.ClearRequest) error {
 	pool, err := p.conf.getOrCreatePool(ctx)
 	if err != nil {
 		return err
@@ -1258,12 +1272,30 @@ func (p *PostgresPartition) Clear(ctx context.Context, destructive bool) error {
 		return err
 	}
 
-	if destructive {
-		_, err = pool.Exec(ctx, `DELETE FROM `+p.tableName())
-	} else {
-		_, err = pool.Exec(ctx, `DELETE FROM `+p.tableName()+` WHERE is_leased = false`)
+	var conditions []string
+
+	if req.Scheduled {
+		conditions = append(conditions, `enqueue_at IS NOT NULL`)
 	}
 
+	if req.Queue {
+		if req.Destructive {
+			conditions = append(conditions, `(enqueue_at IS NULL OR enqueue_at <= NOW())`)
+		} else {
+			conditions = append(conditions, `(enqueue_at IS NULL OR enqueue_at <= NOW()) AND is_leased = false`)
+		}
+	}
+
+	if len(conditions) == 0 {
+		return nil
+	}
+
+	query := `DELETE FROM ` + p.tableName() + ` WHERE ` + conditions[0]
+	for i := 1; i < len(conditions); i++ {
+		query += ` OR ` + conditions[i]
+	}
+
+	_, err = pool.Exec(ctx, query)
 	if err != nil {
 		return errors.Errorf("clear failed: %w", err)
 	}

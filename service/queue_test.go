@@ -439,6 +439,306 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		}, &lease)
 		require.NoError(t, err)
 		require.Len(t, lease.Items, numItems)
+
+		// Complete all leased items
+		require.NoError(t, c.QueueComplete(ctx, &pb.QueueCompleteRequest{
+			RequestTimeout: "5s",
+			QueueName:      queueName,
+			Ids:            querator.CollectIDs(lease.Items),
+		}))
+
+		// Verify items are removed from queue
+		err = c.StorageItemsList(ctx, queueName, 0, &list, nil)
+		require.NoError(t, err)
+		assert.Empty(t, list.Items)
+	})
+
+	t.Run("Produce/Scheduled/Linearizability", func(t *testing.T) {
+		now := clock.NewProvider()
+		now.Freeze(clock.Now())
+		defer now.UnFreeze()
+
+		var queueName = random.String("queue-", 10)
+		d, c, ctx := newDaemon(t, 60*clock.Second, svc.Config{
+			StorageConfig: setup(),
+			Clock:         now,
+		})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			RequestedPartitions: 1,
+			LeaseTimeout:        "1m0s",
+			ExpireTimeout:       "24h0m0s",
+			QueueName:           queueName,
+		})
+
+		const numItems = 10
+		enqueueAt := now.Now().Add(1 * clock.Minute)
+		var items []*pb.QueueProduceItem
+		for i := 0; i < numItems; i++ {
+			items = append(items, &pb.QueueProduceItem{
+				Reference: fmt.Sprintf("ref-%d", i),
+				Encoding:  "utf8",
+				Kind:      "linearizability-test",
+				Utf8:      fmt.Sprintf("message-%d", i),
+				EnqueueAt: timestamppb.New(enqueueAt),
+			})
+		}
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			RequestTimeout: "1m",
+			QueueName:      queueName,
+			Items:          items,
+		}))
+
+		// Items should appear in StorageScheduledList
+		var scheduled pb.StorageItemsListResponse
+		err := c.StorageScheduledList(ctx, queueName, 0, &scheduled, &querator.ListOptions{Limit: 20})
+		require.NoError(t, err)
+		require.Len(t, scheduled.Items, numItems)
+
+		// Advance clock past EnqueueAt
+		now.Advance(2 * clock.Minute)
+
+		// Wait for items to appear in StorageItemsList
+		retryPolicy := retry.Policy{Interval: retry.Sleep(100 * clock.Millisecond), Attempts: 50}
+		err = retry.On(ctx, retryPolicy, func(ctx context.Context, i int) error {
+			var resp pb.StorageItemsListResponse
+			if err := c.StorageItemsList(ctx, queueName, 0, &resp, nil); err != nil {
+				return err
+			}
+			if len(resp.Items) != numItems {
+				return fmt.Errorf("expected %d items, got %d", numItems, len(resp.Items))
+			}
+			return nil
+		})
+		require.NoError(t, err)
+
+		// Lease all items in batch
+		var lease pb.QueueLeaseResponse
+		err = c.QueueLease(ctx, &pb.QueueLeaseRequest{
+			ClientId:       random.String("client-", 10),
+			RequestTimeout: "5s",
+			QueueName:      queueName,
+			BatchSize:      numItems,
+		}, &lease)
+		require.NoError(t, err)
+		require.Len(t, lease.Items, numItems)
+
+		// Verify items leased in FIFO order (by Reference matching production order)
+		for i := 0; i < numItems; i++ {
+			assert.Equal(t, fmt.Sprintf("ref-%d", i), lease.Items[i].Reference)
+		}
+	})
+
+	t.Run("Produce/Scheduled/NearImmediate", func(t *testing.T) {
+		now := clock.NewProvider()
+		now.Freeze(clock.Now())
+		defer now.UnFreeze()
+
+		var queueName = random.String("queue-", 10)
+		d, c, ctx := newDaemon(t, 60*clock.Second, svc.Config{
+			StorageConfig: setup(),
+			Clock:         now,
+		})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			RequestedPartitions: 1,
+			LeaseTimeout:        "1m0s",
+			ExpireTimeout:       "24h0m0s",
+			QueueName:           queueName,
+		})
+
+		// Produce item with EnqueueAt = now + 50ms (< 100ms optimization threshold)
+		enqueueAt := now.Now().Add(50 * clock.Millisecond)
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			RequestTimeout: "1m",
+			QueueName:      queueName,
+			Items: []*pb.QueueProduceItem{
+				{
+					Reference: "near-immediate",
+					Encoding:  "utf8",
+					Kind:      "test",
+					Utf8:      "near immediate test",
+					EnqueueAt: timestamppb.New(enqueueAt),
+				},
+			},
+		}))
+
+		// Item should appear in StorageItemsList immediately (count == 1)
+		var list pb.StorageItemsListResponse
+		err := c.StorageItemsList(ctx, queueName, 0, &list, nil)
+		require.NoError(t, err)
+		require.Len(t, list.Items, 1)
+
+		// Item should NOT be in StorageScheduledList (count == 0)
+		var scheduled pb.StorageItemsListResponse
+		err = c.StorageScheduledList(ctx, queueName, 0, &scheduled, nil)
+		require.NoError(t, err)
+		require.Empty(t, scheduled.Items)
+
+		// Item should be immediately leasable
+		var lease pb.QueueLeaseResponse
+		err = c.QueueLease(ctx, &pb.QueueLeaseRequest{
+			ClientId:       random.String("client-", 10),
+			RequestTimeout: "5s",
+			QueueName:      queueName,
+			BatchSize:      1,
+		}, &lease)
+		require.NoError(t, err)
+		require.Len(t, lease.Items, 1)
+		assert.Equal(t, "near-immediate", lease.Items[0].Reference)
+	})
+
+	t.Run("Produce/Scheduled/PastTimestamp", func(t *testing.T) {
+		now := clock.NewProvider()
+		now.Freeze(clock.Now())
+		defer now.UnFreeze()
+
+		var queueName = random.String("queue-", 10)
+		d, c, ctx := newDaemon(t, 60*clock.Second, svc.Config{
+			StorageConfig: setup(),
+			Clock:         now,
+		})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			RequestedPartitions: 1,
+			LeaseTimeout:        "1m0s",
+			ExpireTimeout:       "24h0m0s",
+			QueueName:           queueName,
+		})
+
+		// Produce item with EnqueueAt in the past
+		enqueueAt := now.Now().Add(-1 * clock.Minute)
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			RequestTimeout: "1m",
+			QueueName:      queueName,
+			Items: []*pb.QueueProduceItem{
+				{
+					Reference: "past-timestamp",
+					Encoding:  "utf8",
+					Kind:      "test",
+					Utf8:      "past timestamp test",
+					EnqueueAt: timestamppb.New(enqueueAt),
+				},
+			},
+		}))
+
+		// Item should appear in StorageItemsList immediately
+		var list pb.StorageItemsListResponse
+		err := c.StorageItemsList(ctx, queueName, 0, &list, nil)
+		require.NoError(t, err)
+		require.Len(t, list.Items, 1)
+
+		// Item should NOT be in StorageScheduledList
+		var scheduled pb.StorageItemsListResponse
+		err = c.StorageScheduledList(ctx, queueName, 0, &scheduled, nil)
+		require.NoError(t, err)
+		require.Empty(t, scheduled.Items)
+
+		// Item should be immediately leasable
+		var lease pb.QueueLeaseResponse
+		err = c.QueueLease(ctx, &pb.QueueLeaseRequest{
+			ClientId:       random.String("client-", 10),
+			RequestTimeout: "5s",
+			QueueName:      queueName,
+			BatchSize:      1,
+		}, &lease)
+		require.NoError(t, err)
+		require.Len(t, lease.Items, 1)
+		assert.Equal(t, "past-timestamp", lease.Items[0].Reference)
+	})
+
+	t.Run("Produce/Scheduled/Pagination", func(t *testing.T) {
+		now := clock.NewProvider()
+		now.Freeze(clock.Now())
+		defer now.UnFreeze()
+
+		var queueName = random.String("queue-", 10)
+		d, c, ctx := newDaemon(t, 60*clock.Second, svc.Config{
+			StorageConfig: setup(),
+			Clock:         now,
+		})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			RequestedPartitions: 1,
+			LeaseTimeout:        "1m0s",
+			ExpireTimeout:       "24h0m0s",
+			QueueName:           queueName,
+		})
+
+		// Produce 50 scheduled items with future EnqueueAt
+		const numItems = 50
+		enqueueAt := now.Now().Add(1 * clock.Minute)
+		var items []*pb.QueueProduceItem
+		for i := 0; i < numItems; i++ {
+			items = append(items, &pb.QueueProduceItem{
+				Reference: fmt.Sprintf("page-ref-%d", i),
+				Encoding:  "utf8",
+				Kind:      "pagination-test",
+				Utf8:      fmt.Sprintf("message-%d", i),
+				EnqueueAt: timestamppb.New(enqueueAt),
+			})
+		}
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			RequestTimeout: "1m",
+			QueueName:      queueName,
+			Items:          items,
+		}))
+
+		// Verify pagination works by fetching all items in pages
+		// Use a larger limit to get all items in one or two calls
+		var allItems pb.StorageItemsListResponse
+		err := c.StorageScheduledList(ctx, queueName, 0, &allItems, &querator.ListOptions{Limit: 100})
+		require.NoError(t, err)
+		require.Len(t, allItems.Items, numItems)
+
+		// Now test pagination with smaller page size
+		const pageSize = 20
+		var page1 pb.StorageItemsListResponse
+		err = c.StorageScheduledList(ctx, queueName, 0, &page1, &querator.ListOptions{Limit: pageSize})
+		require.NoError(t, err)
+		require.Len(t, page1.Items, pageSize)
+
+		// Verify all items have unique IDs
+		seenIDs := make(map[string]bool)
+		for _, item := range page1.Items {
+			require.False(t, seenIDs[item.Id], "Duplicate ID in first page: %s", item.Id)
+			seenIDs[item.Id] = true
+		}
+
+		// Second page using pivot
+		var page2 pb.StorageItemsListResponse
+		err = c.StorageScheduledList(ctx, queueName, 0, &page2, &querator.ListOptions{
+			Limit: pageSize,
+			Pivot: page1.Items[len(page1.Items)-1].Id,
+		})
+		require.NoError(t, err)
+		require.NotEmpty(t, page2.Items)
+
+		// Verify second page has different items (may include pivot or not, but should have new items)
+		newItemsFound := 0
+		for _, item := range page2.Items {
+			if !seenIDs[item.Id] {
+				newItemsFound++
+				seenIDs[item.Id] = true
+			}
+		}
+		require.Greater(t, newItemsFound, 0, "Second page should have at least some new items")
 	})
 
 	t.Run("Lease", func(t *testing.T) {
@@ -873,6 +1173,79 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			p.Total, p.AverageAge, p.TotalLeased, p.AverageLeasedAge)
 	})
 
+	t.Run("Stats/Scheduled", func(t *testing.T) {
+		now := clock.NewProvider()
+		now.Freeze(clock.Now())
+		defer now.UnFreeze()
+
+		var queueName = random.String("queue-", 10)
+		d, c, ctx := newDaemon(t, 60*clock.Second, svc.Config{
+			StorageConfig: setup(),
+			Clock:         now,
+		})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			RequestedPartitions: 1,
+			LeaseTimeout:        "1m0s",
+			ExpireTimeout:       "24h0m0s",
+			QueueName:           queueName,
+		})
+
+		const numScheduled = 50
+		enqueueAt := now.Now().Add(1 * clock.Minute)
+		var items []*pb.QueueProduceItem
+		for i := 0; i < numScheduled; i++ {
+			items = append(items, &pb.QueueProduceItem{
+				Reference: random.String("ref-", 10),
+				Encoding:  random.String("enc-", 10),
+				Kind:      random.String("kind-", 10),
+				Utf8:      fmt.Sprintf("scheduled-%d", i),
+				EnqueueAt: timestamppb.New(enqueueAt),
+			})
+		}
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			RequestTimeout: "1m",
+			QueueName:      queueName,
+			Items:          items,
+		}))
+
+		// Verify scheduled count in stats
+		var stats pb.QueueStatsResponse
+		require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats))
+		require.Len(t, stats.LogicalQueues, 1)
+		require.Len(t, stats.LogicalQueues[0].Partitions, 1)
+		p := stats.LogicalQueues[0].Partitions[0]
+		assert.Equal(t, int32(numScheduled), p.Scheduled)
+		assert.Equal(t, int32(0), p.Total)
+
+		// Advance clock past EnqueueAt
+		now.Advance(2 * clock.Minute)
+
+		// Wait for items to move to ready queue
+		retryPolicy := retry.Policy{Interval: retry.Sleep(100 * clock.Millisecond), Attempts: 50}
+		err := retry.On(ctx, retryPolicy, func(ctx context.Context, i int) error {
+			var resp pb.StorageItemsListResponse
+			if err := c.StorageItemsList(ctx, queueName, 0, &resp, nil); err != nil {
+				return err
+			}
+			if len(resp.Items) != numScheduled {
+				return fmt.Errorf("expected %d items, got %d", numScheduled, len(resp.Items))
+			}
+			return nil
+		})
+		require.NoError(t, err)
+
+		// Verify scheduled count is now 0
+		require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats))
+		p = stats.LogicalQueues[0].Partitions[0]
+		assert.Equal(t, int32(0), p.Scheduled)
+		assert.Equal(t, int32(numScheduled), p.Total)
+	})
+
 	t.Run("QueueClear", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
 		d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
@@ -944,6 +1317,190 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		})
 
 	})
+
+	t.Run("QueueClear/Scheduled", func(t *testing.T) {
+			nowSched := clock.NewProvider()
+			nowSched.Freeze(clock.Now())
+			defer nowSched.UnFreeze()
+
+			var scheduledQueueName = random.String("queue-", 10)
+			dSched, cSched, ctxSched := newDaemon(t, 60*clock.Second, svc.Config{
+				StorageConfig: setup(),
+				Clock:         nowSched,
+			})
+			defer func() {
+				dSched.Shutdown(t)
+				tearDown()
+			}()
+
+			createQueueAndWait(t, ctxSched, cSched, &pb.QueueInfo{
+				RequestedPartitions: 1,
+				LeaseTimeout:        "1m0s",
+				ExpireTimeout:       "24h0m0s",
+				QueueName:           scheduledQueueName,
+			})
+
+			// Produce regular items AND scheduled items
+			const numRegular = 10
+			const numScheduled = 20
+			enqueueAt := nowSched.Now().Add(5 * clock.Minute)
+
+			var regularItems []*pb.QueueProduceItem
+			for i := 0; i < numRegular; i++ {
+				regularItems = append(regularItems, &pb.QueueProduceItem{
+					Reference: random.String("regular-", 10),
+					Encoding:  random.String("enc-", 10),
+					Kind:      random.String("kind-", 10),
+					Utf8:      fmt.Sprintf("regular-%d", i),
+				})
+			}
+			require.NoError(t, cSched.QueueProduce(ctxSched, &pb.QueueProduceRequest{
+				RequestTimeout: "1m",
+				QueueName:      scheduledQueueName,
+				Items:          regularItems,
+			}))
+
+			var scheduledItems []*pb.QueueProduceItem
+			for i := 0; i < numScheduled; i++ {
+				scheduledItems = append(scheduledItems, &pb.QueueProduceItem{
+					Reference: random.String("scheduled-", 10),
+					Encoding:  random.String("enc-", 10),
+					Kind:      random.String("kind-", 10),
+					Utf8:      fmt.Sprintf("scheduled-%d", i),
+					EnqueueAt: timestamppb.New(enqueueAt),
+				})
+			}
+			require.NoError(t, cSched.QueueProduce(ctxSched, &pb.QueueProduceRequest{
+				RequestTimeout: "1m",
+				QueueName:      scheduledQueueName,
+				Items:          scheduledItems,
+			}))
+
+			// Verify scheduled items exist
+			var scheduledList pb.StorageItemsListResponse
+			require.NoError(t, cSched.StorageScheduledList(ctxSched, scheduledQueueName, 0, &scheduledList, nil))
+			assert.Equal(t, numScheduled, len(scheduledList.Items))
+
+			// Verify regular items exist
+			var itemsList pb.StorageItemsListResponse
+			require.NoError(t, cSched.StorageItemsList(ctxSched, scheduledQueueName, 0, &itemsList, nil))
+			assert.Equal(t, numRegular, len(itemsList.Items))
+
+			// Clear only scheduled items
+			require.NoError(t, cSched.QueueClear(ctxSched, &pb.QueueClearRequest{
+				QueueName: scheduledQueueName,
+				Scheduled: true,
+			}))
+
+			// Verify scheduled items removed
+			require.NoError(t, cSched.StorageScheduledList(ctxSched, scheduledQueueName, 0, &scheduledList, nil))
+			assert.Equal(t, 0, len(scheduledList.Items))
+
+			// Verify regular items remain
+			require.NoError(t, cSched.StorageItemsList(ctxSched, scheduledQueueName, 0, &itemsList, nil))
+			assert.Equal(t, numRegular, len(itemsList.Items))
+
+			// Verify stats.Scheduled is 0
+			var stats pb.QueueStatsResponse
+			require.NoError(t, cSched.QueueStats(ctxSched, &pb.QueueStatsRequest{QueueName: scheduledQueueName}, &stats))
+			require.Len(t, stats.LogicalQueues, 1)
+			require.Len(t, stats.LogicalQueues[0].Partitions, 1)
+			p := stats.LogicalQueues[0].Partitions[0]
+			assert.Equal(t, int32(0), p.Scheduled)
+			assert.Equal(t, int32(numRegular), p.Total)
+	})
+
+	t.Run("QueueClear/ScheduledAndQueue", func(t *testing.T) {
+			nowCombined := clock.NewProvider()
+			nowCombined.Freeze(clock.Now())
+			defer nowCombined.UnFreeze()
+
+			var combinedQueueName = random.String("queue-", 10)
+			dCombined, cCombined, ctxCombined := newDaemon(t, 60*clock.Second, svc.Config{
+				StorageConfig: setup(),
+				Clock:         nowCombined,
+			})
+			defer func() {
+				dCombined.Shutdown(t)
+				tearDown()
+			}()
+
+			createQueueAndWait(t, ctxCombined, cCombined, &pb.QueueInfo{
+				RequestedPartitions: 1,
+				LeaseTimeout:        "1m0s",
+				ExpireTimeout:       "24h0m0s",
+				QueueName:           combinedQueueName,
+			})
+
+			// Produce regular items AND scheduled items
+			const numRegular = 15
+			const numScheduled = 25
+			enqueueAt := nowCombined.Now().Add(5 * clock.Minute)
+
+			var regularItems []*pb.QueueProduceItem
+			for i := 0; i < numRegular; i++ {
+				regularItems = append(regularItems, &pb.QueueProduceItem{
+					Reference: random.String("regular-", 10),
+					Encoding:  random.String("enc-", 10),
+					Kind:      random.String("kind-", 10),
+					Utf8:      fmt.Sprintf("regular-%d", i),
+				})
+			}
+			require.NoError(t, cCombined.QueueProduce(ctxCombined, &pb.QueueProduceRequest{
+				RequestTimeout: "1m",
+				QueueName:      combinedQueueName,
+				Items:          regularItems,
+			}))
+
+			var scheduledItems []*pb.QueueProduceItem
+			for i := 0; i < numScheduled; i++ {
+				scheduledItems = append(scheduledItems, &pb.QueueProduceItem{
+					Reference: random.String("scheduled-", 10),
+					Encoding:  random.String("enc-", 10),
+					Kind:      random.String("kind-", 10),
+					Utf8:      fmt.Sprintf("scheduled-%d", i),
+					EnqueueAt: timestamppb.New(enqueueAt),
+				})
+			}
+			require.NoError(t, cCombined.QueueProduce(ctxCombined, &pb.QueueProduceRequest{
+				RequestTimeout: "1m",
+				QueueName:      combinedQueueName,
+				Items:          scheduledItems,
+			}))
+
+			// Verify both exist
+			var scheduledList pb.StorageItemsListResponse
+			require.NoError(t, cCombined.StorageScheduledList(ctxCombined, combinedQueueName, 0, &scheduledList, nil))
+			assert.Equal(t, numScheduled, len(scheduledList.Items))
+
+			var itemsList pb.StorageItemsListResponse
+			require.NoError(t, cCombined.StorageItemsList(ctxCombined, combinedQueueName, 0, &itemsList, nil))
+			assert.Equal(t, numRegular, len(itemsList.Items))
+
+			// Clear both scheduled and queue items
+			require.NoError(t, cCombined.QueueClear(ctxCombined, &pb.QueueClearRequest{
+				QueueName: combinedQueueName,
+				Scheduled: true,
+				Queue:     true,
+			}))
+
+			// Verify both removed
+			require.NoError(t, cCombined.StorageScheduledList(ctxCombined, combinedQueueName, 0, &scheduledList, nil))
+			assert.Equal(t, 0, len(scheduledList.Items))
+
+			require.NoError(t, cCombined.StorageItemsList(ctxCombined, combinedQueueName, 0, &itemsList, nil))
+			assert.Equal(t, 0, len(itemsList.Items))
+
+			// Verify stats
+			var stats pb.QueueStatsResponse
+			require.NoError(t, cCombined.QueueStats(ctxCombined, &pb.QueueStatsRequest{QueueName: combinedQueueName}, &stats))
+			require.Len(t, stats.LogicalQueues, 1)
+			require.Len(t, stats.LogicalQueues[0].Partitions, 1)
+			p := stats.LogicalQueues[0].Partitions[0]
+			assert.Equal(t, int32(0), p.Scheduled)
+			assert.Equal(t, int32(0), p.Total)
+	})
+
 	t.Run("Errors", func(t *testing.T) {
 		storage := setup()
 		defer tearDown()
@@ -1927,6 +2484,142 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			assert.Equal(t, int32(0), dlqItem.Attempts)
 
 			// Verify item is no longer in source queue
+			var sourceResp pb.StorageItemsListResponse
+			require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &sourceResp, nil))
+			assert.Empty(t, sourceResp.Items)
+		})
+
+		t.Run("ScheduledMaxAttempts", func(t *testing.T) {
+			now := clock.NewProvider()
+			now.Freeze(clock.Now())
+			defer now.UnFreeze()
+
+			var queueName = random.String("queue-", 10)
+			var dlqName = random.String("dlq-", 10)
+			d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup(), Clock: now})
+			defer func() {
+				d.Shutdown(t)
+				tearDown()
+			}()
+
+			// Create DLQ queue (no DLQ of its own)
+			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+				QueueName:           dlqName,
+				LeaseTimeout:        "1m",
+				ExpireTimeout:       ExpireTimeout,
+				MaxAttempts:         10,
+				RequestedPartitions: 1,
+			}))
+
+			// Create source queue with DLQ, MaxAttempts=2, LeaseTimeout=1m
+			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+				QueueName:           queueName,
+				LeaseTimeout:        "1m",
+				ExpireTimeout:       ExpireTimeout,
+				MaxAttempts:         2,
+				DeadQueue:           dlqName,
+				RequestedPartitions: 1,
+			}))
+
+			// Produce item with future EnqueueAt
+			enqueueAt := now.Now().Add(1 * clock.Minute)
+			reference := random.String("ref-", 10)
+			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+				QueueName:      queueName,
+				RequestTimeout: "5m",
+				Items: []*pb.QueueProduceItem{
+					{
+						Reference: reference,
+						Encoding:  "text",
+						Kind:      "scheduled-dlq-test",
+						Bytes:     []byte("test payload"),
+						EnqueueAt: timestamppb.New(enqueueAt),
+					},
+				},
+			}))
+
+			// Verify item in scheduled list
+			var scheduledList pb.StorageItemsListResponse
+			err := c.StorageScheduledList(ctx, queueName, 0, &scheduledList, &querator.ListOptions{Limit: 10})
+			require.NoError(t, err)
+			require.Len(t, scheduledList.Items, 1)
+
+			// Advance clock past EnqueueAt, wait for item to be ready
+			now.Advance(2 * clock.Minute)
+
+			// Wait for item to appear in ready queue
+			retryPolicy := retry.Policy{Interval: retry.Sleep(100 * clock.Millisecond), Attempts: 50}
+			err = retry.On(ctx, retryPolicy, func(ctx context.Context, i int) error {
+				var resp pb.StorageItemsListResponse
+				if err := c.StorageItemsList(ctx, queueName, 0, &resp, nil); err != nil {
+					return err
+				}
+				if len(resp.Items) != 1 {
+					return fmt.Errorf("expected 1 item, got %d", len(resp.Items))
+				}
+				return nil
+			})
+			require.NoError(t, err)
+
+			// Lease item (attempt 1)
+			var lease1 pb.QueueLeaseResponse
+			require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+				QueueName:      queueName,
+				RequestTimeout: "5m",
+				ClientId:       "client-1",
+				BatchSize:      10,
+			}, &lease1))
+			require.Len(t, lease1.Items, 1)
+
+			// Advance time to expire lease (attempt 1 expires)
+			now.Advance(2 * clock.Minute)
+
+			// Wait for item to be re-queued after lease expiry
+			require.Eventually(t, func() bool {
+				var resp pb.StorageItemsListResponse
+				if err := c.StorageItemsList(ctx, queueName, 0, &resp, nil); err != nil {
+					return false
+				}
+				if len(resp.Items) == 0 {
+					return false
+				}
+				return !resp.Items[0].IsLeased && resp.Items[0].Attempts == 1
+			}, 5*clock.Second, 100*clock.Millisecond)
+
+			// Lease item again (attempt 2)
+			var lease2 pb.QueueLeaseResponse
+			require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+				QueueName:      queueName,
+				RequestTimeout: "5m",
+				ClientId:       "client-2",
+				BatchSize:      10,
+			}, &lease2))
+			require.Len(t, lease2.Items, 1)
+
+			// Advance time to expire lease (attempt 2 expires, item now at MaxAttempts)
+			now.Advance(2 * clock.Minute)
+
+			// Wait for lifecycle to process the dead item and move to DLQ
+			require.Eventually(t, func() bool {
+				var dlqResp pb.StorageItemsListResponse
+				if err := c.StorageItemsList(ctx, dlqName, 0, &dlqResp, nil); err != nil {
+					return false
+				}
+				return len(dlqResp.Items) == 1
+			}, 5*clock.Second, 100*clock.Millisecond)
+
+			// Verify item in DLQ has correct properties
+			var dlqResp pb.StorageItemsListResponse
+			require.NoError(t, c.StorageItemsList(ctx, dlqName, 0, &dlqResp, nil))
+			require.Len(t, dlqResp.Items, 1)
+
+			dlqItem := dlqResp.Items[0]
+			assert.Equal(t, reference, dlqItem.Reference)
+			assert.NotEmpty(t, dlqItem.SourceId)
+			assert.False(t, dlqItem.IsLeased)
+			assert.Equal(t, int32(0), dlqItem.Attempts)
+
+			// Verify item removed from source queue
 			var sourceResp pb.StorageItemsListResponse
 			require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &sourceResp, nil))
 			assert.Empty(t, sourceResp.Items)

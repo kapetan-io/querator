@@ -188,8 +188,15 @@ nextBatch:
 				// For now, just remove the item
 				m.mem = append(m.mem[:idx], m.mem[idx+1:]...)
 			} else if !retryItem.RetryAt.IsZero() {
-				// Schedule for future retry
-				m.mem[idx].EnqueueAt = retryItem.RetryAt
+				// If RetryAt is in the past or less than 100ms from now, treat as immediate retry
+				now := clock.Now().UTC()
+				if retryItem.RetryAt.Before(now.Add(time.Millisecond * 100)) {
+					// Immediate retry - EnqueueAt stays zero
+					m.mem[idx].EnqueueAt = clock.Time{}
+				} else {
+					// Schedule for future retry
+					m.mem[idx].EnqueueAt = retryItem.RetryAt
+				}
 			}
 			// For immediate retry (empty RetryAt), item stays in queue with incremented attempts
 		}
@@ -315,20 +322,37 @@ func (m *MemoryPartition) Delete(_ context.Context, ids []types.ItemID) error {
 	return nil
 }
 
-func (m *MemoryPartition) Clear(_ context.Context, destructive bool) error {
+func (m *MemoryPartition) Clear(_ context.Context, req types.ClearRequest) error {
 	defer m.mu.Unlock()
 	m.mu.Lock()
 
-	if destructive {
+	if req.Destructive && req.Queue {
 		m.mem = make([]types.Item, 0, 1_000)
+		m.bySourceID = make(map[string]struct{})
 		return nil
 	}
 
 	mem := make([]types.Item, 0, len(m.mem))
 	for _, item := range m.mem {
-		if item.IsLeased {
+		shouldKeep := true
+
+		// Clear scheduled items
+		if req.Scheduled && !item.EnqueueAt.IsZero() {
+			shouldKeep = false
+		}
+
+		// Clear queue items (those with EnqueueAt zero or in past)
+		if req.Queue && item.EnqueueAt.IsZero() {
+			if req.Destructive || !item.IsLeased {
+				shouldKeep = false
+			}
+		}
+
+		if shouldKeep {
 			mem = append(mem, item)
-			continue
+		} else if item.SourceID != nil {
+			// Remove from SourceID index if set
+			delete(m.bySourceID, string(item.SourceID))
 		}
 	}
 	m.mem = mem

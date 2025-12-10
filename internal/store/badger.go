@@ -332,8 +332,15 @@ nextBatch:
 			} else {
 				// For scheduled retry or immediate retry, update the item
 				if !retryItem.RetryAt.IsZero() {
-					// Schedule for future retry
-					item.EnqueueAt = retryItem.RetryAt
+					// If RetryAt is in the past or less than 100ms from now, treat as immediate retry
+					now := clock.Now().UTC()
+					if retryItem.RetryAt.Before(now.Add(time.Millisecond * 100)) {
+						// Immediate retry - EnqueueAt stays zero
+						item.EnqueueAt = clock.Time{}
+					} else {
+						// Schedule for future retry
+						item.EnqueueAt = retryItem.RetryAt
+					}
 				}
 				// For immediate retry (empty RetryAt), item stays in queue with incremented attempts
 
@@ -574,14 +581,14 @@ func (b *BadgerPartition) Delete(_ context.Context, ids []types.ItemID) error {
 	})
 }
 
-func (b *BadgerPartition) Clear(_ context.Context, destructive bool) error {
+func (b *BadgerPartition) Clear(_ context.Context, req types.ClearRequest) error {
 	db, err := b.getDB()
 	if err != nil {
 		return err
 	}
 
 	return db.Update(func(txn *badger.Txn) error {
-		if destructive {
+		if req.Destructive && req.Queue {
 			err := db.DropAll()
 			if err != nil {
 				return errors.Errorf("during destructive DropAll(): %w", err)
@@ -605,13 +612,24 @@ func (b *BadgerPartition) Clear(_ context.Context, destructive bool) error {
 				return errors.Errorf("during Decode(): %w", err)
 			}
 
-			// Skip leased items
-			if item.IsLeased {
-				continue
+			shouldDelete := false
+
+			// Clear scheduled items
+			if req.Scheduled && !item.EnqueueAt.IsZero() {
+				shouldDelete = true
 			}
 
-			if err := txn.Delete(k); err != nil {
-				return errors.Errorf("during Delete(): %w", err)
+			// Clear queue items (those with EnqueueAt zero or in past)
+			if req.Queue && item.EnqueueAt.IsZero() {
+				if req.Destructive || !item.IsLeased {
+					shouldDelete = true
+				}
+			}
+
+			if shouldDelete {
+				if err := txn.Delete(k); err != nil {
+					return errors.Errorf("during Delete(): %w", err)
+				}
 			}
 		}
 		return nil

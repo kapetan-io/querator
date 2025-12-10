@@ -510,6 +510,7 @@ func (s *Service) QueueStats(ctx context.Context, req *proto.QueueStatsRequest,
 					Failures:         int32(stat.Failures),
 					AverageAge:       stat.AverageAge.String(),
 					Total:            int32(stat.Total),
+					Scheduled:        int32(stat.Scheduled),
 				})
 		}
 		res.LogicalQueues = append(res.LogicalQueues, ls)

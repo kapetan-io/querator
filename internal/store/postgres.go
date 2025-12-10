@@ -917,7 +917,7 @@ nextBatch:
 	for i := range batch.Requests {
 		for _, retryItem := range batch.Requests[i].Items {
 			if err := p.validateID(retryItem.ID); err != nil {
-				batch.Requests[i].Err = transport.NewInvalidOption("invalid id: %s", err)
+				batch.Requests[i].Err = transport.NewInvalidOption("invalid storage id; '%s': %s", retryItem.ID, err)
 				continue nextBatch
 			}
 

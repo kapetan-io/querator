@@ -1,8 +1,12 @@
 package service_test
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"github.com/duh-rpc/duh-go"
+	"github.com/duh-rpc/duh-go/retry"
+	"github.com/kapetan-io/querator"
 	svc "github.com/kapetan-io/querator/service"
 	"github.com/kapetan-io/querator/internal/store"
 	pb "github.com/kapetan-io/querator/proto"
@@ -14,7 +18,6 @@ import (
 	"go.uber.org/goleak"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"testing"
-	"time"
 )
 
 func TestRetry(t *testing.T) {
@@ -163,39 +166,6 @@ func testRetry(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			}))
 		})
 
-		t.Run("ScheduledRetry", func(t *testing.T) {
-			// Retry item2 with future timestamp
-			futureTime := time.Now().UTC().Add(1 * time.Second)
-			require.NoError(t, c.QueueRetry(ctx, &pb.QueueRetryRequest{
-				QueueName: queueName,
-				Partition: lease.Partition,
-				Items: []*pb.QueueRetryItem{
-					{
-						Id:      item2.Id,
-						Dead:    false,
-						RetryAt: timestamppb.New(futureTime),
-					},
-				},
-			}))
-
-			// Verify item is not immediately available (should be scheduled)
-			var emptyLease pb.QueueLeaseResponse
-			err := c.QueueLease(ctx, &pb.QueueLeaseRequest{
-				ClientId:       random.String("client-", 10),
-				RequestTimeout: "500ms",
-				QueueName:      queueName,
-				BatchSize:      1,
-			}, &emptyLease)
-			require.Error(t, err)
-			var e duh.Error
-			require.True(t, errors.As(err, &e))
-			assert.Equal(t, duh.CodeRetryRequest, e.Code())
-
-			// Item was successfully scheduled for retry (not immediately available)
-			// For now, we'll skip testing the scheduled delivery since that's a lifecycle feature
-			// that may not be fully implemented yet
-		})
-
 		t.Run("DeadLetter", func(t *testing.T) {
 			// Mark item3 as dead
 			require.NoError(t, c.QueueRetry(ctx, &pb.QueueRetryRequest{
@@ -222,6 +192,116 @@ func testRetry(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			require.True(t, errors.As(err, &e))
 			assert.Equal(t, duh.CodeRetryRequest, e.Code())
 		})
+	})
+
+	t.Run("ScheduledRetry", func(t *testing.T) {
+		now := clock.NewProvider()
+		now.Freeze(clock.Now())
+		defer now.UnFreeze()
+
+		var queueName = random.String("queue-", 10)
+		d, c, ctx := newDaemon(t, 60*clock.Second, svc.Config{
+			StorageConfig: setup(),
+			Clock:         now,
+		})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			RequestedPartitions: 1,
+			LeaseTimeout:        "1m0s",
+			ExpireTimeout:       "24h0m0s",
+			QueueName:           queueName,
+		})
+
+		// Produce an item to retry with scheduled time
+		reference := random.String("ref-", 10)
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			RequestTimeout: "1m",
+			QueueName:      queueName,
+			Items: []*pb.QueueProduceItem{
+				{
+					Reference: reference,
+					Encoding:  "utf8",
+					Kind:      "scheduled-retry-test",
+					Bytes:     []byte("scheduled retry lifecycle test"),
+				},
+			},
+		}))
+
+		// Lease the item
+		var initialLease pb.QueueLeaseResponse
+		require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+			ClientId:       random.String("client-", 10),
+			RequestTimeout: "5s",
+			QueueName:      queueName,
+			BatchSize:      1,
+		}, &initialLease))
+		require.Len(t, initialLease.Items, 1)
+		leasedItem := initialLease.Items[0]
+		assert.Equal(t, int32(1), leasedItem.Attempts)
+
+		// Retry with future RetryAt
+		retryAt := now.Now().Add(1 * clock.Minute)
+		require.NoError(t, c.QueueRetry(ctx, &pb.QueueRetryRequest{
+			QueueName: queueName,
+			Partition: initialLease.Partition,
+			Items: []*pb.QueueRetryItem{
+				{
+					Id:      leasedItem.Id,
+					RetryAt: timestamppb.New(retryAt),
+				},
+			},
+		}))
+
+		// Verify item appears in StorageScheduledList
+		var scheduledList pb.StorageItemsListResponse
+		err := c.StorageScheduledList(ctx, queueName, 0, &scheduledList, &querator.ListOptions{Limit: 10})
+		require.NoError(t, err)
+		require.Len(t, scheduledList.Items, 1)
+
+		// Verify item does NOT appear in StorageItemsList
+		var itemsList pb.StorageItemsListResponse
+		err = c.StorageItemsList(ctx, queueName, 0, &itemsList, nil)
+		require.NoError(t, err)
+		require.Empty(t, itemsList.Items)
+
+		// Advance clock past RetryAt time
+		now.Advance(2 * clock.Minute)
+
+		// Wait for item to appear in StorageItemsList
+		retryPolicy := retry.Policy{Interval: retry.Sleep(100 * clock.Millisecond), Attempts: 50}
+		err = retry.On(ctx, retryPolicy, func(ctx context.Context, i int) error {
+			var resp pb.StorageItemsListResponse
+			if err := c.StorageItemsList(ctx, queueName, 0, &resp, nil); err != nil {
+				return err
+			}
+			if len(resp.Items) != 1 {
+				return fmt.Errorf("expected 1 item, got %d", len(resp.Items))
+			}
+			return nil
+		})
+		require.NoError(t, err)
+
+		// Verify item removed from StorageScheduledList
+		err = c.StorageScheduledList(ctx, queueName, 0, &scheduledList, nil)
+		require.NoError(t, err)
+		require.Empty(t, scheduledList.Items)
+
+		// Lease item again and verify Attempts incremented
+		var retryLease pb.QueueLeaseResponse
+		require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+			ClientId:       random.String("client-", 10),
+			RequestTimeout: "5s",
+			QueueName:      queueName,
+			BatchSize:      1,
+		}, &retryLease))
+		require.Len(t, retryLease.Items, 1)
+		retriedItem := retryLease.Items[0]
+		assert.Equal(t, reference, retriedItem.Reference)
+		assert.Equal(t, int32(2), retriedItem.Attempts)
 	})
 
 	t.Run("Errors", func(t *testing.T) {

@@ -64,6 +64,32 @@ func (l *Logical) notifyScheduled(p *Partition) bool {
 	return false
 }
 
+// notifyScheduledRetry iterates through the retry items. If any have scheduled
+// RetryAt times, update the partition lifecycle state for the provided partition.
+// Returns true if NextScheduledRun was updated.
+func (l *Logical) notifyScheduledRetry(p *Partition) bool {
+	var earliestScheduled time.Time
+	for _, r := range p.RetryRequests.Requests {
+		for _, item := range r.Items {
+			if !item.RetryAt.IsZero() {
+				if earliestScheduled.IsZero() || item.RetryAt.Before(earliestScheduled) {
+					earliestScheduled = item.RetryAt
+				}
+			}
+		}
+	}
+	if earliestScheduled.IsZero() {
+		return false
+	}
+
+	now := l.conf.Clock.Now().UTC()
+	if earliestScheduled.After(now) && earliestScheduled.Before(p.Lifecycle.NextScheduledRun) {
+		p.Lifecycle.NextScheduledRun = earliestScheduled
+		return true
+	}
+	return false
+}
+
 func (l *Logical) assignProduceRequests(state *QueueState) {
 	for _, req := range state.Producers.Requests {
 		// Assign a ExpireTimeout to each item
@@ -321,6 +347,11 @@ func (l *Logical) applyToPartitions(state *QueueState) {
 				req.Err = ErrInternalRetry
 			}
 			// TODO: Handle degradation
+		} else {
+			// Notify scheduler if any items were scheduled for retry
+			if l.notifyScheduledRetry(p) {
+				scheduledUpdated = true
+			}
 		}
 
 		// ==== LifeCycle ====

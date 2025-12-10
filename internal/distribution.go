@@ -347,11 +347,9 @@ func (l *Logical) applyToPartitions(state *QueueState) {
 				req.Err = ErrInternalRetry
 			}
 			// TODO: Handle degradation
-		} else {
+		} else if l.notifyScheduledRetry(p) {
 			// Notify scheduler if any items were scheduled for retry
-			if l.notifyScheduledRetry(p) {
-				scheduledUpdated = true
-			}
+			scheduledUpdated = true
 		}
 
 		// ==== LifeCycle ====

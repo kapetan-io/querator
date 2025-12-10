@@ -350,11 +350,9 @@ func (m *MemoryPartition) Clear(_ context.Context, req types.ClearRequest) error
 
 		if shouldKeep {
 			mem = append(mem, item)
-		} else {
+		} else if item.SourceID != nil {
 			// Remove from SourceID index if set
-			if item.SourceID != nil {
-				delete(m.bySourceID, string(item.SourceID))
-			}
+			delete(m.bySourceID, string(item.SourceID))
 		}
 	}
 	m.mem = mem

@@ -2468,6 +2468,91 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			assert.True(t, dlqItem.LeaseDeadline.AsTime().Before(now.Now()))
 		})
 
+		t.Run("UnlimitedAttempts", func(t *testing.T) {
+			queueName := random.String("queue-", 10)
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				QueueName:           queueName,
+				LeaseTimeout:        "1m0s",
+				ExpireTimeout:       "24h0m0s",
+				RequestedPartitions: 1,
+				MaxAttempts:         0,
+			})
+
+			// Produce a single item (Attempts = 0)
+			ref := random.String("ref-", 10)
+			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+				QueueName:      queueName,
+				RequestTimeout: "1m",
+				Items: []*pb.QueueProduceItem{
+					{
+						Reference: ref,
+						Encoding:  "test-encoding",
+						Kind:      "test-kind",
+						Bytes:     []byte("test payload"),
+					},
+				},
+			}))
+
+			// Verify item is in storage with Attempts = 0
+			var resp pb.StorageItemsListResponse
+			require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &resp, nil))
+			item := findInStorageList(ref, &resp)
+			require.NotNil(t, item)
+			assert.Equal(t, int32(0), item.Attempts)
+
+			// Loop 5 times to prove unlimited behavior
+			const numCycles = 5
+			for cycle := 1; cycle <= numCycles; cycle++ {
+				// Lease the item (Attempts increments)
+				var lease pb.QueueLeaseResponse
+				require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+					ClientId:       random.String("client-", 10),
+					RequestTimeout: "5s",
+					QueueName:      queueName,
+					BatchSize:      1,
+				}, &lease))
+
+				require.Len(t, lease.Items, 1)
+				leased := lease.Items[0]
+				assert.Equal(t, ref, leased.Reference)
+				assert.Equal(t, int32(cycle), leased.Attempts)
+
+				// Advance clock by 2 minutes (past LeaseTimeout of 1m)
+				now.Advance(2 * clock.Minute)
+
+				// Wait for item to be re-queued by lifecycle scanner
+				err := retry.On(ctx, RetryTenTimes, func(ctx context.Context, i int) error {
+					var resp pb.StorageItemsListResponse
+					if err := c.StorageItemsList(ctx, queueName, 0, &resp, nil); err != nil {
+						return err
+					}
+					item := findInStorageList(ref, &resp)
+					if item == nil {
+						return fmt.Errorf("item not found in storage")
+					}
+					if item.IsLeased {
+						return fmt.Errorf("expected item to be re-queued (IsLeased=false)")
+					}
+					return nil
+				})
+				require.NoError(t, err)
+
+				// Verify item is still in queue with expected Attempts count
+				require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &resp, nil))
+				item = findInStorageList(ref, &resp)
+				require.NotNil(t, item)
+				assert.False(t, item.IsLeased)
+				assert.Equal(t, int32(cycle), item.Attempts)
+			}
+
+			// After 5 cycles: Verify item persists with Attempts = 5
+			require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &resp, nil))
+			item = findInStorageList(ref, &resp)
+			require.NotNil(t, item)
+			assert.Equal(t, int32(5), item.Attempts)
+			assert.False(t, item.IsLeased)
+		})
+
 	})
 
 	// t.Run("RequestTimeouts", func(t *testing.T) {})

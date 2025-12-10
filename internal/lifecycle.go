@@ -138,10 +138,23 @@ func (l *Logical) runLifecycle(state *QueueState) {
 			continue
 		}
 
+		// Find the earliest future deadline (lease expiry or item expiry)
+		nextRun := clock.Time{}
+
 		if info.NextLeaseExpiry.After(now) {
-			partition.Lifecycle.NextLifecycleRun = info.NextLeaseExpiry
-		} else {
+			nextRun = info.NextLeaseExpiry
+		}
+
+		if info.NextExpireDeadline.After(now) {
+			if nextRun.IsZero() || info.NextExpireDeadline.Before(nextRun) {
+				nextRun = info.NextExpireDeadline
+			}
+		}
+
+		if nextRun.IsZero() {
 			partition.Lifecycle.NextLifecycleRun = now.Add(humanize.LongTime)
+		} else {
+			partition.Lifecycle.NextLifecycleRun = nextRun
 		}
 	}
 }

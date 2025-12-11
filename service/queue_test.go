@@ -1501,6 +1501,227 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			assert.Equal(t, int32(0), p.Total)
 	})
 
+	t.Run("QueueReload", func(t *testing.T) {
+		t.Run("BasicReload", func(t *testing.T) {
+			var queueName = random.String("queue-", 10)
+			d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+			defer func() {
+				d.Shutdown(t)
+				tearDown()
+			}()
+
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				RequestedPartitions: 1,
+				LeaseTimeout:        LeaseTimeout,
+				ExpireTimeout:       ExpireTimeout,
+				QueueName:           queueName,
+			})
+
+			// Call QueueReload on empty queue
+			require.NoError(t, c.QueueReload(ctx, &pb.QueueClearRequest{
+				QueueName: queueName,
+			}))
+
+			// Verify stats show empty queue
+			var stats pb.QueueStatsResponse
+			require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats))
+			require.Len(t, stats.LogicalQueues, 1)
+			require.Len(t, stats.LogicalQueues[0].Partitions, 1)
+			p := stats.LogicalQueues[0].Partitions[0]
+			assert.Equal(t, int32(0), p.Total)
+			assert.Equal(t, int32(0), p.TotalLeased)
+		})
+
+		t.Run("ReloadPreservesItems", func(t *testing.T) {
+			var queueName = random.String("queue-", 10)
+			d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+			defer func() {
+				d.Shutdown(t)
+				tearDown()
+			}()
+
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				RequestedPartitions: 1,
+				LeaseTimeout:        LeaseTimeout,
+				ExpireTimeout:       ExpireTimeout,
+				QueueName:           queueName,
+			})
+
+			// Produce 50 items
+			const numItems = 50
+			_ = writeRandomItems(t, ctx, c, queueName, numItems)
+
+			// Get stats before reload
+			var statsBefore pb.QueueStatsResponse
+			require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &statsBefore))
+			require.Len(t, statsBefore.LogicalQueues, 1)
+			require.Len(t, statsBefore.LogicalQueues[0].Partitions, 1)
+			pBefore := statsBefore.LogicalQueues[0].Partitions[0]
+			assert.Equal(t, int32(numItems), pBefore.Total)
+			assert.Equal(t, int32(0), pBefore.TotalLeased)
+
+			// Call QueueReload
+			require.NoError(t, c.QueueReload(ctx, &pb.QueueClearRequest{
+				QueueName: queueName,
+			}))
+
+			// Verify stats unchanged - items preserved
+			var statsAfter pb.QueueStatsResponse
+			require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &statsAfter))
+			require.Len(t, statsAfter.LogicalQueues, 1)
+			require.Len(t, statsAfter.LogicalQueues[0].Partitions, 1)
+			pAfter := statsAfter.LogicalQueues[0].Partitions[0]
+			assert.Equal(t, int32(numItems), pAfter.Total)
+			assert.Equal(t, int32(0), pAfter.TotalLeased)
+
+			// Verify items still exist in storage
+			var list pb.StorageItemsListResponse
+			require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, nil))
+			assert.Equal(t, numItems, len(list.Items))
+		})
+
+		t.Run("StorageSyncAfterImport", func(t *testing.T) {
+			var queueName = random.String("queue-", 10)
+			d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+			defer func() {
+				d.Shutdown(t)
+				tearDown()
+			}()
+
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				RequestedPartitions: 1,
+				LeaseTimeout:        LeaseTimeout,
+				ExpireTimeout:       ExpireTimeout,
+				QueueName:           queueName,
+			})
+
+			// Produce 100 items normally
+			const numProduced = 100
+			_ = writeRandomItems(t, ctx, c, queueName, numProduced)
+
+			// Verify stats show 100 items
+			var statsBefore pb.QueueStatsResponse
+			require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &statsBefore))
+			require.Len(t, statsBefore.LogicalQueues, 1)
+			require.Len(t, statsBefore.LogicalQueues[0].Partitions, 1)
+			pBefore := statsBefore.LogicalQueues[0].Partitions[0]
+			assert.Equal(t, int32(numProduced), pBefore.Total)
+			assert.Equal(t, int32(0), pBefore.TotalLeased)
+
+			// Import 50 items directly via StorageItemsImport (bypasses normal flow)
+			const numImported = 50
+			var importItems []*pb.StorageItem
+			expire := clock.Now().UTC().Add(24 * clock.Hour)
+			for i := 0; i < numImported; i++ {
+				importItems = append(importItems, &pb.StorageItem{
+					ExpireDeadline: timestamppb.New(expire),
+					Reference:      random.String("import-", 10),
+					Encoding:       random.String("enc-", 10),
+					Kind:           random.String("kind-", 10),
+					Payload:        []byte(fmt.Sprintf("imported-%d", i)),
+				})
+			}
+			var importResp pb.StorageItemsImportResponse
+			require.NoError(t, c.StorageItemsImport(ctx, &pb.StorageItemsImportRequest{
+				QueueName: queueName,
+				Partition: 0,
+				Items:     importItems,
+			}, &importResp))
+
+			// Stats Total is always read from storage, so shows 150
+			var statsAfterImport pb.QueueStatsResponse
+			require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &statsAfterImport))
+			require.Len(t, statsAfterImport.LogicalQueues, 1)
+			require.Len(t, statsAfterImport.LogicalQueues[0].Partitions, 1)
+			pAfterImport := statsAfterImport.LogicalQueues[0].Partitions[0]
+			assert.Equal(t, int32(numProduced+numImported), pAfterImport.Total)
+
+			// Call QueueReload to ensure in-memory counts are synced
+			require.NoError(t, c.QueueReload(ctx, &pb.QueueClearRequest{
+				QueueName: queueName,
+			}))
+
+			// Verify we can lease all 150 items
+			var leaseResp pb.QueueLeaseResponse
+			require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+				RequestTimeout: "1m",
+				QueueName:      queueName,
+				ClientId:       random.String("client-", 10),
+				BatchSize:      numProduced + numImported,
+			}, &leaseResp))
+			assert.Len(t, leaseResp.Items, numProduced+numImported)
+		})
+
+		t.Run("ReloadWithLeasedItems", func(t *testing.T) {
+			var queueName = random.String("queue-", 10)
+			d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+			defer func() {
+				d.Shutdown(t)
+				tearDown()
+			}()
+
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				RequestedPartitions: 1,
+				LeaseTimeout:        LeaseTimeout,
+				ExpireTimeout:       ExpireTimeout,
+				QueueName:           queueName,
+			})
+
+			// Produce 100 items
+			const numItems = 100
+			_ = writeRandomItems(t, ctx, c, queueName, numItems)
+
+			// Lease 20 items
+			const numLeased = 20
+			var leaseResp pb.QueueLeaseResponse
+			require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+				RequestTimeout: "1m",
+				QueueName:      queueName,
+				ClientId:       random.String("client-", 10),
+				BatchSize:      numLeased,
+			}, &leaseResp))
+			require.Len(t, leaseResp.Items, numLeased)
+
+			// Call QueueReload - should preserve leased items
+			require.NoError(t, c.QueueReload(ctx, &pb.QueueClearRequest{
+				QueueName: queueName,
+			}))
+
+			// Verify stats show correct counts
+			var statsAfterReload pb.QueueStatsResponse
+			require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &statsAfterReload))
+			require.Len(t, statsAfterReload.LogicalQueues, 1)
+			require.Len(t, statsAfterReload.LogicalQueues[0].Partitions, 1)
+			pAfterReload := statsAfterReload.LogicalQueues[0].Partitions[0]
+			assert.Equal(t, int32(numItems), pAfterReload.Total)
+
+			// Complete 10 leased items
+			const numCompleted = 10
+			var completedIDs []string
+			for i := 0; i < numCompleted; i++ {
+				completedIDs = append(completedIDs, leaseResp.Items[i].Id)
+			}
+			require.NoError(t, c.QueueComplete(ctx, &pb.QueueCompleteRequest{
+				RequestTimeout: "1m",
+				QueueName:      queueName,
+				Ids:            completedIDs,
+			}))
+
+			// Call QueueReload again
+			require.NoError(t, c.QueueReload(ctx, &pb.QueueClearRequest{
+				QueueName: queueName,
+			}))
+
+			// Verify stats updated after completions
+			var statsFinal pb.QueueStatsResponse
+			require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &statsFinal))
+			require.Len(t, statsFinal.LogicalQueues, 1)
+			require.Len(t, statsFinal.LogicalQueues[0].Partitions, 1)
+			pFinal := statsFinal.LogicalQueues[0].Partitions[0]
+			assert.Equal(t, int32(numItems-numCompleted), pFinal.Total)
+		})
+	})
+
 	t.Run("Errors", func(t *testing.T) {
 		storage := setup()
 		defer tearDown()
@@ -1912,6 +2133,32 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					}
 				})
 			}
+		})
+
+		t.Run("QueueReload", func(t *testing.T) {
+			d, c, ctx := newDaemon(t, 5*clock.Second, svc.Config{StorageConfig: storage})
+			defer d.Shutdown(t)
+
+			t.Run("InvalidQueueName", func(t *testing.T) {
+				err := c.QueueReload(ctx, &pb.QueueClearRequest{
+					QueueName: "invalid~queue",
+				})
+				var e duh.Error
+				require.True(t, errors.As(err, &e))
+				assert.Contains(t, e.Message(), "queue name is invalid")
+				assert.Contains(t, e.Message(), "cannot contain '~' character")
+				assert.Equal(t, duh.CodeBadRequest, e.Code())
+			})
+
+			t.Run("NonExistentQueue", func(t *testing.T) {
+				err := c.QueueReload(ctx, &pb.QueueClearRequest{
+					QueueName: "does-not-exist",
+				})
+				var e duh.Error
+				require.True(t, errors.As(err, &e))
+				assert.Contains(t, e.Message(), "does not exist")
+				assert.Equal(t, duh.CodeBadRequest, e.Code())
+			})
 		})
 	})
 

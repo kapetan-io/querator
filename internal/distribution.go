@@ -2,11 +2,12 @@ package internal
 
 import (
 	"context"
-	"github.com/kapetan-io/querator/internal/store"
-	"github.com/kapetan-io/querator/transport"
 	"log/slog"
 	"slices"
 	"time"
+
+	"github.com/kapetan-io/querator/internal/store"
+	"github.com/kapetan-io/querator/transport"
 )
 
 // assignToPartitions assigns requests to appropriate partitions
@@ -333,6 +334,12 @@ func (l *Logical) applyToPartitions(state *QueueState) {
 			}
 			// Only if Lease was successful
 			p.State.MostRecentDeadline = leaseDeadline
+
+			// Update lifecycle timer if lease deadline is sooner than next scheduled run
+			if leaseDeadline.Before(p.Lifecycle.NextLifecycleRun) {
+				p.Lifecycle.NextLifecycleRun = leaseDeadline
+				lifecycleUpdated = true
+			}
 
 			if l.log.Enabled(ctx, LevelDebugAll) {
 				for _, req := range p.LeaseRequests.Requests {

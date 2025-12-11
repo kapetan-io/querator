@@ -223,7 +223,6 @@ func (s *Service) QueueRetry(ctx context.Context, req *proto.QueueRetryRequest) 
 	return nil
 }
 
-// TODO(reload)
 func (s *Service) QueueReload(ctx context.Context, req *proto.QueueClearRequest) error {
 	queue, err := s.queues.Get(ctx, req.QueueName)
 	if err != nil {
@@ -233,7 +232,7 @@ func (s *Service) QueueReload(ctx context.Context, req *proto.QueueClearRequest)
 	// Clear all the logical queues on this instance
 	for _, logical := range queue.GetAll() {
 		r := types.ReloadRequest{
-			Partitions: make([]int, 0), // TODO
+			Partitions: make([]int, 0),
 		}
 
 		if err := logical.ReloadPartitions(ctx, &r); err != nil {

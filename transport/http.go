@@ -42,6 +42,7 @@ const (
 	RPCQueueRetry    = "/v1/queue.retry"
 	RPCQueueStats    = "/v1/queue.stats"
 	RPCQueueClear    = "/v1/queue.clear"
+	RPCQueueReload   = "/v1/queue.reload"
 
 	RPCQueuesInfo      = "/v1/queues.info"
 	RPCQueuesRebalance = "/v1/queues.rebalance"
@@ -142,6 +143,9 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	case RPCQueueClear:
 		h.QueueClear(ctx, w, r)
+		return
+	case RPCQueueReload:
+		h.QueueReload(ctx, w, r)
 		return
 	case RPCQueuesCreate:
 		h.QueuesCreate(ctx, w, r)
@@ -331,6 +335,20 @@ func (h *HTTPHandler) QueueClear(ctx context.Context, w http.ResponseWriter, r *
 	}
 
 	if err := h.service.QueueClear(ctx, &req); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
+}
+
+func (h *HTTPHandler) QueueReload(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.QueueClearRequest
+	if err := duh.ReadRequest(r, &req, 512*duh.Bytes); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	if err := h.service.QueueReload(ctx, &req); err != nil {
 		h.ReplyError(w, r, err)
 		return
 	}

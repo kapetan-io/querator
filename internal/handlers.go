@@ -21,9 +21,9 @@ func (l *Logical) handleColdRequests(state *QueueState, req *Request) {
 	case MethodUpdateInfo:
 		info := req.Request.(types.QueueInfo)
 		l.conf.QueueInfo = info
-		// TODO: Update queue info for store.Partitions[i].Info and state.Partitions.Info()
 		for _, d := range state.Partitions {
 			d.Store.UpdateQueueInfo(info)
+			d.Info.Queue = info
 		}
 		close(req.ReadyCh)
 	case MethodUpdatePartitions:

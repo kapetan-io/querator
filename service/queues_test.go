@@ -1,11 +1,14 @@
 package service_test
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"math"
 	"testing"
 
 	"github.com/duh-rpc/duh-go"
+	"github.com/duh-rpc/duh-go/retry"
 	"github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/internal/store"
 	pb "github.com/kapetan-io/querator/proto"
@@ -159,10 +162,6 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				assert.True(t, now.Before(r.UpdatedAt.AsTime()))
 				assert.True(t, r.CreatedAt.AsTime().Before(r.UpdatedAt.AsTime()))
 				assert.Equal(t, l.MaxAttempts+1, r.MaxAttempts)
-
-				t.Run("Respected", func(t *testing.T) {
-					// TODO: Ensure producing and consuming on this queue respects the updated MaxAttempts
-				})
 			})
 
 			t.Run("LeaseTimeout", func(t *testing.T) {
@@ -191,9 +190,6 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				assert.True(t, now.Before(r.UpdatedAt.AsTime()))
 				assert.True(t, r.CreatedAt.AsTime().Before(r.UpdatedAt.AsTime()))
 				assert.Equal(t, rt.String(), r.LeaseTimeout)
-				t.Run("Respected", func(t *testing.T) {
-					// TODO: Ensure producing and consuming on this queue respects the updated value
-				})
 			})
 			t.Run("ExpireTimeout", func(t *testing.T) {
 				l := queues[32]
@@ -221,9 +217,6 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				assert.True(t, now.Before(r.UpdatedAt.AsTime()))
 				assert.True(t, r.CreatedAt.AsTime().Before(r.UpdatedAt.AsTime()))
 				assert.Equal(t, dt.String(), r.ExpireTimeout)
-				t.Run("Respected", func(t *testing.T) {
-					// TODO: Ensure producing and consuming on this queue respects the updated value
-				})
 			})
 			t.Run("Reference", func(t *testing.T) {
 				l := queues[33]
@@ -992,6 +985,1119 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					}
 				})
 			}
+		})
+	})
+
+	t.Run("UpdateBehavior", func(t *testing.T) {
+		now := clock.NewProvider()
+		now.Freeze(clock.Now())
+		defer now.UnFreeze()
+
+		d, c, ctx := newDaemon(t, 60*clock.Second, svc.Config{
+			StorageConfig: setup(),
+			Clock:         now,
+		})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+
+		t.Run("MaxAttempts", func(t *testing.T) {
+			// Baseline test to verify lifecycle works (mirrors MaxAttemptsWithDLQ)
+			t.Run("BaselineWithDLQ", func(t *testing.T) {
+				dlqName := random.String("dlq-", 10)
+				createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+					QueueName:           dlqName,
+					LeaseTimeout:        LeaseTimeout,
+					ExpireTimeout:       ExpireTimeout,
+					RequestedPartitions: 1,
+				})
+
+				queueName := random.String("queue-", 10)
+				createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+					QueueName:           queueName,
+					LeaseTimeout:        "1m0s",
+					ExpireTimeout:       ExpireTimeout,
+					RequestedPartitions: 1,
+					MaxAttempts:         2,
+					DeadQueue:           dlqName,
+				})
+
+				ref := random.String("ref-", 10)
+				require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+					QueueName:      queueName,
+					RequestTimeout: "1m",
+					Items: []*pb.QueueProduceItem{
+						{
+							Reference: ref,
+							Encoding:  "test-encoding",
+							Kind:      "test-kind",
+							Bytes:     []byte("test payload"),
+						},
+					},
+				}))
+
+				// First lease (Attempts=1)
+				var lease pb.QueueLeaseResponse
+				require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+					ClientId:       random.String("client-", 10),
+					RequestTimeout: "5s",
+					QueueName:      queueName,
+					BatchSize:      1,
+				}, &lease))
+				require.Len(t, lease.Items, 1)
+				assert.Equal(t, int32(1), lease.Items[0].Attempts)
+
+				// Advance time, wait for re-queue
+				now.Advance(2 * clock.Minute)
+				err := retry.On(ctx, RetryTenTimes, func(ctx context.Context, i int) error {
+					var resp pb.StorageItemsListResponse
+					if err := c.StorageItemsList(ctx, queueName, 0, &resp, nil); err != nil {
+						return err
+					}
+					item := findInStorageList(ref, &resp)
+					if item == nil {
+						return fmt.Errorf("item not found")
+					}
+					if item.IsLeased {
+						return fmt.Errorf("expected re-queue")
+					}
+					return nil
+				})
+				require.NoError(t, err)
+
+				// Second lease (Attempts=2)
+				require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+					ClientId:       random.String("client-", 10),
+					RequestTimeout: "5s",
+					QueueName:      queueName,
+					BatchSize:      1,
+				}, &lease))
+				require.Len(t, lease.Items, 1)
+				assert.Equal(t, int32(2), lease.Items[0].Attempts)
+
+				// Advance time, wait for DLQ routing
+				now.Advance(2 * clock.Minute)
+				err = retry.On(ctx, RetryTenTimes, func(ctx context.Context, i int) error {
+					var resp pb.StorageItemsListResponse
+					if err := c.StorageItemsList(ctx, queueName, 0, &resp, nil); err != nil {
+						return err
+					}
+					if findInStorageList(ref, &resp) != nil {
+						return fmt.Errorf("expected item removed from main queue")
+					}
+					return nil
+				})
+				require.NoError(t, err)
+
+				// Verify in DLQ
+				var dlqResp pb.StorageItemsListResponse
+				require.NoError(t, c.StorageItemsList(ctx, dlqName, 0, &dlqResp, nil))
+				require.NotNil(t, findInStorageList(ref, &dlqResp))
+			})
+
+			t.Run("DecreaseAffectsExistingItems", func(t *testing.T) {
+				// Create DLQ first
+				dlqName := random.String("dlq-", 10)
+				createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+					QueueName:           dlqName,
+					LeaseTimeout:        LeaseTimeout,
+					ExpireTimeout:       ExpireTimeout,
+					RequestedPartitions: 1,
+				})
+
+				// Create main queue with MaxAttempts=5
+				queueName := random.String("queue-", 10)
+				createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+					QueueName:           queueName,
+					LeaseTimeout:        "1m0s",
+					ExpireTimeout:       ExpireTimeout,
+					RequestedPartitions: 1,
+					MaxAttempts:         5,
+					DeadQueue:           dlqName,
+				})
+
+				// Produce an item
+				ref := random.String("ref-", 10)
+				require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+					QueueName:      queueName,
+					RequestTimeout: "1m",
+					Items: []*pb.QueueProduceItem{
+						{
+							Reference: ref,
+							Encoding:  "test-encoding",
+							Kind:      "test-kind",
+							Bytes:     []byte("test payload"),
+						},
+					},
+				}))
+
+				// First lease: Attempts becomes 1
+				var lease pb.QueueLeaseResponse
+				require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+					ClientId:       random.String("client-", 10),
+					RequestTimeout: "5s",
+					QueueName:      queueName,
+					BatchSize:      1,
+				}, &lease))
+
+				require.Len(t, lease.Items, 1)
+				leased := lease.Items[0]
+				assert.Equal(t, ref, leased.Reference)
+				assert.Equal(t, int32(1), leased.Attempts)
+
+				// Update queue to MaxAttempts=2 (decrease from 5)
+				// NOTE: Must include DeadQueue to preserve DLQ config since Update replaces fields
+				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+					QueueName:   queueName,
+					MaxAttempts: 2,
+					DeadQueue:   dlqName,
+				}))
+
+				// Advance time past LeaseTimeout, wait for re-queue
+				now.Advance(2 * clock.Minute)
+
+				err := retry.On(ctx, RetryTenTimes, func(ctx context.Context, i int) error {
+					var resp pb.StorageItemsListResponse
+					if err := c.StorageItemsList(ctx, queueName, 0, &resp, nil); err != nil {
+						return err
+					}
+					item := findInStorageList(ref, &resp)
+					if item == nil {
+						return fmt.Errorf("item not found in storage")
+					}
+					if item.IsLeased {
+						return fmt.Errorf("expected item to be re-queued (IsLeased=false)")
+					}
+					return nil
+				})
+				require.NoError(t, err)
+
+				// Verify item is still in main queue with Attempts = 1
+				var resp pb.StorageItemsListResponse
+				require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &resp, nil))
+				item := findInStorageList(ref, &resp)
+				require.NotNil(t, item)
+				assert.False(t, item.IsLeased)
+				assert.Equal(t, int32(1), item.Attempts)
+
+				// Second lease: Attempts becomes 2
+				require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+					ClientId:       random.String("client-", 10),
+					RequestTimeout: "5s",
+					QueueName:      queueName,
+					BatchSize:      1,
+				}, &lease))
+
+				require.Len(t, lease.Items, 1)
+				leased = lease.Items[0]
+				assert.Equal(t, ref, leased.Reference)
+				assert.Equal(t, int32(2), leased.Attempts)
+
+				// Advance time past LeaseTimeout again
+				now.Advance(2 * clock.Minute)
+
+				// Wait for item to be removed from main queue (routed to DLQ)
+				err = retry.On(ctx, RetryTenTimes, func(ctx context.Context, i int) error {
+					var resp pb.StorageItemsListResponse
+					if err := c.StorageItemsList(ctx, queueName, 0, &resp, nil); err != nil {
+						return err
+					}
+					if findInStorageList(ref, &resp) != nil {
+						return fmt.Errorf("expected item to be removed from main queue")
+					}
+					return nil
+				})
+				require.NoError(t, err)
+
+				// Verify item is NOT in main queue
+				require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &resp, nil))
+				require.Nil(t, findInStorageList(ref, &resp))
+
+				// Verify item IS in DLQ (2 >= MaxAttempts of 2)
+				var dlqResp pb.StorageItemsListResponse
+				require.NoError(t, c.StorageItemsList(ctx, dlqName, 0, &dlqResp, nil))
+				dlqItem := findInStorageList(ref, &dlqResp)
+				require.NotNil(t, dlqItem)
+				assert.Equal(t, ref, dlqItem.Reference)
+			})
+
+			t.Run("IncreaseAllowsMoreAttempts", func(t *testing.T) {
+				// Create DLQ first
+				dlqName := random.String("dlq-", 10)
+				createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+					QueueName:           dlqName,
+					LeaseTimeout:        LeaseTimeout,
+					ExpireTimeout:       ExpireTimeout,
+					RequestedPartitions: 1,
+				})
+
+				// Create main queue with MaxAttempts=2
+				queueName := random.String("queue-", 10)
+				createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+					QueueName:           queueName,
+					LeaseTimeout:        "1m0s",
+					ExpireTimeout:       ExpireTimeout,
+					RequestedPartitions: 1,
+					MaxAttempts:         2,
+					DeadQueue:           dlqName,
+				})
+
+				// Produce an item
+				ref := random.String("ref-", 10)
+				require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+					QueueName:      queueName,
+					RequestTimeout: "1m",
+					Items: []*pb.QueueProduceItem{
+						{
+							Reference: ref,
+							Encoding:  "test-encoding",
+							Kind:      "test-kind",
+							Bytes:     []byte("test payload"),
+						},
+					},
+				}))
+
+				// First lease: Attempts becomes 1
+				var lease pb.QueueLeaseResponse
+				require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+					ClientId:       random.String("client-", 10),
+					RequestTimeout: "5s",
+					QueueName:      queueName,
+					BatchSize:      1,
+				}, &lease))
+
+				require.Len(t, lease.Items, 1)
+				leased := lease.Items[0]
+				assert.Equal(t, ref, leased.Reference)
+				assert.Equal(t, int32(1), leased.Attempts)
+
+				// Advance time, let lease timeout, wait for re-queue
+				now.Advance(2 * clock.Minute)
+
+				err := retry.On(ctx, RetryTenTimes, func(ctx context.Context, i int) error {
+					var resp pb.StorageItemsListResponse
+					if err := c.StorageItemsList(ctx, queueName, 0, &resp, nil); err != nil {
+						return err
+					}
+					item := findInStorageList(ref, &resp)
+					if item == nil {
+						return fmt.Errorf("item not found in storage")
+					}
+					if item.IsLeased {
+						return fmt.Errorf("expected item to be re-queued (IsLeased=false)")
+					}
+					return nil
+				})
+				require.NoError(t, err)
+
+				// Second lease: Attempts becomes 2
+				require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+					ClientId:       random.String("client-", 10),
+					RequestTimeout: "5s",
+					QueueName:      queueName,
+					BatchSize:      1,
+				}, &lease))
+
+				require.Len(t, lease.Items, 1)
+				leased = lease.Items[0]
+				assert.Equal(t, ref, leased.Reference)
+				assert.Equal(t, int32(2), leased.Attempts)
+
+				// Update queue to MaxAttempts=5 (increase from 2)
+				// NOTE: Must include DeadQueue to preserve DLQ config since Update replaces fields
+				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+					QueueName:   queueName,
+					MaxAttempts: 5,
+					DeadQueue:   dlqName,
+				}))
+
+				// Advance time, let lease timeout
+				now.Advance(2 * clock.Minute)
+
+				// Wait for item to be re-queued (NOT routed to DLQ)
+				err = retry.On(ctx, RetryTenTimes, func(ctx context.Context, i int) error {
+					var resp pb.StorageItemsListResponse
+					if err := c.StorageItemsList(ctx, queueName, 0, &resp, nil); err != nil {
+						return err
+					}
+					item := findInStorageList(ref, &resp)
+					if item == nil {
+						return fmt.Errorf("item not found in storage")
+					}
+					if item.IsLeased {
+						return fmt.Errorf("expected item to be re-queued (IsLeased=false)")
+					}
+					return nil
+				})
+				require.NoError(t, err)
+
+				// Verify item is still in main queue (not in DLQ)
+				var resp pb.StorageItemsListResponse
+				require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &resp, nil))
+				item := findInStorageList(ref, &resp)
+				require.NotNil(t, item)
+				assert.False(t, item.IsLeased)
+				assert.Equal(t, int32(2), item.Attempts)
+
+				// Verify item can be leased again (Attempts becomes 3)
+				require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+					ClientId:       random.String("client-", 10),
+					RequestTimeout: "5s",
+					QueueName:      queueName,
+					BatchSize:      1,
+				}, &lease))
+
+				require.Len(t, lease.Items, 1)
+				leased = lease.Items[0]
+				assert.Equal(t, ref, leased.Reference)
+				assert.Equal(t, int32(3), leased.Attempts)
+
+				// Verify item is NOT in DLQ
+				var dlqResp pb.StorageItemsListResponse
+				require.NoError(t, c.StorageItemsList(ctx, dlqName, 0, &dlqResp, nil))
+				assert.Nil(t, findInStorageList(ref, &dlqResp))
+			})
+
+			t.Run("SetToUnlimited", func(t *testing.T) {
+				// Create DLQ first
+				dlqName := random.String("dlq-", 10)
+				createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+					QueueName:           dlqName,
+					LeaseTimeout:        LeaseTimeout,
+					ExpireTimeout:       ExpireTimeout,
+					RequestedPartitions: 1,
+				})
+
+				// Create main queue with MaxAttempts=2
+				queueName := random.String("queue-", 10)
+				createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+					QueueName:           queueName,
+					LeaseTimeout:        "1m0s",
+					ExpireTimeout:       ExpireTimeout,
+					RequestedPartitions: 1,
+					MaxAttempts:         2,
+					DeadQueue:           dlqName,
+				})
+
+				// Produce an item
+				ref := random.String("ref-", 10)
+				require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+					QueueName:      queueName,
+					RequestTimeout: "1m",
+					Items: []*pb.QueueProduceItem{
+						{
+							Reference: ref,
+							Encoding:  "test-encoding",
+							Kind:      "test-kind",
+							Bytes:     []byte("test payload"),
+						},
+					},
+				}))
+
+				// First lease: Attempts becomes 1
+				var lease pb.QueueLeaseResponse
+				require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+					ClientId:       random.String("client-", 10),
+					RequestTimeout: "5s",
+					QueueName:      queueName,
+					BatchSize:      1,
+				}, &lease))
+
+				require.Len(t, lease.Items, 1)
+				leased := lease.Items[0]
+				assert.Equal(t, ref, leased.Reference)
+				assert.Equal(t, int32(1), leased.Attempts)
+
+				// Update queue to MaxAttempts=0 (unlimited)
+				// NOTE: Must include DeadQueue to preserve DLQ config since Update replaces fields
+				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+					QueueName:   queueName,
+					MaxAttempts: 0,
+					DeadQueue:   dlqName,
+				}))
+
+				// Loop 5+ times: lease, advance time, verify item re-queues
+				const numCycles = 5
+				for cycle := 2; cycle <= numCycles+1; cycle++ {
+					// Advance time past LeaseTimeout
+					now.Advance(2 * clock.Minute)
+
+					// Wait for item to be re-queued
+					err := retry.On(ctx, RetryTenTimes, func(ctx context.Context, i int) error {
+						var resp pb.StorageItemsListResponse
+						if err := c.StorageItemsList(ctx, queueName, 0, &resp, nil); err != nil {
+							return err
+						}
+						item := findInStorageList(ref, &resp)
+						if item == nil {
+							return fmt.Errorf("item not found in storage")
+						}
+						if item.IsLeased {
+							return fmt.Errorf("expected item to be re-queued (IsLeased=false)")
+						}
+						return nil
+					})
+					require.NoError(t, err)
+
+					// Lease the item again
+					require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+						ClientId:       random.String("client-", 10),
+						RequestTimeout: "5s",
+						QueueName:      queueName,
+						BatchSize:      1,
+					}, &lease))
+
+					require.Len(t, lease.Items, 1)
+					leased = lease.Items[0]
+					assert.Equal(t, ref, leased.Reference)
+					assert.Equal(t, int32(cycle), leased.Attempts)
+				}
+
+				// Verify item never routes to DLQ
+				var dlqResp pb.StorageItemsListResponse
+				require.NoError(t, c.StorageItemsList(ctx, dlqName, 0, &dlqResp, nil))
+				assert.Nil(t, findInStorageList(ref, &dlqResp))
+
+				// Verify item is still in main queue
+				var resp pb.StorageItemsListResponse
+				require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &resp, nil))
+				item := findInStorageList(ref, &resp)
+				require.NotNil(t, item)
+			})
+		})
+
+		t.Run("LeaseTimeout", func(t *testing.T) {
+			t.Run("NewLeasesUseUpdatedTimeout", func(t *testing.T) {
+				// Create queue with LeaseTimeout="5m"
+				queueName := random.String("queue-", 10)
+				createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+					QueueName:           queueName,
+					LeaseTimeout:        "5m0s",
+					ExpireTimeout:       ExpireTimeout,
+					RequestedPartitions: 1,
+				})
+
+				// Produce an item
+				ref := random.String("ref-", 10)
+				require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+					QueueName:      queueName,
+					RequestTimeout: "1m",
+					Items: []*pb.QueueProduceItem{
+						{
+							Reference: ref,
+							Encoding:  "test-encoding",
+							Kind:      "test-kind",
+							Bytes:     []byte("test payload"),
+						},
+					},
+				}))
+
+				// Update queue to LeaseTimeout="1m"
+				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+					QueueName:    queueName,
+					LeaseTimeout: "1m0s",
+				}))
+
+				// Lease item
+				var lease pb.QueueLeaseResponse
+				require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+					ClientId:       random.String("client-", 10),
+					RequestTimeout: "5s",
+					QueueName:      queueName,
+					BatchSize:      1,
+				}, &lease))
+
+				require.Len(t, lease.Items, 1)
+				leased := lease.Items[0]
+				assert.Equal(t, ref, leased.Reference)
+
+				// Verify LeaseDeadline is ~1 minute from now (not 5)
+				expectedDeadline := now.Now().Add(clock.Minute)
+				actualDeadline := leased.LeaseDeadline.AsTime()
+				assert.True(t, actualDeadline.Before(expectedDeadline.Add(5*clock.Second)))
+				assert.True(t, actualDeadline.After(expectedDeadline.Add(-5*clock.Second)))
+
+				// Advance time 2 minutes - past 1m LeaseTimeout
+				now.Advance(2 * clock.Minute)
+
+				// Wait for item to be re-queued (lease expired at ~1m mark)
+				err := retry.On(ctx, RetryTenTimes, func(ctx context.Context, i int) error {
+					var resp pb.StorageItemsListResponse
+					if err := c.StorageItemsList(ctx, queueName, 0, &resp, nil); err != nil {
+						return err
+					}
+					item := findInStorageList(ref, &resp)
+					if item == nil {
+						return fmt.Errorf("item not found in storage")
+					}
+					if item.IsLeased {
+						return fmt.Errorf("expected item to be re-queued (IsLeased=false)")
+					}
+					return nil
+				})
+				require.NoError(t, err)
+
+				// Verify item is no longer leased
+				var resp pb.StorageItemsListResponse
+				require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &resp, nil))
+				item := findInStorageList(ref, &resp)
+				require.NotNil(t, item)
+				assert.False(t, item.IsLeased)
+			})
+
+			t.Run("ExistingLeasesKeepOriginalDeadline", func(t *testing.T) {
+				// Create queue with LeaseTimeout="5m"
+				queueName := random.String("queue-", 10)
+				createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+					QueueName:           queueName,
+					LeaseTimeout:        "5m0s",
+					ExpireTimeout:       ExpireTimeout,
+					RequestedPartitions: 1,
+				})
+
+				// Produce an item
+				ref := random.String("ref-", 10)
+				require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+					QueueName:      queueName,
+					RequestTimeout: "1m",
+					Items: []*pb.QueueProduceItem{
+						{
+							Reference: ref,
+							Encoding:  "test-encoding",
+							Kind:      "test-kind",
+							Bytes:     []byte("test payload"),
+						},
+					},
+				}))
+
+				// Lease item (LeaseDeadline set to ~5m from now)
+				var lease pb.QueueLeaseResponse
+				require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+					ClientId:       random.String("client-", 10),
+					RequestTimeout: "5s",
+					QueueName:      queueName,
+					BatchSize:      1,
+				}, &lease))
+
+				require.Len(t, lease.Items, 1)
+				leased := lease.Items[0]
+				assert.Equal(t, ref, leased.Reference)
+
+				// Verify LeaseDeadline is ~5 minutes from now
+				expectedDeadline := now.Now().Add(5 * clock.Minute)
+				actualDeadline := leased.LeaseDeadline.AsTime()
+				assert.True(t, actualDeadline.Before(expectedDeadline.Add(5*clock.Second)))
+				assert.True(t, actualDeadline.After(expectedDeadline.Add(-5*clock.Second)))
+
+				// Update queue to LeaseTimeout="1m"
+				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+					QueueName:    queueName,
+					LeaseTimeout: "1m0s",
+				}))
+
+				// Advance time 2 minutes - past new 1m timeout, but before original 5m deadline
+				now.Advance(2 * clock.Minute)
+
+				// Verify item is STILL leased (original 5m deadline not yet passed)
+				var resp pb.StorageItemsListResponse
+				require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &resp, nil))
+				item := findInStorageList(ref, &resp)
+				require.NotNil(t, item)
+				assert.True(t, item.IsLeased)
+
+				// Advance time 4 more minutes (total 6m, past original 5m deadline)
+				now.Advance(4 * clock.Minute)
+
+				// Wait for item to be re-queued
+				err := retry.On(ctx, RetryTenTimes, func(ctx context.Context, i int) error {
+					var resp pb.StorageItemsListResponse
+					if err := c.StorageItemsList(ctx, queueName, 0, &resp, nil); err != nil {
+						return err
+					}
+					item := findInStorageList(ref, &resp)
+					if item == nil {
+						return fmt.Errorf("item not found in storage")
+					}
+					if item.IsLeased {
+						return fmt.Errorf("expected item to be re-queued (IsLeased=false)")
+					}
+					return nil
+				})
+				require.NoError(t, err)
+
+				// Verify item is no longer leased
+				require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &resp, nil))
+				item = findInStorageList(ref, &resp)
+				require.NotNil(t, item)
+				assert.False(t, item.IsLeased)
+			})
+		})
+
+		t.Run("ExpireTimeout", func(t *testing.T) {
+			t.Run("NewItemsUseUpdatedTimeout", func(t *testing.T) {
+				// Create queue with ExpireTimeout="10m"
+				queueName := random.String("queue-", 10)
+				createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+					QueueName:           queueName,
+					LeaseTimeout:        LeaseTimeout,
+					ExpireTimeout:       "10m0s",
+					RequestedPartitions: 1,
+				})
+
+				// Update queue to ExpireTimeout="2m"
+				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+					QueueName:     queueName,
+					ExpireTimeout: "2m0s",
+				}))
+
+				// Produce item AFTER the update
+				ref := random.String("ref-", 10)
+				require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+					QueueName:      queueName,
+					RequestTimeout: "1m",
+					Items: []*pb.QueueProduceItem{
+						{
+							Reference: ref,
+							Encoding:  "test-encoding",
+							Kind:      "test-kind",
+							Bytes:     []byte("test payload"),
+						},
+					},
+				}))
+
+				// Verify item's ExpireDeadline is ~2 minutes from now (not 10)
+				var resp pb.StorageItemsListResponse
+				require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &resp, nil))
+				item := findInStorageList(ref, &resp)
+				require.NotNil(t, item)
+
+				expectedDeadline := now.Now().Add(2 * clock.Minute)
+				actualDeadline := item.ExpireDeadline.AsTime()
+				assert.True(t, actualDeadline.Before(expectedDeadline.Add(5*clock.Second)))
+				assert.True(t, actualDeadline.After(expectedDeadline.Add(-5*clock.Second)))
+			})
+
+			t.Run("ExistingItemsUnaffected", func(t *testing.T) {
+				// Create queue with ExpireTimeout="10m"
+				queueName := random.String("queue-", 10)
+				createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+					QueueName:           queueName,
+					LeaseTimeout:        LeaseTimeout,
+					ExpireTimeout:       "10m0s",
+					RequestedPartitions: 1,
+				})
+
+				// Produce item (ExpireDeadline set to ~10m)
+				ref := random.String("ref-", 10)
+				require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+					QueueName:      queueName,
+					RequestTimeout: "1m",
+					Items: []*pb.QueueProduceItem{
+						{
+							Reference: ref,
+							Encoding:  "test-encoding",
+							Kind:      "test-kind",
+							Bytes:     []byte("test payload"),
+						},
+					},
+				}))
+
+				// Record the original ExpireDeadline
+				var resp pb.StorageItemsListResponse
+				require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &resp, nil))
+				item := findInStorageList(ref, &resp)
+				require.NotNil(t, item)
+				originalDeadline := item.ExpireDeadline.AsTime()
+
+				// Update queue to ExpireTimeout="2m"
+				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+					QueueName:     queueName,
+					ExpireTimeout: "2m0s",
+				}))
+
+				// Verify item's ExpireDeadline is UNCHANGED (still ~10m from creation)
+				require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &resp, nil))
+				item = findInStorageList(ref, &resp)
+				require.NotNil(t, item)
+				assert.Equal(t, originalDeadline, item.ExpireDeadline.AsTime())
+			})
+		})
+
+		t.Run("DeadQueue", func(t *testing.T) {
+			t.Run("AddDLQAfterCreation", func(t *testing.T) {
+				// Create DLQ queue
+				dlqName := random.String("dlq-", 10)
+				createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+					QueueName:           dlqName,
+					LeaseTimeout:        LeaseTimeout,
+					ExpireTimeout:       ExpireTimeout,
+					RequestedPartitions: 1,
+				})
+
+				// Create main queue WITHOUT DeadQueue, MaxAttempts=2
+				queueName := random.String("queue-", 10)
+				createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+					QueueName:           queueName,
+					LeaseTimeout:        "1m0s",
+					ExpireTimeout:       ExpireTimeout,
+					RequestedPartitions: 1,
+					MaxAttempts:         2,
+				})
+
+				// Produce item
+				ref := random.String("ref-", 10)
+				require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+					QueueName:      queueName,
+					RequestTimeout: "1m",
+					Items: []*pb.QueueProduceItem{
+						{
+							Reference: ref,
+							Encoding:  "test-encoding",
+							Kind:      "test-kind",
+							Bytes:     []byte("test payload"),
+						},
+					},
+				}))
+
+				// Update main queue to set DeadQueue
+				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+					QueueName:   queueName,
+					MaxAttempts: 2,
+					DeadQueue:   dlqName,
+				}))
+
+				// First lease: Attempts becomes 1
+				var lease pb.QueueLeaseResponse
+				require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+					ClientId:       random.String("client-", 10),
+					RequestTimeout: "5s",
+					QueueName:      queueName,
+					BatchSize:      1,
+				}, &lease))
+				require.Len(t, lease.Items, 1)
+				assert.Equal(t, int32(1), lease.Items[0].Attempts)
+
+				// Advance time past LeaseTimeout
+				now.Advance(2 * clock.Minute)
+
+				// Wait for item to be re-queued
+				err := retry.On(ctx, RetryTenTimes, func(ctx context.Context, i int) error {
+					var resp pb.StorageItemsListResponse
+					if err := c.StorageItemsList(ctx, queueName, 0, &resp, nil); err != nil {
+						return err
+					}
+					item := findInStorageList(ref, &resp)
+					if item == nil {
+						return fmt.Errorf("item not found in storage")
+					}
+					if item.IsLeased {
+						return fmt.Errorf("expected item to be re-queued (IsLeased=false)")
+					}
+					return nil
+				})
+				require.NoError(t, err)
+
+				// Second lease: Attempts becomes 2
+				require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+					ClientId:       random.String("client-", 10),
+					RequestTimeout: "5s",
+					QueueName:      queueName,
+					BatchSize:      1,
+				}, &lease))
+				require.Len(t, lease.Items, 1)
+				assert.Equal(t, int32(2), lease.Items[0].Attempts)
+
+				// Advance time past LeaseTimeout
+				now.Advance(2 * clock.Minute)
+
+				// Wait for item to be removed from main queue (routed to DLQ)
+				err = retry.On(ctx, RetryTenTimes, func(ctx context.Context, i int) error {
+					var resp pb.StorageItemsListResponse
+					if err := c.StorageItemsList(ctx, queueName, 0, &resp, nil); err != nil {
+						return err
+					}
+					if findInStorageList(ref, &resp) != nil {
+						return fmt.Errorf("expected item to be removed from main queue")
+					}
+					return nil
+				})
+				require.NoError(t, err)
+
+				// Verify item IS in DLQ
+				var dlqResp pb.StorageItemsListResponse
+				require.NoError(t, c.StorageItemsList(ctx, dlqName, 0, &dlqResp, nil))
+				dlqItem := findInStorageList(ref, &dlqResp)
+				require.NotNil(t, dlqItem)
+				assert.Equal(t, ref, dlqItem.Reference)
+			})
+
+			t.Run("ChangeDLQRoutesNewFailures", func(t *testing.T) {
+				// Create DLQ-A and DLQ-B queues
+				dlqAName := random.String("dlq-a-", 10)
+				createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+					QueueName:           dlqAName,
+					LeaseTimeout:        LeaseTimeout,
+					ExpireTimeout:       ExpireTimeout,
+					RequestedPartitions: 1,
+				})
+
+				dlqBName := random.String("dlq-b-", 10)
+				createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+					QueueName:           dlqBName,
+					LeaseTimeout:        LeaseTimeout,
+					ExpireTimeout:       ExpireTimeout,
+					RequestedPartitions: 1,
+				})
+
+				// Create main queue with DeadQueue=DLQ-A, MaxAttempts=2
+				queueName := random.String("queue-", 10)
+				createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+					QueueName:           queueName,
+					LeaseTimeout:        "1m0s",
+					ExpireTimeout:       ExpireTimeout,
+					RequestedPartitions: 1,
+					MaxAttempts:         2,
+					DeadQueue:           dlqAName,
+				})
+
+				// Produce item-1
+				ref1 := random.String("ref1-", 10)
+				require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+					QueueName:      queueName,
+					RequestTimeout: "1m",
+					Items: []*pb.QueueProduceItem{
+						{
+							Reference: ref1,
+							Encoding:  "test-encoding",
+							Kind:      "test-kind",
+							Bytes:     []byte("test payload"),
+						},
+					},
+				}))
+
+				// Exhaust item-1 attempts
+				for i := 0; i < 2; i++ {
+					var lease pb.QueueLeaseResponse
+					require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+						ClientId:       random.String("client-", 10),
+						RequestTimeout: "5s",
+						QueueName:      queueName,
+						BatchSize:      1,
+					}, &lease))
+					require.Len(t, lease.Items, 1)
+
+					now.Advance(2 * clock.Minute)
+
+					if i < 1 {
+						// Wait for re-queue
+						err := retry.On(ctx, RetryTenTimes, func(ctx context.Context, _ int) error {
+							var resp pb.StorageItemsListResponse
+							if err := c.StorageItemsList(ctx, queueName, 0, &resp, nil); err != nil {
+								return err
+							}
+							item := findInStorageList(ref1, &resp)
+							if item == nil {
+								return fmt.Errorf("item not found")
+							}
+							if item.IsLeased {
+								return fmt.Errorf("expected item to be re-queued")
+							}
+							return nil
+						})
+						require.NoError(t, err)
+					}
+				}
+
+				// Wait for item-1 to be removed from main queue
+				err := retry.On(ctx, RetryTenTimes, func(ctx context.Context, i int) error {
+					var resp pb.StorageItemsListResponse
+					if err := c.StorageItemsList(ctx, queueName, 0, &resp, nil); err != nil {
+						return err
+					}
+					if findInStorageList(ref1, &resp) != nil {
+						return fmt.Errorf("expected item to be removed")
+					}
+					return nil
+				})
+				require.NoError(t, err)
+
+				// Verify item-1 is in DLQ-A
+				var dlqAResp pb.StorageItemsListResponse
+				require.NoError(t, c.StorageItemsList(ctx, dlqAName, 0, &dlqAResp, nil))
+				require.NotNil(t, findInStorageList(ref1, &dlqAResp))
+
+				// Update main queue to set DeadQueue=DLQ-B
+				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+					QueueName:   queueName,
+					MaxAttempts: 2,
+					DeadQueue:   dlqBName,
+				}))
+
+				// Produce item-2
+				ref2 := random.String("ref2-", 10)
+				require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+					QueueName:      queueName,
+					RequestTimeout: "1m",
+					Items: []*pb.QueueProduceItem{
+						{
+							Reference: ref2,
+							Encoding:  "test-encoding",
+							Kind:      "test-kind",
+							Bytes:     []byte("test payload"),
+						},
+					},
+				}))
+
+				// Exhaust item-2 attempts
+				for i := 0; i < 2; i++ {
+					var lease pb.QueueLeaseResponse
+					require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+						ClientId:       random.String("client-", 10),
+						RequestTimeout: "5s",
+						QueueName:      queueName,
+						BatchSize:      1,
+					}, &lease))
+					require.Len(t, lease.Items, 1)
+
+					now.Advance(2 * clock.Minute)
+
+					if i < 1 {
+						// Wait for re-queue
+						err := retry.On(ctx, RetryTenTimes, func(ctx context.Context, _ int) error {
+							var resp pb.StorageItemsListResponse
+							if err := c.StorageItemsList(ctx, queueName, 0, &resp, nil); err != nil {
+								return err
+							}
+							item := findInStorageList(ref2, &resp)
+							if item == nil {
+								return fmt.Errorf("item not found")
+							}
+							if item.IsLeased {
+								return fmt.Errorf("expected item to be re-queued")
+							}
+							return nil
+						})
+						require.NoError(t, err)
+					}
+				}
+
+				// Wait for item-2 to be removed from main queue
+				err = retry.On(ctx, RetryTenTimes, func(ctx context.Context, i int) error {
+					var resp pb.StorageItemsListResponse
+					if err := c.StorageItemsList(ctx, queueName, 0, &resp, nil); err != nil {
+						return err
+					}
+					if findInStorageList(ref2, &resp) != nil {
+						return fmt.Errorf("expected item to be removed")
+					}
+					return nil
+				})
+				require.NoError(t, err)
+
+				// Verify item-2 is in DLQ-B (not DLQ-A)
+				var dlqBResp pb.StorageItemsListResponse
+				require.NoError(t, c.StorageItemsList(ctx, dlqBName, 0, &dlqBResp, nil))
+				require.NotNil(t, findInStorageList(ref2, &dlqBResp))
+
+				require.NoError(t, c.StorageItemsList(ctx, dlqAName, 0, &dlqAResp, nil))
+				assert.Nil(t, findInStorageList(ref2, &dlqAResp))
+			})
+
+			t.Run("RemoveDLQDeletesFailedItems", func(t *testing.T) {
+				// Create DLQ queue
+				dlqName := random.String("dlq-", 10)
+				createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+					QueueName:           dlqName,
+					LeaseTimeout:        LeaseTimeout,
+					ExpireTimeout:       ExpireTimeout,
+					RequestedPartitions: 1,
+				})
+
+				// Create main queue with DeadQueue, MaxAttempts=2
+				queueName := random.String("queue-", 10)
+				createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+					QueueName:           queueName,
+					LeaseTimeout:        "1m0s",
+					ExpireTimeout:       ExpireTimeout,
+					RequestedPartitions: 1,
+					MaxAttempts:         2,
+					DeadQueue:           dlqName,
+				})
+
+				// Update main queue to remove DeadQueue
+				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+					QueueName:   queueName,
+					MaxAttempts: 2,
+					DeadQueue:   "",
+				}))
+
+				// Produce item
+				ref := random.String("ref-", 10)
+				require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+					QueueName:      queueName,
+					RequestTimeout: "1m",
+					Items: []*pb.QueueProduceItem{
+						{
+							Reference: ref,
+							Encoding:  "test-encoding",
+							Kind:      "test-kind",
+							Bytes:     []byte("test payload"),
+						},
+					},
+				}))
+
+				// Exhaust attempts
+				for i := 0; i < 2; i++ {
+					var lease pb.QueueLeaseResponse
+					require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+						ClientId:       random.String("client-", 10),
+						RequestTimeout: "5s",
+						QueueName:      queueName,
+						BatchSize:      1,
+					}, &lease))
+					require.Len(t, lease.Items, 1)
+
+					now.Advance(2 * clock.Minute)
+
+					if i < 1 {
+						// Wait for re-queue
+						err := retry.On(ctx, RetryTenTimes, func(ctx context.Context, _ int) error {
+							var resp pb.StorageItemsListResponse
+							if err := c.StorageItemsList(ctx, queueName, 0, &resp, nil); err != nil {
+								return err
+							}
+							item := findInStorageList(ref, &resp)
+							if item == nil {
+								return fmt.Errorf("item not found")
+							}
+							if item.IsLeased {
+								return fmt.Errorf("expected item to be re-queued")
+							}
+							return nil
+						})
+						require.NoError(t, err)
+					}
+				}
+
+				// Wait for item to be removed from main queue
+				err := retry.On(ctx, RetryTenTimes, func(ctx context.Context, i int) error {
+					var resp pb.StorageItemsListResponse
+					if err := c.StorageItemsList(ctx, queueName, 0, &resp, nil); err != nil {
+						return err
+					}
+					if findInStorageList(ref, &resp) != nil {
+						return fmt.Errorf("expected item to be removed")
+					}
+					return nil
+				})
+				require.NoError(t, err)
+
+				// Verify item is NOT in DLQ (was deleted)
+				var dlqResp pb.StorageItemsListResponse
+				require.NoError(t, c.StorageItemsList(ctx, dlqName, 0, &dlqResp, nil))
+				assert.Nil(t, findInStorageList(ref, &dlqResp))
+			})
 		})
 	})
 }

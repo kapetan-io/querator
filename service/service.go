@@ -223,7 +223,7 @@ func (s *Service) QueueRetry(ctx context.Context, req *proto.QueueRetryRequest) 
 	return nil
 }
 
-func (s *Service) QueueReload(ctx context.Context, req *proto.QueueClearRequest) error {
+func (s *Service) QueueReload(ctx context.Context, req *proto.QueueReloadRequest) error {
 	queue, err := s.queues.Get(ctx, req.QueueName)
 	if err != nil {
 		return err

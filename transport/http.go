@@ -342,7 +342,7 @@ func (h *HTTPHandler) QueueClear(ctx context.Context, w http.ResponseWriter, r *
 }
 
 func (h *HTTPHandler) QueueReload(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-	var req pb.QueueClearRequest
+	var req pb.QueueReloadRequest
 	if err := duh.ReadRequest(r, &req, 512*duh.Bytes); err != nil {
 		h.ReplyError(w, r, err)
 		return

@@ -31,7 +31,7 @@ func (l *Logical) handleColdRequests(state *QueueState, req *Request) {
 		p := req.Request.([]store.Partition)
 		l.conf.StoragePartitions = p
 		close(req.ReadyCh)
-	case MethodReloadPartitions:
+	case MethodReload:
 		l.handleReload(state, req)
 	default:
 		panic(fmt.Sprintf("undefined request method '%d'", req.Method))
@@ -143,8 +143,6 @@ func (l *Logical) handleClear(_ *QueueState, req *Request) {
 }
 
 func (l *Logical) handleReload(state *QueueState, req *Request) {
-	_ = req.Request.(*types.ReloadRequest)
-
 	for _, partition := range state.Partitions {
 		ctx, cancel := context.WithTimeout(req.Context, l.conf.ReadTimeout)
 		var stats types.PartitionStats

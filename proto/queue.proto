@@ -262,6 +262,17 @@ message QueueClearRequest {
   bool destructive = 5;
 }
 
+message QueueReloadRequest {
+  // The name of the queue to reload
+  string queueName = 1  [json_name = "queue_name"];
+}
+
+message QueueReloadResponse {
+  int32 code = 1;
+  string codeText = 2 [json_name = "code_text"];
+  string message = 3;
+}
+
 message QueueStatsRequest {
   string queueName = 1 [json_name = "queue_name"];
 }

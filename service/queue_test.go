@@ -1518,7 +1518,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			})
 
 			// Call QueueReload on empty queue
-			require.NoError(t, c.QueueReload(ctx, &pb.QueueClearRequest{
+			require.NoError(t, c.QueueReload(ctx, &pb.QueueReloadRequest{
 				QueueName: queueName,
 			}))
 
@@ -1561,7 +1561,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			assert.Equal(t, int32(0), pBefore.TotalLeased)
 
 			// Call QueueReload
-			require.NoError(t, c.QueueReload(ctx, &pb.QueueClearRequest{
+			require.NoError(t, c.QueueReload(ctx, &pb.QueueReloadRequest{
 				QueueName: queueName,
 			}))
 
@@ -1637,7 +1637,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			assert.Equal(t, int32(numProduced+numImported), pAfterImport.Total)
 
 			// Call QueueReload to ensure in-memory counts are synced
-			require.NoError(t, c.QueueReload(ctx, &pb.QueueClearRequest{
+			require.NoError(t, c.QueueReload(ctx, &pb.QueueReloadRequest{
 				QueueName: queueName,
 			}))
 
@@ -1683,7 +1683,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			require.Len(t, leaseResp.Items, numLeased)
 
 			// Call QueueReload - should preserve leased items
-			require.NoError(t, c.QueueReload(ctx, &pb.QueueClearRequest{
+			require.NoError(t, c.QueueReload(ctx, &pb.QueueReloadRequest{
 				QueueName: queueName,
 			}))
 
@@ -1708,7 +1708,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			}))
 
 			// Call QueueReload again
-			require.NoError(t, c.QueueReload(ctx, &pb.QueueClearRequest{
+			require.NoError(t, c.QueueReload(ctx, &pb.QueueReloadRequest{
 				QueueName: queueName,
 			}))
 
@@ -2140,7 +2140,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			defer d.Shutdown(t)
 
 			t.Run("InvalidQueueName", func(t *testing.T) {
-				err := c.QueueReload(ctx, &pb.QueueClearRequest{
+				err := c.QueueReload(ctx, &pb.QueueReloadRequest{
 					QueueName: "invalid~queue",
 				})
 				var e duh.Error
@@ -2151,7 +2151,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			})
 
 			t.Run("NonExistentQueue", func(t *testing.T) {
-				err := c.QueueReload(ctx, &pb.QueueClearRequest{
+				err := c.QueueReload(ctx, &pb.QueueReloadRequest{
 					QueueName: "does-not-exist",
 				})
 				var e duh.Error

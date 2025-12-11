@@ -155,7 +155,7 @@ func (c *Client) QueueClear(ctx context.Context, req *pb.QueueClearRequest) erro
 	return c.client.Do(r, &res)
 }
 
-func (c *Client) QueueReload(ctx context.Context, req *pb.QueueClearRequest) error {
+func (c *Client) QueueReload(ctx context.Context, req *pb.QueueReloadRequest) error {
 	payload, err := proto.Marshal(req)
 	if err != nil {
 		return duh.NewClientError("while marshaling request payload: %w", err, nil)

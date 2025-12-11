@@ -14,6 +14,7 @@ type QueueOps interface {
 	QueueRetry(context.Context, *pb.QueueRetryRequest) error
 	QueueStats(context.Context, *pb.QueueStatsRequest, *pb.QueueStatsResponse) error
 	QueueClear(context.Context, *pb.QueueClearRequest) error
+	QueueReload(context.Context, *pb.QueueReloadRequest) error
 }
 
 // QueueAdmin handles queue lifecycle management

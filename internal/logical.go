@@ -37,7 +37,7 @@ const (
 	MethodLease
 	MethodComplete
 	MethodRetry
-	MethodReloadPartitions
+	MethodReload
 	MethodNotify
 	MethodNotifyScheduled
 
@@ -416,7 +416,7 @@ func (l *Logical) ReloadPartitions(ctx context.Context, req *types.ReloadRequest
 	}
 
 	r := Request{
-		Method:  MethodReloadPartitions,
+		Method:  MethodReload,
 		Request: req,
 	}
 	return l.queueRequest(ctx, &r)
@@ -672,7 +672,7 @@ func (l *Logical) handleRequest(state *QueueState, req *Request) {
 		l.handleHotRequests(state, req)
 	case MethodStorageItemsList, MethodStorageItemsImport, MethodStorageItemsDelete,
 		MethodQueueStats, MethodQueuePause, MethodQueueClear, MethodUpdateInfo,
-		MethodUpdatePartitions, MethodReloadPartitions:
+		MethodUpdatePartitions, MethodReload:
 		l.handleColdRequests(state, req)
 	default:
 		panic(fmt.Sprintf("undefined request method '%d'", req.Method))

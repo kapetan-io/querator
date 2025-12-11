@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"context"
 	"fmt"
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
@@ -30,9 +31,8 @@ func (l *Logical) handleColdRequests(state *QueueState, req *Request) {
 		p := req.Request.([]store.Partition)
 		l.conf.StoragePartitions = p
 		close(req.ReadyCh)
-	case MethodReloadPartitions:
-		// TODO(reload) Reload the partitions
-		// TODO: Move all the inline code into handleXXX methods
+	case MethodReload:
+		l.handleReload(state, req)
 	default:
 		panic(fmt.Sprintf("undefined request method '%d'", req.Method))
 	}
@@ -139,6 +139,28 @@ func (l *Logical) handleClear(_ *QueueState, req *Request) {
 			req.Err = err
 		}
 	}
+	close(req.ReadyCh)
+}
+
+func (l *Logical) handleReload(state *QueueState, req *Request) {
+	for _, partition := range state.Partitions {
+		ctx, cancel := context.WithTimeout(req.Context, l.conf.ReadTimeout)
+		var stats types.PartitionStats
+		err := partition.Store.Stats(ctx, &stats, l.conf.Clock.Now().UTC())
+		cancel()
+
+		if err != nil {
+			l.log.Warn("partition unavailable during reload",
+				"partition", partition.Info.PartitionNum,
+				"error", err)
+			partition.State.Failures = 1
+		} else {
+			partition.State.UnLeased = stats.Total - stats.NumLeased
+			partition.State.NumLeased = stats.NumLeased
+			partition.State.Failures = 0
+		}
+	}
+
 	close(req.ReadyCh)
 }
 

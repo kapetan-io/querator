@@ -21,22 +21,12 @@ func TestShutdown(t *testing.T) {
 	postgres := postgresTestSetup{}
 
 	for _, tc := range []struct {
-		Setup      NewStorageFunc
-		TearDown   func()
-		Name       string
-		Persistent bool
+		Setup    NewStorageFunc
+		TearDown func()
+		Name     string
 	}{
 		{
-			Name:       "InMemory",
-			Persistent: false,
-			Setup: func() store.Config {
-				return setupMemoryStorage(store.Config{})
-			},
-			TearDown: func() {},
-		},
-		{
-			Name:       "BadgerDB",
-			Persistent: true,
+			Name: "BadgerDB",
 			Setup: func() store.Config {
 				return badgerdb.Setup(store.BadgerConfig{})
 			},
@@ -45,8 +35,7 @@ func TestShutdown(t *testing.T) {
 			},
 		},
 		{
-			Name:       "PostgreSQL",
-			Persistent: true,
+			Name: "PostgreSQL",
 			Setup: func() store.Config {
 				return postgres.Setup(store.PostgresConfig{})
 			},
@@ -56,17 +45,14 @@ func TestShutdown(t *testing.T) {
 		},
 	} {
 		t.Run(tc.Name, func(t *testing.T) {
-			testShutdown(t, tc.Setup, tc.TearDown, tc.Persistent)
+			testShutdown(t, tc.Setup, tc.TearDown)
 		})
 	}
 }
 
-func testShutdown(t *testing.T, setup NewStorageFunc, tearDown func(), persistent bool) {
+func testShutdown(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 	t.Run("ProduceThenShutdown", func(t *testing.T) {
-		if !persistent {
-			t.Skip("skipping persistence test for non-persistent backend")
-		}
 
 		const numItems = 5
 		queueName := random.String("queue-", 10)
@@ -103,10 +89,6 @@ func testShutdown(t *testing.T, setup NewStorageFunc, tearDown func(), persisten
 	})
 
 	t.Run("LeaseThenShutdown", func(t *testing.T) {
-		if !persistent {
-			t.Skip("skipping persistence test for non-persistent backend")
-		}
-
 		const numItems = 5
 		queueName := random.String("queue-", 10)
 		storage := setup()
@@ -152,10 +134,6 @@ func testShutdown(t *testing.T, setup NewStorageFunc, tearDown func(), persisten
 	})
 
 	t.Run("PartialCompleteThenShutdown", func(t *testing.T) {
-		if !persistent {
-			t.Skip("skipping persistence test for non-persistent backend")
-		}
-
 		const numItems = 10
 		const completeCount = 5
 		queueName := random.String("queue-", 10)

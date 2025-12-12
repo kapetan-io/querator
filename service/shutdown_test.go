@@ -1,6 +1,7 @@
 package service_test
 
 import (
+	"context"
 	"strings"
 	"sync"
 	"testing"
@@ -200,10 +201,11 @@ func testShutdown(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		// Use a shorter context since this test explicitly triggers shutdown
 		d, c, ctx := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: storage})
-		// Ensure cleanup even if test fails early - ignore errors since we may shut down twice
+		// Ensure cleanup even if test fails early - use fresh context since d.ctx may be canceled
 		defer func() {
-			_ = d.d.Shutdown(d.ctx)
-			d.cancel()
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_ = d.d.Shutdown(cleanupCtx)
 		}()
 
 		createQueueAndWait(t, ctx, c, &pb.QueueInfo{

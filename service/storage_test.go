@@ -65,7 +65,7 @@ func TestQueueStorage(t *testing.T) {
 }
 
 func testQueueStorage(t *testing.T, setUp NewStorageFunc, tearDown func()) {
-	defer goleak.VerifyNone(t)
+	defer goleak.VerifyNone(t, goleakOptions...)
 
 	storage := setUp()
 	defer tearDown()

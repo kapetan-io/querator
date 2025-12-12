@@ -65,7 +65,7 @@ func TestRetry(t *testing.T) {
 }
 
 func testRetry(t *testing.T, setup NewStorageFunc, tearDown func()) {
-	defer goleak.VerifyNone(t)
+	defer goleak.VerifyNone(t, goleakOptions...)
 
 	t.Run("QueueRetry", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)

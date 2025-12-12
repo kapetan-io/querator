@@ -62,7 +62,7 @@ func TestPartitions(t *testing.T) {
 }
 
 func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
-	defer goleak.VerifyNone(t)
+	defer goleak.VerifyNone(t, goleakOptions...)
 	d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
 	defer func() {
 		d.Shutdown(t)

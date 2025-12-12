@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/duh-rpc/duh-go"
 	"github.com/duh-rpc/duh-go/retry"
+	"github.com/jackc/pgx/v5"
 	"github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/daemon"
 	"github.com/kapetan-io/querator/internal"
@@ -28,6 +29,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -42,6 +44,121 @@ var RetryTenTimes = retry.Policy{Interval: retry.Sleep(100 * clock.Millisecond),
 type NewStorageFunc func() store.Config
 
 var log *slog.Logger
+
+var goleakOptions = []goleak.Option{
+	goleak.IgnoreTopFunction("github.com/testcontainers/testcontainers-go.(*Reaper).connect.func1"),
+}
+
+// ---------------------------------------------------------------------
+// Shared PostgreSQL Container
+// ---------------------------------------------------------------------
+
+type sharedPostgresContainer struct {
+	container *postgres.PostgresContainer
+	host      string
+	port      string
+	dbCounter atomic.Int64
+}
+
+var (
+	sharedPostgres     *sharedPostgresContainer
+	sharedPostgresOnce sync.Once
+	sharedPostgresErr  error
+)
+
+func getSharedPostgresContainer() (*sharedPostgresContainer, error) {
+	sharedPostgresOnce.Do(func() {
+		sharedPostgres = &sharedPostgresContainer{}
+		sharedPostgresErr = sharedPostgres.Start(context.Background())
+	})
+	return sharedPostgres, sharedPostgresErr
+}
+
+func (s *sharedPostgresContainer) Start(ctx context.Context) error {
+	container, err := postgres.Run(ctx,
+		"postgres:16-alpine",
+		postgres.WithDatabase("postgres"),
+		postgres.WithUsername("postgres"),
+		postgres.WithPassword("postgres"),
+		testcontainers.WithWaitStrategy(
+			wait.ForLog("database system is ready to accept connections").
+				WithOccurrence(2).
+				WithStartupTimeout(30*time.Second)),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to start postgres container: %w", err)
+	}
+
+	host, err := container.Host(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get container host: %w", err)
+	}
+
+	mappedPort, err := container.MappedPort(ctx, "5432/tcp")
+	if err != nil {
+		return fmt.Errorf("failed to get mapped port: %w", err)
+	}
+
+	s.container = container
+	s.host = host
+	s.port = mappedPort.Port()
+	return nil
+}
+
+func (s *sharedPostgresContainer) Stop(ctx context.Context) error {
+	if s.container == nil {
+		return nil
+	}
+
+	if err := s.container.Terminate(ctx); err != nil {
+		log.Warn("failed to terminate postgres container", "error", err)
+		return err
+	}
+	return nil
+}
+
+func (s *sharedPostgresContainer) CreateDatabase(ctx context.Context) (dsn string, dbName string, err error) {
+	dbName = fmt.Sprintf("querator_test_%d", s.dbCounter.Add(1))
+	adminDSN := fmt.Sprintf("postgres://postgres:postgres@%s:%s/postgres?sslmode=disable", s.host, s.port)
+
+	conn, err := pgx.Connect(ctx, adminDSN)
+	if err != nil {
+		return "", "", fmt.Errorf("connect to postgres db: %w", err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+
+	_, err = conn.Exec(ctx, fmt.Sprintf("CREATE DATABASE %s", pgx.Identifier{dbName}.Sanitize()))
+	if err != nil {
+		return "", "", fmt.Errorf("create database %s: %w", dbName, err)
+	}
+
+	dsn = fmt.Sprintf("postgres://postgres:postgres@%s:%s/%s?sslmode=disable", s.host, s.port, dbName)
+	return dsn, dbName, nil
+}
+
+func (s *sharedPostgresContainer) DropDatabase(ctx context.Context, dbName string) error {
+	adminDSN := fmt.Sprintf("postgres://postgres:postgres@%s:%s/postgres?sslmode=disable", s.host, s.port)
+
+	conn, err := pgx.Connect(ctx, adminDSN)
+	if err != nil {
+		return fmt.Errorf("connect to postgres db: %w", err)
+	}
+	defer func() { _ = conn.Close(ctx) }()
+
+	_, err = conn.Exec(ctx,
+		"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()",
+		dbName)
+	if err != nil {
+		log.Warn("failed to terminate connections", "database", dbName, "error", err)
+	}
+
+	_, err = conn.Exec(ctx, fmt.Sprintf("DROP DATABASE IF EXISTS %s", pgx.Identifier{dbName}.Sanitize()))
+	if err != nil {
+		return fmt.Errorf("drop database %s: %w", dbName, err)
+	}
+
+	return nil
+}
 
 func TestMain(m *testing.M) {
 	// TEST_LOGGING env var controls log output:
@@ -59,7 +176,15 @@ func TestMain(m *testing.M) {
 		}))
 	}
 
-	goleak.VerifyTestMain(m)
+	defer func() {
+		if sharedPostgres != nil {
+			if err := sharedPostgres.Stop(context.Background()); err != nil {
+				fmt.Fprintf(os.Stderr, "failed to stop shared postgres container: %v\n", err)
+			}
+		}
+	}()
+
+	goleak.VerifyTestMain(m, goleakOptions...)
 }
 
 // ---------------------------------------------------------------------
@@ -150,34 +275,23 @@ func (b *badgerTestSetup) Teardown() {
 // ---------------------------------------------------------------------
 
 type postgresTestSetup struct {
-	container *postgres.PostgresContainer
-	dsn       string
+	dsn    string
+	dbName string
 }
 
 func (p *postgresTestSetup) Setup(conf store.PostgresConfig) store.Config {
-	ctx := context.Background()
-
-	container, err := postgres.Run(ctx,
-		"postgres:16-alpine",
-		postgres.WithDatabase("querator_test"),
-		postgres.WithUsername("postgres"),
-		postgres.WithPassword("postgres"),
-		testcontainers.WithWaitStrategy(
-			wait.ForLog("database system is ready to accept connections").
-				WithOccurrence(2).
-				WithStartupTimeout(30*time.Second)),
-	)
+	container, err := getSharedPostgresContainer()
 	if err != nil {
-		panic(fmt.Sprintf("failed to start postgres container: %v", err))
+		panic(fmt.Sprintf("failed to get shared postgres container: %v", err))
 	}
 
-	dsn, err := container.ConnectionString(ctx, "sslmode=disable")
+	dsn, dbName, err := container.CreateDatabase(context.Background())
 	if err != nil {
-		panic(fmt.Sprintf("failed to get connection string: %v", err))
+		panic(fmt.Sprintf("failed to create test database: %v", err))
 	}
 
-	p.container = container
 	p.dsn = dsn
+	p.dbName = dbName
 
 	conf.ConnectionString = dsn
 	conf.Log = log
@@ -196,11 +310,18 @@ func (p *postgresTestSetup) Setup(conf store.PostgresConfig) store.Config {
 }
 
 func (p *postgresTestSetup) Teardown() {
-	if p.container != nil {
-		ctx := context.Background()
-		if err := p.container.Terminate(ctx); err != nil {
-			panic(fmt.Sprintf("failed to terminate postgres container: %v", err))
-		}
+	if p.dbName == "" {
+		return
+	}
+
+	container, err := getSharedPostgresContainer()
+	if err != nil {
+		log.Warn("failed to get shared postgres container for cleanup", "error", err)
+		return
+	}
+
+	if err := container.DropDatabase(context.Background(), p.dbName); err != nil {
+		log.Warn("failed to drop test database", "database", p.dbName, "error", err)
 	}
 }
 

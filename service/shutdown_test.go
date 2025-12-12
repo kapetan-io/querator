@@ -200,6 +200,11 @@ func testShutdown(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		// Use a shorter context since this test explicitly triggers shutdown
 		d, c, ctx := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: storage})
+		// Ensure cleanup even if test fails early - ignore errors since we may shut down twice
+		defer func() {
+			_ = d.d.Shutdown(d.ctx)
+			d.cancel()
+		}()
 
 		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 			QueueName:           queueName,

@@ -67,7 +67,7 @@ func TestQueue(t *testing.T) {
 }
 
 func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
-	defer goleak.VerifyNone(t)
+	defer goleak.VerifyNone(t, goleakOptions...)
 
 	t.Run("ProduceAndLease", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)

@@ -65,7 +65,7 @@ func TestQueuesStorage(t *testing.T) {
 }
 
 func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
-	defer goleak.VerifyNone(t)
+	defer goleak.VerifyNone(t, goleakOptions...)
 
 	t.Run("CRUD", func(t *testing.T) {
 		d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})

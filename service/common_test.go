@@ -125,7 +125,7 @@ func (s *sharedPostgresContainer) CreateDatabase(ctx context.Context) (dsn strin
 	if err != nil {
 		return "", "", fmt.Errorf("connect to postgres db: %w", err)
 	}
-	defer conn.Close(ctx)
+	defer func() { _ = conn.Close(ctx) }()
 
 	_, err = conn.Exec(ctx, fmt.Sprintf("CREATE DATABASE %s", pgx.Identifier{dbName}.Sanitize()))
 	if err != nil {
@@ -143,7 +143,7 @@ func (s *sharedPostgresContainer) DropDatabase(ctx context.Context, dbName strin
 	if err != nil {
 		return fmt.Errorf("connect to postgres db: %w", err)
 	}
-	defer conn.Close(ctx)
+	defer func() { _ = conn.Close(ctx) }()
 
 	_, err = conn.Exec(ctx,
 		"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()",

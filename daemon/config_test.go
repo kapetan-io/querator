@@ -1,4 +1,4 @@
-package config_test
+package daemon_test
 
 import (
 	"context"
@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kapetan-io/querator/config"
 	"github.com/kapetan-io/querator/daemon"
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
@@ -19,13 +18,13 @@ import (
 func TestApplyConfigFileErrs(t *testing.T) {
 	tests := []struct {
 		name        string
-		file        config.File
+		file        daemon.File
 		expectedErr string
 	}{
 		{
 			name: "InvalidLoggingHandler",
-			file: config.File{
-				Logging: config.Logging{
+			file: daemon.File{
+				Logging: daemon.Logging{
 					Handler: "invalid",
 				},
 			},
@@ -33,8 +32,8 @@ func TestApplyConfigFileErrs(t *testing.T) {
 		},
 		{
 			name: "InvalidPartitionStorageDriver",
-			file: config.File{
-				PartitionStorage: []config.PartitionStorage{
+			file: daemon.File{
+				PartitionStorage: []daemon.PartitionStorage{
 					{
 						Name:   "test",
 						Driver: "invalid",
@@ -45,8 +44,8 @@ func TestApplyConfigFileErrs(t *testing.T) {
 		},
 		{
 			name: "InvalidQueueStorageDriver",
-			file: config.File{
-				QueueStorage: config.QueueStorage{
+			file: daemon.File{
+				QueueStorage: daemon.QueueStorage{
 					Driver: "invalid",
 				},
 			},
@@ -54,17 +53,17 @@ func TestApplyConfigFileErrs(t *testing.T) {
 		},
 		{
 			name: "InvalidPartitionStorageReference",
-			file: config.File{
-				PartitionStorage: []config.PartitionStorage{
+			file: daemon.File{
+				PartitionStorage: []daemon.PartitionStorage{
 					{
 						Name:   "test",
 						Driver: "memory",
 					},
 				},
-				Queues: []config.Queue{
+				Queues: []daemon.Queue{
 					{
 						Name: "test-queue",
-						Partitions: []config.Partition{
+						Partitions: []daemon.Partition{
 							{
 								StorageName: "non-existent",
 							},
@@ -79,29 +78,29 @@ func TestApplyConfigFileErrs(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			conf := &daemon.Config{}
-			err := config.ApplyConfigFile(context.Background(), conf, tt.file, io.Discard)
+			err := daemon.ApplyConfigFile(context.Background(), conf, tt.file, io.Discard)
 			assert.EqualError(t, err, tt.expectedErr)
 		})
 	}
 }
 
 func TestApplyConfigFile(t *testing.T) {
-	file := config.File{
-		Logging: config.Logging{
+	file := daemon.File{
+		Logging: daemon.Logging{
 			Level:   "debug",
 			Handler: "json",
 		},
-		PartitionStorage: []config.PartitionStorage{
+		PartitionStorage: []daemon.PartitionStorage{
 			{
 				Name:     "mem-00",
 				Driver:   "memory",
 				Affinity: 0,
 			},
 		},
-		QueueStorage: config.QueueStorage{
+		QueueStorage: daemon.QueueStorage{
 			Driver: "Memory",
 		},
-		Queues: []config.Queue{
+		Queues: []daemon.Queue{
 			{
 				Name:                "queue-1",
 				LeaseTimeout:        10 * time.Minute,
@@ -109,7 +108,7 @@ func TestApplyConfigFile(t *testing.T) {
 				MaxAttempts:         10,
 				Reference:           "test",
 				RequestedPartitions: 1,
-				Partitions: []config.Partition{
+				Partitions: []daemon.Partition{
 					{
 						Partition:   0,
 						ReadOnly:    false,
@@ -122,17 +121,15 @@ func TestApplyConfigFile(t *testing.T) {
 
 	conf := &daemon.Config{}
 	ctx := context.Background()
-	err := config.ApplyConfigFile(ctx, conf, file, io.Discard)
+	err := daemon.ApplyConfigFile(ctx, conf, file, io.Discard)
 	require.NoError(t, err)
 
-	// Check if the config is reflected correctly
 	assert.Equal(t, true, conf.Service.Log.Handler().Enabled(ctx, slog.LevelDebug))
 	assert.Len(t, conf.Service.StorageConfig.PartitionStorage, 1)
 	assert.Equal(t, "mem-00", conf.Service.StorageConfig.PartitionStorage[0].Name)
 	assert.Equal(t, float64(0), conf.Service.StorageConfig.PartitionStorage[0].Affinity)
 	assert.IsType(t, &store.MemoryQueues{}, conf.Service.StorageConfig.Queues)
 
-	// Check if the queue is created in daemon.Config
 	var info types.QueueInfo
 	require.NoError(t, conf.Service.StorageConfig.Queues.Get(ctx, "queue-1", &info))
 	assert.Equal(t, "queue-1", info.Name)
@@ -153,7 +150,7 @@ func TestApplyConfigFromYAML(t *testing.T) {
 	validConfig := `
 partition-storage:
   - name: mem-00
-    driver: Memory 
+    driver: Memory
     affinity: 0
 
 queue-storage:
@@ -172,15 +169,14 @@ queues:
         read-only: false
         storage-name: mem-00
 `
-	var file config.File
+	var file daemon.File
 	err := yaml.Unmarshal([]byte(validConfig), &file)
 	require.NoError(t, err)
 
 	conf := &daemon.Config{}
-	err = config.ApplyConfigFile(context.Background(), conf, file, io.Discard)
+	err = daemon.ApplyConfigFile(context.Background(), conf, file, io.Discard)
 	require.NoError(t, err)
 
-	// Verify the configuration
 	assert.Len(t, conf.Service.StorageConfig.PartitionStorage, 1)
 	assert.Equal(t, "mem-00", conf.Service.StorageConfig.PartitionStorage[0].Name)
 	assert.IsType(t, &store.MemoryQueues{}, conf.Service.StorageConfig.Queues)
@@ -205,7 +201,7 @@ func TestBadgerConfig(t *testing.T) {
 	badgerConfig := `
 partition-storage:
   - name: badger-00
-    driver: Badger 
+    driver: Badger
     affinity: 0
     config:
       storage-dir: /tmp/badger1
@@ -214,18 +210,16 @@ queue-storage:
   config:
     storage-dir: "/tmp/queue-storage"
 `
-	var file config.File
+	var file daemon.File
 	err := yaml.Unmarshal([]byte(badgerConfig), &file)
 	require.NoError(t, err)
 
 	var conf daemon.Config
 	ctx := context.Background()
-	err = config.ApplyConfigFile(ctx, &conf, file, io.Discard)
+	err = daemon.ApplyConfigFile(ctx, &conf, file, io.Discard)
 	require.NoError(t, err)
 	assert.Equal(t, "/tmp/badger1",
 		conf.Service.StorageConfig.PartitionStorage[0].PartitionStore.(*store.BadgerPartitionStore).Config().StorageDir)
 	assert.Equal(t, "/tmp/queue-storage",
 		conf.Service.StorageConfig.Queues.(*store.BadgerQueues).Config().StorageDir)
 }
-
-// TODO: Add config tests for the other storage drivers as we add them

@@ -10,7 +10,6 @@ import (
 	"syscall"
 
 	"github.com/kapetan-io/querator"
-	"github.com/kapetan-io/querator/config"
 	"github.com/kapetan-io/querator/daemon"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -41,7 +40,7 @@ func init() {
 }
 
 func StartServer(ctx context.Context, w io.Writer) error {
-	var file config.File
+	var file daemon.File
 	if flags.ConfigFile != "" {
 		reader, err := os.Open(flags.ConfigFile)
 		if err != nil {
@@ -57,7 +56,7 @@ func StartServer(ctx context.Context, w io.Writer) error {
 	}
 
 	var conf daemon.Config
-	if err := config.ApplyConfigFile(ctx, &conf, file, w); err != nil {
+	if err := daemon.ApplyConfigFile(ctx, &conf, file, w); err != nil {
 		return fmt.Errorf("while applying config file: %w", err)
 	}
 

@@ -433,8 +433,6 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			assert.Equal(t, 2, len(r.Items))
 		}
 	})
-	// TODO: Errors
-	// TODO: Attempt to complete ids for a partition which does not exist
 }
 
 type Partition struct {

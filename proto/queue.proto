@@ -242,13 +242,10 @@ message PartitionInfo {
 message QueueClearRequest {
   // The name of the queue
   string queueName = 1  [json_name = "queue_name"];
-  // retry indicates the 'retry' queue will be cleared. If true, any items
-  // scheduled to be retried at a future date will be removed.
-  bool retry = 2; // TODO: Implement
   // Scheduled indicates any 'scheduled' items in the queue will be
   // cleared. If true, any items scheduled to be enqueued at a future date
-  // will be removed.
-  bool scheduled = 3; // TODO: Implement
+  // will be removed. This includes items scheduled for retry.
+  bool scheduled = 3;
   // Queue indicates any items currently waiting in the FIFO queue will
   // clear. If true, any items in the queue which have NOT been leased
   // will be removed.

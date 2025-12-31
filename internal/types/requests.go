@@ -105,18 +105,15 @@ type ReloadRequest struct {
 }
 
 type ClearRequest struct {
-	// Retry indicates the 'retry' queue will be cleared. If true, any items
-	// scheduled to be retried at a future date will be removed.
-	Retry bool // TODO: Implement
 	// Scheduled indicates any 'scheduled' items in the queue will be
 	// cleared. If true, any items scheduled to be enqueued at a future date
-	// will be removed.
+	// will be removed. This includes items scheduled for retry.
 	Scheduled bool
 	// Queue indicates any items currently waiting in the FIFO queue will
 	// clear. If true, any items in the queue which have NOT been leased
 	// will be removed.
 	Queue bool
-	// Destructive indicates the Retry,Scheduled,Queue operations should be
+	// Destructive indicates the Scheduled,Queue operations should be
 	// destructive in that all data regardless of status will be removed.
 	// For example, if used with ClearRequest.Queue = true, then ALL items
 	// in the queue regardless of lease status will be removed. This means

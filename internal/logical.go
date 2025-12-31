@@ -428,8 +428,8 @@ func (l *Logical) Clear(ctx context.Context, req *types.ClearRequest) error {
 		return ErrQueueShutdown
 	}
 
-	if !req.Queue && !req.Retry && !req.Scheduled {
-		return transport.NewInvalidOption("invalid clear request; one of 'queue', 'retry'," +
+	if !req.Queue && !req.Scheduled {
+		return transport.NewInvalidOption("invalid clear request; one of 'queue'," +
 			" 'scheduled' must be true")
 	}
 

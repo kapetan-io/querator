@@ -257,7 +257,6 @@ func (s *Service) QueueClear(ctx context.Context, req *proto.QueueClearRequest) 
 			Destructive: req.Destructive,
 			Scheduled:   req.Scheduled,
 			Queue:       req.Queue,
-			Retry:       req.Retry,
 		}
 
 		if err := logical.Clear(ctx, &r); err != nil {

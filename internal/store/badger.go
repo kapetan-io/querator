@@ -1479,3 +1479,723 @@ func (b *BadgerNamespaces) Close(_ context.Context) error {
 	b.db = nil
 	return err
 }
+
+// ---------------------------------------------
+// Users Implementation
+// ---------------------------------------------
+
+type BadgerUsers struct {
+	conf BadgerConfig
+	db   *badger.DB
+}
+
+var _ Users = &BadgerUsers{}
+
+func NewBadgerUsers(conf BadgerConfig) *BadgerUsers {
+	set.Default(conf.Log, slog.Default())
+	return &BadgerUsers{
+		conf: conf,
+	}
+}
+
+func (b *BadgerUsers) getDB() (*badger.DB, error) {
+	if b.db != nil {
+		return b.db, nil
+	}
+
+	dir := filepath.Join(b.conf.StorageDir, fmt.Sprintf("~user-storage-%s", bucketName))
+
+	opts := badger.DefaultOptions(dir)
+	opts.Logger = newBadgerLogger(b.conf.Log)
+	db, err := badger.Open(opts)
+	if err != nil {
+		return nil, errors.Errorf("while opening user db '%s': %w", dir, err)
+	}
+
+	b.db = db
+	return db, nil
+}
+
+func (b *BadgerUsers) Get(_ context.Context, id string, user *types.User) error {
+	if strings.TrimSpace(id) == "" {
+		return types.ErrUserNotExist
+	}
+
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.View(func(txn *badger.Txn) error {
+		kvItem, err := txn.Get([]byte("user:" + id))
+		if err != nil {
+			if errors.Is(err, badger.ErrKeyNotFound) {
+				return types.ErrUserNotExist
+			}
+			return errors.Errorf("during Get(): %w", err)
+		}
+
+		var v []byte
+		v, err = kvItem.ValueCopy(v)
+		if err != nil {
+			return errors.Errorf("during ValueCopy(): %w", err)
+		}
+
+		if err := gob.NewDecoder(bytes.NewReader(v)).Decode(user); err != nil {
+			return errors.Errorf("during Decode(): %w", err)
+		}
+		return nil
+	})
+}
+
+func (b *BadgerUsers) GetByUsername(_ context.Context, username string, user *types.User) error {
+	if strings.TrimSpace(username) == "" {
+		return types.ErrUserNotExist
+	}
+
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.View(func(txn *badger.Txn) error {
+		// First lookup the ID by username
+		kvItem, err := txn.Get([]byte("user-username:" + username))
+		if err != nil {
+			if errors.Is(err, badger.ErrKeyNotFound) {
+				return types.ErrUserNotExist
+			}
+			return errors.Errorf("during Get(): %w", err)
+		}
+
+		var idBytes []byte
+		idBytes, err = kvItem.ValueCopy(idBytes)
+		if err != nil {
+			return errors.Errorf("during ValueCopy(): %w", err)
+		}
+
+		// Now get the user by ID
+		kvItem, err = txn.Get([]byte("user:" + string(idBytes)))
+		if err != nil {
+			if errors.Is(err, badger.ErrKeyNotFound) {
+				return types.ErrUserNotExist
+			}
+			return errors.Errorf("during Get(): %w", err)
+		}
+
+		var v []byte
+		v, err = kvItem.ValueCopy(v)
+		if err != nil {
+			return errors.Errorf("during ValueCopy(): %w", err)
+		}
+
+		if err := gob.NewDecoder(bytes.NewReader(v)).Decode(user); err != nil {
+			return errors.Errorf("during Decode(): %w", err)
+		}
+		return nil
+	})
+}
+
+func (b *BadgerUsers) Add(_ context.Context, user types.User) error {
+	if strings.TrimSpace(user.ID) == "" {
+		return transport.NewInvalidOption("user id is invalid; cannot be empty")
+	}
+
+	if strings.TrimSpace(user.Username) == "" {
+		return transport.NewInvalidOption("username is invalid; cannot be empty")
+	}
+
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.Update(func(txn *badger.Txn) error {
+		// Check if user ID already exists
+		_, err := txn.Get([]byte("user:" + user.ID))
+		if err == nil {
+			return types.ErrUserAlreadyExists
+		}
+		if !errors.Is(err, badger.ErrKeyNotFound) {
+			return errors.Errorf("during Get(): %w", err)
+		}
+
+		// Check if username is taken
+		_, err = txn.Get([]byte("user-username:" + user.Username))
+		if err == nil {
+			return types.ErrUsernameAlreadyTaken
+		}
+		if !errors.Is(err, badger.ErrKeyNotFound) {
+			return errors.Errorf("during Get(): %w", err)
+		}
+
+		var buf bytes.Buffer
+		if err := gob.NewEncoder(&buf).Encode(user); err != nil {
+			return errors.Errorf("during gob.Encode(): %w", err)
+		}
+
+		if err := txn.Set([]byte("user:"+user.ID), buf.Bytes()); err != nil {
+			return errors.Errorf("during Set(): %w", err)
+		}
+
+		// Set username index
+		if err := txn.Set([]byte("user-username:"+user.Username), []byte(user.ID)); err != nil {
+			return errors.Errorf("during Set(): %w", err)
+		}
+		return nil
+	})
+}
+
+func (b *BadgerUsers) List(_ context.Context, users *[]types.User, opts types.ListOptions) error {
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.View(func(txn *badger.Txn) error {
+		var count int
+		iter := txn.NewIterator(badger.DefaultIteratorOptions)
+		defer iter.Close()
+
+		prefix := []byte("user:")
+
+		if opts.Pivot != nil {
+			iter.Seek([]byte("user:" + string(opts.Pivot)))
+		} else {
+			iter.Seek(prefix)
+		}
+
+		for ; iter.ValidForPrefix(prefix); iter.Next() {
+			var v []byte
+			v, err := iter.Item().ValueCopy(v)
+			if err != nil {
+				return errors.Errorf("during ValueCopy(): %w", err)
+			}
+
+			var user types.User
+			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(&user); err != nil {
+				return errors.Errorf("during Decode(): %w", err)
+			}
+			*users = append(*users, user)
+			count++
+
+			if count >= opts.Limit {
+				return nil
+			}
+		}
+		return nil
+	})
+}
+
+func (b *BadgerUsers) Delete(_ context.Context, id string) error {
+	if strings.TrimSpace(id) == "" {
+		return types.ErrUserNotExist
+	}
+
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.Update(func(txn *badger.Txn) error {
+		// Get the user first to get the username for index cleanup
+		kvItem, err := txn.Get([]byte("user:" + id))
+		if err != nil {
+			if errors.Is(err, badger.ErrKeyNotFound) {
+				return types.ErrUserNotExist
+			}
+			return errors.Errorf("during Get(): %w", err)
+		}
+
+		var v []byte
+		v, err = kvItem.ValueCopy(v)
+		if err != nil {
+			return errors.Errorf("during ValueCopy(): %w", err)
+		}
+
+		var user types.User
+		if err := gob.NewDecoder(bytes.NewReader(v)).Decode(&user); err != nil {
+			return errors.Errorf("during Decode(): %w", err)
+		}
+
+		// Delete username index
+		if err := txn.Delete([]byte("user-username:" + user.Username)); err != nil {
+			return errors.Errorf("during Delete(): %w", err)
+		}
+
+		// Delete user
+		if err := txn.Delete([]byte("user:" + id)); err != nil {
+			return errors.Errorf("during Delete(): %w", err)
+		}
+		return nil
+	})
+}
+
+func (b *BadgerUsers) Close(_ context.Context) error {
+	if b.db == nil {
+		return nil
+	}
+	err := b.db.Close()
+	b.db = nil
+	return err
+}
+
+// ---------------------------------------------
+// API Keys Implementation
+// ---------------------------------------------
+
+type BadgerAPIKeys struct {
+	conf BadgerConfig
+	db   *badger.DB
+}
+
+var _ APIKeys = &BadgerAPIKeys{}
+
+func NewBadgerAPIKeys(conf BadgerConfig) *BadgerAPIKeys {
+	set.Default(conf.Log, slog.Default())
+	return &BadgerAPIKeys{
+		conf: conf,
+	}
+}
+
+func (b *BadgerAPIKeys) getDB() (*badger.DB, error) {
+	if b.db != nil {
+		return b.db, nil
+	}
+
+	dir := filepath.Join(b.conf.StorageDir, fmt.Sprintf("~apikey-storage-%s", bucketName))
+
+	opts := badger.DefaultOptions(dir)
+	opts.Logger = newBadgerLogger(b.conf.Log)
+	db, err := badger.Open(opts)
+	if err != nil {
+		return nil, errors.Errorf("while opening apikey db '%s': %w", dir, err)
+	}
+
+	b.db = db
+	return db, nil
+}
+
+func (b *BadgerAPIKeys) Get(_ context.Context, id string, key *types.APIKey) error {
+	if strings.TrimSpace(id) == "" {
+		return types.ErrAPIKeyNotExist
+	}
+
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.View(func(txn *badger.Txn) error {
+		kvItem, err := txn.Get([]byte("apikey:" + id))
+		if err != nil {
+			if errors.Is(err, badger.ErrKeyNotFound) {
+				return types.ErrAPIKeyNotExist
+			}
+			return errors.Errorf("during Get(): %w", err)
+		}
+
+		var v []byte
+		v, err = kvItem.ValueCopy(v)
+		if err != nil {
+			return errors.Errorf("during ValueCopy(): %w", err)
+		}
+
+		if err := gob.NewDecoder(bytes.NewReader(v)).Decode(key); err != nil {
+			return errors.Errorf("during Decode(): %w", err)
+		}
+		return nil
+	})
+}
+
+func (b *BadgerAPIKeys) GetByHash(_ context.Context, hash string, key *types.APIKey) error {
+	if strings.TrimSpace(hash) == "" {
+		return types.ErrAPIKeyNotExist
+	}
+
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.View(func(txn *badger.Txn) error {
+		// First lookup the ID by hash
+		kvItem, err := txn.Get([]byte("apikey-hash:" + hash))
+		if err != nil {
+			if errors.Is(err, badger.ErrKeyNotFound) {
+				return types.ErrAPIKeyNotExist
+			}
+			return errors.Errorf("during Get(): %w", err)
+		}
+
+		var idBytes []byte
+		idBytes, err = kvItem.ValueCopy(idBytes)
+		if err != nil {
+			return errors.Errorf("during ValueCopy(): %w", err)
+		}
+
+		// Now get the key by ID
+		kvItem, err = txn.Get([]byte("apikey:" + string(idBytes)))
+		if err != nil {
+			if errors.Is(err, badger.ErrKeyNotFound) {
+				return types.ErrAPIKeyNotExist
+			}
+			return errors.Errorf("during Get(): %w", err)
+		}
+
+		var v []byte
+		v, err = kvItem.ValueCopy(v)
+		if err != nil {
+			return errors.Errorf("during ValueCopy(): %w", err)
+		}
+
+		if err := gob.NewDecoder(bytes.NewReader(v)).Decode(key); err != nil {
+			return errors.Errorf("during Decode(): %w", err)
+		}
+		return nil
+	})
+}
+
+func (b *BadgerAPIKeys) Add(_ context.Context, key types.APIKey) error {
+	if strings.TrimSpace(key.ID) == "" {
+		return transport.NewInvalidOption("api key id is invalid; cannot be empty")
+	}
+
+	if strings.TrimSpace(key.KeyHash) == "" {
+		return transport.NewInvalidOption("api key hash is invalid; cannot be empty")
+	}
+
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.Update(func(txn *badger.Txn) error {
+		// Check if key ID already exists
+		_, err := txn.Get([]byte("apikey:" + key.ID))
+		if err == nil {
+			return transport.NewInvalidOption("api key already exists")
+		}
+		if !errors.Is(err, badger.ErrKeyNotFound) {
+			return errors.Errorf("during Get(): %w", err)
+		}
+
+		// Check if hash is already taken
+		_, err = txn.Get([]byte("apikey-hash:" + key.KeyHash))
+		if err == nil {
+			return transport.NewInvalidOption("api key hash already exists")
+		}
+		if !errors.Is(err, badger.ErrKeyNotFound) {
+			return errors.Errorf("during Get(): %w", err)
+		}
+
+		var buf bytes.Buffer
+		if err := gob.NewEncoder(&buf).Encode(key); err != nil {
+			return errors.Errorf("during gob.Encode(): %w", err)
+		}
+
+		if err := txn.Set([]byte("apikey:"+key.ID), buf.Bytes()); err != nil {
+			return errors.Errorf("during Set(): %w", err)
+		}
+
+		// Set hash index
+		if err := txn.Set([]byte("apikey-hash:"+key.KeyHash), []byte(key.ID)); err != nil {
+			return errors.Errorf("during Set(): %w", err)
+		}
+
+		// Set user index (append key ID to list)
+		userKeyList := []byte("apikey-user:" + key.UserID)
+		existingIDs, _ := b.getUserKeyIDs(txn, key.UserID)
+		existingIDs = append(existingIDs, key.ID)
+
+		var listBuf bytes.Buffer
+		if err := gob.NewEncoder(&listBuf).Encode(existingIDs); err != nil {
+			return errors.Errorf("during gob.Encode(): %w", err)
+		}
+		if err := txn.Set(userKeyList, listBuf.Bytes()); err != nil {
+			return errors.Errorf("during Set(): %w", err)
+		}
+
+		return nil
+	})
+}
+
+func (b *BadgerAPIKeys) getUserKeyIDs(txn *badger.Txn, userID string) ([]string, error) {
+	kvItem, err := txn.Get([]byte("apikey-user:" + userID))
+	if err != nil {
+		if errors.Is(err, badger.ErrKeyNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var v []byte
+	v, err = kvItem.ValueCopy(v)
+	if err != nil {
+		return nil, err
+	}
+
+	var ids []string
+	if err := gob.NewDecoder(bytes.NewReader(v)).Decode(&ids); err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
+func (b *BadgerAPIKeys) List(_ context.Context, keys *[]types.APIKey, opts types.ListOptions) error {
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.View(func(txn *badger.Txn) error {
+		var count int
+		iter := txn.NewIterator(badger.DefaultIteratorOptions)
+		defer iter.Close()
+
+		prefix := []byte("apikey:")
+
+		if opts.Pivot != nil {
+			iter.Seek([]byte("apikey:" + string(opts.Pivot)))
+		} else {
+			iter.Seek(prefix)
+		}
+
+		for ; iter.ValidForPrefix(prefix); iter.Next() {
+			key := iter.Item().Key()
+			// Skip index keys
+			if bytes.HasPrefix(key, []byte("apikey-hash:")) || bytes.HasPrefix(key, []byte("apikey-user:")) {
+				continue
+			}
+
+			var v []byte
+			v, err := iter.Item().ValueCopy(v)
+			if err != nil {
+				return errors.Errorf("during ValueCopy(): %w", err)
+			}
+
+			var apiKey types.APIKey
+			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(&apiKey); err != nil {
+				return errors.Errorf("during Decode(): %w", err)
+			}
+			*keys = append(*keys, apiKey)
+			count++
+
+			if count >= opts.Limit {
+				return nil
+			}
+		}
+		return nil
+	})
+}
+
+func (b *BadgerAPIKeys) ListByUser(_ context.Context, userID string, keys *[]types.APIKey, opts types.ListOptions) error {
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.View(func(txn *badger.Txn) error {
+		ids, err := b.getUserKeyIDs(txn, userID)
+		if err != nil {
+			return err
+		}
+		if ids == nil {
+			return nil
+		}
+
+		var count int
+		var pastPivot bool
+
+		if opts.Pivot == nil {
+			pastPivot = true
+		}
+
+		for _, id := range ids {
+			if count >= opts.Limit {
+				return nil
+			}
+
+			if !pastPivot {
+				if id == string(opts.Pivot) {
+					pastPivot = true
+				}
+				continue
+			}
+
+			kvItem, err := txn.Get([]byte("apikey:" + id))
+			if err != nil {
+				continue
+			}
+
+			var v []byte
+			v, err = kvItem.ValueCopy(v)
+			if err != nil {
+				return errors.Errorf("during ValueCopy(): %w", err)
+			}
+
+			var apiKey types.APIKey
+			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(&apiKey); err != nil {
+				return errors.Errorf("during Decode(): %w", err)
+			}
+			*keys = append(*keys, apiKey)
+			count++
+		}
+		return nil
+	})
+}
+
+func (b *BadgerAPIKeys) Delete(_ context.Context, id string) error {
+	if strings.TrimSpace(id) == "" {
+		return nil
+	}
+
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.Update(func(txn *badger.Txn) error {
+		// Get the key first for cleanup
+		kvItem, err := txn.Get([]byte("apikey:" + id))
+		if err != nil {
+			if errors.Is(err, badger.ErrKeyNotFound) {
+				return nil
+			}
+			return errors.Errorf("during Get(): %w", err)
+		}
+
+		var v []byte
+		v, err = kvItem.ValueCopy(v)
+		if err != nil {
+			return errors.Errorf("during ValueCopy(): %w", err)
+		}
+
+		var key types.APIKey
+		if err := gob.NewDecoder(bytes.NewReader(v)).Decode(&key); err != nil {
+			return errors.Errorf("during Decode(): %w", err)
+		}
+
+		// Delete hash index
+		if err := txn.Delete([]byte("apikey-hash:" + key.KeyHash)); err != nil {
+			return errors.Errorf("during Delete(): %w", err)
+		}
+
+		// Update user index
+		ids, _ := b.getUserKeyIDs(txn, key.UserID)
+		newIDs := make([]string, 0, len(ids))
+		for _, existingID := range ids {
+			if existingID != id {
+				newIDs = append(newIDs, existingID)
+			}
+		}
+		if len(newIDs) > 0 {
+			var listBuf bytes.Buffer
+			if err := gob.NewEncoder(&listBuf).Encode(newIDs); err != nil {
+				return errors.Errorf("during gob.Encode(): %w", err)
+			}
+			if err := txn.Set([]byte("apikey-user:"+key.UserID), listBuf.Bytes()); err != nil {
+				return errors.Errorf("during Set(): %w", err)
+			}
+		} else {
+			_ = txn.Delete([]byte("apikey-user:" + key.UserID))
+		}
+
+		// Delete key
+		if err := txn.Delete([]byte("apikey:" + id)); err != nil {
+			return errors.Errorf("during Delete(): %w", err)
+		}
+		return nil
+	})
+}
+
+func (b *BadgerAPIKeys) DeleteByUser(_ context.Context, userID string) error {
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.Update(func(txn *badger.Txn) error {
+		ids, _ := b.getUserKeyIDs(txn, userID)
+		if ids == nil {
+			return nil
+		}
+
+		for _, id := range ids {
+			// Get the key for hash cleanup
+			kvItem, err := txn.Get([]byte("apikey:" + id))
+			if err != nil {
+				continue
+			}
+
+			var v []byte
+			v, err = kvItem.ValueCopy(v)
+			if err != nil {
+				continue
+			}
+
+			var key types.APIKey
+			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(&key); err != nil {
+				continue
+			}
+
+			// Delete hash index
+			_ = txn.Delete([]byte("apikey-hash:" + key.KeyHash))
+			// Delete key
+			_ = txn.Delete([]byte("apikey:" + id))
+		}
+
+		// Delete user index
+		_ = txn.Delete([]byte("apikey-user:" + userID))
+		return nil
+	})
+}
+
+func (b *BadgerAPIKeys) UpdateLastUsed(_ context.Context, id string, lastUsed clock.Time) error {
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.Update(func(txn *badger.Txn) error {
+		kvItem, err := txn.Get([]byte("apikey:" + id))
+		if err != nil {
+			if errors.Is(err, badger.ErrKeyNotFound) {
+				return types.ErrAPIKeyNotExist
+			}
+			return errors.Errorf("during Get(): %w", err)
+		}
+
+		var v []byte
+		v, err = kvItem.ValueCopy(v)
+		if err != nil {
+			return errors.Errorf("during ValueCopy(): %w", err)
+		}
+
+		var key types.APIKey
+		if err := gob.NewDecoder(bytes.NewReader(v)).Decode(&key); err != nil {
+			return errors.Errorf("during Decode(): %w", err)
+		}
+
+		key.LastUsedAt = &lastUsed
+
+		var buf bytes.Buffer
+		if err := gob.NewEncoder(&buf).Encode(key); err != nil {
+			return errors.Errorf("during gob.Encode(): %w", err)
+		}
+
+		if err := txn.Set([]byte("apikey:"+id), buf.Bytes()); err != nil {
+			return errors.Errorf("during Set(): %w", err)
+		}
+		return nil
+	})
+}
+
+func (b *BadgerAPIKeys) Close(_ context.Context) error {
+	if b.db == nil {
+		return nil
+	}
+	err := b.db.Close()
+	b.db = nil
+	return err
+}

@@ -162,3 +162,56 @@ func (s *Service) validateNamespaceProto(in *proto.NamespaceInfo, out *types.Nam
 	out.Name = in.Name
 	return nil
 }
+
+func (s *Service) validateUserCreateProto(in *proto.UserCreateRequest, out *types.User) error {
+	const maxUsernameLength = 128
+	const maxEmailLength = 256
+	const maxExternalIDLength = 256
+
+	if len(in.Username) > maxUsernameLength {
+		return transport.NewInvalidOption("username is invalid; cannot be greater than '%d' characters", maxUsernameLength)
+	}
+
+	if in.Username == "" {
+		return transport.NewInvalidOption("username is invalid; cannot be empty")
+	}
+
+	if len(in.Email) > maxEmailLength {
+		return transport.NewInvalidOption("email is invalid; cannot be greater than '%d' characters", maxEmailLength)
+	}
+
+	if len(in.ExternalId) > maxExternalIDLength {
+		return transport.NewInvalidOption("external_id is invalid; cannot be greater than '%d' characters", maxExternalIDLength)
+	}
+
+	out.ExternalID = in.ExternalId
+	out.Username = in.Username
+	out.Email = in.Email
+	return nil
+}
+
+func (s *Service) validateAPIKeyCreateProto(in *proto.APIKeyCreateRequest, out *types.APIKey) error {
+	const maxNameLength = 128
+
+	if in.UserId == "" {
+		return transport.NewInvalidOption("user_id is invalid; cannot be empty")
+	}
+
+	if len(in.Name) > maxNameLength {
+		return transport.NewInvalidOption("name is invalid; cannot be greater than '%d' characters", maxNameLength)
+	}
+
+	out.UserID = in.UserId
+	out.Name = in.Name
+
+	if in.NamespaceScope != "" {
+		out.NamespaceScope = &in.NamespaceScope
+	}
+
+	if in.ExpiresAt != nil && in.ExpiresAt.IsValid() {
+		expiresAt := clock.Time(in.ExpiresAt.AsTime())
+		out.ExpiresAt = &expiresAt
+	}
+
+	return nil
+}

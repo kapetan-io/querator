@@ -145,6 +145,10 @@ type Config struct {
 	Queues Queues
 	// Namespaces where metadata about the namespaces is stored
 	Namespaces Namespaces
+	// Users where user data is stored
+	Users Users
+	// APIKeys where API key data is stored
+	APIKeys APIKeys
 	// The PartitionStorage configured for partitions to utilize
 	PartitionStorage []PartitionStorage
 }

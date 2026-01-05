@@ -512,3 +512,148 @@ func (c *Client) NamespacesDelete(ctx context.Context, req *pb.NamespacesDeleteR
 	var res v1.Reply
 	return c.client.Do(r, &res)
 }
+
+// -------------------------------------------------
+// User Management API
+// -------------------------------------------------
+
+func (c *Client) UsersCreate(ctx context.Context, req *pb.UserCreateRequest,
+	res *pb.UserCreateResponse) error {
+	payload, err := proto.Marshal(req)
+	if err != nil {
+		return duh.NewClientError("while marshaling request payload: %w", err, nil)
+	}
+
+	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("%s%s", c.conf.Endpoint, transport.RPCUsersCreate), bytes.NewReader(payload))
+	if err != nil {
+		return duh.NewClientError("", err, nil)
+	}
+
+	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	return c.client.Do(r, res)
+}
+
+func (c *Client) UsersList(ctx context.Context, res *pb.UsersListResponse, opts *ListOptions) error {
+	var req pb.UsersListRequest
+	if opts != nil {
+		req.Limit = int32(opts.Limit)
+		req.Pivot = opts.Pivot
+	}
+
+	payload, err := proto.Marshal(&req)
+	if err != nil {
+		return duh.NewClientError("while marshaling request payload: %w", err, nil)
+	}
+
+	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("%s%s", c.conf.Endpoint, transport.RPCUsersList), bytes.NewReader(payload))
+	if err != nil {
+		return duh.NewClientError("", err, nil)
+	}
+
+	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	return c.client.Do(r, res)
+}
+
+func (c *Client) UsersDelete(ctx context.Context, req *pb.UsersDeleteRequest) error {
+	payload, err := proto.Marshal(req)
+	if err != nil {
+		return duh.NewClientError("while marshaling request payload: %w", err, nil)
+	}
+
+	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("%s%s", c.conf.Endpoint, transport.RPCUsersDelete), bytes.NewReader(payload))
+	if err != nil {
+		return duh.NewClientError("", err, nil)
+	}
+
+	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	var res v1.Reply
+	return c.client.Do(r, &res)
+}
+
+// -------------------------------------------------
+// API Key Management API
+// -------------------------------------------------
+
+func (c *Client) APIKeysCreate(ctx context.Context, req *pb.APIKeyCreateRequest,
+	res *pb.APIKeyCreateResponse) error {
+	payload, err := proto.Marshal(req)
+	if err != nil {
+		return duh.NewClientError("while marshaling request payload: %w", err, nil)
+	}
+
+	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("%s%s", c.conf.Endpoint, transport.RPCAPIKeysCreate), bytes.NewReader(payload))
+	if err != nil {
+		return duh.NewClientError("", err, nil)
+	}
+
+	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	return c.client.Do(r, res)
+}
+
+func (c *Client) APIKeysList(ctx context.Context, res *pb.APIKeysListResponse, opts *ListOptions) error {
+	var req pb.APIKeysListRequest
+	if opts != nil {
+		req.Limit = int32(opts.Limit)
+		req.Pivot = opts.Pivot
+	}
+
+	payload, err := proto.Marshal(&req)
+	if err != nil {
+		return duh.NewClientError("while marshaling request payload: %w", err, nil)
+	}
+
+	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("%s%s", c.conf.Endpoint, transport.RPCAPIKeysList), bytes.NewReader(payload))
+	if err != nil {
+		return duh.NewClientError("", err, nil)
+	}
+
+	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	return c.client.Do(r, res)
+}
+
+func (c *Client) APIKeysListByUser(ctx context.Context, userID string, res *pb.APIKeysListResponse,
+	opts *ListOptions) error {
+	req := pb.APIKeysListRequest{
+		UserId: userID,
+	}
+	if opts != nil {
+		req.Limit = int32(opts.Limit)
+		req.Pivot = opts.Pivot
+	}
+
+	payload, err := proto.Marshal(&req)
+	if err != nil {
+		return duh.NewClientError("while marshaling request payload: %w", err, nil)
+	}
+
+	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("%s%s", c.conf.Endpoint, transport.RPCAPIKeysList), bytes.NewReader(payload))
+	if err != nil {
+		return duh.NewClientError("", err, nil)
+	}
+
+	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	return c.client.Do(r, res)
+}
+
+func (c *Client) APIKeysDelete(ctx context.Context, req *pb.APIKeysDeleteRequest) error {
+	payload, err := proto.Marshal(req)
+	if err != nil {
+		return duh.NewClientError("while marshaling request payload: %w", err, nil)
+	}
+
+	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("%s%s", c.conf.Endpoint, transport.RPCAPIKeysDelete), bytes.NewReader(payload))
+	if err != nil {
+		return duh.NewClientError("", err, nil)
+	}
+
+	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	var res v1.Reply
+	return c.client.Do(r, &res)
+}

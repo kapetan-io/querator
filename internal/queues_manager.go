@@ -437,6 +437,20 @@ func (qm *QueuesManager) Shutdown(ctx context.Context) error {
 				return
 			}
 		}
+		if qm.conf.StorageConfig.Users != nil {
+			qm.log.LogAttrs(ctx, LevelDebugAll, "close users store")
+			if err := qm.conf.StorageConfig.Users.Close(ctx); err != nil {
+				wait <- err
+				return
+			}
+		}
+		if qm.conf.StorageConfig.APIKeys != nil {
+			qm.log.LogAttrs(ctx, LevelDebugAll, "close apikeys store")
+			if err := qm.conf.StorageConfig.APIKeys.Close(ctx); err != nil {
+				wait <- err
+				return
+			}
+		}
 		close(wait)
 	}()
 

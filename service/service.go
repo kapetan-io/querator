@@ -23,6 +23,7 @@ import (
 
 	"github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/internal"
+	"github.com/kapetan-io/querator/internal/auth"
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/proto"
@@ -603,6 +604,143 @@ func (s *Service) NamespacesList(ctx context.Context, req *proto.NamespacesListR
 func (s *Service) NamespacesDelete(ctx context.Context, req *proto.NamespacesDeleteRequest) error {
 	// TODO: Check if namespace has queues and return ErrNamespaceHasQueues if so
 	if err := s.conf.StorageConfig.Namespaces.Delete(ctx, req.Name); err != nil {
+		return err
+	}
+	return nil
+}
+
+// -------------------------------------------------
+// User Management API
+// -------------------------------------------------
+
+func (s *Service) UsersCreate(ctx context.Context, req *proto.UserCreateRequest,
+	resp *proto.UserCreateResponse) error {
+	var user types.User
+
+	if err := s.validateUserCreateProto(req, &user); err != nil {
+		return err
+	}
+
+	user.ID = internal.NewUID()
+	user.CreatedAt = s.conf.Clock.Now().UTC()
+	user.UpdatedAt = user.CreatedAt
+
+	if err := s.conf.StorageConfig.Users.Add(ctx, user); err != nil {
+		return err
+	}
+
+	resp.Id = user.ID
+	return nil
+}
+
+func (s *Service) UsersList(ctx context.Context, req *proto.UsersListRequest,
+	resp *proto.UsersListResponse) error {
+
+	if req.Limit == 0 {
+		req.Limit = DefaultListLimit
+	}
+
+	users := make([]types.User, 0, allocInt32(req.Limit))
+	if err := s.conf.StorageConfig.Users.List(ctx, &users, types.ListOptions{
+		Pivot: types.ToItemID(req.Pivot),
+		Limit: int(req.Limit),
+	}); err != nil {
+		return err
+	}
+
+	for _, user := range users {
+		resp.Items = append(resp.Items, user.ToProto(new(proto.User)))
+	}
+	return nil
+}
+
+func (s *Service) UsersDelete(ctx context.Context, req *proto.UsersDeleteRequest) error {
+	// Delete all API keys for this user first (CASCADE delete)
+	if err := s.conf.StorageConfig.APIKeys.DeleteByUser(ctx, req.Id); err != nil {
+		return err
+	}
+
+	if err := s.conf.StorageConfig.Users.Delete(ctx, req.Id); err != nil {
+		return err
+	}
+	return nil
+}
+
+// -------------------------------------------------
+// API Key Management API
+// -------------------------------------------------
+
+func (s *Service) APIKeysCreate(ctx context.Context, req *proto.APIKeyCreateRequest,
+	resp *proto.APIKeyCreateResponse) error {
+	var key types.APIKey
+
+	if err := s.validateAPIKeyCreateProto(req, &key); err != nil {
+		return err
+	}
+
+	// Verify the user exists
+	var user types.User
+	if err := s.conf.StorageConfig.Users.Get(ctx, key.UserID, &user); err != nil {
+		return err
+	}
+
+	// Generate the API key
+	envTag := req.EnvTag
+	if envTag == "" {
+		envTag = "qtr"
+	}
+
+	generated, err := auth.GenerateAPIKey(envTag)
+	if err != nil {
+		return transport.NewRequestFailed("failed to generate api key: %s", err.Error())
+	}
+
+	key.ID = internal.NewUID()
+	key.KeyHash = generated.KeyHash
+	key.KeyPrefix = generated.Prefix
+	key.CreatedAt = s.conf.Clock.Now().UTC()
+
+	if err := s.conf.StorageConfig.APIKeys.Add(ctx, key); err != nil {
+		return err
+	}
+
+	resp.Prefix = generated.Prefix
+	resp.Key = generated.Key
+	resp.Id = key.ID
+	return nil
+}
+
+func (s *Service) APIKeysList(ctx context.Context, req *proto.APIKeysListRequest,
+	resp *proto.APIKeysListResponse) error {
+
+	if req.Limit == 0 {
+		req.Limit = DefaultListLimit
+	}
+
+	keys := make([]types.APIKey, 0, allocInt32(req.Limit))
+	opts := types.ListOptions{
+		Pivot: types.ToItemID(req.Pivot),
+		Limit: int(req.Limit),
+	}
+
+	var err error
+	if req.UserId != "" {
+		err = s.conf.StorageConfig.APIKeys.ListByUser(ctx, req.UserId, &keys, opts)
+	} else {
+		err = s.conf.StorageConfig.APIKeys.List(ctx, &keys, opts)
+	}
+	if err != nil {
+		return err
+	}
+
+	for _, key := range keys {
+		resp.Items = append(resp.Items, key.ToProto(new(proto.APIKeyMetadata)))
+	}
+	return nil
+}
+
+func (s *Service) APIKeysDelete(ctx context.Context, req *proto.APIKeysDeleteRequest) error {
+	if err := s.conf.StorageConfig.APIKeys.Delete(ctx, req.Id); err != nil {
 		return err
 	}
 	return nil

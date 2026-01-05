@@ -77,6 +77,14 @@ const (
 	RPCNamespacesCreate = "/v1/namespaces.create"
 	RPCNamespacesList   = "/v1/namespaces.list"
 	RPCNamespacesDelete = "/v1/namespaces.delete"
+
+	RPCUsersCreate = "/v1/users.create"
+	RPCUsersList   = "/v1/users.list"
+	RPCUsersDelete = "/v1/users.delete"
+
+	RPCAPIKeysCreate = "/v1/apikeys.create"
+	RPCAPIKeysList   = "/v1/apikeys.list"
+	RPCAPIKeysDelete = "/v1/apikeys.delete"
 )
 
 type HTTPHandler struct {
@@ -186,6 +194,24 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	case RPCNamespacesDelete:
 		h.NamespacesDelete(ctx, w, r)
+		return
+	case RPCUsersCreate:
+		h.UsersCreate(ctx, w, r)
+		return
+	case RPCUsersList:
+		h.UsersList(ctx, w, r)
+		return
+	case RPCUsersDelete:
+		h.UsersDelete(ctx, w, r)
+		return
+	case RPCAPIKeysCreate:
+		h.APIKeysCreate(ctx, w, r)
+		return
+	case RPCAPIKeysList:
+		h.APIKeysList(ctx, w, r)
+		return
+	case RPCAPIKeysDelete:
+		h.APIKeysDelete(ctx, w, r)
 		return
 	}
 	duh.ReplyWithCode(w, r, duh.CodeNotImplemented, nil, "no such method; "+r.URL.Path)
@@ -516,6 +542,102 @@ func (h *HTTPHandler) NamespacesDelete(ctx context.Context, w http.ResponseWrite
 	}
 
 	if err := h.service.NamespacesDelete(ctx, &req); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
+}
+
+// -------------------------------------------------
+// User Management API
+// -------------------------------------------------
+
+func (h *HTTPHandler) UsersCreate(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.UserCreateRequest
+	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	var resp pb.UserCreateResponse
+	if err := h.service.UsersCreate(ctx, &req, &resp); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &resp)
+}
+
+func (h *HTTPHandler) UsersList(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.UsersListRequest
+	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	var resp pb.UsersListResponse
+	if err := h.service.UsersList(ctx, &req, &resp); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &resp)
+}
+
+func (h *HTTPHandler) UsersDelete(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.UsersDeleteRequest
+	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	if err := h.service.UsersDelete(ctx, &req); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
+}
+
+// -------------------------------------------------
+// API Key Management API
+// -------------------------------------------------
+
+func (h *HTTPHandler) APIKeysCreate(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.APIKeyCreateRequest
+	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	var resp pb.APIKeyCreateResponse
+	if err := h.service.APIKeysCreate(ctx, &req, &resp); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &resp)
+}
+
+func (h *HTTPHandler) APIKeysList(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.APIKeysListRequest
+	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	var resp pb.APIKeysListResponse
+	if err := h.service.APIKeysList(ctx, &req, &resp); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &resp)
+}
+
+func (h *HTTPHandler) APIKeysDelete(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.APIKeysDeleteRequest
+	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	if err := h.service.APIKeysDelete(ctx, &req); err != nil {
 		h.ReplyError(w, r, err)
 		return
 	}

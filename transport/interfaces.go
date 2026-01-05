@@ -41,11 +41,27 @@ type NamespaceAdmin interface {
 	NamespacesDelete(context.Context, *pb.NamespacesDeleteRequest) error
 }
 
+// UsersAdmin handles user lifecycle management
+type UsersAdmin interface {
+	UsersCreate(context.Context, *pb.UserCreateRequest, *pb.UserCreateResponse) error
+	UsersList(context.Context, *pb.UsersListRequest, *pb.UsersListResponse) error
+	UsersDelete(context.Context, *pb.UsersDeleteRequest) error
+}
+
+// APIKeysAdmin handles API key lifecycle management
+type APIKeysAdmin interface {
+	APIKeysCreate(context.Context, *pb.APIKeyCreateRequest, *pb.APIKeyCreateResponse) error
+	APIKeysList(context.Context, *pb.APIKeysListRequest, *pb.APIKeysListResponse) error
+	APIKeysDelete(context.Context, *pb.APIKeysDeleteRequest) error
+}
+
 // Service combines all interfaces for backward compatibility
 type Service interface {
 	QueueOps
 	QueueAdmin
 	StorageInspector
 	NamespaceAdmin
+	UsersAdmin
+	APIKeysAdmin
 	Health(context.Context) (*HealthResponse, error)
 }

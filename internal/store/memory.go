@@ -888,3 +888,404 @@ func (s *MemoryNamespaces) findNamespace(name string) (int, bool) {
 	}
 	return nearestIdx, false
 }
+
+// ---------------------------------------------
+// Users Implementation
+// ---------------------------------------------
+
+type MemoryUsers struct {
+	byUsername map[string]string // username -> ID index
+	users      map[string]types.User
+	mu         sync.RWMutex
+	log        *slog.Logger
+}
+
+var _ Users = &MemoryUsers{}
+
+func NewMemoryUsers(log *slog.Logger) *MemoryUsers {
+	set.Default(&log, slog.Default())
+	return &MemoryUsers{
+		byUsername: make(map[string]string),
+		users:      make(map[string]types.User),
+		log:        log,
+	}
+}
+
+func (m *MemoryUsers) Get(_ context.Context, id string, user *types.User) error {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if strings.TrimSpace(id) == "" {
+		return types.ErrUserNotExist
+	}
+
+	u, ok := m.users[id]
+	if !ok {
+		return types.ErrUserNotExist
+	}
+	*user = u
+	return nil
+}
+
+func (m *MemoryUsers) GetByUsername(_ context.Context, username string, user *types.User) error {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if strings.TrimSpace(username) == "" {
+		return types.ErrUserNotExist
+	}
+
+	id, ok := m.byUsername[username]
+	if !ok {
+		return types.ErrUserNotExist
+	}
+
+	u, ok := m.users[id]
+	if !ok {
+		return types.ErrUserNotExist
+	}
+	*user = u
+	return nil
+}
+
+func (m *MemoryUsers) Add(_ context.Context, user types.User) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if strings.TrimSpace(user.ID) == "" {
+		return transport.NewInvalidOption("user id is invalid; cannot be empty")
+	}
+
+	if strings.TrimSpace(user.Username) == "" {
+		return transport.NewInvalidOption("username is invalid; cannot be empty")
+	}
+
+	if _, ok := m.users[user.ID]; ok {
+		return types.ErrUserAlreadyExists
+	}
+
+	if _, ok := m.byUsername[user.Username]; ok {
+		return types.ErrUsernameAlreadyTaken
+	}
+
+	m.users[user.ID] = user
+	m.byUsername[user.Username] = user.ID
+	return nil
+}
+
+func (m *MemoryUsers) List(_ context.Context, users *[]types.User, opts types.ListOptions) error {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var count int
+	var pastPivot bool
+
+	if opts.Pivot == nil {
+		pastPivot = true
+	}
+
+	// Collect and sort IDs for deterministic ordering
+	ids := make([]string, 0, len(m.users))
+	for id := range m.users {
+		ids = append(ids, id)
+	}
+	// Sort by ID
+	for i := 0; i < len(ids)-1; i++ {
+		for j := i + 1; j < len(ids); j++ {
+			if strings.Compare(ids[i], ids[j]) > 0 {
+				ids[i], ids[j] = ids[j], ids[i]
+			}
+		}
+	}
+
+	for _, id := range ids {
+		if count >= opts.Limit {
+			return nil
+		}
+
+		if !pastPivot {
+			if id == string(opts.Pivot) {
+				pastPivot = true
+			}
+			continue
+		}
+
+		*users = append(*users, m.users[id])
+		count++
+	}
+	return nil
+}
+
+func (m *MemoryUsers) Delete(_ context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if strings.TrimSpace(id) == "" {
+		return types.ErrUserNotExist
+	}
+
+	user, ok := m.users[id]
+	if !ok {
+		return types.ErrUserNotExist
+	}
+
+	delete(m.byUsername, user.Username)
+	delete(m.users, id)
+	return nil
+}
+
+func (m *MemoryUsers) Close(_ context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.users = nil
+	m.byUsername = nil
+	return nil
+}
+
+// ---------------------------------------------
+// API Keys Implementation
+// ---------------------------------------------
+
+type MemoryAPIKeys struct {
+	byHash map[string]string   // keyHash -> ID index
+	byUser map[string][]string // userID -> []ID index
+	keys   map[string]types.APIKey
+	mu     sync.RWMutex
+	log    *slog.Logger
+}
+
+var _ APIKeys = &MemoryAPIKeys{}
+
+func NewMemoryAPIKeys(log *slog.Logger) *MemoryAPIKeys {
+	set.Default(&log, slog.Default())
+	return &MemoryAPIKeys{
+		byHash: make(map[string]string),
+		byUser: make(map[string][]string),
+		keys:   make(map[string]types.APIKey),
+		log:    log,
+	}
+}
+
+func (m *MemoryAPIKeys) Get(_ context.Context, id string, key *types.APIKey) error {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if strings.TrimSpace(id) == "" {
+		return types.ErrAPIKeyNotExist
+	}
+
+	k, ok := m.keys[id]
+	if !ok {
+		return types.ErrAPIKeyNotExist
+	}
+	*key = k
+	return nil
+}
+
+func (m *MemoryAPIKeys) GetByHash(_ context.Context, hash string, key *types.APIKey) error {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if strings.TrimSpace(hash) == "" {
+		return types.ErrAPIKeyNotExist
+	}
+
+	id, ok := m.byHash[hash]
+	if !ok {
+		return types.ErrAPIKeyNotExist
+	}
+
+	k, ok := m.keys[id]
+	if !ok {
+		return types.ErrAPIKeyNotExist
+	}
+	*key = k
+	return nil
+}
+
+func (m *MemoryAPIKeys) Add(_ context.Context, key types.APIKey) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if strings.TrimSpace(key.ID) == "" {
+		return transport.NewInvalidOption("api key id is invalid; cannot be empty")
+	}
+
+	if strings.TrimSpace(key.KeyHash) == "" {
+		return transport.NewInvalidOption("api key hash is invalid; cannot be empty")
+	}
+
+	if _, ok := m.keys[key.ID]; ok {
+		return transport.NewInvalidOption("api key already exists")
+	}
+
+	if _, ok := m.byHash[key.KeyHash]; ok {
+		return transport.NewInvalidOption("api key hash already exists")
+	}
+
+	m.keys[key.ID] = key
+	m.byHash[key.KeyHash] = key.ID
+	m.byUser[key.UserID] = append(m.byUser[key.UserID], key.ID)
+	return nil
+}
+
+func (m *MemoryAPIKeys) List(_ context.Context, keys *[]types.APIKey, opts types.ListOptions) error {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var count int
+	var pastPivot bool
+
+	if opts.Pivot == nil {
+		pastPivot = true
+	}
+
+	// Collect and sort IDs for deterministic ordering
+	ids := make([]string, 0, len(m.keys))
+	for id := range m.keys {
+		ids = append(ids, id)
+	}
+	// Sort by ID
+	for i := 0; i < len(ids)-1; i++ {
+		for j := i + 1; j < len(ids); j++ {
+			if strings.Compare(ids[i], ids[j]) > 0 {
+				ids[i], ids[j] = ids[j], ids[i]
+			}
+		}
+	}
+
+	for _, id := range ids {
+		if count >= opts.Limit {
+			return nil
+		}
+
+		if !pastPivot {
+			if id == string(opts.Pivot) {
+				pastPivot = true
+			}
+			continue
+		}
+
+		*keys = append(*keys, m.keys[id])
+		count++
+	}
+	return nil
+}
+
+func (m *MemoryAPIKeys) ListByUser(_ context.Context, userID string, keys *[]types.APIKey, opts types.ListOptions) error {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	ids, ok := m.byUser[userID]
+	if !ok {
+		return nil
+	}
+
+	var count int
+	var pastPivot bool
+
+	if opts.Pivot == nil {
+		pastPivot = true
+	}
+
+	// Sort IDs for deterministic ordering
+	sortedIDs := make([]string, len(ids))
+	copy(sortedIDs, ids)
+	for i := 0; i < len(sortedIDs)-1; i++ {
+		for j := i + 1; j < len(sortedIDs); j++ {
+			if strings.Compare(sortedIDs[i], sortedIDs[j]) > 0 {
+				sortedIDs[i], sortedIDs[j] = sortedIDs[j], sortedIDs[i]
+			}
+		}
+	}
+
+	for _, id := range sortedIDs {
+		if count >= opts.Limit {
+			return nil
+		}
+
+		if !pastPivot {
+			if id == string(opts.Pivot) {
+				pastPivot = true
+			}
+			continue
+		}
+
+		if k, ok := m.keys[id]; ok {
+			*keys = append(*keys, k)
+			count++
+		}
+	}
+	return nil
+}
+
+func (m *MemoryAPIKeys) Delete(_ context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if strings.TrimSpace(id) == "" {
+		return nil
+	}
+
+	key, ok := m.keys[id]
+	if !ok {
+		return nil
+	}
+
+	delete(m.byHash, key.KeyHash)
+	delete(m.keys, id)
+
+	// Remove from user index
+	userKeys := m.byUser[key.UserID]
+	for i, k := range userKeys {
+		if k == id {
+			m.byUser[key.UserID] = append(userKeys[:i], userKeys[i+1:]...)
+			break
+		}
+	}
+	return nil
+}
+
+func (m *MemoryAPIKeys) DeleteByUser(_ context.Context, userID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	ids, ok := m.byUser[userID]
+	if !ok {
+		return nil
+	}
+
+	for _, id := range ids {
+		if key, ok := m.keys[id]; ok {
+			delete(m.byHash, key.KeyHash)
+			delete(m.keys, id)
+		}
+	}
+	delete(m.byUser, userID)
+	return nil
+}
+
+func (m *MemoryAPIKeys) UpdateLastUsed(_ context.Context, id string, lastUsed clock.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	key, ok := m.keys[id]
+	if !ok {
+		return types.ErrAPIKeyNotExist
+	}
+
+	key.LastUsedAt = &lastUsed
+	m.keys[id] = key
+	return nil
+}
+
+func (m *MemoryAPIKeys) Close(_ context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.keys = nil
+	m.byHash = nil
+	m.byUser = nil
+	return nil
+}

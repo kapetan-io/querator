@@ -215,3 +215,57 @@ func (s *Service) validateAPIKeyCreateProto(in *proto.APIKeyCreateRequest, out *
 
 	return nil
 }
+
+func (s *Service) validateRoleCreateProto(in *proto.RoleCreateRequest, out *types.Role) error {
+	const maxNameLength = 128
+
+	if in.Namespace == "" {
+		return transport.NewInvalidOption("namespace is invalid; cannot be empty")
+	}
+
+	if in.Name == "" {
+		return transport.NewInvalidOption("name is invalid; cannot be empty")
+	}
+
+	if len(in.Name) > maxNameLength {
+		return transport.NewInvalidOption("name is invalid; cannot be greater than '%d' characters", maxNameLength)
+	}
+
+	out.Namespace = in.Namespace
+	out.Name = in.Name
+	out.Permissions = in.Permissions
+	return nil
+}
+
+func (s *Service) validateRoleUpdateProto(in *proto.RoleUpdateRequest, out *types.Role) error {
+	if in.Namespace == "" {
+		return transport.NewInvalidOption("namespace is invalid; cannot be empty")
+	}
+
+	if in.Name == "" {
+		return transport.NewInvalidOption("name is invalid; cannot be empty")
+	}
+
+	out.Namespace = in.Namespace
+	out.Name = in.Name
+	out.Permissions = in.Permissions
+	return nil
+}
+
+func (s *Service) validateRoleBindingCreateProto(in *proto.RoleBindingCreateRequest, out *types.RoleBinding) error {
+	if in.Namespace == "" {
+		return transport.NewInvalidOption("namespace is invalid; cannot be empty")
+	}
+
+	if in.RoleName == "" {
+		return transport.NewInvalidOption("role_name is invalid; cannot be empty")
+	}
+
+	if in.UserId == "" {
+		return transport.NewInvalidOption("user_id is invalid; cannot be empty")
+	}
+
+	out.Namespace = in.Namespace
+	out.UserID = in.UserId
+	return nil
+}

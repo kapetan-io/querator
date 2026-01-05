@@ -29,3 +29,19 @@ var (
 	ErrAuthRequired = transport.NewUnauthorized("authentication required")
 	ErrAccessDenied = transport.NewForbidden("access denied")
 )
+
+// Role errors
+var (
+	ErrRoleNotExist             = transport.NewRequestFailed("role does not exist")
+	ErrRoleAlreadyExists        = transport.NewInvalidOption("role already exists")
+	ErrRoleBindingAlreadyExists = transport.NewInvalidOption("role binding already exists")
+	ErrRoleHasBindings          = transport.NewInvalidOption("role has active bindings; delete bindings first")
+	ErrRoleIsStandard           = transport.NewInvalidOption("cannot modify or delete standard role")
+	ErrRoleBindingNotExist      = transport.NewRequestFailed("role binding does not exist")
+)
+
+// Namespace auth resource errors
+var (
+	ErrNamespaceHasRoles        = transport.NewInvalidOption("namespace has roles; delete roles first")
+	ErrNamespaceHasRoleBindings = transport.NewInvalidOption("namespace has role bindings; delete role bindings first")
+)

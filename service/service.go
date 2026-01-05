@@ -745,3 +745,212 @@ func (s *Service) APIKeysDelete(ctx context.Context, req *proto.APIKeysDeleteReq
 	}
 	return nil
 }
+
+// -------------------------------------------------
+// Role Management API
+// -------------------------------------------------
+
+func (s *Service) RolesCreate(ctx context.Context, req *proto.RoleCreateRequest,
+	resp *proto.RoleCreateResponse) error {
+	var role types.Role
+
+	if err := s.validateRoleCreateProto(req, &role); err != nil {
+		return err
+	}
+
+	// Check if this is a standard role name that cannot be created
+	if auth.IsStandardRole(role.Name) {
+		return types.ErrRoleIsStandard
+	}
+
+	// Validate all permissions
+	for _, perm := range role.Permissions {
+		if !auth.IsValidPermission(perm) {
+			return transport.NewInvalidOption("permission '%s' is invalid", perm)
+		}
+	}
+
+	// Verify the namespace exists
+	var ns types.Namespace
+	if err := s.conf.StorageConfig.Namespaces.Get(ctx, role.Namespace, &ns); err != nil {
+		return err
+	}
+
+	role.ID = internal.NewUID()
+	role.CreatedAt = s.conf.Clock.Now().UTC()
+
+	if err := s.conf.StorageConfig.Roles.Add(ctx, role); err != nil {
+		return err
+	}
+
+	resp.Id = role.ID
+	return nil
+}
+
+func (s *Service) RolesList(ctx context.Context, req *proto.RolesListRequest,
+	resp *proto.RolesListResponse) error {
+
+	if req.Limit == 0 {
+		req.Limit = DefaultListLimit
+	}
+
+	roles := make([]types.Role, 0, allocInt32(req.Limit))
+	if err := s.conf.StorageConfig.Roles.List(ctx, req.Namespace, &roles, types.ListOptions{
+		Pivot: types.ToItemID(req.Pivot),
+		Limit: int(req.Limit),
+	}); err != nil {
+		return err
+	}
+
+	for _, role := range roles {
+		resp.Items = append(resp.Items, role.ToProto(new(proto.Role)))
+	}
+	return nil
+}
+
+func (s *Service) RolesUpdate(ctx context.Context, req *proto.RoleUpdateRequest) error {
+	var role types.Role
+
+	if err := s.validateRoleUpdateProto(req, &role); err != nil {
+		return err
+	}
+
+	// Get the existing role
+	var existing types.Role
+	if err := s.conf.StorageConfig.Roles.Get(ctx, role.Namespace, role.Name, &existing); err != nil {
+		return err
+	}
+
+	// Check if this is a standard role that cannot be updated
+	if auth.IsStandardRole(existing.Name) {
+		return types.ErrRoleIsStandard
+	}
+
+	// Validate all permissions
+	for _, perm := range role.Permissions {
+		if !auth.IsValidPermission(perm) {
+			return transport.NewInvalidOption("permission '%s' is invalid", perm)
+		}
+	}
+
+	role.ID = existing.ID
+	if err := s.conf.StorageConfig.Roles.Update(ctx, role); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Service) RolesDelete(ctx context.Context, req *proto.RolesDeleteRequest) error {
+	// Get the role first to check standard role and get ID
+	var role types.Role
+	if err := s.conf.StorageConfig.Roles.Get(ctx, req.Namespace, req.Name, &role); err != nil {
+		return err
+	}
+
+	// Check if this is a standard role that cannot be deleted
+	if auth.IsStandardRole(role.Name) {
+		return types.ErrRoleIsStandard
+	}
+
+	// Check if role has bindings
+	var bindings []types.RoleBinding
+	if err := s.conf.StorageConfig.RoleBindings.ListByRole(ctx, role.ID, &bindings); err != nil {
+		return err
+	}
+	if len(bindings) > 0 {
+		return types.ErrRoleHasBindings
+	}
+
+	if err := s.conf.StorageConfig.Roles.Delete(ctx, role.ID); err != nil {
+		return err
+	}
+	return nil
+}
+
+// -------------------------------------------------
+// Role Binding Management API
+// -------------------------------------------------
+
+func (s *Service) RoleBindingsCreate(ctx context.Context, req *proto.RoleBindingCreateRequest,
+	resp *proto.RoleBindingCreateResponse) error {
+	var binding types.RoleBinding
+
+	if err := s.validateRoleBindingCreateProto(req, &binding); err != nil {
+		return err
+	}
+
+	// Verify the role exists in the namespace
+	var role types.Role
+	if err := s.conf.StorageConfig.Roles.Get(ctx, req.Namespace, req.RoleName, &role); err != nil {
+		return err
+	}
+
+	// Verify the user exists
+	var user types.User
+	if err := s.conf.StorageConfig.Users.Get(ctx, binding.UserID, &user); err != nil {
+		return err
+	}
+
+	binding.ID = internal.NewUID()
+	binding.RoleID = role.ID
+	binding.CreatedAt = s.conf.Clock.Now().UTC()
+
+	if err := s.conf.StorageConfig.RoleBindings.Add(ctx, binding); err != nil {
+		return err
+	}
+
+	resp.Id = binding.ID
+	return nil
+}
+
+func (s *Service) RoleBindingsList(ctx context.Context, req *proto.RoleBindingsListRequest,
+	resp *proto.RoleBindingsListResponse) error {
+
+	if req.Limit == 0 {
+		req.Limit = DefaultListLimit
+	}
+
+	bindings := make([]types.RoleBinding, 0, allocInt32(req.Limit))
+	if err := s.conf.StorageConfig.RoleBindings.List(ctx, req.Namespace, &bindings, types.ListOptions{
+		Pivot: types.ToItemID(req.Pivot),
+		Limit: int(req.Limit),
+	}); err != nil {
+		return err
+	}
+
+	for _, binding := range bindings {
+		resp.Items = append(resp.Items, binding.ToProto(new(proto.RoleBinding)))
+	}
+	return nil
+}
+
+func (s *Service) RoleBindingsDelete(ctx context.Context, req *proto.RoleBindingDeleteRequest) error {
+	// Get the role first to find the binding
+	var role types.Role
+	if err := s.conf.StorageConfig.Roles.Get(ctx, req.Namespace, req.RoleName, &role); err != nil {
+		return err
+	}
+
+	// Find the binding for this user and role
+	var bindings []types.RoleBinding
+	if err := s.conf.StorageConfig.RoleBindings.ListByRole(ctx, role.ID, &bindings); err != nil {
+		return err
+	}
+
+	var bindingID string
+	for _, b := range bindings {
+		if b.UserID == req.UserId && b.Namespace == req.Namespace {
+			bindingID = b.ID
+			break
+		}
+	}
+
+	if bindingID == "" {
+		return types.ErrRoleBindingNotExist
+	}
+
+	if err := s.conf.StorageConfig.RoleBindings.Delete(ctx, bindingID); err != nil {
+		return err
+	}
+	return nil
+}

@@ -85,6 +85,15 @@ const (
 	RPCAPIKeysCreate = "/v1/apikeys.create"
 	RPCAPIKeysList   = "/v1/apikeys.list"
 	RPCAPIKeysDelete = "/v1/apikeys.delete"
+
+	RPCRolesCreate = "/v1/roles.create"
+	RPCRolesList   = "/v1/roles.list"
+	RPCRolesUpdate = "/v1/roles.update"
+	RPCRolesDelete = "/v1/roles.delete"
+
+	RPCRoleBindingsCreate = "/v1/rolebindings.create"
+	RPCRoleBindingsList   = "/v1/rolebindings.list"
+	RPCRoleBindingsDelete = "/v1/rolebindings.delete"
 )
 
 type HTTPHandler struct {
@@ -212,6 +221,27 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	case RPCAPIKeysDelete:
 		h.APIKeysDelete(ctx, w, r)
+		return
+	case RPCRolesCreate:
+		h.RolesCreate(ctx, w, r)
+		return
+	case RPCRolesList:
+		h.RolesList(ctx, w, r)
+		return
+	case RPCRolesUpdate:
+		h.RolesUpdate(ctx, w, r)
+		return
+	case RPCRolesDelete:
+		h.RolesDelete(ctx, w, r)
+		return
+	case RPCRoleBindingsCreate:
+		h.RoleBindingsCreate(ctx, w, r)
+		return
+	case RPCRoleBindingsList:
+		h.RoleBindingsList(ctx, w, r)
+		return
+	case RPCRoleBindingsDelete:
+		h.RoleBindingsDelete(ctx, w, r)
 		return
 	}
 	duh.ReplyWithCode(w, r, duh.CodeNotImplemented, nil, "no such method; "+r.URL.Path)
@@ -638,6 +668,116 @@ func (h *HTTPHandler) APIKeysDelete(ctx context.Context, w http.ResponseWriter, 
 	}
 
 	if err := h.service.APIKeysDelete(ctx, &req); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
+}
+
+// -------------------------------------------------
+// Role Management API
+// -------------------------------------------------
+
+func (h *HTTPHandler) RolesCreate(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.RoleCreateRequest
+	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	var resp pb.RoleCreateResponse
+	if err := h.service.RolesCreate(ctx, &req, &resp); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &resp)
+}
+
+func (h *HTTPHandler) RolesList(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.RolesListRequest
+	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	var resp pb.RolesListResponse
+	if err := h.service.RolesList(ctx, &req, &resp); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &resp)
+}
+
+func (h *HTTPHandler) RolesUpdate(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.RoleUpdateRequest
+	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	if err := h.service.RolesUpdate(ctx, &req); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
+}
+
+func (h *HTTPHandler) RolesDelete(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.RolesDeleteRequest
+	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	if err := h.service.RolesDelete(ctx, &req); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
+}
+
+// -------------------------------------------------
+// Role Binding Management API
+// -------------------------------------------------
+
+func (h *HTTPHandler) RoleBindingsCreate(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.RoleBindingCreateRequest
+	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	var resp pb.RoleBindingCreateResponse
+	if err := h.service.RoleBindingsCreate(ctx, &req, &resp); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &resp)
+}
+
+func (h *HTTPHandler) RoleBindingsList(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.RoleBindingsListRequest
+	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	var resp pb.RoleBindingsListResponse
+	if err := h.service.RoleBindingsList(ctx, &req, &resp); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &resp)
+}
+
+func (h *HTTPHandler) RoleBindingsDelete(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.RoleBindingDeleteRequest
+	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	if err := h.service.RoleBindingsDelete(ctx, &req); err != nil {
 		h.ReplyError(w, r, err)
 		return
 	}

@@ -1289,3 +1289,421 @@ func (m *MemoryAPIKeys) Close(_ context.Context) error {
 	m.byUser = nil
 	return nil
 }
+
+// ---------------------------------------------
+// Roles Implementation
+// ---------------------------------------------
+
+type MemoryRoles struct {
+	byNamespaceName map[string]string // "namespace:name" -> ID index
+	roles           map[string]types.Role
+	mu              sync.RWMutex
+	log             *slog.Logger
+}
+
+var _ Roles = &MemoryRoles{}
+
+func NewMemoryRoles(log *slog.Logger) *MemoryRoles {
+	set.Default(&log, slog.Default())
+	return &MemoryRoles{
+		byNamespaceName: make(map[string]string),
+		roles:           make(map[string]types.Role),
+		log:             log,
+	}
+}
+
+func (m *MemoryRoles) Get(_ context.Context, namespace, name string, role *types.Role) error {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	key := namespace + ":" + name
+	id, ok := m.byNamespaceName[key]
+	if !ok {
+		return types.ErrRoleNotExist
+	}
+
+	r, ok := m.roles[id]
+	if !ok {
+		return types.ErrRoleNotExist
+	}
+	*role = r
+	return nil
+}
+
+func (m *MemoryRoles) GetByID(_ context.Context, id string, role *types.Role) error {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if strings.TrimSpace(id) == "" {
+		return types.ErrRoleNotExist
+	}
+
+	r, ok := m.roles[id]
+	if !ok {
+		return types.ErrRoleNotExist
+	}
+	*role = r
+	return nil
+}
+
+func (m *MemoryRoles) Add(_ context.Context, role types.Role) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if strings.TrimSpace(role.ID) == "" {
+		return transport.NewInvalidOption("role id is invalid; cannot be empty")
+	}
+
+	if strings.TrimSpace(role.Name) == "" {
+		return transport.NewInvalidOption("role name is invalid; cannot be empty")
+	}
+
+	if strings.TrimSpace(role.Namespace) == "" {
+		return transport.NewInvalidOption("role namespace is invalid; cannot be empty")
+	}
+
+	key := role.Namespace + ":" + role.Name
+	if _, ok := m.byNamespaceName[key]; ok {
+		return types.ErrRoleAlreadyExists
+	}
+
+	if _, ok := m.roles[role.ID]; ok {
+		return types.ErrRoleAlreadyExists
+	}
+
+	m.roles[role.ID] = role
+	m.byNamespaceName[key] = role.ID
+	return nil
+}
+
+func (m *MemoryRoles) Update(_ context.Context, role types.Role) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if strings.TrimSpace(role.ID) == "" {
+		return types.ErrRoleNotExist
+	}
+
+	existing, ok := m.roles[role.ID]
+	if !ok {
+		return types.ErrRoleNotExist
+	}
+
+	// Update permissions only, keep other fields
+	existing.Permissions = role.Permissions
+	m.roles[role.ID] = existing
+	return nil
+}
+
+func (m *MemoryRoles) List(_ context.Context, namespace string, roles *[]types.Role, opts types.ListOptions) error {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var count int
+	var pastPivot bool
+
+	if opts.Pivot == nil {
+		pastPivot = true
+	}
+
+	// Collect and sort IDs for deterministic ordering
+	ids := make([]string, 0, len(m.roles))
+	for id, role := range m.roles {
+		if namespace != "" && role.Namespace != namespace {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	// Sort by ID
+	for i := 0; i < len(ids)-1; i++ {
+		for j := i + 1; j < len(ids); j++ {
+			if strings.Compare(ids[i], ids[j]) > 0 {
+				ids[i], ids[j] = ids[j], ids[i]
+			}
+		}
+	}
+
+	for _, id := range ids {
+		if count >= opts.Limit {
+			return nil
+		}
+
+		if !pastPivot {
+			if id == string(opts.Pivot) {
+				pastPivot = true
+			}
+			continue
+		}
+
+		*roles = append(*roles, m.roles[id])
+		count++
+	}
+	return nil
+}
+
+func (m *MemoryRoles) Delete(_ context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if strings.TrimSpace(id) == "" {
+		return types.ErrRoleNotExist
+	}
+
+	role, ok := m.roles[id]
+	if !ok {
+		return types.ErrRoleNotExist
+	}
+
+	key := role.Namespace + ":" + role.Name
+	delete(m.byNamespaceName, key)
+	delete(m.roles, id)
+	return nil
+}
+
+func (m *MemoryRoles) Close(_ context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.roles = nil
+	m.byNamespaceName = nil
+	return nil
+}
+
+// ---------------------------------------------
+// RoleBindings Implementation
+// ---------------------------------------------
+
+type MemoryRoleBindings struct {
+	byUserNamespaceRole map[string]string   // "userID:namespace:roleID" -> ID (for uniqueness)
+	byUser              map[string][]string // userID -> []binding IDs
+	byRole              map[string][]string // roleID -> []binding IDs
+	bindings            map[string]types.RoleBinding
+	mu                  sync.RWMutex
+	log                 *slog.Logger
+}
+
+var _ RoleBindings = &MemoryRoleBindings{}
+
+func NewMemoryRoleBindings(log *slog.Logger) *MemoryRoleBindings {
+	set.Default(&log, slog.Default())
+	return &MemoryRoleBindings{
+		byUserNamespaceRole: make(map[string]string),
+		byUser:              make(map[string][]string),
+		byRole:              make(map[string][]string),
+		bindings:            make(map[string]types.RoleBinding),
+		log:                 log,
+	}
+}
+
+func (m *MemoryRoleBindings) Get(_ context.Context, id string, binding *types.RoleBinding) error {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if strings.TrimSpace(id) == "" {
+		return types.ErrRoleBindingNotExist
+	}
+
+	b, ok := m.bindings[id]
+	if !ok {
+		return types.ErrRoleBindingNotExist
+	}
+	*binding = b
+	return nil
+}
+
+func (m *MemoryRoleBindings) Add(_ context.Context, binding types.RoleBinding) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if strings.TrimSpace(binding.ID) == "" {
+		return transport.NewInvalidOption("role binding id is invalid; cannot be empty")
+	}
+
+	if strings.TrimSpace(binding.UserID) == "" {
+		return transport.NewInvalidOption("role binding user_id is invalid; cannot be empty")
+	}
+
+	if strings.TrimSpace(binding.RoleID) == "" {
+		return transport.NewInvalidOption("role binding role_id is invalid; cannot be empty")
+	}
+
+	if strings.TrimSpace(binding.Namespace) == "" {
+		return transport.NewInvalidOption("role binding namespace is invalid; cannot be empty")
+	}
+
+	// Check for duplicate (same user, namespace, role combination)
+	uniqueKey := binding.UserID + ":" + binding.Namespace + ":" + binding.RoleID
+	if _, ok := m.byUserNamespaceRole[uniqueKey]; ok {
+		return types.ErrRoleBindingAlreadyExists
+	}
+
+	if _, ok := m.bindings[binding.ID]; ok {
+		return types.ErrRoleBindingAlreadyExists
+	}
+
+	m.bindings[binding.ID] = binding
+	m.byUserNamespaceRole[uniqueKey] = binding.ID
+	m.byUser[binding.UserID] = append(m.byUser[binding.UserID], binding.ID)
+	m.byRole[binding.RoleID] = append(m.byRole[binding.RoleID], binding.ID)
+	return nil
+}
+
+func (m *MemoryRoleBindings) List(_ context.Context, namespace string, bindings *[]types.RoleBinding, opts types.ListOptions) error {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var count int
+	var pastPivot bool
+
+	if opts.Pivot == nil {
+		pastPivot = true
+	}
+
+	// Collect and sort IDs for deterministic ordering
+	ids := make([]string, 0, len(m.bindings))
+	for id, binding := range m.bindings {
+		if namespace != "" && binding.Namespace != namespace {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	// Sort by ID
+	for i := 0; i < len(ids)-1; i++ {
+		for j := i + 1; j < len(ids); j++ {
+			if strings.Compare(ids[i], ids[j]) > 0 {
+				ids[i], ids[j] = ids[j], ids[i]
+			}
+		}
+	}
+
+	for _, id := range ids {
+		if count >= opts.Limit {
+			return nil
+		}
+
+		if !pastPivot {
+			if id == string(opts.Pivot) {
+				pastPivot = true
+			}
+			continue
+		}
+
+		*bindings = append(*bindings, m.bindings[id])
+		count++
+	}
+	return nil
+}
+
+func (m *MemoryRoleBindings) ListByUser(_ context.Context, userID string, bindings *[]types.RoleBinding) error {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	ids, ok := m.byUser[userID]
+	if !ok {
+		return nil
+	}
+
+	for _, id := range ids {
+		if b, ok := m.bindings[id]; ok {
+			*bindings = append(*bindings, b)
+		}
+	}
+	return nil
+}
+
+func (m *MemoryRoleBindings) ListByRole(_ context.Context, roleID string, bindings *[]types.RoleBinding) error {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	ids, ok := m.byRole[roleID]
+	if !ok {
+		return nil
+	}
+
+	for _, id := range ids {
+		if b, ok := m.bindings[id]; ok {
+			*bindings = append(*bindings, b)
+		}
+	}
+	return nil
+}
+
+func (m *MemoryRoleBindings) Delete(_ context.Context, id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if strings.TrimSpace(id) == "" {
+		return types.ErrRoleBindingNotExist
+	}
+
+	binding, ok := m.bindings[id]
+	if !ok {
+		return types.ErrRoleBindingNotExist
+	}
+
+	// Remove from uniqueness index
+	uniqueKey := binding.UserID + ":" + binding.Namespace + ":" + binding.RoleID
+	delete(m.byUserNamespaceRole, uniqueKey)
+	delete(m.bindings, id)
+
+	// Remove from user index
+	userBindings := m.byUser[binding.UserID]
+	for i, bid := range userBindings {
+		if bid == id {
+			m.byUser[binding.UserID] = append(userBindings[:i], userBindings[i+1:]...)
+			break
+		}
+	}
+
+	// Remove from role index
+	roleBindings := m.byRole[binding.RoleID]
+	for i, bid := range roleBindings {
+		if bid == id {
+			m.byRole[binding.RoleID] = append(roleBindings[:i], roleBindings[i+1:]...)
+			break
+		}
+	}
+
+	return nil
+}
+
+func (m *MemoryRoleBindings) DeleteByUser(_ context.Context, userID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	ids, ok := m.byUser[userID]
+	if !ok {
+		return nil
+	}
+
+	for _, id := range ids {
+		if binding, ok := m.bindings[id]; ok {
+			// Remove from uniqueness index
+			uniqueKey := binding.UserID + ":" + binding.Namespace + ":" + binding.RoleID
+			delete(m.byUserNamespaceRole, uniqueKey)
+			delete(m.bindings, id)
+
+			// Remove from role index
+			roleBindings := m.byRole[binding.RoleID]
+			for i, bid := range roleBindings {
+				if bid == id {
+					m.byRole[binding.RoleID] = append(roleBindings[:i], roleBindings[i+1:]...)
+					break
+				}
+			}
+		}
+	}
+	delete(m.byUser, userID)
+	return nil
+}
+
+func (m *MemoryRoleBindings) Close(_ context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.bindings = nil
+	m.byUserNamespaceRole = nil
+	m.byUser = nil
+	m.byRole = nil
+	return nil
+}

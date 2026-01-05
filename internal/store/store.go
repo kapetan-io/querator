@@ -149,6 +149,10 @@ type Config struct {
 	Users Users
 	// APIKeys where API key data is stored
 	APIKeys APIKeys
+	// Roles where role data is stored
+	Roles Roles
+	// RoleBindings where role binding data is stored
+	RoleBindings RoleBindings
 	// The PartitionStorage configured for partitions to utilize
 	PartitionStorage []PartitionStorage
 }

@@ -657,3 +657,146 @@ func (c *Client) APIKeysDelete(ctx context.Context, req *pb.APIKeysDeleteRequest
 	var res v1.Reply
 	return c.client.Do(r, &res)
 }
+
+// -------------------------------------------------
+// Role Management API
+// -------------------------------------------------
+
+func (c *Client) RolesCreate(ctx context.Context, req *pb.RoleCreateRequest,
+	res *pb.RoleCreateResponse) error {
+	payload, err := proto.Marshal(req)
+	if err != nil {
+		return duh.NewClientError("while marshaling request payload: %w", err, nil)
+	}
+
+	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("%s%s", c.conf.Endpoint, transport.RPCRolesCreate), bytes.NewReader(payload))
+	if err != nil {
+		return duh.NewClientError("", err, nil)
+	}
+
+	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	return c.client.Do(r, res)
+}
+
+func (c *Client) RolesList(ctx context.Context, namespace string, res *pb.RolesListResponse,
+	opts *ListOptions) error {
+	req := pb.RolesListRequest{
+		Namespace: namespace,
+	}
+	if opts != nil {
+		req.Limit = int32(opts.Limit)
+		req.Pivot = opts.Pivot
+	}
+
+	payload, err := proto.Marshal(&req)
+	if err != nil {
+		return duh.NewClientError("while marshaling request payload: %w", err, nil)
+	}
+
+	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("%s%s", c.conf.Endpoint, transport.RPCRolesList), bytes.NewReader(payload))
+	if err != nil {
+		return duh.NewClientError("", err, nil)
+	}
+
+	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	return c.client.Do(r, res)
+}
+
+func (c *Client) RolesUpdate(ctx context.Context, req *pb.RoleUpdateRequest) error {
+	payload, err := proto.Marshal(req)
+	if err != nil {
+		return duh.NewClientError("while marshaling request payload: %w", err, nil)
+	}
+
+	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("%s%s", c.conf.Endpoint, transport.RPCRolesUpdate), bytes.NewReader(payload))
+	if err != nil {
+		return duh.NewClientError("", err, nil)
+	}
+
+	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	var res v1.Reply
+	return c.client.Do(r, &res)
+}
+
+func (c *Client) RolesDelete(ctx context.Context, req *pb.RolesDeleteRequest) error {
+	payload, err := proto.Marshal(req)
+	if err != nil {
+		return duh.NewClientError("while marshaling request payload: %w", err, nil)
+	}
+
+	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("%s%s", c.conf.Endpoint, transport.RPCRolesDelete), bytes.NewReader(payload))
+	if err != nil {
+		return duh.NewClientError("", err, nil)
+	}
+
+	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	var res v1.Reply
+	return c.client.Do(r, &res)
+}
+
+// -------------------------------------------------
+// Role Binding Management API
+// -------------------------------------------------
+
+func (c *Client) RoleBindingsCreate(ctx context.Context, req *pb.RoleBindingCreateRequest,
+	res *pb.RoleBindingCreateResponse) error {
+	payload, err := proto.Marshal(req)
+	if err != nil {
+		return duh.NewClientError("while marshaling request payload: %w", err, nil)
+	}
+
+	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("%s%s", c.conf.Endpoint, transport.RPCRoleBindingsCreate), bytes.NewReader(payload))
+	if err != nil {
+		return duh.NewClientError("", err, nil)
+	}
+
+	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	return c.client.Do(r, res)
+}
+
+func (c *Client) RoleBindingsList(ctx context.Context, namespace string, res *pb.RoleBindingsListResponse,
+	opts *ListOptions) error {
+	req := pb.RoleBindingsListRequest{
+		Namespace: namespace,
+	}
+	if opts != nil {
+		req.Limit = int32(opts.Limit)
+		req.Pivot = opts.Pivot
+	}
+
+	payload, err := proto.Marshal(&req)
+	if err != nil {
+		return duh.NewClientError("while marshaling request payload: %w", err, nil)
+	}
+
+	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("%s%s", c.conf.Endpoint, transport.RPCRoleBindingsList), bytes.NewReader(payload))
+	if err != nil {
+		return duh.NewClientError("", err, nil)
+	}
+
+	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	return c.client.Do(r, res)
+}
+
+func (c *Client) RoleBindingsDelete(ctx context.Context, req *pb.RoleBindingDeleteRequest) error {
+	payload, err := proto.Marshal(req)
+	if err != nil {
+		return duh.NewClientError("while marshaling request payload: %w", err, nil)
+	}
+
+	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("%s%s", c.conf.Endpoint, transport.RPCRoleBindingsDelete), bytes.NewReader(payload))
+	if err != nil {
+		return duh.NewClientError("", err, nil)
+	}
+
+	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	var res v1.Reply
+	return c.client.Do(r, &res)
+}

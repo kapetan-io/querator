@@ -2199,3 +2199,776 @@ func (b *BadgerAPIKeys) Close(_ context.Context) error {
 	b.db = nil
 	return err
 }
+
+// ---------------------------------------------
+// Roles Implementation
+// ---------------------------------------------
+
+type BadgerRoles struct {
+	conf BadgerConfig
+	db   *badger.DB
+}
+
+var _ Roles = &BadgerRoles{}
+
+func NewBadgerRoles(conf BadgerConfig) *BadgerRoles {
+	set.Default(conf.Log, slog.Default())
+	return &BadgerRoles{
+		conf: conf,
+	}
+}
+
+func (b *BadgerRoles) getDB() (*badger.DB, error) {
+	if b.db != nil {
+		return b.db, nil
+	}
+
+	dir := filepath.Join(b.conf.StorageDir, fmt.Sprintf("~role-storage-%s", bucketName))
+
+	opts := badger.DefaultOptions(dir)
+	opts.Logger = newBadgerLogger(b.conf.Log)
+	db, err := badger.Open(opts)
+	if err != nil {
+		return nil, errors.Errorf("while opening role db '%s': %w", dir, err)
+	}
+
+	b.db = db
+	return db, nil
+}
+
+func (b *BadgerRoles) Get(_ context.Context, namespace, name string, role *types.Role) error {
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.View(func(txn *badger.Txn) error {
+		// First lookup the ID by namespace:name
+		indexKey := []byte("role-ns-name:" + namespace + ":" + name)
+		kvItem, err := txn.Get(indexKey)
+		if err != nil {
+			if errors.Is(err, badger.ErrKeyNotFound) {
+				return types.ErrRoleNotExist
+			}
+			return errors.Errorf("during Get(): %w", err)
+		}
+
+		var idBytes []byte
+		idBytes, err = kvItem.ValueCopy(idBytes)
+		if err != nil {
+			return errors.Errorf("during ValueCopy(): %w", err)
+		}
+
+		// Now get the role by ID
+		kvItem, err = txn.Get([]byte("role:" + string(idBytes)))
+		if err != nil {
+			if errors.Is(err, badger.ErrKeyNotFound) {
+				return types.ErrRoleNotExist
+			}
+			return errors.Errorf("during Get(): %w", err)
+		}
+
+		var v []byte
+		v, err = kvItem.ValueCopy(v)
+		if err != nil {
+			return errors.Errorf("during ValueCopy(): %w", err)
+		}
+
+		if err := gob.NewDecoder(bytes.NewReader(v)).Decode(role); err != nil {
+			return errors.Errorf("during Decode(): %w", err)
+		}
+		return nil
+	})
+}
+
+func (b *BadgerRoles) GetByID(_ context.Context, id string, role *types.Role) error {
+	if strings.TrimSpace(id) == "" {
+		return types.ErrRoleNotExist
+	}
+
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.View(func(txn *badger.Txn) error {
+		kvItem, err := txn.Get([]byte("role:" + id))
+		if err != nil {
+			if errors.Is(err, badger.ErrKeyNotFound) {
+				return types.ErrRoleNotExist
+			}
+			return errors.Errorf("during Get(): %w", err)
+		}
+
+		var v []byte
+		v, err = kvItem.ValueCopy(v)
+		if err != nil {
+			return errors.Errorf("during ValueCopy(): %w", err)
+		}
+
+		if err := gob.NewDecoder(bytes.NewReader(v)).Decode(role); err != nil {
+			return errors.Errorf("during Decode(): %w", err)
+		}
+		return nil
+	})
+}
+
+func (b *BadgerRoles) Add(_ context.Context, role types.Role) error {
+	if strings.TrimSpace(role.ID) == "" {
+		return transport.NewInvalidOption("role id is invalid; cannot be empty")
+	}
+
+	if strings.TrimSpace(role.Name) == "" {
+		return transport.NewInvalidOption("role name is invalid; cannot be empty")
+	}
+
+	if strings.TrimSpace(role.Namespace) == "" {
+		return transport.NewInvalidOption("role namespace is invalid; cannot be empty")
+	}
+
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.Update(func(txn *badger.Txn) error {
+		// Check if role already exists by namespace:name
+		indexKey := []byte("role-ns-name:" + role.Namespace + ":" + role.Name)
+		_, err := txn.Get(indexKey)
+		if err == nil {
+			return types.ErrRoleAlreadyExists
+		}
+
+		// Encode role
+		var buf bytes.Buffer
+		if err := gob.NewEncoder(&buf).Encode(role); err != nil {
+			return errors.Errorf("during gob.Encode(): %w", err)
+		}
+
+		// Store role
+		if err := txn.Set([]byte("role:"+role.ID), buf.Bytes()); err != nil {
+			return errors.Errorf("during Set(): %w", err)
+		}
+
+		// Set namespace:name index
+		if err := txn.Set(indexKey, []byte(role.ID)); err != nil {
+			return errors.Errorf("during Set(): %w", err)
+		}
+
+		return nil
+	})
+}
+
+func (b *BadgerRoles) Update(_ context.Context, role types.Role) error {
+	if strings.TrimSpace(role.ID) == "" {
+		return types.ErrRoleNotExist
+	}
+
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.Update(func(txn *badger.Txn) error {
+		// Get existing role
+		kvItem, err := txn.Get([]byte("role:" + role.ID))
+		if err != nil {
+			if errors.Is(err, badger.ErrKeyNotFound) {
+				return types.ErrRoleNotExist
+			}
+			return errors.Errorf("during Get(): %w", err)
+		}
+
+		var v []byte
+		v, err = kvItem.ValueCopy(v)
+		if err != nil {
+			return errors.Errorf("during ValueCopy(): %w", err)
+		}
+
+		var existing types.Role
+		if err := gob.NewDecoder(bytes.NewReader(v)).Decode(&existing); err != nil {
+			return errors.Errorf("during Decode(): %w", err)
+		}
+
+		// Update permissions only
+		existing.Permissions = role.Permissions
+
+		var buf bytes.Buffer
+		if err := gob.NewEncoder(&buf).Encode(existing); err != nil {
+			return errors.Errorf("during gob.Encode(): %w", err)
+		}
+
+		if err := txn.Set([]byte("role:"+role.ID), buf.Bytes()); err != nil {
+			return errors.Errorf("during Set(): %w", err)
+		}
+		return nil
+	})
+}
+
+func (b *BadgerRoles) List(_ context.Context, namespace string, roles *[]types.Role, opts types.ListOptions) error {
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.View(func(txn *badger.Txn) error {
+		var count int
+		iter := txn.NewIterator(badger.DefaultIteratorOptions)
+		defer iter.Close()
+
+		prefix := []byte("role:")
+
+		if opts.Pivot != nil {
+			iter.Seek([]byte("role:" + string(opts.Pivot)))
+		} else {
+			iter.Seek(prefix)
+		}
+
+		for ; iter.ValidForPrefix(prefix); iter.Next() {
+			key := iter.Item().Key()
+			// Skip index keys
+			if bytes.HasPrefix(key, []byte("role-ns-name:")) {
+				continue
+			}
+
+			var v []byte
+			v, err := iter.Item().ValueCopy(v)
+			if err != nil {
+				return errors.Errorf("during ValueCopy(): %w", err)
+			}
+
+			var role types.Role
+			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(&role); err != nil {
+				return errors.Errorf("during Decode(): %w", err)
+			}
+
+			// Filter by namespace if specified
+			if namespace != "" && role.Namespace != namespace {
+				continue
+			}
+
+			*roles = append(*roles, role)
+			count++
+
+			if count >= opts.Limit {
+				return nil
+			}
+		}
+		return nil
+	})
+}
+
+func (b *BadgerRoles) Delete(_ context.Context, id string) error {
+	if strings.TrimSpace(id) == "" {
+		return types.ErrRoleNotExist
+	}
+
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.Update(func(txn *badger.Txn) error {
+		// Get role first for cleanup
+		kvItem, err := txn.Get([]byte("role:" + id))
+		if err != nil {
+			if errors.Is(err, badger.ErrKeyNotFound) {
+				return types.ErrRoleNotExist
+			}
+			return errors.Errorf("during Get(): %w", err)
+		}
+
+		var v []byte
+		v, err = kvItem.ValueCopy(v)
+		if err != nil {
+			return errors.Errorf("during ValueCopy(): %w", err)
+		}
+
+		var role types.Role
+		if err := gob.NewDecoder(bytes.NewReader(v)).Decode(&role); err != nil {
+			return errors.Errorf("during Decode(): %w", err)
+		}
+
+		// Delete namespace:name index
+		indexKey := []byte("role-ns-name:" + role.Namespace + ":" + role.Name)
+		if err := txn.Delete(indexKey); err != nil {
+			return errors.Errorf("during Delete(): %w", err)
+		}
+
+		// Delete role
+		if err := txn.Delete([]byte("role:" + id)); err != nil {
+			return errors.Errorf("during Delete(): %w", err)
+		}
+		return nil
+	})
+}
+
+func (b *BadgerRoles) Close(_ context.Context) error {
+	if b.db == nil {
+		return nil
+	}
+	err := b.db.Close()
+	b.db = nil
+	return err
+}
+
+// ---------------------------------------------
+// RoleBindings Implementation
+// ---------------------------------------------
+
+type BadgerRoleBindings struct {
+	conf BadgerConfig
+	db   *badger.DB
+}
+
+var _ RoleBindings = &BadgerRoleBindings{}
+
+func NewBadgerRoleBindings(conf BadgerConfig) *BadgerRoleBindings {
+	set.Default(conf.Log, slog.Default())
+	return &BadgerRoleBindings{
+		conf: conf,
+	}
+}
+
+func (b *BadgerRoleBindings) getDB() (*badger.DB, error) {
+	if b.db != nil {
+		return b.db, nil
+	}
+
+	dir := filepath.Join(b.conf.StorageDir, fmt.Sprintf("~rolebinding-storage-%s", bucketName))
+
+	opts := badger.DefaultOptions(dir)
+	opts.Logger = newBadgerLogger(b.conf.Log)
+	db, err := badger.Open(opts)
+	if err != nil {
+		return nil, errors.Errorf("while opening rolebinding db '%s': %w", dir, err)
+	}
+
+	b.db = db
+	return db, nil
+}
+
+func (b *BadgerRoleBindings) Get(_ context.Context, id string, binding *types.RoleBinding) error {
+	if strings.TrimSpace(id) == "" {
+		return types.ErrRoleBindingNotExist
+	}
+
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.View(func(txn *badger.Txn) error {
+		kvItem, err := txn.Get([]byte("rolebinding:" + id))
+		if err != nil {
+			if errors.Is(err, badger.ErrKeyNotFound) {
+				return types.ErrRoleBindingNotExist
+			}
+			return errors.Errorf("during Get(): %w", err)
+		}
+
+		var v []byte
+		v, err = kvItem.ValueCopy(v)
+		if err != nil {
+			return errors.Errorf("during ValueCopy(): %w", err)
+		}
+
+		if err := gob.NewDecoder(bytes.NewReader(v)).Decode(binding); err != nil {
+			return errors.Errorf("during Decode(): %w", err)
+		}
+		return nil
+	})
+}
+
+func (b *BadgerRoleBindings) Add(_ context.Context, binding types.RoleBinding) error {
+	if strings.TrimSpace(binding.ID) == "" {
+		return transport.NewInvalidOption("role binding id is invalid; cannot be empty")
+	}
+
+	if strings.TrimSpace(binding.UserID) == "" {
+		return transport.NewInvalidOption("role binding user_id is invalid; cannot be empty")
+	}
+
+	if strings.TrimSpace(binding.RoleID) == "" {
+		return transport.NewInvalidOption("role binding role_id is invalid; cannot be empty")
+	}
+
+	if strings.TrimSpace(binding.Namespace) == "" {
+		return transport.NewInvalidOption("role binding namespace is invalid; cannot be empty")
+	}
+
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.Update(func(txn *badger.Txn) error {
+		// Check for duplicate (same user, namespace, role combination)
+		uniqueKey := []byte("rolebinding-unique:" + binding.UserID + ":" + binding.Namespace + ":" + binding.RoleID)
+		_, err := txn.Get(uniqueKey)
+		if err == nil {
+			return types.ErrRoleBindingAlreadyExists
+		}
+
+		// Encode binding
+		var buf bytes.Buffer
+		if err := gob.NewEncoder(&buf).Encode(binding); err != nil {
+			return errors.Errorf("during gob.Encode(): %w", err)
+		}
+
+		// Store binding
+		if err := txn.Set([]byte("rolebinding:"+binding.ID), buf.Bytes()); err != nil {
+			return errors.Errorf("during Set(): %w", err)
+		}
+
+		// Set uniqueness index
+		if err := txn.Set(uniqueKey, []byte(binding.ID)); err != nil {
+			return errors.Errorf("during Set(): %w", err)
+		}
+
+		// Update user index
+		userIDs, _ := b.getUserBindingIDs(txn, binding.UserID)
+		userIDs = append(userIDs, binding.ID)
+		var userBuf bytes.Buffer
+		if err := gob.NewEncoder(&userBuf).Encode(userIDs); err != nil {
+			return errors.Errorf("during gob.Encode(): %w", err)
+		}
+		if err := txn.Set([]byte("rolebinding-user:"+binding.UserID), userBuf.Bytes()); err != nil {
+			return errors.Errorf("during Set(): %w", err)
+		}
+
+		// Update role index
+		roleIDs, _ := b.getRoleBindingIDs(txn, binding.RoleID)
+		roleIDs = append(roleIDs, binding.ID)
+		var roleBuf bytes.Buffer
+		if err := gob.NewEncoder(&roleBuf).Encode(roleIDs); err != nil {
+			return errors.Errorf("during gob.Encode(): %w", err)
+		}
+		if err := txn.Set([]byte("rolebinding-role:"+binding.RoleID), roleBuf.Bytes()); err != nil {
+			return errors.Errorf("during Set(): %w", err)
+		}
+
+		return nil
+	})
+}
+
+func (b *BadgerRoleBindings) getUserBindingIDs(txn *badger.Txn, userID string) ([]string, error) {
+	kvItem, err := txn.Get([]byte("rolebinding-user:" + userID))
+	if err != nil {
+		if errors.Is(err, badger.ErrKeyNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var v []byte
+	v, err = kvItem.ValueCopy(v)
+	if err != nil {
+		return nil, err
+	}
+
+	var ids []string
+	if err := gob.NewDecoder(bytes.NewReader(v)).Decode(&ids); err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
+func (b *BadgerRoleBindings) getRoleBindingIDs(txn *badger.Txn, roleID string) ([]string, error) {
+	kvItem, err := txn.Get([]byte("rolebinding-role:" + roleID))
+	if err != nil {
+		if errors.Is(err, badger.ErrKeyNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var v []byte
+	v, err = kvItem.ValueCopy(v)
+	if err != nil {
+		return nil, err
+	}
+
+	var ids []string
+	if err := gob.NewDecoder(bytes.NewReader(v)).Decode(&ids); err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
+func (b *BadgerRoleBindings) List(_ context.Context, namespace string, bindings *[]types.RoleBinding, opts types.ListOptions) error {
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.View(func(txn *badger.Txn) error {
+		var count int
+		iter := txn.NewIterator(badger.DefaultIteratorOptions)
+		defer iter.Close()
+
+		prefix := []byte("rolebinding:")
+
+		if opts.Pivot != nil {
+			iter.Seek([]byte("rolebinding:" + string(opts.Pivot)))
+		} else {
+			iter.Seek(prefix)
+		}
+
+		for ; iter.ValidForPrefix(prefix); iter.Next() {
+			key := iter.Item().Key()
+			// Skip index keys
+			if bytes.HasPrefix(key, []byte("rolebinding-unique:")) ||
+				bytes.HasPrefix(key, []byte("rolebinding-user:")) ||
+				bytes.HasPrefix(key, []byte("rolebinding-role:")) {
+				continue
+			}
+
+			var v []byte
+			v, err := iter.Item().ValueCopy(v)
+			if err != nil {
+				return errors.Errorf("during ValueCopy(): %w", err)
+			}
+
+			var binding types.RoleBinding
+			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(&binding); err != nil {
+				return errors.Errorf("during Decode(): %w", err)
+			}
+
+			// Filter by namespace if specified
+			if namespace != "" && binding.Namespace != namespace {
+				continue
+			}
+
+			*bindings = append(*bindings, binding)
+			count++
+
+			if count >= opts.Limit {
+				return nil
+			}
+		}
+		return nil
+	})
+}
+
+func (b *BadgerRoleBindings) ListByUser(_ context.Context, userID string, bindings *[]types.RoleBinding) error {
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.View(func(txn *badger.Txn) error {
+		ids, _ := b.getUserBindingIDs(txn, userID)
+		if ids == nil {
+			return nil
+		}
+
+		for _, id := range ids {
+			kvItem, err := txn.Get([]byte("rolebinding:" + id))
+			if err != nil {
+				continue
+			}
+
+			var v []byte
+			v, err = kvItem.ValueCopy(v)
+			if err != nil {
+				continue
+			}
+
+			var binding types.RoleBinding
+			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(&binding); err != nil {
+				continue
+			}
+			*bindings = append(*bindings, binding)
+		}
+		return nil
+	})
+}
+
+func (b *BadgerRoleBindings) ListByRole(_ context.Context, roleID string, bindings *[]types.RoleBinding) error {
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.View(func(txn *badger.Txn) error {
+		ids, _ := b.getRoleBindingIDs(txn, roleID)
+		if ids == nil {
+			return nil
+		}
+
+		for _, id := range ids {
+			kvItem, err := txn.Get([]byte("rolebinding:" + id))
+			if err != nil {
+				continue
+			}
+
+			var v []byte
+			v, err = kvItem.ValueCopy(v)
+			if err != nil {
+				continue
+			}
+
+			var binding types.RoleBinding
+			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(&binding); err != nil {
+				continue
+			}
+			*bindings = append(*bindings, binding)
+		}
+		return nil
+	})
+}
+
+func (b *BadgerRoleBindings) Delete(_ context.Context, id string) error {
+	if strings.TrimSpace(id) == "" {
+		return types.ErrRoleBindingNotExist
+	}
+
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.Update(func(txn *badger.Txn) error {
+		// Get binding first for cleanup
+		kvItem, err := txn.Get([]byte("rolebinding:" + id))
+		if err != nil {
+			if errors.Is(err, badger.ErrKeyNotFound) {
+				return types.ErrRoleBindingNotExist
+			}
+			return errors.Errorf("during Get(): %w", err)
+		}
+
+		var v []byte
+		v, err = kvItem.ValueCopy(v)
+		if err != nil {
+			return errors.Errorf("during ValueCopy(): %w", err)
+		}
+
+		var binding types.RoleBinding
+		if err := gob.NewDecoder(bytes.NewReader(v)).Decode(&binding); err != nil {
+			return errors.Errorf("during Decode(): %w", err)
+		}
+
+		// Delete uniqueness index
+		uniqueKey := []byte("rolebinding-unique:" + binding.UserID + ":" + binding.Namespace + ":" + binding.RoleID)
+		_ = txn.Delete(uniqueKey)
+
+		// Update user index
+		userIDs, _ := b.getUserBindingIDs(txn, binding.UserID)
+		newUserIDs := make([]string, 0, len(userIDs))
+		for _, existingID := range userIDs {
+			if existingID != id {
+				newUserIDs = append(newUserIDs, existingID)
+			}
+		}
+		if len(newUserIDs) > 0 {
+			var userBuf bytes.Buffer
+			if err := gob.NewEncoder(&userBuf).Encode(newUserIDs); err != nil {
+				return errors.Errorf("during gob.Encode(): %w", err)
+			}
+			if err := txn.Set([]byte("rolebinding-user:"+binding.UserID), userBuf.Bytes()); err != nil {
+				return errors.Errorf("during Set(): %w", err)
+			}
+		} else {
+			_ = txn.Delete([]byte("rolebinding-user:" + binding.UserID))
+		}
+
+		// Update role index
+		roleIDs, _ := b.getRoleBindingIDs(txn, binding.RoleID)
+		newRoleIDs := make([]string, 0, len(roleIDs))
+		for _, existingID := range roleIDs {
+			if existingID != id {
+				newRoleIDs = append(newRoleIDs, existingID)
+			}
+		}
+		if len(newRoleIDs) > 0 {
+			var roleBuf bytes.Buffer
+			if err := gob.NewEncoder(&roleBuf).Encode(newRoleIDs); err != nil {
+				return errors.Errorf("during gob.Encode(): %w", err)
+			}
+			if err := txn.Set([]byte("rolebinding-role:"+binding.RoleID), roleBuf.Bytes()); err != nil {
+				return errors.Errorf("during Set(): %w", err)
+			}
+		} else {
+			_ = txn.Delete([]byte("rolebinding-role:" + binding.RoleID))
+		}
+
+		// Delete binding
+		if err := txn.Delete([]byte("rolebinding:" + id)); err != nil {
+			return errors.Errorf("during Delete(): %w", err)
+		}
+		return nil
+	})
+}
+
+func (b *BadgerRoleBindings) DeleteByUser(_ context.Context, userID string) error {
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.Update(func(txn *badger.Txn) error {
+		ids, _ := b.getUserBindingIDs(txn, userID)
+		if ids == nil {
+			return nil
+		}
+
+		for _, id := range ids {
+			// Get binding for cleanup
+			kvItem, err := txn.Get([]byte("rolebinding:" + id))
+			if err != nil {
+				continue
+			}
+
+			var v []byte
+			v, err = kvItem.ValueCopy(v)
+			if err != nil {
+				continue
+			}
+
+			var binding types.RoleBinding
+			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(&binding); err != nil {
+				continue
+			}
+
+			// Delete uniqueness index
+			uniqueKey := []byte("rolebinding-unique:" + binding.UserID + ":" + binding.Namespace + ":" + binding.RoleID)
+			_ = txn.Delete(uniqueKey)
+
+			// Update role index
+			roleIDs, _ := b.getRoleBindingIDs(txn, binding.RoleID)
+			newRoleIDs := make([]string, 0, len(roleIDs))
+			for _, existingID := range roleIDs {
+				if existingID != id {
+					newRoleIDs = append(newRoleIDs, existingID)
+				}
+			}
+			if len(newRoleIDs) > 0 {
+				var roleBuf bytes.Buffer
+				if err := gob.NewEncoder(&roleBuf).Encode(newRoleIDs); err != nil {
+					continue
+				}
+				_ = txn.Set([]byte("rolebinding-role:"+binding.RoleID), roleBuf.Bytes())
+			} else {
+				_ = txn.Delete([]byte("rolebinding-role:" + binding.RoleID))
+			}
+
+			// Delete binding
+			_ = txn.Delete([]byte("rolebinding:" + id))
+		}
+
+		// Delete user index
+		_ = txn.Delete([]byte("rolebinding-user:" + userID))
+		return nil
+	})
+}
+
+func (b *BadgerRoleBindings) Close(_ context.Context) error {
+	if b.db == nil {
+		return nil
+	}
+	err := b.db.Close()
+	b.db = nil
+	return err
+}

@@ -55,6 +55,21 @@ type APIKeysAdmin interface {
 	APIKeysDelete(context.Context, *pb.APIKeysDeleteRequest) error
 }
 
+// RolesAdmin handles role lifecycle management
+type RolesAdmin interface {
+	RolesCreate(context.Context, *pb.RoleCreateRequest, *pb.RoleCreateResponse) error
+	RolesList(context.Context, *pb.RolesListRequest, *pb.RolesListResponse) error
+	RolesUpdate(context.Context, *pb.RoleUpdateRequest) error
+	RolesDelete(context.Context, *pb.RolesDeleteRequest) error
+}
+
+// RoleBindingsAdmin handles role binding lifecycle management
+type RoleBindingsAdmin interface {
+	RoleBindingsCreate(context.Context, *pb.RoleBindingCreateRequest, *pb.RoleBindingCreateResponse) error
+	RoleBindingsList(context.Context, *pb.RoleBindingsListRequest, *pb.RoleBindingsListResponse) error
+	RoleBindingsDelete(context.Context, *pb.RoleBindingDeleteRequest) error
+}
+
 // Service combines all interfaces for backward compatibility
 type Service interface {
 	QueueOps
@@ -63,5 +78,7 @@ type Service interface {
 	NamespaceAdmin
 	UsersAdmin
 	APIKeysAdmin
+	RolesAdmin
+	RoleBindingsAdmin
 	Health(context.Context) (*HealthResponse, error)
 }

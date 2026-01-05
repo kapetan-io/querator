@@ -257,6 +257,8 @@ func (b *badgerTestSetup) Setup(bc store.BadgerConfig) store.Config {
 	conf.Queues = store.NewBadgerQueues(bc)
 	conf.Users = store.NewBadgerUsers(bc)
 	conf.APIKeys = store.NewBadgerAPIKeys(bc)
+	conf.Roles = store.NewBadgerRoles(bc)
+	conf.RoleBindings = store.NewBadgerRoleBindings(bc)
 	conf.PartitionStorage = []store.PartitionStorage{
 		{
 			PartitionStore: store.NewBadgerPartitionStore(bc),
@@ -365,6 +367,8 @@ func setupMemoryStorage(conf store.Config) store.Config {
 	conf.Queues = store.NewMemoryQueues(log)
 	conf.Users = store.NewMemoryUsers(log)
 	conf.APIKeys = store.NewMemoryAPIKeys(log)
+	conf.Roles = store.NewMemoryRoles(log)
+	conf.RoleBindings = store.NewMemoryRoleBindings(log)
 	conf.PartitionStorage = []store.PartitionStorage{
 		{
 			PartitionStore: store.NewMemoryPartitionStore(conf, log),

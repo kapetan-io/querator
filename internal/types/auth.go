@@ -83,3 +83,45 @@ func (k *APIKey) ToProto(p *proto.APIKeyMetadata) *proto.APIKeyMetadata {
 	}
 	return p
 }
+
+// Role represents a role with a set of permissions within a namespace
+type Role struct {
+	Permissions []string
+	CreatedAt   clock.Time
+	Namespace   string
+	Name        string
+	ID          string
+}
+
+// ToProto converts a Role to its proto representation
+func (r *Role) ToProto(p *proto.Role) *proto.Role {
+	p.Permissions = r.Permissions
+	p.Namespace = r.Namespace
+	p.Name = r.Name
+	p.Id = r.ID
+	if !r.CreatedAt.IsZero() {
+		p.CreatedAt = timestamppb.New(r.CreatedAt)
+	}
+	return p
+}
+
+// RoleBinding represents the binding of a user to a role within a namespace
+type RoleBinding struct {
+	CreatedAt clock.Time
+	Namespace string
+	UserID    string
+	RoleID    string
+	ID        string
+}
+
+// ToProto converts a RoleBinding to its proto representation
+func (b *RoleBinding) ToProto(p *proto.RoleBinding) *proto.RoleBinding {
+	p.Namespace = b.Namespace
+	p.UserId = b.UserID
+	p.RoleId = b.RoleID
+	p.Id = b.ID
+	if !b.CreatedAt.IsZero() {
+		p.CreatedAt = timestamppb.New(b.CreatedAt)
+	}
+	return p
+}

@@ -69,6 +69,7 @@ type Service struct {
 }
 
 func New(conf Config) (*Service, error) {
+	set.Default(&conf.Clock, clock.NewProvider())
 	set.Default(&conf.Log, slog.Default())
 	set.Default(&conf.ReadTimeout, 3*time.Second)
 	set.Default(&conf.WriteTimeout, 3*time.Second)
@@ -552,4 +553,57 @@ func (s *Service) Health(ctx context.Context) (*transport.HealthResponse, error)
 func (s *Service) Shutdown(ctx context.Context) error {
 	// See 0015-shutdown-errors.md for a discussion of shutdown operation
 	return s.queues.Shutdown(ctx)
+}
+
+// -------------------------------------------------
+// Namespace Management API
+// -------------------------------------------------
+
+func (s *Service) NamespacesCreate(ctx context.Context, req *proto.NamespaceInfo) error {
+	var ns types.Namespace
+
+	if err := s.validateNamespaceProto(req, &ns); err != nil {
+		return err
+	}
+
+	// Check for reserved namespace prefix
+	if ns.IsReserved() {
+		return types.ErrNamespaceReserved
+	}
+
+	ns.CreatedAt = s.conf.Clock.Now().UTC()
+	if err := s.conf.StorageConfig.Namespaces.Add(ctx, ns); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (s *Service) NamespacesList(ctx context.Context, req *proto.NamespacesListRequest,
+	resp *proto.NamespacesListResponse) error {
+
+	if req.Limit == 0 {
+		req.Limit = DefaultListLimit
+	}
+
+	namespaces := make([]types.Namespace, 0, allocInt32(req.Limit))
+	if err := s.conf.StorageConfig.Namespaces.List(ctx, &namespaces, types.ListOptions{
+		Pivot: types.ToItemID(req.Pivot),
+		Limit: int(req.Limit),
+	}); err != nil {
+		return err
+	}
+
+	for _, ns := range namespaces {
+		resp.Items = append(resp.Items, ns.ToProto(new(proto.NamespaceInfo)))
+	}
+	return nil
+}
+
+func (s *Service) NamespacesDelete(ctx context.Context, req *proto.NamespacesDeleteRequest) error {
+	// TODO: Check if namespace has queues and return ErrNamespaceHasQueues if so
+	if err := s.conf.StorageConfig.Namespaces.Delete(ctx, req.Name); err != nil {
+		return err
+	}
+	return nil
 }

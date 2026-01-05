@@ -943,7 +943,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				assert.Equal(t, "1m0s", resp.LeaseTimeout)
 				assert.Equal(t, "10m0s", resp.ExpireTimeout)
 				assert.Equal(t, int32(10), resp.MaxAttempts)
-				assert.Equal(t, int32(0), resp.RequestedPartitions) // partitions start at 0
+				assert.Equal(t, int32(1), resp.RequestedPartitions)
 				assert.NotNil(t, resp.CreatedAt)
 				assert.NotNil(t, resp.UpdatedAt)
 			})

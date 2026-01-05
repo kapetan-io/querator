@@ -143,6 +143,8 @@ func Find(needle string, haystack []PartitionStorage) PartitionStorage {
 type Config struct {
 	// Queues where metadata about the queues is stored
 	Queues Queues
+	// Namespaces where metadata about the namespaces is stored
+	Namespaces Namespaces
 	// The PartitionStorage configured for partitions to utilize
 	PartitionStorage []PartitionStorage
 }

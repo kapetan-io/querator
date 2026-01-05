@@ -1305,3 +1305,177 @@ func (l *badgerLogger) Infof(f string, v ...interface{}) {
 func (l *badgerLogger) Debugf(f string, v ...interface{}) {
 	l.log.LogAttrs(context.Background(), LevelDebug, fmt.Sprintf(strings.Trim(f, "\n"), v...))
 }
+
+// ---------------------------------------------
+// Namespaces Implementation
+// ---------------------------------------------
+
+type BadgerNamespaces struct {
+	conf BadgerConfig
+	db   *badger.DB
+}
+
+var _ Namespaces = &BadgerNamespaces{}
+
+func NewBadgerNamespaces(conf BadgerConfig) *BadgerNamespaces {
+	set.Default(conf.Log, slog.Default())
+	return &BadgerNamespaces{
+		conf: conf,
+	}
+}
+
+func (b *BadgerNamespaces) getDB() (*badger.DB, error) {
+	if b.db != nil {
+		return b.db, nil
+	}
+
+	// We store info about namespaces in a single db file. We prefix it with `~` to make it
+	// impossible for someone to create a namespace with the same name.
+	dir := filepath.Join(b.conf.StorageDir, fmt.Sprintf("~namespace-storage-%s", bucketName))
+
+	opts := badger.DefaultOptions(dir)
+	opts.Logger = newBadgerLogger(b.conf.Log)
+	db, err := badger.Open(opts)
+	if err != nil {
+		return nil, errors.Errorf("while opening namespace db '%s': %w", dir, err)
+	}
+
+	b.db = db
+	return db, nil
+}
+
+func (b *BadgerNamespaces) Get(_ context.Context, name string, ns *types.Namespace) error {
+	if strings.TrimSpace(name) == "" {
+		return types.ErrNamespaceNotExist
+	}
+
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.View(func(txn *badger.Txn) error {
+		kvItem, err := txn.Get([]byte(name))
+		if err != nil {
+			if errors.Is(err, badger.ErrKeyNotFound) {
+				return types.ErrNamespaceNotExist
+			}
+			return errors.Errorf("during Get(): %w", err)
+		}
+
+		var v []byte
+		v, err = kvItem.ValueCopy(v)
+		if err != nil {
+			return errors.Errorf("during ValueCopy(): %w", err)
+		}
+
+		if err := gob.NewDecoder(bytes.NewReader(v)).Decode(ns); err != nil {
+			return errors.Errorf("during Decode(): %w", err)
+		}
+		return nil
+	})
+}
+
+func (b *BadgerNamespaces) Add(_ context.Context, ns types.Namespace) error {
+	if strings.TrimSpace(ns.Name) == "" {
+		return transport.NewInvalidOption("namespace name is invalid; cannot be empty")
+	}
+
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.Update(func(txn *badger.Txn) error {
+		// If the namespace already exists in the store
+		_, err := txn.Get([]byte(ns.Name))
+		if err == nil {
+			return types.ErrNamespaceAlreadyExists
+		}
+
+		var buf bytes.Buffer
+		if err := gob.NewEncoder(&buf).Encode(ns); err != nil {
+			return errors.Errorf("during gob.Encode(): %w", err)
+		}
+
+		if err := txn.Set([]byte(ns.Name), buf.Bytes()); err != nil {
+			return errors.Errorf("during Set(): %w", err)
+		}
+		return nil
+	})
+}
+
+func (b *BadgerNamespaces) List(_ context.Context, namespaces *[]types.Namespace, opts types.ListOptions) error {
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.View(func(txn *badger.Txn) error {
+		var count int
+		var v []byte
+		iter := txn.NewIterator(badger.DefaultIteratorOptions)
+		defer iter.Close()
+
+		if opts.Pivot != nil {
+			iter.Seek(opts.Pivot)
+		} else {
+			iter.Rewind()
+		}
+
+		for ; iter.Valid(); iter.Next() {
+			v, err := iter.Item().ValueCopy(v)
+			if err != nil {
+				return errors.Errorf("during ValueCopy(): %w", err)
+			}
+
+			var ns types.Namespace
+			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(&ns); err != nil {
+				return errors.Errorf("during Decode(): %w", err)
+			}
+			*namespaces = append(*namespaces, ns)
+			count++
+
+			if count >= opts.Limit {
+				return nil
+			}
+		}
+		return nil
+	})
+}
+
+func (b *BadgerNamespaces) Delete(_ context.Context, name string) error {
+	if strings.TrimSpace(name) == "" {
+		return types.ErrNamespaceNotExist
+	}
+
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.Update(func(txn *badger.Txn) error {
+		// Check if namespace exists first
+		_, err := txn.Get([]byte(name))
+		if err != nil {
+			if errors.Is(err, badger.ErrKeyNotFound) {
+				return types.ErrNamespaceNotExist
+			}
+			return errors.Errorf("during Get(): %w", err)
+		}
+
+		if err := txn.Delete([]byte(name)); err != nil {
+			return errors.Errorf("during Delete(%s): %w", name, err)
+		}
+		return nil
+	})
+}
+
+func (b *BadgerNamespaces) Close(_ context.Context) error {
+	if b.db == nil {
+		return nil
+	}
+	err := b.db.Close()
+	b.db = nil
+	return err
+}

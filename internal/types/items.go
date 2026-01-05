@@ -161,6 +161,8 @@ func (p *PartitionInfo) HashKey() PartitionHash {
 type QueueInfo struct {
 	// The name of the queue
 	Name string
+	// Namespace is the namespace this queue belongs to. Used for multi-tenant isolation.
+	Namespace string
 	// LeaseTimeout is how long the lease is valid for.
 	LeaseTimeout clock.Duration
 	// DeadQueue is the name of the dead letter queue for this queue.
@@ -186,12 +188,14 @@ type QueueInfo struct {
 }
 
 func (i *QueueInfo) ToProto(in *pb.QueueInfo) *pb.QueueInfo {
+	in.RequestedPartitions = int32(i.RequestedPartitions)
+	in.ExpireTimeout = i.ExpireTimeout.String()
 	in.LeaseTimeout = i.LeaseTimeout.String()
 	in.UpdatedAt = timestamppb.New(i.UpdatedAt)
 	in.CreatedAt = timestamppb.New(i.CreatedAt)
-	in.ExpireTimeout = i.ExpireTimeout.String()
 	in.MaxAttempts = int32(i.MaxAttempts)
 	in.DeadQueue = i.DeadQueue
+	in.Namespace = i.Namespace
 	in.Reference = i.Reference
 	in.QueueName = i.Name
 	return in

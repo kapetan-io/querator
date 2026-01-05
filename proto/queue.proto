@@ -232,6 +232,10 @@ message QueueInfo {
   int32 requestedPartitions = 9 [json_name = "requested_partitions"];
 
   repeated PartitionInfo partitions = 10;
+
+  // The namespace this queue belongs to. Used for multi-tenant isolation.
+  // If empty, the queue belongs to the default namespace.
+  string namespace = 11;
 }
 
 message PartitionInfo {

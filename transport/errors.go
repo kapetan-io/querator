@@ -182,3 +182,89 @@ func (e *ErrConflict) Message() string {
 }
 
 var _ duh.Error = &ErrConflict{}
+
+// -------------------------------------------------
+
+// ErrUnauthorized is used to indicate authentication is required but not provided or invalid
+type ErrUnauthorized struct {
+	msg string
+}
+
+func NewUnauthorized(msg string, args ...any) *ErrUnauthorized {
+	return &ErrUnauthorized{msg: fmt.Sprintf(msg, args...)}
+}
+
+func (e *ErrUnauthorized) Error() string {
+	return e.msg
+}
+
+func (e *ErrUnauthorized) Is(target error) bool {
+	var err *ErrUnauthorized
+	return errors.As(target, &err)
+}
+
+func (e *ErrUnauthorized) Code() int {
+	return duh.CodeUnauthorized
+}
+
+func (e *ErrUnauthorized) ProtoMessage() proto.Message {
+	return &v1.Reply{
+		Message:  e.msg,
+		CodeText: duh.CodeText(duh.CodeUnauthorized),
+		Code:     int32(duh.CodeUnauthorized),
+		Details:  nil,
+	}
+}
+
+func (e *ErrUnauthorized) Details() map[string]string {
+	return nil
+}
+
+func (e *ErrUnauthorized) Message() string {
+	return e.msg
+}
+
+var _ duh.Error = &ErrUnauthorized{}
+
+// -------------------------------------------------
+
+// ErrForbidden is used to indicate the request is authenticated but lacks permission
+type ErrForbidden struct {
+	msg string
+}
+
+func NewForbidden(msg string, args ...any) *ErrForbidden {
+	return &ErrForbidden{msg: fmt.Sprintf(msg, args...)}
+}
+
+func (e *ErrForbidden) Error() string {
+	return e.msg
+}
+
+func (e *ErrForbidden) Is(target error) bool {
+	var err *ErrForbidden
+	return errors.As(target, &err)
+}
+
+func (e *ErrForbidden) Code() int {
+	return duh.CodeForbidden
+}
+
+func (e *ErrForbidden) ProtoMessage() proto.Message {
+	return &v1.Reply{
+		Message:  e.msg,
+		CodeText: duh.CodeText(duh.CodeForbidden),
+		Code:     int32(duh.CodeForbidden),
+		Details:  nil,
+	}
+}
+
+func (e *ErrForbidden) Details() map[string]string {
+	return nil
+}
+
+func (e *ErrForbidden) Message() string {
+	return e.msg
+}
+
+var _ duh.Error = &ErrForbidden{}

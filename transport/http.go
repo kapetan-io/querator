@@ -73,6 +73,10 @@ const (
 	RPCStorageScheduledList     = "/v1/storage/scheduled.list"
 	RPCStorageScheduledQueueAdd = "/v1/storage/scheduled.add"
 	RPCStorageScheduledDelete   = "/v1/storage/scheduled.delete"
+
+	RPCNamespacesCreate = "/v1/namespaces.create"
+	RPCNamespacesList   = "/v1/namespaces.list"
+	RPCNamespacesDelete = "/v1/namespaces.delete"
 )
 
 type HTTPHandler struct {
@@ -173,6 +177,15 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	case RPCStorageScheduledList:
 		h.StorageScheduledList(ctx, w, r)
+		return
+	case RPCNamespacesCreate:
+		h.NamespacesCreate(ctx, w, r)
+		return
+	case RPCNamespacesList:
+		h.NamespacesList(ctx, w, r)
+		return
+	case RPCNamespacesDelete:
+		h.NamespacesDelete(ctx, w, r)
 		return
 	}
 	duh.ReplyWithCode(w, r, duh.CodeNotImplemented, nil, "no such method; "+r.URL.Path)
@@ -460,4 +473,51 @@ func (h *HTTPHandler) ReplyError(w http.ResponseWriter, r *http.Request, err err
 		"http.request.useragent", r.Header.Get("user-agent"),
 	)
 	duh.ReplyWithCode(w, r, duh.CodeInternalError, nil, "Internal Error")
+}
+
+// -------------------------------------------------
+// Namespace Management API
+// -------------------------------------------------
+
+func (h *HTTPHandler) NamespacesCreate(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.NamespaceInfo
+	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	if err := h.service.NamespacesCreate(ctx, &req); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
+}
+
+func (h *HTTPHandler) NamespacesList(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.NamespacesListRequest
+	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	var resp pb.NamespacesListResponse
+	if err := h.service.NamespacesList(ctx, &req, &resp); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &resp)
+}
+
+func (h *HTTPHandler) NamespacesDelete(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.NamespacesDeleteRequest
+	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	if err := h.service.NamespacesDelete(ctx, &req); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
 }

@@ -430,6 +430,13 @@ func (qm *QueuesManager) Shutdown(ctx context.Context) error {
 			wait <- err
 			return
 		}
+		if qm.conf.StorageConfig.Namespaces != nil {
+			qm.log.LogAttrs(ctx, LevelDebugAll, "close namespace store")
+			if err := qm.conf.StorageConfig.Namespaces.Close(ctx); err != nil {
+				wait <- err
+				return
+			}
+		}
 		close(wait)
 	}()
 

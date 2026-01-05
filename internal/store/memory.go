@@ -791,3 +791,100 @@ func (m MemoryPartitionStore) Get(info types.PartitionInfo) Partition {
 	}
 	return p
 }
+
+// ---------------------------------------------
+// Namespaces Implementation
+// ---------------------------------------------
+
+type MemoryNamespaces struct {
+	mem []types.Namespace
+	log *slog.Logger
+}
+
+var _ Namespaces = &MemoryNamespaces{}
+
+func NewMemoryNamespaces(log *slog.Logger) *MemoryNamespaces {
+	set.Default(&log, slog.Default())
+	return &MemoryNamespaces{
+		mem: make([]types.Namespace, 0, 100),
+		log: log,
+	}
+}
+
+func (s *MemoryNamespaces) Get(_ context.Context, name string, ns *types.Namespace) error {
+	if strings.TrimSpace(name) == "" {
+		return types.ErrNamespaceNotExist
+	}
+
+	idx, ok := s.findNamespace(name)
+	if !ok {
+		return types.ErrNamespaceNotExist
+	}
+	*ns = s.mem[idx]
+	return nil
+}
+
+func (s *MemoryNamespaces) Add(_ context.Context, ns types.Namespace) error {
+	if strings.TrimSpace(ns.Name) == "" {
+		return transport.NewInvalidOption("namespace name is invalid; cannot be empty")
+	}
+
+	_, ok := s.findNamespace(ns.Name)
+	if ok {
+		return types.ErrNamespaceAlreadyExists
+	}
+
+	s.mem = append(s.mem, ns)
+	return nil
+}
+
+func (s *MemoryNamespaces) List(_ context.Context, namespaces *[]types.Namespace, opts types.ListOptions) error {
+	var count, idx int
+	if opts.Pivot != nil {
+		idx, _ = s.findNamespace(string(opts.Pivot))
+	}
+
+	for _, ns := range s.mem[idx:] {
+		if count >= opts.Limit {
+			return nil
+		}
+		*namespaces = append(*namespaces, ns)
+		count++
+	}
+	return nil
+}
+
+func (s *MemoryNamespaces) Delete(_ context.Context, name string) error {
+	if strings.TrimSpace(name) == "" {
+		return types.ErrNamespaceNotExist
+	}
+
+	idx, ok := s.findNamespace(name)
+	if !ok {
+		return types.ErrNamespaceNotExist
+	}
+	s.mem = append(s.mem[:idx], s.mem[idx+1:]...)
+	return nil
+}
+
+func (s *MemoryNamespaces) Close(_ context.Context) error {
+	s.mem = nil
+	return nil
+}
+
+// findNamespace attempts to find the provided namespace in s.mem. If found returns the index and true.
+// If not found returns the next nearest item in the list.
+func (s *MemoryNamespaces) findNamespace(name string) (int, bool) {
+	var nearest, nearestIdx int
+	for i, ns := range s.mem {
+		lex := strings.Compare(ns.Name, name)
+		if lex == 0 {
+			return i, true
+		}
+		if lex > nearest {
+			nearestIdx = i
+			nearest = lex
+		}
+	}
+	return nearestIdx, false
+}

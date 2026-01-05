@@ -253,6 +253,7 @@ func (b *badgerTestSetup) Setup(bc store.BadgerConfig) store.Config {
 	bc.Log = log
 
 	var conf store.Config
+	conf.Namespaces = store.NewBadgerNamespaces(bc)
 	conf.Queues = store.NewBadgerQueues(bc)
 	conf.PartitionStorage = []store.PartitionStorage{
 		{
@@ -358,6 +359,7 @@ func compareStorageItem(t *testing.T, l *pb.StorageItem, r *pb.StorageItem) {
 
 //nolint:unparam // conf param kept for consistency with other setup functions
 func setupMemoryStorage(conf store.Config) store.Config {
+	conf.Namespaces = store.NewMemoryNamespaces(log)
 	conf.Queues = store.NewMemoryQueues(log)
 	conf.PartitionStorage = []store.PartitionStorage{
 		{

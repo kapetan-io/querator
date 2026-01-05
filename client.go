@@ -452,3 +452,63 @@ func CollectIDs[S ~[]E, E ItemsWithIDs](items S) []string {
 	}
 	return result
 }
+
+// -------------------------------------------------
+// Namespace Management API
+// -------------------------------------------------
+
+func (c *Client) NamespacesCreate(ctx context.Context, req *pb.NamespaceInfo) error {
+	payload, err := proto.Marshal(req)
+	if err != nil {
+		return duh.NewClientError("while marshaling request payload: %w", err, nil)
+	}
+
+	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("%s%s", c.conf.Endpoint, transport.RPCNamespacesCreate), bytes.NewReader(payload))
+	if err != nil {
+		return duh.NewClientError("", err, nil)
+	}
+
+	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	var res v1.Reply
+	return c.client.Do(r, &res)
+}
+
+func (c *Client) NamespacesList(ctx context.Context, res *pb.NamespacesListResponse, opts *ListOptions) error {
+	var req pb.NamespacesListRequest
+	if opts != nil {
+		req.Limit = int32(opts.Limit)
+		req.Pivot = opts.Pivot
+	}
+
+	payload, err := proto.Marshal(&req)
+	if err != nil {
+		return duh.NewClientError("while marshaling request payload: %w", err, nil)
+	}
+
+	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("%s%s", c.conf.Endpoint, transport.RPCNamespacesList), bytes.NewReader(payload))
+	if err != nil {
+		return duh.NewClientError("", err, nil)
+	}
+
+	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	return c.client.Do(r, res)
+}
+
+func (c *Client) NamespacesDelete(ctx context.Context, req *pb.NamespacesDeleteRequest) error {
+	payload, err := proto.Marshal(req)
+	if err != nil {
+		return duh.NewClientError("while marshaling request payload: %w", err, nil)
+	}
+
+	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("%s%s", c.conf.Endpoint, transport.RPCNamespacesDelete), bytes.NewReader(payload))
+	if err != nil {
+		return duh.NewClientError("", err, nil)
+	}
+
+	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	var res v1.Reply
+	return c.client.Do(r, &res)
+}

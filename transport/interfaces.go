@@ -34,10 +34,18 @@ type StorageInspector interface {
 	StorageScheduledList(context.Context, *pb.StorageItemsListRequest, *pb.StorageItemsListResponse) error
 }
 
+// NamespaceAdmin handles namespace lifecycle management
+type NamespaceAdmin interface {
+	NamespacesCreate(context.Context, *pb.NamespaceInfo) error
+	NamespacesList(context.Context, *pb.NamespacesListRequest, *pb.NamespacesListResponse) error
+	NamespacesDelete(context.Context, *pb.NamespacesDeleteRequest) error
+}
+
 // Service combines all interfaces for backward compatibility
 type Service interface {
 	QueueOps
 	QueueAdmin
 	StorageInspector
+	NamespaceAdmin
 	Health(context.Context) (*HealthResponse, error)
 }

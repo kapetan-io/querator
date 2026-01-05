@@ -138,10 +138,27 @@ func (s *Service) validateQueueOptionsProto(in *proto.QueueInfo, out *types.Queu
 		}
 	}
 
-	out.MaxAttempts = int(in.MaxAttempts)
 	out.RequestedPartitions = int(in.RequestedPartitions)
+	out.MaxAttempts = int(in.MaxAttempts)
+	out.Namespace = in.Namespace
 	out.DeadQueue = in.DeadQueue
 	out.Reference = in.Reference
 	out.Name = in.QueueName
+	return nil
+}
+
+func (s *Service) validateNamespaceProto(in *proto.NamespaceInfo, out *types.Namespace) error {
+	const maxNamespaceNameLength = 256
+
+	if len(in.Name) > maxNamespaceNameLength {
+		return transport.NewInvalidOption("namespace name is invalid; cannot be greater than '%d' characters", maxNamespaceNameLength)
+	}
+
+	if in.Name == "" {
+		return transport.NewInvalidOption("namespace name is invalid; cannot be empty")
+	}
+
+	out.Description = in.Description
+	out.Name = in.Name
 	return nil
 }

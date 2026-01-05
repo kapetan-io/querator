@@ -118,14 +118,11 @@ func testNamespaces(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		// Create multiple namespaces
 		const numNamespaces = 10
-		var created []*pb.NamespaceInfo
 		for i := 0; i < numNamespaces; i++ {
-			ns := &pb.NamespaceInfo{
+			require.NoError(t, c.NamespacesCreate(ctx, &pb.NamespaceInfo{
 				Name:        random.String("list-ns-", 10),
 				Description: random.String("desc-", 20),
-			}
-			require.NoError(t, c.NamespacesCreate(ctx, ns))
-			created = append(created, ns)
+			}))
 		}
 
 		t.Run("ListAll", func(t *testing.T) {

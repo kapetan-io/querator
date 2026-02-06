@@ -15,6 +15,7 @@ import (
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/service"
+	"github.com/kapetan-io/querator/transport"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/color"
 	"github.com/kapetan-io/tackle/set"
@@ -40,6 +41,10 @@ type Config struct {
 	// a new instance of the client bound to the client portion of a net.Pipe. This is useful for testing
 	// querator where access to the loop back is not allowed, or when using testing/synctest
 	InMemoryListener bool
+
+	// AuthBackend is the authentication and authorization backend.
+	// If nil, defaults to NoOpAuthBackend which allows all requests (open access).
+	AuthBackend transport.AuthBackend
 }
 
 func (c *Config) ClientTLS() *tls.Config {

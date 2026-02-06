@@ -556,6 +556,16 @@ func (s *Service) Shutdown(ctx context.Context) error {
 	return s.queues.Shutdown(ctx)
 }
 
+// GetQueueNamespace returns the namespace for a given queue name.
+// Used by the HTTP layer for authorization checks.
+func (s *Service) GetQueueNamespace(ctx context.Context, queueName string) (string, error) {
+	queue, err := s.queues.Get(ctx, queueName)
+	if err != nil {
+		return "", err
+	}
+	return queue.Info().Namespace, nil
+}
+
 // -------------------------------------------------
 // Namespace Management API
 // -------------------------------------------------

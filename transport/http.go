@@ -21,13 +21,102 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"net/http"
+	"strings"
+
 	"github.com/duh-rpc/duh-go"
 	v1 "github.com/duh-rpc/duh-go/proto/v1"
 	pb "github.com/kapetan-io/querator/proto"
 	"github.com/kapetan-io/tackle/set"
 	"github.com/prometheus/client_golang/prometheus"
-	"log/slog"
-	"net/http"
+)
+
+// Principal represents an authenticated entity making a request
+type Principal struct {
+	NamespaceScope *string
+	UserID         string
+	Username       string
+}
+
+// AnonymousPrincipal represents an unauthenticated user
+var AnonymousPrincipal = Principal{Username: "anonymous"}
+
+// AuthBackend defines the interface for authentication and authorization in the HTTP layer.
+// This interface is defined locally to avoid import cycles with internal/auth.
+type AuthBackend interface {
+	// Authenticate validates a token and returns the principal
+	Authenticate(ctx context.Context, token string) (Principal, error)
+	// HasPermission checks if a principal has a permission in a namespace
+	HasPermission(ctx context.Context, principal Principal, targetNS string, perm string) (bool, error)
+}
+
+// NoOpAuthBackend is an AuthBackend that always allows access (default open)
+type NoOpAuthBackend struct{}
+
+// Authenticate returns the anonymous principal
+func (n *NoOpAuthBackend) Authenticate(_ context.Context, _ string) (Principal, error) {
+	return AnonymousPrincipal, nil
+}
+
+// HasPermission always returns true
+func (n *NoOpAuthBackend) HasPermission(_ context.Context, _ Principal, _ string, _ string) (bool, error) {
+	return true, nil
+}
+
+type contextKey string
+
+const principalKey contextKey = "principal"
+
+// PrincipalFromContext extracts the Principal from the context
+func PrincipalFromContext(ctx context.Context) Principal {
+	p, ok := ctx.Value(principalKey).(Principal)
+	if !ok {
+		return AnonymousPrincipal
+	}
+	return p
+}
+
+// ContextWithPrincipal returns a new context with the Principal stored in it
+func ContextWithPrincipal(ctx context.Context, p Principal) context.Context {
+	return context.WithValue(ctx, principalKey, p)
+}
+
+// Permission constants for authorization checks
+const (
+	PermNamespaceCreate = "namespace.create"
+	PermNamespaceDelete = "namespace.delete"
+	PermNamespaceList   = "namespace.list"
+
+	PermQueueCreate   = "queue.create"
+	PermQueueDelete   = "queue.delete"
+	PermQueueUpdate   = "queue.update"
+	PermQueueList     = "queue.list"
+	PermQueueProduce  = "queue.produce"
+	PermQueueLease    = "queue.lease"
+	PermQueueComplete = "queue.complete"
+	PermQueueRetry    = "queue.retry"
+	PermQueueStats    = "queue.stats"
+	PermQueueClear    = "queue.clear"
+
+	PermUserCreate = "user.create"
+	PermUserDelete = "user.delete"
+	PermUserList   = "user.list"
+
+	PermAPIKeyCreate = "apikey.create"
+	PermAPIKeyDelete = "apikey.delete"
+	PermAPIKeyList   = "apikey.list"
+
+	PermRoleCreate        = "role.create"
+	PermRoleUpdate        = "role.update"
+	PermRoleDelete        = "role.delete"
+	PermRoleList          = "role.list"
+	PermRoleBindingCreate = "rolebinding.create"
+	PermRoleBindingDelete = "rolebinding.delete"
+	PermRoleBindingList   = "rolebinding.list"
+
+	// SystemNamespace is the reserved namespace for system-level resources
+	SystemNamespace = "_system"
 )
 
 // TODO: Document pause in OpenAPI, "Pauses queue processing such that requests to produce, lease,
@@ -98,14 +187,25 @@ const (
 
 type HTTPHandler struct {
 	duration       *prometheus.SummaryVec
-	log            *slog.Logger
+	maxProduceSize int64
 	metrics        http.Handler
 	service        Service
-	maxProduceSize int64
+	auth           AuthBackend
+	log            *slog.Logger
 }
 
-func NewHTTPHandler(s Service, metrics http.Handler, maxProduceSize int64, log *slog.Logger) *HTTPHandler {
-	set.Default(&maxProduceSize, int64(5*duh.MegaByte))
+// HTTPHandlerConfig configures the HTTPHandler
+type HTTPHandlerConfig struct {
+	MaxProduceSize int64
+	AuthBackend    AuthBackend
+	Metrics        http.Handler
+	Service        Service
+	Log            *slog.Logger
+}
+
+func NewHTTPHandler(conf HTTPHandlerConfig) *HTTPHandler {
+	set.Default(&conf.MaxProduceSize, int64(5*duh.MegaByte))
+	set.Default(&conf.AuthBackend, &NoOpAuthBackend{})
 
 	return &HTTPHandler{
 		duration: prometheus.NewSummaryVec(prometheus.SummaryOpts{
@@ -116,11 +216,49 @@ func NewHTTPHandler(s Service, metrics http.Handler, maxProduceSize int64, log *
 				0.99: 0.001,
 			},
 		}, []string{"path"}),
-		maxProduceSize: maxProduceSize,
-		metrics:        metrics,
-		log:            log,
-		service:        s,
+		maxProduceSize: conf.MaxProduceSize,
+		metrics:        conf.Metrics,
+		service:        conf.Service,
+		auth:           conf.AuthBackend,
+		log:            conf.Log,
 	}
+}
+
+// authenticate extracts and validates credentials from the request
+func (h *HTTPHandler) authenticate(ctx context.Context, r *http.Request) (context.Context, error) {
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		principal, err := h.auth.Authenticate(ctx, "")
+		if err != nil {
+			return ctx, NewUnauthorized("authentication required")
+		}
+		return ContextWithPrincipal(ctx, principal), nil
+	}
+
+	const bearerPrefix = "Bearer "
+	if !strings.HasPrefix(authHeader, bearerPrefix) {
+		return ctx, NewUnauthorized("invalid authorization header format")
+	}
+	token := strings.TrimPrefix(authHeader, bearerPrefix)
+
+	principal, err := h.auth.Authenticate(ctx, token)
+	if err != nil {
+		return ctx, err
+	}
+	return ContextWithPrincipal(ctx, principal), nil
+}
+
+// authorize checks if the principal has the required permission in the namespace
+func (h *HTTPHandler) authorize(ctx context.Context, namespace, permission string) error {
+	principal := PrincipalFromContext(ctx)
+	hasPermission, err := h.auth.HasPermission(ctx, principal, namespace, permission)
+	if err != nil {
+		return NewRequestFailed("authorization check failed: %s", err.Error())
+	}
+	if !hasPermission {
+		return NewForbidden("access denied")
+	}
+	return nil
 }
 
 func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -140,6 +278,13 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		duh.ReplyWithCode(w, r, duh.CodeBadRequest, nil,
 			fmt.Sprintf("http method '%s' not allowed; only POST", r.Method))
+		return
+	}
+
+	// Authenticate the request
+	ctx, err := h.authenticate(ctx, r)
+	if err != nil {
+		h.ReplyError(w, r, err)
 		return
 	}
 
@@ -254,6 +399,17 @@ func (h *HTTPHandler) QueueProduce(ctx context.Context, w http.ResponseWriter, r
 		return
 	}
 
+	// Get queue namespace for authorization
+	ns, err := h.service.GetQueueNamespace(ctx, req.QueueName)
+	if err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	if err := h.authorize(ctx, ns, PermQueueProduce); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
 	if err := h.service.QueueProduce(ctx, &req); err != nil {
 		h.ReplyError(w, r, err)
 		return
@@ -264,6 +420,17 @@ func (h *HTTPHandler) QueueProduce(ctx context.Context, w http.ResponseWriter, r
 func (h *HTTPHandler) QueueLease(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req pb.QueueLeaseRequest
 	if err := duh.ReadRequest(r, &req, 512*duh.Bytes); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	// Get queue namespace for authorization
+	ns, err := h.service.GetQueueNamespace(ctx, req.QueueName)
+	if err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	if err := h.authorize(ctx, ns, PermQueueLease); err != nil {
 		h.ReplyError(w, r, err)
 		return
 	}
@@ -283,6 +450,17 @@ func (h *HTTPHandler) QueueComplete(ctx context.Context, w http.ResponseWriter, 
 		return
 	}
 
+	// Get queue namespace for authorization
+	ns, err := h.service.GetQueueNamespace(ctx, req.QueueName)
+	if err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	if err := h.authorize(ctx, ns, PermQueueComplete); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
 	if err := h.service.QueueComplete(ctx, &req); err != nil {
 		h.ReplyError(w, r, err)
 		return
@@ -293,6 +471,17 @@ func (h *HTTPHandler) QueueComplete(ctx context.Context, w http.ResponseWriter, 
 func (h *HTTPHandler) QueueRetry(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req pb.QueueRetryRequest
 	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	// Get queue namespace for authorization
+	ns, err := h.service.GetQueueNamespace(ctx, req.QueueName)
+	if err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	if err := h.authorize(ctx, ns, PermQueueRetry); err != nil {
 		h.ReplyError(w, r, err)
 		return
 	}
@@ -315,6 +504,16 @@ func (h *HTTPHandler) QueuesCreate(ctx context.Context, w http.ResponseWriter, r
 		return
 	}
 
+	// Authorize against the namespace from the request
+	ns := req.Namespace
+	if ns == "" {
+		ns = SystemNamespace
+	}
+	if err := h.authorize(ctx, ns, PermQueueCreate); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
 	if err := h.service.QueuesCreate(ctx, &req); err != nil {
 		h.ReplyError(w, r, err)
 		return
@@ -325,6 +524,12 @@ func (h *HTTPHandler) QueuesCreate(ctx context.Context, w http.ResponseWriter, r
 func (h *HTTPHandler) QueuesList(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req pb.QueuesListRequest
 	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	// QueuesList requires system-level permission
+	if err := h.authorize(ctx, SystemNamespace, PermQueueList); err != nil {
 		h.ReplyError(w, r, err)
 		return
 	}
@@ -345,6 +550,17 @@ func (h *HTTPHandler) QueuesUpdate(ctx context.Context, w http.ResponseWriter, r
 		return
 	}
 
+	// Get queue namespace for authorization
+	ns, err := h.service.GetQueueNamespace(ctx, req.QueueName)
+	if err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	if err := h.authorize(ctx, ns, PermQueueUpdate); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
 	if err := h.service.QueuesUpdate(ctx, &req); err != nil {
 		h.ReplyError(w, r, err)
 		return
@@ -359,6 +575,17 @@ func (h *HTTPHandler) QueuesDelete(ctx context.Context, w http.ResponseWriter, r
 		return
 	}
 
+	// Get queue namespace for authorization
+	ns, err := h.service.GetQueueNamespace(ctx, req.QueueName)
+	if err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	if err := h.authorize(ctx, ns, PermQueueDelete); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
 	if err := h.service.QueuesDelete(ctx, &req); err != nil {
 		h.ReplyError(w, r, err)
 		return
@@ -369,6 +596,17 @@ func (h *HTTPHandler) QueuesDelete(ctx context.Context, w http.ResponseWriter, r
 func (h *HTTPHandler) QueuesInfo(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req pb.QueuesInfoRequest
 	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	// Get queue namespace for authorization
+	ns, err := h.service.GetQueueNamespace(ctx, req.QueueName)
+	if err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	if err := h.authorize(ctx, ns, PermQueueStats); err != nil {
 		h.ReplyError(w, r, err)
 		return
 	}
@@ -388,6 +626,17 @@ func (h *HTTPHandler) QueueStats(ctx context.Context, w http.ResponseWriter, r *
 		return
 	}
 
+	// Get queue namespace for authorization
+	ns, err := h.service.GetQueueNamespace(ctx, req.QueueName)
+	if err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	if err := h.authorize(ctx, ns, PermQueueStats); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
 	var resp pb.QueueStatsResponse
 	if err := h.service.QueueStats(ctx, &req, &resp); err != nil {
 		h.ReplyError(w, r, err)
@@ -399,6 +648,17 @@ func (h *HTTPHandler) QueueStats(ctx context.Context, w http.ResponseWriter, r *
 func (h *HTTPHandler) QueueClear(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req pb.QueueClearRequest
 	if err := duh.ReadRequest(r, &req, 512*duh.Bytes); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	// Get queue namespace for authorization
+	ns, err := h.service.GetQueueNamespace(ctx, req.QueueName)
+	if err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	if err := h.authorize(ctx, ns, PermQueueClear); err != nil {
 		h.ReplyError(w, r, err)
 		return
 	}
@@ -417,6 +677,17 @@ func (h *HTTPHandler) QueueReload(ctx context.Context, w http.ResponseWriter, r 
 		return
 	}
 
+	// Get queue namespace for authorization
+	ns, err := h.service.GetQueueNamespace(ctx, req.QueueName)
+	if err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	if err := h.authorize(ctx, ns, PermQueueUpdate); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
 	if err := h.service.QueueReload(ctx, &req); err != nil {
 		h.ReplyError(w, r, err)
 		return
@@ -427,6 +698,17 @@ func (h *HTTPHandler) QueueReload(ctx context.Context, w http.ResponseWriter, r 
 func (h *HTTPHandler) StorageItemsList(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req pb.StorageItemsListRequest
 	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	// Get queue namespace for authorization
+	ns, err := h.service.GetQueueNamespace(ctx, req.QueueName)
+	if err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	if err := h.authorize(ctx, ns, PermQueueStats); err != nil {
 		h.ReplyError(w, r, err)
 		return
 	}
@@ -446,6 +728,17 @@ func (h *HTTPHandler) StorageScheduledList(ctx context.Context, w http.ResponseW
 		return
 	}
 
+	// Get queue namespace for authorization
+	ns, err := h.service.GetQueueNamespace(ctx, req.QueueName)
+	if err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	if err := h.authorize(ctx, ns, PermQueueStats); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
 	var resp pb.StorageItemsListResponse
 	if err := h.service.StorageScheduledList(ctx, &req, &resp); err != nil {
 		h.ReplyError(w, r, err)
@@ -461,6 +754,17 @@ func (h *HTTPHandler) StorageItemsImport(ctx context.Context, w http.ResponseWri
 		return
 	}
 
+	// Get queue namespace for authorization
+	ns, err := h.service.GetQueueNamespace(ctx, req.QueueName)
+	if err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	if err := h.authorize(ctx, ns, PermQueueProduce); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
 	var resp pb.StorageItemsImportResponse
 	if err := h.service.StorageItemsImport(ctx, &req, &resp); err != nil {
 		h.ReplyError(w, r, err)
@@ -472,6 +776,17 @@ func (h *HTTPHandler) StorageItemsImport(ctx context.Context, w http.ResponseWri
 func (h *HTTPHandler) StorageItemsDelete(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req pb.StorageItemsDeleteRequest
 	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	// Get queue namespace for authorization
+	ns, err := h.service.GetQueueNamespace(ctx, req.QueueName)
+	if err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	if err := h.authorize(ctx, ns, PermQueueComplete); err != nil {
 		h.ReplyError(w, r, err)
 		return
 	}
@@ -542,6 +857,12 @@ func (h *HTTPHandler) NamespacesCreate(ctx context.Context, w http.ResponseWrite
 		return
 	}
 
+	// Namespace operations require system-level permission
+	if err := h.authorize(ctx, SystemNamespace, PermNamespaceCreate); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
 	if err := h.service.NamespacesCreate(ctx, &req); err != nil {
 		h.ReplyError(w, r, err)
 		return
@@ -552,6 +873,12 @@ func (h *HTTPHandler) NamespacesCreate(ctx context.Context, w http.ResponseWrite
 func (h *HTTPHandler) NamespacesList(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req pb.NamespacesListRequest
 	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	// Namespace operations require system-level permission
+	if err := h.authorize(ctx, SystemNamespace, PermNamespaceList); err != nil {
 		h.ReplyError(w, r, err)
 		return
 	}
@@ -567,6 +894,12 @@ func (h *HTTPHandler) NamespacesList(ctx context.Context, w http.ResponseWriter,
 func (h *HTTPHandler) NamespacesDelete(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req pb.NamespacesDeleteRequest
 	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	// Namespace operations require system-level permission
+	if err := h.authorize(ctx, SystemNamespace, PermNamespaceDelete); err != nil {
 		h.ReplyError(w, r, err)
 		return
 	}
@@ -589,6 +922,12 @@ func (h *HTTPHandler) UsersCreate(ctx context.Context, w http.ResponseWriter, r 
 		return
 	}
 
+	// User operations require system-level permission
+	if err := h.authorize(ctx, SystemNamespace, PermUserCreate); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
 	var resp pb.UserCreateResponse
 	if err := h.service.UsersCreate(ctx, &req, &resp); err != nil {
 		h.ReplyError(w, r, err)
@@ -604,6 +943,12 @@ func (h *HTTPHandler) UsersList(ctx context.Context, w http.ResponseWriter, r *h
 		return
 	}
 
+	// User operations require system-level permission
+	if err := h.authorize(ctx, SystemNamespace, PermUserList); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
 	var resp pb.UsersListResponse
 	if err := h.service.UsersList(ctx, &req, &resp); err != nil {
 		h.ReplyError(w, r, err)
@@ -615,6 +960,12 @@ func (h *HTTPHandler) UsersList(ctx context.Context, w http.ResponseWriter, r *h
 func (h *HTTPHandler) UsersDelete(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req pb.UsersDeleteRequest
 	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	// User operations require system-level permission
+	if err := h.authorize(ctx, SystemNamespace, PermUserDelete); err != nil {
 		h.ReplyError(w, r, err)
 		return
 	}
@@ -637,6 +988,12 @@ func (h *HTTPHandler) APIKeysCreate(ctx context.Context, w http.ResponseWriter, 
 		return
 	}
 
+	// API key operations require system-level permission
+	if err := h.authorize(ctx, SystemNamespace, PermAPIKeyCreate); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
 	var resp pb.APIKeyCreateResponse
 	if err := h.service.APIKeysCreate(ctx, &req, &resp); err != nil {
 		h.ReplyError(w, r, err)
@@ -652,6 +1009,12 @@ func (h *HTTPHandler) APIKeysList(ctx context.Context, w http.ResponseWriter, r 
 		return
 	}
 
+	// API key operations require system-level permission
+	if err := h.authorize(ctx, SystemNamespace, PermAPIKeyList); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
 	var resp pb.APIKeysListResponse
 	if err := h.service.APIKeysList(ctx, &req, &resp); err != nil {
 		h.ReplyError(w, r, err)
@@ -663,6 +1026,12 @@ func (h *HTTPHandler) APIKeysList(ctx context.Context, w http.ResponseWriter, r 
 func (h *HTTPHandler) APIKeysDelete(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req pb.APIKeysDeleteRequest
 	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	// API key operations require system-level permission
+	if err := h.authorize(ctx, SystemNamespace, PermAPIKeyDelete); err != nil {
 		h.ReplyError(w, r, err)
 		return
 	}
@@ -685,6 +1054,12 @@ func (h *HTTPHandler) RolesCreate(ctx context.Context, w http.ResponseWriter, r 
 		return
 	}
 
+	// Role operations are scoped to the namespace in the request
+	if err := h.authorize(ctx, req.Namespace, PermRoleCreate); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
 	var resp pb.RoleCreateResponse
 	if err := h.service.RolesCreate(ctx, &req, &resp); err != nil {
 		h.ReplyError(w, r, err)
@@ -696,6 +1071,12 @@ func (h *HTTPHandler) RolesCreate(ctx context.Context, w http.ResponseWriter, r 
 func (h *HTTPHandler) RolesList(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req pb.RolesListRequest
 	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	// Role operations are scoped to the namespace in the request
+	if err := h.authorize(ctx, req.Namespace, PermRoleList); err != nil {
 		h.ReplyError(w, r, err)
 		return
 	}
@@ -715,6 +1096,12 @@ func (h *HTTPHandler) RolesUpdate(ctx context.Context, w http.ResponseWriter, r 
 		return
 	}
 
+	// Role operations are scoped to the namespace in the request
+	if err := h.authorize(ctx, req.Namespace, PermRoleUpdate); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
 	if err := h.service.RolesUpdate(ctx, &req); err != nil {
 		h.ReplyError(w, r, err)
 		return
@@ -725,6 +1112,12 @@ func (h *HTTPHandler) RolesUpdate(ctx context.Context, w http.ResponseWriter, r 
 func (h *HTTPHandler) RolesDelete(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req pb.RolesDeleteRequest
 	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	// Role operations are scoped to the namespace in the request
+	if err := h.authorize(ctx, req.Namespace, PermRoleDelete); err != nil {
 		h.ReplyError(w, r, err)
 		return
 	}
@@ -747,6 +1140,12 @@ func (h *HTTPHandler) RoleBindingsCreate(ctx context.Context, w http.ResponseWri
 		return
 	}
 
+	// Role binding operations are scoped to the namespace in the request
+	if err := h.authorize(ctx, req.Namespace, PermRoleBindingCreate); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
 	var resp pb.RoleBindingCreateResponse
 	if err := h.service.RoleBindingsCreate(ctx, &req, &resp); err != nil {
 		h.ReplyError(w, r, err)
@@ -762,6 +1161,12 @@ func (h *HTTPHandler) RoleBindingsList(ctx context.Context, w http.ResponseWrite
 		return
 	}
 
+	// Role binding operations are scoped to the namespace in the request
+	if err := h.authorize(ctx, req.Namespace, PermRoleBindingList); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
 	var resp pb.RoleBindingsListResponse
 	if err := h.service.RoleBindingsList(ctx, &req, &resp); err != nil {
 		h.ReplyError(w, r, err)
@@ -773,6 +1178,12 @@ func (h *HTTPHandler) RoleBindingsList(ctx context.Context, w http.ResponseWrite
 func (h *HTTPHandler) RoleBindingsDelete(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req pb.RoleBindingDeleteRequest
 	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	// Role binding operations are scoped to the namespace in the request
+	if err := h.authorize(ctx, req.Namespace, PermRoleBindingDelete); err != nil {
 		h.ReplyError(w, r, err)
 		return
 	}

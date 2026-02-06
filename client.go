@@ -41,6 +41,8 @@ type ClientConfig struct {
 	Client *http.Client
 	// The address of endpoint in the format `<scheme>://<host>:<port>`
 	Endpoint string
+	// APIKey is the API key used for authentication (sent as Bearer token)
+	APIKey string
 }
 
 type Client struct {
@@ -71,6 +73,12 @@ func NewClient(conf ClientConfig) (*Client, error) {
 	}, nil
 }
 
+func (c *Client) setAuthHeader(r *http.Request) {
+	if c.conf.APIKey != "" {
+		r.Header.Set("Authorization", "Bearer "+c.conf.APIKey)
+	}
+}
+
 func (c *Client) QueueProduce(ctx context.Context, req *pb.QueueProduceRequest) error {
 	payload, err := proto.Marshal(req)
 	if err != nil {
@@ -84,6 +92,7 @@ func (c *Client) QueueProduce(ctx context.Context, req *pb.QueueProduceRequest) 
 	}
 
 	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	c.setAuthHeader(r)
 	var res v1.Reply
 	return c.client.Do(r, &res)
 }
@@ -101,6 +110,7 @@ func (c *Client) QueueLease(ctx context.Context, req *pb.QueueLeaseRequest, res 
 	}
 
 	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	c.setAuthHeader(r)
 	return c.client.Do(r, res)
 }
 
@@ -117,6 +127,7 @@ func (c *Client) QueueComplete(ctx context.Context, req *pb.QueueCompleteRequest
 	}
 
 	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	c.setAuthHeader(r)
 	var res v1.Reply
 	return c.client.Do(r, &res)
 }
@@ -134,6 +145,7 @@ func (c *Client) QueueRetry(ctx context.Context, req *pb.QueueRetryRequest) erro
 	}
 
 	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	c.setAuthHeader(r)
 	var res v1.Reply
 	return c.client.Do(r, &res)
 }
@@ -151,6 +163,7 @@ func (c *Client) QueueClear(ctx context.Context, req *pb.QueueClearRequest) erro
 	}
 
 	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	c.setAuthHeader(r)
 	var res v1.Reply
 	return c.client.Do(r, &res)
 }
@@ -168,6 +181,7 @@ func (c *Client) QueueReload(ctx context.Context, req *pb.QueueReloadRequest) er
 	}
 
 	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	c.setAuthHeader(r)
 	var res v1.Reply
 	return c.client.Do(r, &res)
 }
@@ -189,6 +203,7 @@ func (c *Client) QueuesCreate(ctx context.Context, req *pb.QueueInfo) error {
 	}
 
 	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	c.setAuthHeader(r)
 	var res v1.Reply
 	return c.client.Do(r, &res)
 }
@@ -212,6 +227,7 @@ func (c *Client) QueuesList(ctx context.Context, res *pb.QueuesListResponse, opt
 	}
 
 	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	c.setAuthHeader(r)
 	return c.client.Do(r, res)
 }
 
@@ -228,6 +244,7 @@ func (c *Client) QueuesUpdate(ctx context.Context, req *pb.QueueInfo) error {
 	}
 
 	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	c.setAuthHeader(r)
 	var res v1.Reply
 	return c.client.Do(r, &res)
 }
@@ -245,6 +262,7 @@ func (c *Client) QueuesDelete(ctx context.Context, req *pb.QueuesDeleteRequest) 
 	}
 
 	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	c.setAuthHeader(r)
 	var res v1.Reply
 	return c.client.Do(r, &res)
 }
@@ -262,6 +280,7 @@ func (c *Client) QueuesInfo(ctx context.Context, req *pb.QueuesInfoRequest, res 
 	}
 
 	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	c.setAuthHeader(r)
 	return c.client.Do(r, res)
 }
 
@@ -300,6 +319,7 @@ func (c *Client) StorageItemsList(ctx context.Context, name string, partition in
 	}
 
 	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	c.setAuthHeader(r)
 	return c.client.Do(r, res)
 }
 
@@ -335,6 +355,7 @@ func (c *Client) StorageScheduledList(ctx context.Context, name string, partitio
 	}
 
 	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	c.setAuthHeader(r)
 	return c.client.Do(r, res)
 }
 
@@ -353,6 +374,7 @@ func (c *Client) StorageItemsImport(ctx context.Context, req *pb.StorageItemsImp
 	}
 
 	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	c.setAuthHeader(r)
 	return c.client.Do(r, res)
 }
 
@@ -370,6 +392,7 @@ func (c *Client) StorageItemsDelete(ctx context.Context, req *pb.StorageItemsDel
 	}
 
 	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	c.setAuthHeader(r)
 	var res v1.Reply
 	return c.client.Do(r, &res)
 }
@@ -389,6 +412,7 @@ func (c *Client) QueueStats(ctx context.Context, req *pb.QueueStatsRequest,
 	}
 
 	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	c.setAuthHeader(r)
 	return c.client.Do(r, res)
 }
 
@@ -470,6 +494,7 @@ func (c *Client) NamespacesCreate(ctx context.Context, req *pb.NamespaceInfo) er
 	}
 
 	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	c.setAuthHeader(r)
 	var res v1.Reply
 	return c.client.Do(r, &res)
 }
@@ -493,6 +518,7 @@ func (c *Client) NamespacesList(ctx context.Context, res *pb.NamespacesListRespo
 	}
 
 	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	c.setAuthHeader(r)
 	return c.client.Do(r, res)
 }
 
@@ -509,6 +535,7 @@ func (c *Client) NamespacesDelete(ctx context.Context, req *pb.NamespacesDeleteR
 	}
 
 	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	c.setAuthHeader(r)
 	var res v1.Reply
 	return c.client.Do(r, &res)
 }
@@ -531,6 +558,7 @@ func (c *Client) UsersCreate(ctx context.Context, req *pb.UserCreateRequest,
 	}
 
 	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	c.setAuthHeader(r)
 	return c.client.Do(r, res)
 }
 
@@ -553,6 +581,7 @@ func (c *Client) UsersList(ctx context.Context, res *pb.UsersListResponse, opts 
 	}
 
 	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	c.setAuthHeader(r)
 	return c.client.Do(r, res)
 }
 
@@ -569,6 +598,7 @@ func (c *Client) UsersDelete(ctx context.Context, req *pb.UsersDeleteRequest) er
 	}
 
 	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	c.setAuthHeader(r)
 	var res v1.Reply
 	return c.client.Do(r, &res)
 }
@@ -591,6 +621,7 @@ func (c *Client) APIKeysCreate(ctx context.Context, req *pb.APIKeyCreateRequest,
 	}
 
 	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	c.setAuthHeader(r)
 	return c.client.Do(r, res)
 }
 
@@ -613,6 +644,7 @@ func (c *Client) APIKeysList(ctx context.Context, res *pb.APIKeysListResponse, o
 	}
 
 	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	c.setAuthHeader(r)
 	return c.client.Do(r, res)
 }
 
@@ -638,6 +670,7 @@ func (c *Client) APIKeysListByUser(ctx context.Context, userID string, res *pb.A
 	}
 
 	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	c.setAuthHeader(r)
 	return c.client.Do(r, res)
 }
 
@@ -654,6 +687,7 @@ func (c *Client) APIKeysDelete(ctx context.Context, req *pb.APIKeysDeleteRequest
 	}
 
 	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	c.setAuthHeader(r)
 	var res v1.Reply
 	return c.client.Do(r, &res)
 }
@@ -676,6 +710,7 @@ func (c *Client) RolesCreate(ctx context.Context, req *pb.RoleCreateRequest,
 	}
 
 	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	c.setAuthHeader(r)
 	return c.client.Do(r, res)
 }
 
@@ -701,6 +736,7 @@ func (c *Client) RolesList(ctx context.Context, namespace string, res *pb.RolesL
 	}
 
 	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	c.setAuthHeader(r)
 	return c.client.Do(r, res)
 }
 
@@ -717,6 +753,7 @@ func (c *Client) RolesUpdate(ctx context.Context, req *pb.RoleUpdateRequest) err
 	}
 
 	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	c.setAuthHeader(r)
 	var res v1.Reply
 	return c.client.Do(r, &res)
 }
@@ -734,6 +771,7 @@ func (c *Client) RolesDelete(ctx context.Context, req *pb.RolesDeleteRequest) er
 	}
 
 	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	c.setAuthHeader(r)
 	var res v1.Reply
 	return c.client.Do(r, &res)
 }
@@ -756,6 +794,7 @@ func (c *Client) RoleBindingsCreate(ctx context.Context, req *pb.RoleBindingCrea
 	}
 
 	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	c.setAuthHeader(r)
 	return c.client.Do(r, res)
 }
 
@@ -781,6 +820,7 @@ func (c *Client) RoleBindingsList(ctx context.Context, namespace string, res *pb
 	}
 
 	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	c.setAuthHeader(r)
 	return c.client.Do(r, res)
 }
 
@@ -797,6 +837,7 @@ func (c *Client) RoleBindingsDelete(ctx context.Context, req *pb.RoleBindingDele
 	}
 
 	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	c.setAuthHeader(r)
 	var res v1.Reply
 	return c.client.Do(r, &res)
 }

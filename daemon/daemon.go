@@ -65,9 +65,14 @@ func NewDaemon(ctx context.Context, conf Config) (*Daemon, error) {
 func (d *Daemon) Start(ctx context.Context) error {
 	registry := prometheus.NewRegistry()
 
-	handler := transport.NewHTTPHandler(d.service, promhttp.InstrumentMetricHandler(
-		registry, promhttp.HandlerFor(registry, promhttp.HandlerOpts{}),
-	), d.conf.MaxProducePayloadSize, d.conf.Service.Log)
+	handler := transport.NewHTTPHandler(transport.HTTPHandlerConfig{
+		MaxProduceSize: d.conf.MaxProducePayloadSize,
+		AuthBackend:    d.conf.AuthBackend,
+		Metrics: promhttp.InstrumentMetricHandler(
+			registry, promhttp.HandlerFor(registry, promhttp.HandlerOpts{})),
+		Service: d.service,
+		Log:     d.conf.Service.Log,
+	})
 	registry.MustRegister(handler)
 
 	switch {

@@ -763,8 +763,8 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					Req: &pb.QueueInfo{
 						QueueName: "noSuchQueue",
 					},
-					Msg:  "queue does not exist",
-					Code: duh.CodeRequestFailed,
+					Msg:  "queue does not exist; no such queue named 'noSuchQueue'",
+					Code: duh.CodeBadRequest,
 				},
 				{
 					Name: "QueueNameMaxLength",

@@ -550,17 +550,6 @@ func (h *HTTPHandler) QueuesUpdate(ctx context.Context, w http.ResponseWriter, r
 		return
 	}
 
-	// Get queue namespace for authorization
-	ns, err := h.service.GetQueueNamespace(ctx, req.QueueName)
-	if err != nil {
-		h.ReplyError(w, r, err)
-		return
-	}
-	if err := h.authorize(ctx, ns, PermQueueUpdate); err != nil {
-		h.ReplyError(w, r, err)
-		return
-	}
-
 	if err := h.service.QueuesUpdate(ctx, &req); err != nil {
 		h.ReplyError(w, r, err)
 		return
@@ -571,17 +560,6 @@ func (h *HTTPHandler) QueuesUpdate(ctx context.Context, w http.ResponseWriter, r
 func (h *HTTPHandler) QueuesDelete(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req pb.QueuesDeleteRequest
 	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
-		h.ReplyError(w, r, err)
-		return
-	}
-
-	// Get queue namespace for authorization
-	ns, err := h.service.GetQueueNamespace(ctx, req.QueueName)
-	if err != nil {
-		h.ReplyError(w, r, err)
-		return
-	}
-	if err := h.authorize(ctx, ns, PermQueueDelete); err != nil {
 		h.ReplyError(w, r, err)
 		return
 	}

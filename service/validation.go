@@ -1,6 +1,9 @@
 package service
 
 import (
+	"strings"
+	"unicode"
+
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/proto"
 	"github.com/kapetan-io/querator/transport"
@@ -8,10 +11,32 @@ import (
 )
 
 const (
-	maxTimeoutLength  = 15
-	defaultAllocation = 512  // 2<<8
-	maxAllocation     = 2048 // 2<<10
+	maxTimeoutLength   = 15
+	maxQueueNameLength = 512
+	defaultAllocation  = 512  // 2<<8
+	maxAllocation      = 2048 // 2<<10
 )
+
+// validateQueueName validates the queue name format.
+// This validation happens at the service layer to protect downstream systems.
+func validateQueueName(name string) error {
+	if len(name) > maxQueueNameLength {
+		return transport.NewInvalidOption("queue name is invalid; cannot be greater than '%d' characters", maxQueueNameLength)
+	}
+
+	if strings.TrimSpace(name) == "" {
+		return transport.NewInvalidOption("queue name is invalid; queue name cannot be empty")
+	}
+
+	if strings.ContainsFunc(name, unicode.IsSpace) {
+		return transport.NewInvalidOption("queue name is invalid; '%s' cannot contain whitespace", name)
+	}
+
+	if strings.Contains(name, "~") {
+		return transport.NewInvalidOption("queue name is invalid; '%s' cannot contain '~' character", name)
+	}
+	return nil
+}
 
 func allocInt32(mem int32) int {
 	if mem < 0 {

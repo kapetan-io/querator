@@ -42,6 +42,8 @@ type Config struct {
 	Log *slog.Logger
 	// StorageConfig is the configured storage backends
 	StorageConfig store.Config
+	// Auth is the authentication/authorization backend (optional, defaults to NoOp)
+	Auth auth.AuthBackend
 	// InstanceID is a unique id for this instance of Querator
 	InstanceID string
 	// WriteTimeout The time it should take for a single batched write to complete
@@ -67,6 +69,7 @@ type Config struct {
 type Service struct {
 	queues *internal.QueuesManager
 	conf   Config
+	auth   auth.AuthBackend
 }
 
 func New(conf Config) (*Service, error) {
@@ -98,10 +101,29 @@ func New(conf Config) (*Service, error) {
 		return nil, err
 	}
 
+	// Default to NoOp auth if not provided
+	if conf.Auth == nil {
+		conf.Auth = &auth.NoOpAuthBackend{}
+	}
+
 	return &Service{
-		conf:   conf,
 		queues: qm,
+		conf:   conf,
+		auth:   conf.Auth,
 	}, nil
+}
+
+// authorize checks if the principal in context has the required permission in the namespace
+func (s *Service) authorize(ctx context.Context, namespace, permission string) error {
+	principal := internal.PrincipalFromContext(ctx)
+	hasPermission, err := s.auth.HasPermission(ctx, principal, namespace, permission)
+	if err != nil {
+		return transport.NewRequestFailed("authorization check failed: %s", err.Error())
+	}
+	if !hasPermission {
+		return transport.NewForbidden("access denied")
+	}
+	return nil
 }
 
 func (s *Service) QueueProduce(ctx context.Context, req *proto.QueueProduceRequest) error {
@@ -330,9 +352,24 @@ func (s *Service) QueuesList(ctx context.Context, req *proto.QueuesListRequest,
 }
 
 func (s *Service) QueuesUpdate(ctx context.Context, req *proto.QueueInfo) error {
-	var info types.QueueInfo
+	// Validate queue name format first
+	if err := validateQueueName(req.QueueName); err != nil {
+		return err
+	}
 
+	var info types.QueueInfo
 	if err := s.validateQueueOptionsProto(req, &info); err != nil {
+		return err
+	}
+
+	// Get namespace for authorization
+	ns, err := s.GetQueueNamespace(ctx, req.QueueName)
+	if err != nil {
+		return err
+	}
+
+	// Authorize
+	if err := s.authorize(ctx, ns, auth.PermQueueUpdate); err != nil {
 		return err
 	}
 
@@ -343,6 +380,21 @@ func (s *Service) QueuesUpdate(ctx context.Context, req *proto.QueueInfo) error 
 }
 
 func (s *Service) QueuesDelete(ctx context.Context, req *proto.QueuesDeleteRequest) error {
+	// Validate queue name format first
+	if err := validateQueueName(req.QueueName); err != nil {
+		return err
+	}
+
+	// Get namespace for authorization
+	ns, err := s.GetQueueNamespace(ctx, req.QueueName)
+	if err != nil {
+		return err
+	}
+
+	// Authorize
+	if err := s.authorize(ctx, ns, auth.PermQueueDelete); err != nil {
+		return err
+	}
 
 	if err := s.queues.Delete(ctx, req.QueueName); err != nil {
 		return err

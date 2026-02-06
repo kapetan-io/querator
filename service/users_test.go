@@ -28,7 +28,7 @@ func TestUsers(t *testing.T) {
 		{
 			Name: "BadgerDB",
 			Setup: func() store.Config {
-				badger := &badgerTestSetup{Dir: "."}
+				badger := &badgerTestSetup{Dir: t.TempDir()}
 				t.Cleanup(func() {
 					badger.Teardown()
 				})

@@ -17,8 +17,6 @@ import (
 )
 
 func TestNamespaces(t *testing.T) {
-	badger := badgerTestSetup{Dir: t.TempDir()}
-
 	for _, tc := range []struct {
 		Setup    NewStorageFunc
 		TearDown func()
@@ -34,11 +32,13 @@ func TestNamespaces(t *testing.T) {
 		{
 			Name: "BadgerDB",
 			Setup: func() store.Config {
+				badger := badgerTestSetup{Dir: t.TempDir()}
+				t.Cleanup(func() {
+					badger.Teardown()
+				})
 				return badger.Setup(store.BadgerConfig{})
 			},
-			TearDown: func() {
-				badger.Teardown()
-			},
+			TearDown: func() {},
 		},
 	} {
 		t.Run(tc.Name, func(t *testing.T) {

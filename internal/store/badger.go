@@ -1064,6 +1064,7 @@ func NewBadgerQueues(conf BadgerConfig) Queues {
 
 type BadgerQueues struct {
 	QueuesValidation
+	mu   sync.Mutex
 	db   *badger.DB
 	conf BadgerConfig
 }
@@ -1071,7 +1072,9 @@ type BadgerQueues struct {
 var _ Queues = &BadgerQueues{}
 
 func (b *BadgerQueues) getDB() (*badger.DB, error) {
+	b.mu.Lock()
 	if b.db != nil {
+		b.mu.Unlock()
 		return b.db, nil
 	}
 
@@ -1083,10 +1086,12 @@ func (b *BadgerQueues) getDB() (*badger.DB, error) {
 	opts.Logger = newBadgerLogger(b.conf.Log)
 	db, err := badger.Open(opts)
 	if err != nil {
+		b.mu.Unlock()
 		return nil, errors.Errorf("while opening db '%s': %w", dir, err)
 	}
 
 	b.db = db
+	b.mu.Unlock()
 	return db, nil
 }
 
@@ -1311,6 +1316,7 @@ func (l *badgerLogger) Debugf(f string, v ...interface{}) {
 // ---------------------------------------------
 
 type BadgerNamespaces struct {
+	mu   sync.Mutex
 	conf BadgerConfig
 	db   *badger.DB
 }
@@ -1325,7 +1331,9 @@ func NewBadgerNamespaces(conf BadgerConfig) *BadgerNamespaces {
 }
 
 func (b *BadgerNamespaces) getDB() (*badger.DB, error) {
+	b.mu.Lock()
 	if b.db != nil {
+		b.mu.Unlock()
 		return b.db, nil
 	}
 
@@ -1337,10 +1345,12 @@ func (b *BadgerNamespaces) getDB() (*badger.DB, error) {
 	opts.Logger = newBadgerLogger(b.conf.Log)
 	db, err := badger.Open(opts)
 	if err != nil {
+		b.mu.Unlock()
 		return nil, errors.Errorf("while opening namespace db '%s': %w", dir, err)
 	}
 
 	b.db = db
+	b.mu.Unlock()
 	return db, nil
 }
 
@@ -1485,6 +1495,7 @@ func (b *BadgerNamespaces) Close(_ context.Context) error {
 // ---------------------------------------------
 
 type BadgerUsers struct {
+	mu   sync.Mutex
 	conf BadgerConfig
 	db   *badger.DB
 }
@@ -1499,7 +1510,9 @@ func NewBadgerUsers(conf BadgerConfig) *BadgerUsers {
 }
 
 func (b *BadgerUsers) getDB() (*badger.DB, error) {
+	b.mu.Lock()
 	if b.db != nil {
+		b.mu.Unlock()
 		return b.db, nil
 	}
 
@@ -1509,10 +1522,12 @@ func (b *BadgerUsers) getDB() (*badger.DB, error) {
 	opts.Logger = newBadgerLogger(b.conf.Log)
 	db, err := badger.Open(opts)
 	if err != nil {
+		b.mu.Unlock()
 		return nil, errors.Errorf("while opening user db '%s': %w", dir, err)
 	}
 
 	b.db = db
+	b.mu.Unlock()
 	return db, nil
 }
 
@@ -1745,6 +1760,7 @@ func (b *BadgerUsers) Close(_ context.Context) error {
 // ---------------------------------------------
 
 type BadgerAPIKeys struct {
+	mu   sync.Mutex
 	conf BadgerConfig
 	db   *badger.DB
 }
@@ -1759,7 +1775,9 @@ func NewBadgerAPIKeys(conf BadgerConfig) *BadgerAPIKeys {
 }
 
 func (b *BadgerAPIKeys) getDB() (*badger.DB, error) {
+	b.mu.Lock()
 	if b.db != nil {
+		b.mu.Unlock()
 		return b.db, nil
 	}
 
@@ -1769,10 +1787,12 @@ func (b *BadgerAPIKeys) getDB() (*badger.DB, error) {
 	opts.Logger = newBadgerLogger(b.conf.Log)
 	db, err := badger.Open(opts)
 	if err != nil {
+		b.mu.Unlock()
 		return nil, errors.Errorf("while opening apikey db '%s': %w", dir, err)
 	}
 
 	b.db = db
+	b.mu.Unlock()
 	return db, nil
 }
 
@@ -2205,6 +2225,7 @@ func (b *BadgerAPIKeys) Close(_ context.Context) error {
 // ---------------------------------------------
 
 type BadgerRoles struct {
+	mu   sync.Mutex
 	conf BadgerConfig
 	db   *badger.DB
 }
@@ -2219,7 +2240,9 @@ func NewBadgerRoles(conf BadgerConfig) *BadgerRoles {
 }
 
 func (b *BadgerRoles) getDB() (*badger.DB, error) {
+	b.mu.Lock()
 	if b.db != nil {
+		b.mu.Unlock()
 		return b.db, nil
 	}
 
@@ -2229,10 +2252,12 @@ func (b *BadgerRoles) getDB() (*badger.DB, error) {
 	opts.Logger = newBadgerLogger(b.conf.Log)
 	db, err := badger.Open(opts)
 	if err != nil {
+		b.mu.Unlock()
 		return nil, errors.Errorf("while opening role db '%s': %w", dir, err)
 	}
 
 	b.db = db
+	b.mu.Unlock()
 	return db, nil
 }
 
@@ -2517,6 +2542,7 @@ func (b *BadgerRoles) Close(_ context.Context) error {
 // ---------------------------------------------
 
 type BadgerRoleBindings struct {
+	mu   sync.Mutex
 	conf BadgerConfig
 	db   *badger.DB
 }
@@ -2531,7 +2557,9 @@ func NewBadgerRoleBindings(conf BadgerConfig) *BadgerRoleBindings {
 }
 
 func (b *BadgerRoleBindings) getDB() (*badger.DB, error) {
+	b.mu.Lock()
 	if b.db != nil {
+		b.mu.Unlock()
 		return b.db, nil
 	}
 
@@ -2541,10 +2569,12 @@ func (b *BadgerRoleBindings) getDB() (*badger.DB, error) {
 	opts.Logger = newBadgerLogger(b.conf.Log)
 	db, err := badger.Open(opts)
 	if err != nil {
+		b.mu.Unlock()
 		return nil, errors.Errorf("while opening rolebinding db '%s': %w", dir, err)
 	}
 
 	b.db = db
+	b.mu.Unlock()
 	return db, nil
 }
 

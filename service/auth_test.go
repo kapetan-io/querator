@@ -1,10 +1,14 @@
 package service_test
 
 import (
+	"bytes"
 	"context"
+	"fmt"
+	"net/http"
 	"testing"
 
 	"github.com/duh-rpc/duh-go"
+	v1 "github.com/duh-rpc/duh-go/proto/v1"
 	"github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/daemon"
 	"github.com/kapetan-io/querator/internal/auth"
@@ -12,12 +16,14 @@ import (
 	"github.com/kapetan-io/querator/internal/types"
 	pb "github.com/kapetan-io/querator/proto"
 	svc "github.com/kapetan-io/querator/service"
+	"github.com/kapetan-io/querator/transport"
 	tauth "github.com/kapetan-io/querator/transport/auth"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/random"
 	"github.com/kapetan-io/tackle/set"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestAuth(t *testing.T) {
@@ -152,6 +158,47 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 			var duhErr duh.Error
 			require.ErrorAs(t, err, &duhErr)
 			assert.Equal(t, duh.CodeUnauthorized, duhErr.Code())
+		})
+
+		t.Run("ExpiredAPIKey", func(t *testing.T) {
+			storageConf := setup()
+			d, _ := newDaemonWithAuth(t, storageConf)
+			defer d.Shutdown(t)
+
+			ctx := d.Context()
+
+			// Create user directly in storage
+			user := types.User{
+				ID:       random.String("user-", 10),
+				Username: "expired-" + random.String("", 5),
+			}
+			err := storageConf.Users.Add(ctx, user)
+			require.NoError(t, err)
+
+			// Generate an API key and store it with an expiration in the past
+			generatedKey, err := auth.GenerateAPIKey("")
+			require.NoError(t, err)
+
+			expiredAt := clock.Now().UTC().Add(-clock.Hour)
+			err = storageConf.APIKeys.Add(ctx, types.APIKey{
+				ExpiresAt: &expiredAt,
+				KeyPrefix: generatedKey.Prefix,
+				KeyHash:   generatedKey.KeyHash,
+				UserID:    user.ID,
+				Name:      "expired-key",
+				ID:        random.String("key-", 10),
+			})
+			require.NoError(t, err)
+
+			// Authenticate with the expired key
+			c := newClientWithAPIKey(t, d, generatedKey.Key)
+			var listRes pb.QueuesListResponse
+			err = c.QueuesList(ctx, &listRes, nil)
+			require.Error(t, err)
+			var duhErr duh.Error
+			require.ErrorAs(t, err, &duhErr)
+			assert.Equal(t, duh.CodeUnauthorized, duhErr.Code())
+			assert.Contains(t, duhErr.Message(), "api key has expired")
 		})
 	})
 
@@ -316,22 +363,26 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 			d, _ := newDaemonWithAuth(t, storageConf)
 			defer d.Shutdown(t)
 
-			// Create client with malformed auth (not "Bearer <token>" format)
-			c, err := querator.NewClient(querator.ClientConfig{
-				Endpoint: "http://" + d.d.Listener.Addr().String(),
-				APIKey:   "", // We'll send a custom header
-			})
+			ctx := d.Context()
+			endpoint := fmt.Sprintf("http://%s%s", d.d.Listener.Addr().String(), transport.RPCQueuesList)
+
+			// Send a raw HTTP request with a non-Bearer authorization header
+			payload, err := proto.Marshal(&pb.QueuesListRequest{})
 			require.NoError(t, err)
 
-			// The client doesn't support custom headers easily, but we can test
-			// via the default behavior when no key is set with auth enabled
-			ctx := d.Context()
-			var listRes pb.QueuesListResponse
-			err = c.QueuesList(ctx, &listRes, nil)
+			r, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
+			require.NoError(t, err)
+
+			r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+			r.Header.Set("Authorization", "Basic c29tZS1jcmVkZW50aWFscw==")
+
+			var res v1.Reply
+			err = duh.HTTP1Client.Do(r, &res)
 			require.Error(t, err)
 			var duhErr duh.Error
 			require.ErrorAs(t, err, &duhErr)
 			assert.Equal(t, duh.CodeUnauthorized, duhErr.Code())
+			assert.Contains(t, duhErr.Message(), "invalid authorization header format")
 		})
 	})
 }

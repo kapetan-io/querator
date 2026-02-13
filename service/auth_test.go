@@ -12,6 +12,7 @@ import (
 	"github.com/kapetan-io/querator/internal/types"
 	pb "github.com/kapetan-io/querator/proto"
 	svc "github.com/kapetan-io/querator/service"
+	tauth "github.com/kapetan-io/querator/transport/auth"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/random"
 	"github.com/kapetan-io/tackle/set"
@@ -197,7 +198,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 			adminClient := newClientWithAPIKey(t, d, adminKey)
 
 			// Create a user with limited permissions (only queue.list, no queue.create)
-			limitedKey := createUserWithLimitedPermissions(t, ctx, adminClient, []string{auth.PermQueueList})
+			limitedKey := createUserWithLimitedPermissions(t, ctx, adminClient, []string{tauth.QueueList})
 
 			// Create client with limited API key
 			limitedClient := newClientWithAPIKey(t, d, limitedKey)
@@ -239,7 +240,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 			require.NoError(t, err)
 
 			// Create a user with permissions only in ns1
-			ns1Key := createUserWithNamespacePermissions(t, ctx, adminClient, ns1, auth.NamespaceOwnerPermissions)
+			ns1Key := createUserWithNamespacePermissions(t, ctx, adminClient, ns1, tauth.NamespaceOwnerPermissions)
 
 			// Create client with ns1-scoped API key
 			ns1Client := newClientWithAPIKey(t, d, ns1Key)
@@ -417,7 +418,7 @@ func createAdminUser(t *testing.T, ctx context.Context, storageConf store.Config
 
 	// First, ensure _system namespace exists
 	err := storageConf.Namespaces.Add(ctx, types.Namespace{
-		Name:        auth.SystemNamespace,
+		Name:        tauth.SystemNamespace,
 		Description: "System namespace for global administration",
 	})
 	require.NoError(t, err)
@@ -426,8 +427,8 @@ func createAdminUser(t *testing.T, ctx context.Context, storageConf store.Config
 	adminRole := types.Role{
 		ID:          random.String("role-", 10),
 		Name:        "admin-" + random.String("", 5),
-		Namespace:   auth.SystemNamespace,
-		Permissions: auth.AllPermissions,
+		Namespace:   tauth.SystemNamespace,
+		Permissions: tauth.AllPermissions,
 	}
 	err = storageConf.Roles.Add(ctx, adminRole)
 	require.NoError(t, err)
@@ -445,7 +446,7 @@ func createAdminUser(t *testing.T, ctx context.Context, storageConf store.Config
 		ID:        random.String("binding-", 10),
 		UserID:    adminUser.ID,
 		RoleID:    adminRole.ID,
-		Namespace: auth.SystemNamespace,
+		Namespace: tauth.SystemNamespace,
 	}
 	err = storageConf.RoleBindings.Add(ctx, binding)
 	require.NoError(t, err)
@@ -481,7 +482,7 @@ func createUserWithLimitedPermissions(t *testing.T, ctx context.Context, c *quer
 	// Create role with limited permissions
 	var roleRes pb.RoleCreateResponse
 	err = c.RolesCreate(ctx, &pb.RoleCreateRequest{
-		Namespace:   auth.SystemNamespace,
+		Namespace:   tauth.SystemNamespace,
 		Name:        "limited-role-" + random.String("", 5),
 		Permissions: perms,
 	}, &roleRes)
@@ -489,7 +490,7 @@ func createUserWithLimitedPermissions(t *testing.T, ctx context.Context, c *quer
 
 	// Get the role to find its name for role binding
 	var rolesListRes pb.RolesListResponse
-	err = c.RolesList(ctx, auth.SystemNamespace, &rolesListRes, nil)
+	err = c.RolesList(ctx, tauth.SystemNamespace, &rolesListRes, nil)
 	require.NoError(t, err)
 
 	// Find the role we just created
@@ -505,7 +506,7 @@ func createUserWithLimitedPermissions(t *testing.T, ctx context.Context, c *quer
 	// Create role binding
 	var bindingRes pb.RoleBindingCreateResponse
 	err = c.RoleBindingsCreate(ctx, &pb.RoleBindingCreateRequest{
-		Namespace: auth.SystemNamespace,
+		Namespace: tauth.SystemNamespace,
 		UserId:    userRes.Id,
 		RoleName:  roleName,
 	}, &bindingRes)

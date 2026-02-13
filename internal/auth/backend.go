@@ -6,6 +6,7 @@ import (
 
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
+	tauth "github.com/kapetan-io/querator/transport/auth"
 	"github.com/kapetan-io/tackle/set"
 )
 
@@ -84,8 +85,8 @@ func (a *DefaultAuthBackend) HasPermission(ctx context.Context, principal types.
 	}
 
 	// Step 3: If target is not _system, check permission in _system namespace (admin fallback)
-	if targetNS != SystemNamespace {
-		hasPermission, err = a.checkPermissionInNamespace(ctx, principal.User.ID, SystemNamespace, perm)
+	if targetNS != tauth.SystemNamespace {
+		hasPermission, err = a.checkPermissionInNamespace(ctx, principal.User.ID, tauth.SystemNamespace, perm)
 		if err != nil {
 			return false, err
 		}

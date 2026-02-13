@@ -56,15 +56,6 @@ func HashAPIKey(key string) string {
 	return base64.RawURLEncoding.EncodeToString(hash[:])
 }
 
-// ParseAPIKey extracts the environment tag and prefix from an API key
-func ParseAPIKey(key string) (envTag, prefix string, err error) {
-	parts := strings.SplitN(key, "_", 3)
-	if len(parts) != 3 {
-		return "", "", fmt.Errorf("invalid api key format")
-	}
-	return parts[0], parts[1], nil
-}
-
 // ValidateAPIKeyFormat checks if an API key has the correct format
 func ValidateAPIKeyFormat(key string) error {
 	if key == "" {

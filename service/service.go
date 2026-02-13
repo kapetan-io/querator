@@ -28,6 +28,7 @@ import (
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/proto"
 	"github.com/kapetan-io/querator/transport"
+	tauth "github.com/kapetan-io/querator/transport/auth"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/set"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -369,7 +370,7 @@ func (s *Service) QueuesUpdate(ctx context.Context, req *proto.QueueInfo) error 
 	}
 
 	// Authorize
-	if err := s.authorize(ctx, ns, auth.PermQueueUpdate); err != nil {
+	if err := s.authorize(ctx, ns, tauth.QueueUpdate); err != nil {
 		return err
 	}
 
@@ -392,7 +393,7 @@ func (s *Service) QueuesDelete(ctx context.Context, req *proto.QueuesDeleteReque
 	}
 
 	// Authorize
-	if err := s.authorize(ctx, ns, auth.PermQueueDelete); err != nil {
+	if err := s.authorize(ctx, ns, tauth.QueueDelete); err != nil {
 		return err
 	}
 
@@ -717,7 +718,12 @@ func (s *Service) UsersList(ctx context.Context, req *proto.UsersListRequest,
 }
 
 func (s *Service) UsersDelete(ctx context.Context, req *proto.UsersDeleteRequest) error {
-	// Delete all API keys for this user first (CASCADE delete)
+	// Delete all role bindings for this user first (CASCADE delete)
+	if err := s.conf.StorageConfig.RoleBindings.DeleteByUser(ctx, req.Id); err != nil {
+		return err
+	}
+
+	// Delete all API keys for this user (CASCADE delete)
 	if err := s.conf.StorageConfig.APIKeys.DeleteByUser(ctx, req.Id); err != nil {
 		return err
 	}
@@ -821,13 +827,13 @@ func (s *Service) RolesCreate(ctx context.Context, req *proto.RoleCreateRequest,
 	}
 
 	// Check if this is a standard role name that cannot be created
-	if auth.IsStandardRole(role.Name) {
+	if tauth.IsStandardRole(role.Name) {
 		return types.ErrRoleIsStandard
 	}
 
 	// Validate all permissions
 	for _, perm := range role.Permissions {
-		if !auth.IsValidPermission(perm) {
+		if !tauth.IsValidPermission(perm) {
 			return transport.NewInvalidOption("permission '%s' is invalid", perm)
 		}
 	}
@@ -884,13 +890,13 @@ func (s *Service) RolesUpdate(ctx context.Context, req *proto.RoleUpdateRequest)
 	}
 
 	// Check if this is a standard role that cannot be updated
-	if auth.IsStandardRole(existing.Name) {
+	if tauth.IsStandardRole(existing.Name) {
 		return types.ErrRoleIsStandard
 	}
 
 	// Validate all permissions
 	for _, perm := range role.Permissions {
-		if !auth.IsValidPermission(perm) {
+		if !tauth.IsValidPermission(perm) {
 			return transport.NewInvalidOption("permission '%s' is invalid", perm)
 		}
 	}
@@ -910,7 +916,7 @@ func (s *Service) RolesDelete(ctx context.Context, req *proto.RolesDeleteRequest
 	}
 
 	// Check if this is a standard role that cannot be deleted
-	if auth.IsStandardRole(role.Name) {
+	if tauth.IsStandardRole(role.Name) {
 		return types.ErrRoleIsStandard
 	}
 

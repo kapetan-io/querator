@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"strings"
 )
@@ -36,7 +37,7 @@ func GenerateAPIKey(envTag string) (GeneratedKey, error) {
 		return GeneratedKey{}, fmt.Errorf("generating random bytes: %w", err)
 	}
 
-	secret := base64.RawURLEncoding.EncodeToString(randomBytes)
+	secret := hex.EncodeToString(randomBytes)
 	prefix := secret[:PrefixLength]
 	fullKey := fmt.Sprintf("%s_%s_%s", envTag, prefix, secret)
 

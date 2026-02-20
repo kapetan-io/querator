@@ -413,43 +413,56 @@ func (qm *QueuesManager) Shutdown(ctx context.Context) error {
 	defer qm.mutex.Unlock()
 	qm.mutex.Lock()
 
-	wait := make(chan error)
+	wait := make(chan error, 1)
 	go func() {
+		var errs []error
 		for _, q := range qm.queues {
 			qm.log.LogAttrs(ctx, LevelDebugAll, "shutdown logical",
 				slog.Int("num_queues", len(qm.queues)),
 				slog.String("queue", q.Info().Name))
 			for _, l := range q.GetAll() {
 				if err := l.Shutdown(ctx); err != nil {
-					wait <- err
+					errs = append(errs, err)
 				}
 			}
 		}
 		qm.log.LogAttrs(ctx, LevelDebugAll, "close queue store")
 		if err := qm.conf.StorageConfig.Queues.Close(ctx); err != nil {
-			wait <- err
-			return
+			errs = append(errs, err)
 		}
 		if qm.conf.StorageConfig.Namespaces != nil {
 			qm.log.LogAttrs(ctx, LevelDebugAll, "close namespace store")
 			if err := qm.conf.StorageConfig.Namespaces.Close(ctx); err != nil {
-				wait <- err
-				return
+				errs = append(errs, err)
 			}
 		}
 		if qm.conf.StorageConfig.Users != nil {
 			qm.log.LogAttrs(ctx, LevelDebugAll, "close users store")
 			if err := qm.conf.StorageConfig.Users.Close(ctx); err != nil {
-				wait <- err
-				return
+				errs = append(errs, err)
 			}
 		}
 		if qm.conf.StorageConfig.APIKeys != nil {
 			qm.log.LogAttrs(ctx, LevelDebugAll, "close apikeys store")
 			if err := qm.conf.StorageConfig.APIKeys.Close(ctx); err != nil {
-				wait <- err
-				return
+				errs = append(errs, err)
 			}
+		}
+		if qm.conf.StorageConfig.Roles != nil {
+			qm.log.LogAttrs(ctx, LevelDebugAll, "close roles store")
+			if err := qm.conf.StorageConfig.Roles.Close(ctx); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		if qm.conf.StorageConfig.RoleBindings != nil {
+			qm.log.LogAttrs(ctx, LevelDebugAll, "close rolebindings store")
+			if err := qm.conf.StorageConfig.RoleBindings.Close(ctx); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		if len(errs) > 0 {
+			wait <- errs[0]
+			return
 		}
 		close(wait)
 	}()

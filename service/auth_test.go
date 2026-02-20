@@ -23,6 +23,7 @@ import (
 	"github.com/kapetan-io/tackle/set"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/goleak"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -53,9 +54,7 @@ func TestAuth(t *testing.T) {
 }
 
 func testAuth(t *testing.T, setup NewStorageFunc) {
-	// Note: goleak checking is disabled for auth tests due to BadgerDB internal goroutines
-	// that don't always clean up immediately. The stores are properly closed.
-	// defer goleak.VerifyNone(t, goleakOptions...)
+	defer goleak.VerifyNone(t, goleakOptions...)
 	t.Run("DefaultOpen", func(t *testing.T) {
 		t.Run("AllowsRequestsWithoutAPIKey", func(t *testing.T) {
 			d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
@@ -398,14 +397,6 @@ func (a *authTestDaemon) Shutdown(t *testing.T) {
 	t.Helper()
 	a.authBackend.Close()
 	a.testDaemon.Shutdown(t)
-	// Close Roles and RoleBindings stores which aren't closed by QueuesManager
-	ctx := context.Background()
-	if a.storageConf.Roles != nil {
-		_ = a.storageConf.Roles.Close(ctx)
-	}
-	if a.storageConf.RoleBindings != nil {
-		_ = a.storageConf.RoleBindings.Close(ctx)
-	}
 }
 
 // newDaemonWithAuth creates a daemon with DefaultAuthBackend and returns the admin API key

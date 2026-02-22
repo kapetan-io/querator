@@ -86,7 +86,7 @@ var AllPermissions = []string{
 }
 
 // AdminPermissions are all permissions granted to the Admin role
-var AdminPermissions = AllPermissions
+var AdminPermissions = append([]string(nil), AllPermissions...)
 
 // NamespaceOwnerPermissions are permissions for managing a namespace's resources
 var NamespaceOwnerPermissions = []string{

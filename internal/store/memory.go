@@ -1022,8 +1022,9 @@ func (m *MemoryUsers) List(_ context.Context, users *[]types.User, opts types.Li
 		if !pastPivot {
 			if id == string(opts.Pivot) {
 				pastPivot = true
+			} else {
+				continue
 			}
-			continue
 		}
 
 		*users = append(*users, m.users[id])
@@ -1179,8 +1180,9 @@ func (m *MemoryAPIKeys) List(_ context.Context, keys *[]types.APIKey, opts types
 		if !pastPivot {
 			if id == string(opts.Pivot) {
 				pastPivot = true
+			} else {
+				continue
 			}
-			continue
 		}
 
 		*keys = append(*keys, m.keys[id])
@@ -1224,8 +1226,9 @@ func (m *MemoryAPIKeys) ListByUser(_ context.Context, userID string, keys *[]typ
 		if !pastPivot {
 			if id == string(opts.Pivot) {
 				pastPivot = true
+			} else {
+				continue
 			}
-			continue
 		}
 
 		if k, ok := m.keys[id]; ok {
@@ -1447,8 +1450,9 @@ func (m *MemoryRoles) List(_ context.Context, namespace string, roles *[]types.R
 		if !pastPivot {
 			if id == string(opts.Pivot) {
 				pastPivot = true
+			} else {
+				continue
 			}
-			continue
 		}
 
 		*roles = append(*roles, m.roles[id])
@@ -1600,8 +1604,9 @@ func (m *MemoryRoleBindings) List(_ context.Context, namespace string, bindings 
 		if !pastPivot {
 			if id == string(opts.Pivot) {
 				pastPivot = true
+			} else {
+				continue
 			}
-			continue
 		}
 
 		*bindings = append(*bindings, m.bindings[id])

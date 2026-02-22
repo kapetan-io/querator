@@ -468,6 +468,124 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 		})
 	})
 
+	t.Run("CacheInvalidation", func(t *testing.T) {
+		t.Run("DeletedAPIKeyDenied", func(t *testing.T) {
+			storageConf := setup()
+			d, adminKey := newDaemonWithAuth(t, storageConf)
+			defer d.Shutdown(t)
+
+			ctx := d.Context()
+			adminClient := newClientWithAPIKey(t, d, adminKey)
+
+			// Create a user with permissions
+			userKey := createUserWithLimitedPermissions(t, ctx, adminClient, []string{tauth.QueueList})
+			userClient := newClientWithAPIKey(t, d, userKey)
+
+			// Authenticate successfully with the key
+			var listRes pb.QueuesListResponse
+			err := userClient.QueuesList(ctx, &listRes, nil)
+			require.NoError(t, err)
+
+			// Find the API key ID to delete
+			var keysRes pb.APIKeysListResponse
+			err = adminClient.APIKeysList(ctx, &keysRes, nil)
+			require.NoError(t, err)
+
+			// Find the non-admin key (the one named "limited-key")
+			var keyID string
+			for _, k := range keysRes.Items {
+				if k.Name == "limited-key" {
+					keyID = k.Id
+					break
+				}
+			}
+			require.NotEmpty(t, keyID)
+
+			// Delete the API key
+			err = adminClient.APIKeysDelete(ctx, &pb.APIKeysDeleteRequest{Id: keyID})
+			require.NoError(t, err)
+
+			// Attempt to authenticate with the deleted key — should fail immediately
+			err = userClient.QueuesList(ctx, &listRes, nil)
+			require.Error(t, err)
+			var duhErr duh.Error
+			require.ErrorAs(t, err, &duhErr)
+			assert.Equal(t, duh.CodeUnauthorized, duhErr.Code())
+		})
+
+		t.Run("DeletedUserDenied", func(t *testing.T) {
+			storageConf := setup()
+			d, adminKey := newDaemonWithAuth(t, storageConf)
+			defer d.Shutdown(t)
+
+			ctx := d.Context()
+			adminClient := newClientWithAPIKey(t, d, adminKey)
+
+			// Create a user with permissions
+			var userRes pb.UserCreateResponse
+			err := adminClient.UsersCreate(ctx, &pb.UserCreateRequest{
+				Username: "delete-cache-user-" + random.String("", 5),
+			}, &userRes)
+			require.NoError(t, err)
+
+			// Create role and binding for the user
+			var roleRes pb.RoleCreateResponse
+			err = adminClient.RolesCreate(ctx, &pb.RoleCreateRequest{
+				Namespace:   tauth.SystemNamespace,
+				Name:        "delete-cache-role-" + random.String("", 5),
+				Permissions: []string{tauth.QueueList},
+			}, &roleRes)
+			require.NoError(t, err)
+
+			// Find the role name
+			var rolesListRes pb.RolesListResponse
+			err = adminClient.RolesList(ctx, tauth.SystemNamespace, &rolesListRes, nil)
+			require.NoError(t, err)
+			var roleName string
+			for _, role := range rolesListRes.Items {
+				if role.Id == roleRes.Id {
+					roleName = role.Name
+					break
+				}
+			}
+			require.NotEmpty(t, roleName)
+
+			var bindingRes pb.RoleBindingCreateResponse
+			err = adminClient.RoleBindingsCreate(ctx, &pb.RoleBindingCreateRequest{
+				Namespace: tauth.SystemNamespace,
+				UserId:    userRes.Id,
+				RoleName:  roleName,
+			}, &bindingRes)
+			require.NoError(t, err)
+
+			// Create API key for the user
+			var keyRes pb.APIKeyCreateResponse
+			err = adminClient.APIKeysCreate(ctx, &pb.APIKeyCreateRequest{
+				UserId: userRes.Id,
+				Name:   "delete-cache-key",
+			}, &keyRes)
+			require.NoError(t, err)
+
+			userClient := newClientWithAPIKey(t, d, keyRes.Key)
+
+			// Authenticate successfully
+			var listRes pb.QueuesListResponse
+			err = userClient.QueuesList(ctx, &listRes, nil)
+			require.NoError(t, err)
+
+			// Delete the user (cascade deletes keys and bindings)
+			err = adminClient.UsersDelete(ctx, &pb.UsersDeleteRequest{Id: userRes.Id})
+			require.NoError(t, err)
+
+			// Attempt to authenticate with the deleted user's key — should fail immediately
+			err = userClient.QueuesList(ctx, &listRes, nil)
+			require.Error(t, err)
+			var duhErr duh.Error
+			require.ErrorAs(t, err, &duhErr)
+			assert.Equal(t, duh.CodeUnauthorized, duhErr.Code())
+		})
+	})
+
 	t.Run("Errors", func(t *testing.T) {
 		t.Run("MalformedAuthHeader", func(t *testing.T) {
 			storageConf := setup()
@@ -538,7 +656,7 @@ func newDaemonWithAuth(t *testing.T, storageConf store.Config) (*authTestDaemon,
 	td.ctx, td.cancel = context.WithTimeout(context.Background(), clock.Minute*10)
 
 	td.d, err = daemon.NewDaemon(td.ctx, daemon.Config{
-		Service:       svc.Config{StorageConfig: storageConf, Log: log, Auth: internalBackend},
+		Service:       svc.Config{StorageConfig: storageConf, Auth: internalBackend, Log: log},
 		AuthBackend:   authAdapter,
 		ListenAddress: "localhost:0", // Use random available port
 	})

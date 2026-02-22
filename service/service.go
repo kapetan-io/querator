@@ -726,19 +726,25 @@ func (s *Service) UsersList(ctx context.Context, req *proto.UsersListRequest,
 }
 
 func (s *Service) UsersDelete(ctx context.Context, req *proto.UsersDeleteRequest) error {
-	// Delete all role bindings for this user first (CASCADE delete)
-	if err := s.conf.StorageConfig.RoleBindings.DeleteByUser(ctx, req.Id); err != nil {
-		return err
-	}
-
-	// Delete all API keys for this user (CASCADE delete)
-	if err := s.conf.StorageConfig.APIKeys.DeleteByUser(ctx, req.Id); err != nil {
-		return err
-	}
-
+	// Delete the user first — this is the primary resource
 	if err := s.conf.StorageConfig.Users.Delete(ctx, req.Id); err != nil {
 		return err
 	}
+
+	// Invalidate cache immediately so the deleted user's credentials no longer authenticate
+	s.auth.InvalidateUser(req.Id)
+
+	// Best-effort cleanup of associated resources
+	if err := s.conf.StorageConfig.RoleBindings.DeleteByUser(ctx, req.Id); err != nil {
+		s.conf.Log.Warn("failed to delete role bindings during user cascade delete",
+			"user_id", req.Id, "error", err)
+	}
+
+	if err := s.conf.StorageConfig.APIKeys.DeleteByUser(ctx, req.Id); err != nil {
+		s.conf.Log.Warn("failed to delete api keys during user cascade delete",
+			"user_id", req.Id, "error", err)
+	}
+
 	return nil
 }
 
@@ -816,9 +822,17 @@ func (s *Service) APIKeysList(ctx context.Context, req *proto.APIKeysListRequest
 }
 
 func (s *Service) APIKeysDelete(ctx context.Context, req *proto.APIKeysDeleteRequest) error {
+	// Fetch the key before deleting so we can invalidate the cache
+	var key types.APIKey
+	if err := s.conf.StorageConfig.APIKeys.Get(ctx, req.Id, &key); err != nil {
+		return err
+	}
+
 	if err := s.conf.StorageConfig.APIKeys.Delete(ctx, req.Id); err != nil {
 		return err
 	}
+
+	s.auth.InvalidateKey(key.KeyHash)
 	return nil
 }
 

@@ -2,9 +2,11 @@ package service_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/duh-rpc/duh-go"
+	"github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/internal/store"
 	pb "github.com/kapetan-io/querator/proto"
 	svc "github.com/kapetan-io/querator/service"
@@ -226,6 +228,72 @@ func testUsers(t *testing.T, setup NewStorageFunc) {
 		err = c.APIKeysList(ctx, &listRes, nil)
 		require.NoError(t, err)
 		assert.Empty(t, listRes.Items)
+	})
+
+	t.Run("UsersListPagination", func(t *testing.T) {
+		d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
+		defer d.Shutdown(t)
+
+		// Create 10 users
+		const numUsers = 10
+		for i := 0; i < numUsers; i++ {
+			var res pb.UserCreateResponse
+			err := c.UsersCreate(ctx, &pb.UserCreateRequest{
+				Username: fmt.Sprintf("page-user-%02d-%s", i, random.String("", 5)),
+			}, &res)
+			require.NoError(t, err)
+		}
+
+		// List first 3
+		var page1 pb.UsersListResponse
+		err := c.UsersList(ctx, &page1, &querator.ListOptions{Limit: 3})
+		require.NoError(t, err)
+		require.Len(t, page1.Items, 3)
+
+		// Use last item's ID as pivot — pivot item should be first in next page (inclusive)
+		pivot := page1.Items[2].Id
+		var page2 pb.UsersListResponse
+		err = c.UsersList(ctx, &page2, &querator.ListOptions{Pivot: pivot, Limit: 3})
+		require.NoError(t, err)
+		require.NotEmpty(t, page2.Items)
+		assert.Equal(t, pivot, page2.Items[0].Id)
+	})
+
+	t.Run("APIKeysListPagination", func(t *testing.T) {
+		d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
+		defer d.Shutdown(t)
+
+		// Create a user
+		var userRes pb.UserCreateResponse
+		err := c.UsersCreate(ctx, &pb.UserCreateRequest{
+			Username: "pagination-key-user-" + random.String("", 5),
+		}, &userRes)
+		require.NoError(t, err)
+
+		// Create 10 API keys
+		const numKeys = 10
+		for i := 0; i < numKeys; i++ {
+			var keyRes pb.APIKeyCreateResponse
+			err := c.APIKeysCreate(ctx, &pb.APIKeyCreateRequest{
+				UserId: userRes.Id,
+				Name:   fmt.Sprintf("page-key-%02d", i),
+			}, &keyRes)
+			require.NoError(t, err)
+		}
+
+		// List first 3
+		var page1 pb.APIKeysListResponse
+		err = c.APIKeysList(ctx, &page1, &querator.ListOptions{Limit: 3})
+		require.NoError(t, err)
+		require.Len(t, page1.Items, 3)
+
+		// Use last item's ID as pivot — pivot item should be first in next page (inclusive)
+		pivot := page1.Items[2].Id
+		var page2 pb.APIKeysListResponse
+		err = c.APIKeysList(ctx, &page2, &querator.ListOptions{Pivot: pivot, Limit: 3})
+		require.NoError(t, err)
+		require.NotEmpty(t, page2.Items)
+		assert.Equal(t, pivot, page2.Items[0].Id)
 	})
 
 	// Error Tests

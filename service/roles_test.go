@@ -1,9 +1,11 @@
 package service_test
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/duh-rpc/duh-go"
+	"github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
 	pb "github.com/kapetan-io/querator/proto"
@@ -277,6 +279,92 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 		err = c.RoleBindingsList(ctx, ns, &listRes, nil)
 		require.NoError(t, err)
 		assert.Empty(t, listRes.Items)
+	})
+
+	t.Run("RolesListPagination", func(t *testing.T) {
+		d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
+		defer d.Shutdown(t)
+
+		ns := random.String("ns-", 10)
+		err := c.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: ns})
+		require.NoError(t, err)
+
+		// Create 10 roles
+		const numRoles = 10
+		for i := 0; i < numRoles; i++ {
+			var res pb.RoleCreateResponse
+			err := c.RolesCreate(ctx, &pb.RoleCreateRequest{
+				Namespace:   ns,
+				Name:        fmt.Sprintf("page-role-%02d-%s", i, random.String("", 5)),
+				Permissions: []string{tauth.QueueList},
+			}, &res)
+			require.NoError(t, err)
+		}
+
+		// List first 3
+		var page1 pb.RolesListResponse
+		err = c.RolesList(ctx, ns, &page1, &querator.ListOptions{Limit: 3})
+		require.NoError(t, err)
+		require.Len(t, page1.Items, 3)
+
+		// Use last item's ID as pivot — pivot item should be first in next page (inclusive)
+		pivot := page1.Items[2].Id
+		var page2 pb.RolesListResponse
+		err = c.RolesList(ctx, ns, &page2, &querator.ListOptions{Pivot: pivot, Limit: 3})
+		require.NoError(t, err)
+		require.NotEmpty(t, page2.Items)
+		assert.Equal(t, pivot, page2.Items[0].Id)
+	})
+
+	t.Run("RoleBindingsListPagination", func(t *testing.T) {
+		d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
+		defer d.Shutdown(t)
+
+		ns := random.String("ns-", 10)
+		err := c.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: ns})
+		require.NoError(t, err)
+
+		// Create a role
+		roleName := "pagination-binding-role-" + random.String("", 5)
+		var roleRes pb.RoleCreateResponse
+		err = c.RolesCreate(ctx, &pb.RoleCreateRequest{
+			Namespace:   ns,
+			Name:        roleName,
+			Permissions: []string{tauth.QueueList},
+		}, &roleRes)
+		require.NoError(t, err)
+
+		// Create 10 users and bind each to the role
+		const numBindings = 10
+		for i := 0; i < numBindings; i++ {
+			var userRes pb.UserCreateResponse
+			err := c.UsersCreate(ctx, &pb.UserCreateRequest{
+				Username: fmt.Sprintf("page-bind-user-%02d-%s", i, random.String("", 5)),
+			}, &userRes)
+			require.NoError(t, err)
+
+			var bindRes pb.RoleBindingCreateResponse
+			err = c.RoleBindingsCreate(ctx, &pb.RoleBindingCreateRequest{
+				Namespace: ns,
+				RoleName:  roleName,
+				UserId:    userRes.Id,
+			}, &bindRes)
+			require.NoError(t, err)
+		}
+
+		// List first 3
+		var page1 pb.RoleBindingsListResponse
+		err = c.RoleBindingsList(ctx, ns, &page1, &querator.ListOptions{Limit: 3})
+		require.NoError(t, err)
+		require.Len(t, page1.Items, 3)
+
+		// Use last item's ID as pivot — pivot item should be first in next page (inclusive)
+		pivot := page1.Items[2].Id
+		var page2 pb.RoleBindingsListResponse
+		err = c.RoleBindingsList(ctx, ns, &page2, &querator.ListOptions{Pivot: pivot, Limit: 3})
+		require.NoError(t, err)
+		require.NotEmpty(t, page2.Items)
+		assert.Equal(t, pivot, page2.Items[0].Id)
 	})
 
 	// Error Tests

@@ -16,6 +16,10 @@ type AuthBackend interface {
 	Authenticate(ctx context.Context, token string) (types.Principal, error)
 	// HasPermission checks if a principal has a permission in a namespace
 	HasPermission(ctx context.Context, principal types.Principal, targetNS string, perm string) (bool, error)
+	// InvalidateUser removes all cached entries for a user
+	InvalidateUser(userID string)
+	// InvalidateKey removes a cached entry by key hash
+	InvalidateKey(keyHash string)
 	// Close releases any resources
 	Close()
 }
@@ -132,6 +136,16 @@ func (a *DefaultAuthBackend) checkPermissionInNamespace(ctx context.Context, use
 	return false, nil
 }
 
+// InvalidateUser removes all cached entries for a user
+func (a *DefaultAuthBackend) InvalidateUser(userID string) {
+	a.cache.InvalidateUser(userID)
+}
+
+// InvalidateKey removes a cached entry by key hash
+func (a *DefaultAuthBackend) InvalidateKey(keyHash string) {
+	a.cache.Invalidate(keyHash)
+}
+
 // Close releases resources
 func (a *DefaultAuthBackend) Close() {
 	if a.cache != nil {
@@ -153,6 +167,12 @@ func (n *NoOpAuthBackend) Authenticate(_ context.Context, _ string) (types.Princ
 func (n *NoOpAuthBackend) HasPermission(_ context.Context, _ types.Principal, _ string, _ string) (bool, error) {
 	return true, nil
 }
+
+// InvalidateUser does nothing
+func (n *NoOpAuthBackend) InvalidateUser(_ string) {}
+
+// InvalidateKey does nothing
+func (n *NoOpAuthBackend) InvalidateKey(_ string) {}
 
 // Close does nothing
 func (n *NoOpAuthBackend) Close() {}

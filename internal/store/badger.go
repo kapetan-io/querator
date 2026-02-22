@@ -2042,8 +2042,9 @@ func (b *BadgerAPIKeys) ListByUser(_ context.Context, userID string, keys *[]typ
 			if !pastPivot {
 				if id == string(opts.Pivot) {
 					pastPivot = true
+				} else {
+					continue
 				}
-				continue
 			}
 
 			kvItem, err := txn.Get([]byte("apikey:" + id))

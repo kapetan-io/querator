@@ -797,6 +797,7 @@ func (m MemoryPartitionStore) Get(info types.PartitionInfo) Partition {
 // ---------------------------------------------
 
 type MemoryNamespaces struct {
+	mu  sync.RWMutex
 	mem []types.Namespace
 	log *slog.Logger
 }
@@ -812,6 +813,9 @@ func NewMemoryNamespaces(log *slog.Logger) *MemoryNamespaces {
 }
 
 func (s *MemoryNamespaces) Get(_ context.Context, name string, ns *types.Namespace) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	if strings.TrimSpace(name) == "" {
 		return types.ErrNamespaceNotExist
 	}
@@ -825,6 +829,9 @@ func (s *MemoryNamespaces) Get(_ context.Context, name string, ns *types.Namespa
 }
 
 func (s *MemoryNamespaces) Add(_ context.Context, ns types.Namespace) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if strings.TrimSpace(ns.Name) == "" {
 		return transport.NewInvalidOption("namespace name is invalid; cannot be empty")
 	}
@@ -839,6 +846,9 @@ func (s *MemoryNamespaces) Add(_ context.Context, ns types.Namespace) error {
 }
 
 func (s *MemoryNamespaces) List(_ context.Context, namespaces *[]types.Namespace, opts types.ListOptions) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	var count, idx int
 	if opts.Pivot != nil {
 		idx, _ = s.findNamespace(string(opts.Pivot))
@@ -855,6 +865,9 @@ func (s *MemoryNamespaces) List(_ context.Context, namespaces *[]types.Namespace
 }
 
 func (s *MemoryNamespaces) Delete(_ context.Context, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if strings.TrimSpace(name) == "" {
 		return types.ErrNamespaceNotExist
 	}
@@ -868,6 +881,9 @@ func (s *MemoryNamespaces) Delete(_ context.Context, name string) error {
 }
 
 func (s *MemoryNamespaces) Close(_ context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	s.mem = nil
 	return nil
 }

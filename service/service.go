@@ -116,7 +116,15 @@ func New(conf Config) (*Service, error) {
 
 // authorize checks if the principal in context has the required permission in the namespace
 func (s *Service) authorize(ctx context.Context, namespace, permission string) error {
-	principal := internal.PrincipalFromContext(ctx)
+	tp := transport.PrincipalFromContext(ctx)
+	principal := types.Principal{
+		NamespaceScope: tp.NamespaceScope,
+		IsAnonymous:    tp.UserID == "" || tp.Username == "anonymous",
+		User: types.User{
+			Username: tp.Username,
+			ID:       tp.UserID,
+		},
+	}
 	hasPermission, err := s.auth.HasPermission(ctx, principal, namespace, permission)
 	if err != nil {
 		return transport.NewRequestFailed("authorization check failed: %s", err.Error())

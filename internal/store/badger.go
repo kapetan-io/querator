@@ -1402,6 +1402,9 @@ func (b *BadgerNamespaces) Add(_ context.Context, ns types.Namespace) error {
 		if err == nil {
 			return types.ErrNamespaceAlreadyExists
 		}
+		if !errors.Is(err, badger.ErrKeyNotFound) {
+			return errors.Errorf("during Get(): %w", err)
+		}
 
 		var buf bytes.Buffer
 		if err := gob.NewEncoder(&buf).Encode(ns); err != nil {

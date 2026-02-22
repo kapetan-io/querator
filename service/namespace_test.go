@@ -2,6 +2,8 @@ package service_test
 
 import (
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/duh-rpc/duh-go"
@@ -241,5 +243,35 @@ func testNamespaces(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				})
 			}
 		})
+	})
+
+	t.Run("ConcurrentOperations", func(t *testing.T) {
+		d, c, ctx := newDaemon(t, clock.Minute, svc.Config{StorageConfig: setup()})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+
+		const goroutines = 10
+		var wg sync.WaitGroup
+		wg.Add(goroutines)
+
+		for i := 0; i < goroutines; i++ {
+			go func(idx int) {
+				defer wg.Done()
+				ns := fmt.Sprintf("concurrent-ns-%d", idx)
+
+				err := c.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: ns})
+				require.NoError(t, err)
+
+				var listRes pb.NamespacesListResponse
+				err = c.NamespacesList(ctx, &listRes, nil)
+				require.NoError(t, err)
+
+				err = c.NamespacesDelete(ctx, &pb.NamespacesDeleteRequest{Name: ns})
+				require.NoError(t, err)
+			}(i)
+		}
+		wg.Wait()
 	})
 }

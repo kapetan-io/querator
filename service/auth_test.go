@@ -317,6 +317,118 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 			assert.Equal(t, duh.CodeForbidden, duhErr.Code())
 		})
 
+		t.Run("AdminCanUpdateQueue", func(t *testing.T) {
+			storageConf := setup()
+			d, adminKey := newDaemonWithAuth(t, storageConf)
+			defer d.Shutdown(t)
+
+			ctx := d.Context()
+			c := newClientWithAPIKey(t, d, adminKey)
+
+			queueName := random.String("queue-", 10)
+			err := c.QueuesCreate(ctx, &pb.QueueInfo{
+				QueueName:           queueName,
+				LeaseTimeout:        LeaseTimeout,
+				ExpireTimeout:       ExpireTimeout,
+				RequestedPartitions: 1,
+			})
+			require.NoError(t, err)
+
+			// Before fix: service layer sees AnonymousPrincipal → denies admin
+			// After fix: service layer reads real principal → allows admin
+			err = c.QueuesUpdate(ctx, &pb.QueueInfo{
+				QueueName:    queueName,
+				LeaseTimeout: "2m0s",
+			})
+			require.NoError(t, err)
+		})
+
+		t.Run("AdminCanDeleteQueue", func(t *testing.T) {
+			storageConf := setup()
+			d, adminKey := newDaemonWithAuth(t, storageConf)
+			defer d.Shutdown(t)
+
+			ctx := d.Context()
+			c := newClientWithAPIKey(t, d, adminKey)
+
+			queueName := random.String("queue-", 10)
+			err := c.QueuesCreate(ctx, &pb.QueueInfo{
+				QueueName:           queueName,
+				LeaseTimeout:        LeaseTimeout,
+				ExpireTimeout:       ExpireTimeout,
+				RequestedPartitions: 1,
+			})
+			require.NoError(t, err)
+
+			// Before fix: service layer sees AnonymousPrincipal → denies admin
+			// After fix: service layer reads real principal → allows admin
+			err = c.QueuesDelete(ctx, &pb.QueuesDeleteRequest{
+				QueueName: queueName,
+			})
+			require.NoError(t, err)
+		})
+
+		t.Run("QueuesUpdateDenied", func(t *testing.T) {
+			storageConf := setup()
+			d, adminKey := newDaemonWithAuth(t, storageConf)
+			defer d.Shutdown(t)
+
+			ctx := d.Context()
+			adminClient := newClientWithAPIKey(t, d, adminKey)
+
+			queueName := random.String("queue-", 10)
+			err := adminClient.QueuesCreate(ctx, &pb.QueueInfo{
+				QueueName:           queueName,
+				LeaseTimeout:        LeaseTimeout,
+				ExpireTimeout:       ExpireTimeout,
+				RequestedPartitions: 1,
+			})
+			require.NoError(t, err)
+
+			// Create user with only queue.list — no queue.update
+			limitedKey := createUserWithLimitedPermissions(t, ctx, adminClient, []string{tauth.QueueList})
+			limitedClient := newClientWithAPIKey(t, d, limitedKey)
+
+			err = limitedClient.QueuesUpdate(ctx, &pb.QueueInfo{
+				QueueName:    queueName,
+				LeaseTimeout: "2m0s",
+			})
+			require.Error(t, err)
+			var duhErr duh.Error
+			require.ErrorAs(t, err, &duhErr)
+			assert.Equal(t, duh.CodeForbidden, duhErr.Code())
+		})
+
+		t.Run("QueuesDeleteDenied", func(t *testing.T) {
+			storageConf := setup()
+			d, adminKey := newDaemonWithAuth(t, storageConf)
+			defer d.Shutdown(t)
+
+			ctx := d.Context()
+			adminClient := newClientWithAPIKey(t, d, adminKey)
+
+			queueName := random.String("queue-", 10)
+			err := adminClient.QueuesCreate(ctx, &pb.QueueInfo{
+				QueueName:           queueName,
+				LeaseTimeout:        LeaseTimeout,
+				ExpireTimeout:       ExpireTimeout,
+				RequestedPartitions: 1,
+			})
+			require.NoError(t, err)
+
+			// Create user with only queue.list — no queue.delete
+			limitedKey := createUserWithLimitedPermissions(t, ctx, adminClient, []string{tauth.QueueList})
+			limitedClient := newClientWithAPIKey(t, d, limitedKey)
+
+			err = limitedClient.QueuesDelete(ctx, &pb.QueuesDeleteRequest{
+				QueueName: queueName,
+			})
+			require.Error(t, err)
+			var duhErr duh.Error
+			require.ErrorAs(t, err, &duhErr)
+			assert.Equal(t, duh.CodeForbidden, duhErr.Code())
+		})
+
 		t.Run("SystemNamespaceCascade", func(t *testing.T) {
 			storageConf := setup()
 			d, adminKey := newDaemonWithAuth(t, storageConf)
@@ -426,7 +538,7 @@ func newDaemonWithAuth(t *testing.T, storageConf store.Config) (*authTestDaemon,
 	td.ctx, td.cancel = context.WithTimeout(context.Background(), clock.Minute*10)
 
 	td.d, err = daemon.NewDaemon(td.ctx, daemon.Config{
-		Service:       svc.Config{StorageConfig: storageConf, Log: log},
+		Service:       svc.Config{StorageConfig: storageConf, Log: log, Auth: internalBackend},
 		AuthBackend:   authAdapter,
 		ListenAddress: "localhost:0", // Use random available port
 	})

@@ -64,6 +64,9 @@ func NewDefaultAuthBackend(conf DefaultAuthBackendConfig) *DefaultAuthBackend {
 
 // Authenticate validates a token and returns the principal
 func (a *DefaultAuthBackend) Authenticate(ctx context.Context, token string) (types.Principal, error) {
+	if token == "" {
+		return types.AnonymousPrincipal, nil
+	}
 	return a.cache.Authenticate(ctx, token)
 }
 

@@ -18,6 +18,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -73,7 +74,7 @@ type Service struct {
 	auth   auth.AuthBackend
 }
 
-func New(conf Config) (*Service, error) {
+func New(ctx context.Context, conf Config) (*Service, error) {
 	set.Default(&conf.Clock, clock.NewProvider())
 	set.Default(&conf.Log, slog.Default())
 	set.Default(&conf.ReadTimeout, 3*time.Second)
@@ -107,11 +108,17 @@ func New(conf Config) (*Service, error) {
 		conf.Auth = &auth.NoOpAuthBackend{}
 	}
 
-	return &Service{
+	s := &Service{
 		queues: qm,
 		conf:   conf,
 		auth:   conf.Auth,
-	}, nil
+	}
+
+	if err := s.Bootstrap(ctx); err != nil {
+		return nil, err
+	}
+
+	return s, nil
 }
 
 // authorize checks if the principal in context has the required permission in the namespace
@@ -1070,6 +1077,137 @@ func (s *Service) RoleBindingsDelete(ctx context.Context, req *proto.RoleBinding
 
 	if err := s.conf.StorageConfig.RoleBindings.Delete(ctx, bindingID); err != nil {
 		return err
+	}
+	return nil
+}
+
+// -------------------------------------------------
+// Bootstrap
+// -------------------------------------------------
+
+// Bootstrap idempotently creates the _system namespace, anonymous user, standard roles,
+// and anonymous->Admin role binding. Safe to call on every startup.
+func (s *Service) Bootstrap(ctx context.Context) error {
+	// Skip bootstrap when auth is disabled (NoOp) or auth storage backends are not configured
+	if _, ok := s.auth.(*auth.NoOpAuthBackend); ok {
+		return nil
+	}
+	if s.conf.StorageConfig.Namespaces == nil || s.conf.StorageConfig.Users == nil ||
+		s.conf.StorageConfig.Roles == nil || s.conf.StorageConfig.RoleBindings == nil {
+		return nil
+	}
+
+	if err := s.bootstrapSystemNamespace(ctx); err != nil {
+		return err
+	}
+	if err := s.bootstrapAnonymousUser(ctx); err != nil {
+		return err
+	}
+	if err := s.bootstrapStandardRoles(ctx); err != nil {
+		return err
+	}
+	if err := s.bootstrapAnonymousAdminBinding(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
+// bootstrapSystemNamespace creates the _system namespace directly in storage,
+// bypassing NamespacesCreate which rejects reserved namespace names.
+func (s *Service) bootstrapSystemNamespace(ctx context.Context) error {
+	err := s.conf.StorageConfig.Namespaces.Add(ctx, types.Namespace{
+		Name:      tauth.SystemNamespace,
+		CreatedAt: s.conf.Clock.Now().UTC(),
+	})
+	if err != nil && !errors.Is(err, types.ErrNamespaceAlreadyExists) {
+		return err
+	}
+	return nil
+}
+
+// bootstrapAnonymousUser creates the anonymous user directly in storage.
+func (s *Service) bootstrapAnonymousUser(ctx context.Context) error {
+	now := s.conf.Clock.Now().UTC()
+	err := s.conf.StorageConfig.Users.Add(ctx, types.User{
+		ID:        types.AnonymousUser.ID,
+		Username:  types.AnonymousUser.Username,
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	if err != nil && !errors.Is(err, types.ErrUserAlreadyExists) && !errors.Is(err, types.ErrUsernameAlreadyTaken) {
+		return err
+	}
+	return nil
+}
+
+// bootstrapStandardRoles creates standard roles (Admin, NamespaceOwner, PublicViewer)
+// directly in storage, bypassing RolesCreate which rejects standard role names.
+func (s *Service) bootstrapStandardRoles(ctx context.Context) error {
+	now := s.conf.Clock.Now().UTC()
+	roles := []types.Role{
+		{
+			ID:          internal.NewUID(),
+			Name:        tauth.RoleAdmin,
+			Namespace:   tauth.SystemNamespace,
+			Permissions: tauth.AdminPermissions,
+			CreatedAt:   now,
+		},
+		{
+			ID:          internal.NewUID(),
+			Name:        tauth.RoleNamespaceOwner,
+			Namespace:   tauth.SystemNamespace,
+			Permissions: tauth.NamespaceOwnerPermissions,
+			CreatedAt:   now,
+		},
+		{
+			ID:          internal.NewUID(),
+			Name:        tauth.RolePublicViewer,
+			Namespace:   tauth.SystemNamespace,
+			Permissions: tauth.PublicViewerPermissions,
+			CreatedAt:   now,
+		},
+	}
+	for _, role := range roles {
+		err := s.conf.StorageConfig.Roles.Add(ctx, role)
+		if err != nil && !errors.Is(err, types.ErrRoleAlreadyExists) {
+			return err
+		}
+	}
+	return nil
+}
+
+// bootstrapAnonymousAdminBinding creates the anonymous->Admin role binding in _system,
+// enabling Open Door mode where unauthenticated requests have admin privileges.
+func (s *Service) bootstrapAnonymousAdminBinding(ctx context.Context) error {
+	// Look up the Admin role to get its ID
+	var adminRole types.Role
+	if err := s.conf.StorageConfig.Roles.Get(ctx, tauth.SystemNamespace, tauth.RoleAdmin, &adminRole); err != nil {
+		return err
+	}
+
+	// Create the binding
+	err := s.conf.StorageConfig.RoleBindings.Add(ctx, types.RoleBinding{
+		ID:        internal.NewUID(),
+		UserID:    types.AnonymousUser.ID,
+		RoleID:    adminRole.ID,
+		Namespace: tauth.SystemNamespace,
+		CreatedAt: s.conf.Clock.Now().UTC(),
+	})
+	if err != nil && !errors.Is(err, types.ErrRoleBindingAlreadyExists) {
+		return err
+	}
+
+	// Check if the anonymous->Admin binding exists and log a warning
+	var bindings []types.RoleBinding
+	if err := s.conf.StorageConfig.RoleBindings.ListByUser(ctx, types.AnonymousUser.ID, &bindings); err != nil {
+		return err
+	}
+	for _, binding := range bindings {
+		if binding.RoleID == adminRole.ID && binding.Namespace == tauth.SystemNamespace {
+			s.conf.Log.Warn("SYSTEM RUNNING IN OPEN DOOR MODE - anonymous user has admin privileges. " +
+				"Remove the anonymous admin binding to secure the system.")
+			break
+		}
 	}
 	return nil
 }

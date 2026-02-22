@@ -3,6 +3,7 @@ package service_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -142,22 +143,19 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 			assert.Equal(t, duh.CodeUnauthorized, duhErr.Code())
 		})
 
-		t.Run("MissingAPIKeyWithAuthEnabled", func(t *testing.T) {
+		t.Run("AnonymousAccessInOpenDoor", func(t *testing.T) {
 			storageConf := setup()
 			d, _ := newDaemonWithAuth(t, storageConf)
 			defer d.Shutdown(t)
 
-			// Create client without API key
+			// Create client without API key (anonymous)
 			c := newClientWithAPIKey(t, d, "")
 			ctx := d.Context()
 
-			// Request should fail with 401
+			// In Open Door mode, anonymous has Admin privileges via bootstrap binding
 			var listRes pb.QueuesListResponse
 			err := c.QueuesList(ctx, &listRes, nil)
-			require.Error(t, err)
-			var duhErr duh.Error
-			require.ErrorAs(t, err, &duhErr)
-			assert.Equal(t, duh.CodeUnauthorized, duhErr.Code())
+			require.NoError(t, err)
 		})
 
 		t.Run("ExpiredAPIKey", func(t *testing.T) {
@@ -733,12 +731,14 @@ func newClientWithAPIKey(t *testing.T, d *authTestDaemon, apiKey string) *querat
 func createAdminUser(t *testing.T, ctx context.Context, storageConf store.Config) string {
 	t.Helper()
 
-	// First, ensure _system namespace exists
+	// Ensure _system namespace exists (may already exist from bootstrap)
 	err := storageConf.Namespaces.Add(ctx, types.Namespace{
 		Name:        tauth.SystemNamespace,
 		Description: "System namespace for global administration",
 	})
-	require.NoError(t, err)
+	if err != nil && !errors.Is(err, types.ErrNamespaceAlreadyExists) {
+		require.NoError(t, err)
+	}
 
 	// Create admin role in _system namespace
 	adminRole := types.Role{

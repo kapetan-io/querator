@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sync"
 	"testing"
 
 	"github.com/duh-rpc/duh-go"
@@ -584,6 +585,50 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 			require.ErrorAs(t, err, &duhErr)
 			assert.Equal(t, duh.CodeUnauthorized, duhErr.Code())
 		})
+	})
+
+	t.Run("DoubleClose", func(t *testing.T) {
+		storageConf := setup()
+		d, _ := newDaemonWithAuth(t, storageConf)
+
+		// First close via Shutdown (calls authBackend.Close())
+		d.authBackend.Close()
+		// Second close should not panic
+		d.authBackend.Close()
+
+		d.testDaemon.Shutdown(t)
+	})
+
+	t.Run("ConcurrentAuthentication", func(t *testing.T) {
+		storageConf := setup()
+		d, adminKey := newDaemonWithAuth(t, storageConf)
+		defer d.Shutdown(t)
+
+		ctx := d.Context()
+
+		// Create multiple users with API keys to trigger concurrent cache misses
+		const numUsers = 10
+		keys := make([]string, numUsers)
+		for i := 0; i < numUsers; i++ {
+			keys[i] = createUserWithLimitedPermissions(t, ctx,
+				newClientWithAPIKey(t, d, adminKey), []string{tauth.QueueList})
+		}
+
+		// Authenticate all keys concurrently, triggering concurrent UpdateLastUsed goroutines
+		var wg sync.WaitGroup
+		wg.Add(numUsers)
+		for i := 0; i < numUsers; i++ {
+			go func(key string) {
+				defer wg.Done()
+				c := newClientWithAPIKey(t, d, key)
+				var listRes pb.QueuesListResponse
+				_ = c.QueuesList(ctx, &listRes, nil)
+			}(keys[i])
+		}
+		wg.Wait()
+
+		// Shutdown will call Close(), which waits for all UpdateLastUsed goroutines.
+		// goleak.VerifyNone (deferred in testAuth) verifies no goroutines leak.
 	})
 
 	t.Run("Errors", func(t *testing.T) {

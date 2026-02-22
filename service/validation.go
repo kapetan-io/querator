@@ -179,8 +179,16 @@ func (s *Service) validateNamespaceProto(in *proto.NamespaceInfo, out *types.Nam
 		return transport.NewInvalidOption("namespace name is invalid; cannot be greater than '%d' characters", maxNamespaceNameLength)
 	}
 
-	if in.Name == "" {
+	if strings.TrimSpace(in.Name) == "" {
 		return transport.NewInvalidOption("namespace name is invalid; cannot be empty")
+	}
+
+	if strings.ContainsFunc(in.Name, unicode.IsSpace) {
+		return transport.NewInvalidOption("namespace name is invalid; '%s' cannot contain whitespace", in.Name)
+	}
+
+	if strings.Contains(in.Name, "~") {
+		return transport.NewInvalidOption("namespace name is invalid; '%s' cannot contain '~' character", in.Name)
 	}
 
 	out.Description = in.Description

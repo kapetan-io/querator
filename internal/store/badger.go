@@ -1016,10 +1016,14 @@ func (b *BadgerPartition) Stats(_ context.Context, stats *types.PartitionStats, 
 }
 
 func (b *BadgerPartition) Close(_ context.Context) error {
-	if b.db != nil {
-		return b.db.Close()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.db == nil {
+		return nil
 	}
-	return nil
+	err := b.db.Close()
+	b.db = nil
+	return err
 }
 
 func (b *BadgerPartition) validateID(id []byte) error {
@@ -1275,6 +1279,8 @@ func (b *BadgerQueues) Delete(_ context.Context, name string) error {
 }
 
 func (b *BadgerQueues) Close(_ context.Context) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	if b.db == nil {
 		return nil
 	}
@@ -1485,6 +1491,8 @@ func (b *BadgerNamespaces) Delete(_ context.Context, name string) error {
 }
 
 func (b *BadgerNamespaces) Close(_ context.Context) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	if b.db == nil {
 		return nil
 	}
@@ -1750,6 +1758,8 @@ func (b *BadgerUsers) Delete(_ context.Context, id string) error {
 }
 
 func (b *BadgerUsers) Close(_ context.Context) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	if b.db == nil {
 		return nil
 	}
@@ -2140,7 +2150,10 @@ func (b *BadgerAPIKeys) DeleteByUser(_ context.Context, userID string) error {
 	}
 
 	return db.Update(func(txn *badger.Txn) error {
-		ids, _ := b.getUserKeyIDs(txn, userID)
+		ids, err := b.getUserKeyIDs(txn, userID)
+		if err != nil {
+			return errors.Errorf("during getUserKeyIDs(): %w", err)
+		}
 		if ids == nil {
 			return nil
 		}
@@ -2149,28 +2162,37 @@ func (b *BadgerAPIKeys) DeleteByUser(_ context.Context, userID string) error {
 			// Get the key for hash cleanup
 			kvItem, err := txn.Get([]byte("apikey:" + id))
 			if err != nil {
-				continue
+				if errors.Is(err, badger.ErrKeyNotFound) {
+					continue
+				}
+				return errors.Errorf("during Get(): %w", err)
 			}
 
 			var v []byte
 			v, err = kvItem.ValueCopy(v)
 			if err != nil {
-				continue
+				return errors.Errorf("during ValueCopy(): %w", err)
 			}
 
 			var key types.APIKey
 			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(&key); err != nil {
-				continue
+				return errors.Errorf("during Decode(): %w", err)
 			}
 
 			// Delete hash index
-			_ = txn.Delete([]byte("apikey-hash:" + key.KeyHash))
+			if err := txn.Delete([]byte("apikey-hash:" + key.KeyHash)); err != nil && !errors.Is(err, badger.ErrKeyNotFound) {
+				return errors.Errorf("during Delete(): %w", err)
+			}
 			// Delete key
-			_ = txn.Delete([]byte("apikey:" + id))
+			if err := txn.Delete([]byte("apikey:" + id)); err != nil && !errors.Is(err, badger.ErrKeyNotFound) {
+				return errors.Errorf("during Delete(): %w", err)
+			}
 		}
 
 		// Delete user index
-		_ = txn.Delete([]byte("apikey-user:" + userID))
+		if err := txn.Delete([]byte("apikey-user:" + userID)); err != nil && !errors.Is(err, badger.ErrKeyNotFound) {
+			return errors.Errorf("during Delete(): %w", err)
+		}
 		return nil
 	})
 }
@@ -2216,6 +2238,8 @@ func (b *BadgerAPIKeys) UpdateLastUsed(_ context.Context, id string, lastUsed cl
 }
 
 func (b *BadgerAPIKeys) Close(_ context.Context) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	if b.db == nil {
 		return nil
 	}
@@ -2533,6 +2557,8 @@ func (b *BadgerRoles) Delete(_ context.Context, id string) error {
 }
 
 func (b *BadgerRoles) Close(_ context.Context) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	if b.db == nil {
 		return nil
 	}
@@ -2943,7 +2969,10 @@ func (b *BadgerRoleBindings) DeleteByUser(_ context.Context, userID string) erro
 	}
 
 	return db.Update(func(txn *badger.Txn) error {
-		ids, _ := b.getUserBindingIDs(txn, userID)
+		ids, err := b.getUserBindingIDs(txn, userID)
+		if err != nil {
+			return errors.Errorf("during getUserBindingIDs(): %w", err)
+		}
 		if ids == nil {
 			return nil
 		}
@@ -2952,26 +2981,34 @@ func (b *BadgerRoleBindings) DeleteByUser(_ context.Context, userID string) erro
 			// Get binding for cleanup
 			kvItem, err := txn.Get([]byte("rolebinding:" + id))
 			if err != nil {
-				continue
+				if errors.Is(err, badger.ErrKeyNotFound) {
+					continue
+				}
+				return errors.Errorf("during Get(): %w", err)
 			}
 
 			var v []byte
 			v, err = kvItem.ValueCopy(v)
 			if err != nil {
-				continue
+				return errors.Errorf("during ValueCopy(): %w", err)
 			}
 
 			var binding types.RoleBinding
 			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(&binding); err != nil {
-				continue
+				return errors.Errorf("during Decode(): %w", err)
 			}
 
 			// Delete uniqueness index
 			uniqueKey := []byte("rolebinding-unique:" + binding.UserID + ":" + binding.Namespace + ":" + binding.RoleID)
-			_ = txn.Delete(uniqueKey)
+			if err := txn.Delete(uniqueKey); err != nil && !errors.Is(err, badger.ErrKeyNotFound) {
+				return errors.Errorf("during Delete(): %w", err)
+			}
 
 			// Update role index
-			roleIDs, _ := b.getRoleBindingIDs(txn, binding.RoleID)
+			roleIDs, err := b.getRoleBindingIDs(txn, binding.RoleID)
+			if err != nil {
+				return errors.Errorf("during getRoleBindingIDs(): %w", err)
+			}
 			newRoleIDs := make([]string, 0, len(roleIDs))
 			for _, existingID := range roleIDs {
 				if existingID != id {
@@ -2981,24 +3018,34 @@ func (b *BadgerRoleBindings) DeleteByUser(_ context.Context, userID string) erro
 			if len(newRoleIDs) > 0 {
 				var roleBuf bytes.Buffer
 				if err := gob.NewEncoder(&roleBuf).Encode(newRoleIDs); err != nil {
-					continue
+					return errors.Errorf("during Encode(): %w", err)
 				}
-				_ = txn.Set([]byte("rolebinding-role:"+binding.RoleID), roleBuf.Bytes())
+				if err := txn.Set([]byte("rolebinding-role:"+binding.RoleID), roleBuf.Bytes()); err != nil {
+					return errors.Errorf("during Set(): %w", err)
+				}
 			} else {
-				_ = txn.Delete([]byte("rolebinding-role:" + binding.RoleID))
+				if err := txn.Delete([]byte("rolebinding-role:" + binding.RoleID)); err != nil && !errors.Is(err, badger.ErrKeyNotFound) {
+					return errors.Errorf("during Delete(): %w", err)
+				}
 			}
 
 			// Delete binding
-			_ = txn.Delete([]byte("rolebinding:" + id))
+			if err := txn.Delete([]byte("rolebinding:" + id)); err != nil && !errors.Is(err, badger.ErrKeyNotFound) {
+				return errors.Errorf("during Delete(): %w", err)
+			}
 		}
 
 		// Delete user index
-		_ = txn.Delete([]byte("rolebinding-user:" + userID))
+		if err := txn.Delete([]byte("rolebinding-user:" + userID)); err != nil && !errors.Is(err, badger.ErrKeyNotFound) {
+			return errors.Errorf("during Delete(): %w", err)
+		}
 		return nil
 	})
 }
 
 func (b *BadgerRoleBindings) Close(_ context.Context) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	if b.db == nil {
 		return nil
 	}

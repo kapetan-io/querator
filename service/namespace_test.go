@@ -11,6 +11,7 @@ import (
 	"github.com/kapetan-io/querator/internal/store"
 	pb "github.com/kapetan-io/querator/proto"
 	svc "github.com/kapetan-io/querator/service"
+	tauth "github.com/kapetan-io/querator/transport/auth"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/random"
 	"github.com/stretchr/testify/assert"
@@ -201,6 +202,24 @@ func testNamespaces(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					Msg:  "namespace name is invalid; cannot be greater than '256' characters",
 					Code: duh.CodeBadRequest,
 				},
+				{
+					Name: "WhitespaceOnly",
+					Req:  &pb.NamespaceInfo{Name: "   "},
+					Msg:  "namespace name is invalid; cannot be empty",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "ContainsWhitespace",
+					Req:  &pb.NamespaceInfo{Name: "my namespace"},
+					Msg:  "namespace name is invalid; 'my namespace' cannot contain whitespace",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "ContainsTilde",
+					Req:  &pb.NamespaceInfo{Name: "my~namespace"},
+					Msg:  "namespace name is invalid; 'my~namespace' cannot contain '~' character",
+					Code: duh.CodeBadRequest,
+				},
 			} {
 				t.Run(test.Name, func(t *testing.T) {
 					err := c.NamespacesCreate(ctx, test.Req)
@@ -242,6 +261,65 @@ func testNamespaces(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					assert.Equal(t, test.Code, e.Code())
 				})
 			}
+		})
+
+		t.Run("NamespaceHasRoles", func(t *testing.T) {
+			ns := random.String("ns-", 10)
+			require.NoError(t, c.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: ns}))
+
+			// Create a role in the namespace
+			var roleRes pb.RoleCreateResponse
+			err := c.RolesCreate(ctx, &pb.RoleCreateRequest{
+				Namespace:   ns,
+				Name:        "test-role-" + random.String("", 5),
+				Permissions: []string{tauth.QueueList},
+			}, &roleRes)
+			require.NoError(t, err)
+
+			// Attempt to delete the namespace that has roles
+			err = c.NamespacesDelete(ctx, &pb.NamespacesDeleteRequest{Name: ns})
+			require.Error(t, err)
+			var duhErr duh.Error
+			require.ErrorAs(t, err, &duhErr)
+			assert.Contains(t, duhErr.Message(), "namespace has roles")
+		})
+
+		t.Run("NamespaceHasRoleBindings", func(t *testing.T) {
+			ns := random.String("ns-", 10)
+			require.NoError(t, c.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: ns}))
+
+			// Create a user
+			var userRes pb.UserCreateResponse
+			err := c.UsersCreate(ctx, &pb.UserCreateRequest{
+				Username: "binding-user-" + random.String("", 5),
+			}, &userRes)
+			require.NoError(t, err)
+
+			// Create a role in the namespace
+			roleName := "binding-role-" + random.String("", 5)
+			var roleRes pb.RoleCreateResponse
+			err = c.RolesCreate(ctx, &pb.RoleCreateRequest{
+				Namespace:   ns,
+				Name:        roleName,
+				Permissions: []string{tauth.QueueList},
+			}, &roleRes)
+			require.NoError(t, err)
+
+			// Create a role binding
+			var bindingRes pb.RoleBindingCreateResponse
+			err = c.RoleBindingsCreate(ctx, &pb.RoleBindingCreateRequest{
+				Namespace: ns,
+				RoleName:  roleName,
+				UserId:    userRes.Id,
+			}, &bindingRes)
+			require.NoError(t, err)
+
+			// Attempt to delete the namespace that has role bindings
+			err = c.NamespacesDelete(ctx, &pb.NamespacesDeleteRequest{Name: ns})
+			require.Error(t, err)
+			var duhErr duh.Error
+			require.ErrorAs(t, err, &duhErr)
+			assert.Contains(t, duhErr.Message(), "namespace has role bindings")
 		})
 	})
 

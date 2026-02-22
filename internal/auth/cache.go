@@ -33,6 +33,8 @@ type Cache struct {
 	apiKeys         store.APIKeys
 	stopCleanup     chan struct{}
 	mu              sync.RWMutex
+	wg              sync.WaitGroup
+	once            sync.Once
 	ttl             time.Duration
 }
 
@@ -113,9 +115,16 @@ func (c *Cache) Authenticate(ctx context.Context, key string) (types.Principal, 
 	c.mu.Unlock()
 
 	// Update last used time asynchronously
-	go func() {
-		_ = c.apiKeys.UpdateLastUsed(context.Background(), apiKey.ID, clock.Now().UTC())
-	}()
+	select {
+	case <-c.stopCleanup:
+		// Cache is closed, don't spawn new goroutines
+	default:
+		c.wg.Add(1)
+		go func() {
+			defer c.wg.Done()
+			_ = c.apiKeys.UpdateLastUsed(context.Background(), apiKey.ID, clock.Now().UTC())
+		}()
+	}
 
 	return principal, nil
 }
@@ -138,9 +147,12 @@ func (c *Cache) InvalidateUser(userID string) {
 	c.mu.Unlock()
 }
 
-// Close stops the cleanup goroutine
+// Close stops the cleanup goroutine and waits for pending operations
 func (c *Cache) Close() {
-	close(c.stopCleanup)
+	c.once.Do(func() {
+		close(c.stopCleanup)
+		c.wg.Wait()
+	})
 }
 
 func (c *Cache) cleanupLoop() {

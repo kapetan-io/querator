@@ -673,7 +673,36 @@ func (s *Service) NamespacesList(ctx context.Context, req *proto.NamespacesListR
 }
 
 func (s *Service) NamespacesDelete(ctx context.Context, req *proto.NamespacesDeleteRequest) error {
-	// TODO: Check if namespace has queues and return ErrNamespaceHasQueues if so
+	// Check for child role bindings (check before roles so users get actionable errors:
+	// delete bindings first, then roles, then namespace)
+	var bindings []types.RoleBinding
+	if err := s.conf.StorageConfig.RoleBindings.List(ctx, req.Name, &bindings, types.ListOptions{Limit: 1}); err != nil {
+		return err
+	}
+	if len(bindings) > 0 {
+		return types.ErrNamespaceHasRoleBindings
+	}
+
+	// Check for child roles
+	var roles []types.Role
+	if err := s.conf.StorageConfig.Roles.List(ctx, req.Name, &roles, types.ListOptions{Limit: 1}); err != nil {
+		return err
+	}
+	if len(roles) > 0 {
+		return types.ErrNamespaceHasRoles
+	}
+
+	// Check for child queues
+	var queues []types.QueueInfo
+	if err := s.conf.StorageConfig.Queues.List(ctx, &queues, types.ListOptions{Limit: maxAllocation}); err != nil {
+		return err
+	}
+	for _, q := range queues {
+		if q.Namespace == req.Name {
+			return types.ErrNamespaceHasQueues
+		}
+	}
+
 	if err := s.conf.StorageConfig.Namespaces.Delete(ctx, req.Name); err != nil {
 		return err
 	}

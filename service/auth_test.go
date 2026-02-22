@@ -641,6 +641,176 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 			assert.Contains(t, duhErr.Message(), "invalid authorization header format")
 		})
 	})
+
+	t.Run("Bootstrap", func(t *testing.T) {
+		t.Run("SystemNamespaceExists", func(t *testing.T) {
+			d, adminKey := newDaemonWithAuth(t, setup)
+			defer d.Shutdown(t)
+
+			c := newClientWithAPIKey(t, d, adminKey)
+			ctx := d.Context()
+
+			var listRes pb.NamespacesListResponse
+			err := c.NamespacesList(ctx, &listRes, nil)
+			require.NoError(t, err)
+
+			var found bool
+			for _, ns := range listRes.Items {
+				if ns.Name == tauth.SystemNamespace {
+					found = true
+					break
+				}
+			}
+			assert.True(t, found)
+		})
+
+		t.Run("AnonymousUserExists", func(t *testing.T) {
+			d, adminKey := newDaemonWithAuth(t, setup)
+			defer d.Shutdown(t)
+
+			c := newClientWithAPIKey(t, d, adminKey)
+			ctx := d.Context()
+
+			var listRes pb.UsersListResponse
+			err := c.UsersList(ctx, &listRes, nil)
+			require.NoError(t, err)
+
+			var found bool
+			for _, u := range listRes.Items {
+				if u.Username == "anonymous" && u.Id == "anonymous" {
+					found = true
+					break
+				}
+			}
+			assert.True(t, found)
+		})
+
+		t.Run("StandardRolesExist", func(t *testing.T) {
+			d, adminKey := newDaemonWithAuth(t, setup)
+			defer d.Shutdown(t)
+
+			c := newClientWithAPIKey(t, d, adminKey)
+			ctx := d.Context()
+
+			var listRes pb.RolesListResponse
+			err := c.RolesList(ctx, tauth.SystemNamespace, &listRes, nil)
+			require.NoError(t, err)
+
+			roles := make(map[string][]string)
+			for _, role := range listRes.Items {
+				roles[role.Name] = role.Permissions
+			}
+
+			// Verify Admin role exists with correct permissions
+			adminPerms, ok := roles[tauth.RoleAdmin]
+			require.True(t, ok)
+			assert.ElementsMatch(t, tauth.AdminPermissions, adminPerms)
+
+			// Verify NamespaceOwner role exists with correct permissions
+			ownerPerms, ok := roles[tauth.RoleNamespaceOwner]
+			require.True(t, ok)
+			assert.ElementsMatch(t, tauth.NamespaceOwnerPermissions, ownerPerms)
+
+			// Verify PublicViewer role exists with correct permissions
+			viewerPerms, ok := roles[tauth.RolePublicViewer]
+			require.True(t, ok)
+			assert.ElementsMatch(t, tauth.PublicViewerPermissions, viewerPerms)
+		})
+
+		t.Run("AnonymousAdminBindingExists", func(t *testing.T) {
+			d, adminKey := newDaemonWithAuth(t, setup)
+			defer d.Shutdown(t)
+
+			c := newClientWithAPIKey(t, d, adminKey)
+			ctx := d.Context()
+
+			// Find the Admin role ID
+			var rolesRes pb.RolesListResponse
+			err := c.RolesList(ctx, tauth.SystemNamespace, &rolesRes, nil)
+			require.NoError(t, err)
+
+			var adminRoleID string
+			for _, role := range rolesRes.Items {
+				if role.Name == tauth.RoleAdmin {
+					adminRoleID = role.Id
+					break
+				}
+			}
+			require.NotEmpty(t, adminRoleID)
+
+			// List role bindings and find the anonymous->Admin binding
+			var bindingsRes pb.RoleBindingsListResponse
+			err = c.RoleBindingsList(ctx, tauth.SystemNamespace, &bindingsRes, nil)
+			require.NoError(t, err)
+
+			var found bool
+			for _, binding := range bindingsRes.Items {
+				if binding.UserId == "anonymous" && binding.RoleId == adminRoleID {
+					found = true
+					break
+				}
+			}
+			assert.True(t, found)
+		})
+	})
+
+	t.Run("OpenDoor", func(t *testing.T) {
+		t.Run("AnonymousCanCreateUser", func(t *testing.T) {
+			d, _ := newDaemonWithAuth(t, setup)
+			defer d.Shutdown(t)
+
+			// Create an unauthenticated client (anonymous has Admin via bootstrap)
+			c := newClientWithAPIKey(t, d, "")
+			ctx := d.Context()
+
+			var userRes pb.UserCreateResponse
+			err := c.UsersCreate(ctx, &pb.UserCreateRequest{
+				Username: "opendoor-" + random.String("", 5),
+			}, &userRes)
+			require.NoError(t, err)
+			assert.NotEmpty(t, userRes.Id)
+		})
+
+		t.Run("AnonymousCanCreateAPIKey", func(t *testing.T) {
+			d, _ := newDaemonWithAuth(t, setup)
+			defer d.Shutdown(t)
+
+			c := newClientWithAPIKey(t, d, "")
+			ctx := d.Context()
+
+			// Create a user first
+			var userRes pb.UserCreateResponse
+			err := c.UsersCreate(ctx, &pb.UserCreateRequest{
+				Username: "opendoor-key-" + random.String("", 5),
+			}, &userRes)
+			require.NoError(t, err)
+
+			// Create an API key for the user
+			var keyRes pb.APIKeyCreateResponse
+			err = c.APIKeysCreate(ctx, &pb.APIKeyCreateRequest{
+				UserId: userRes.Id,
+				Name:   "opendoor-key",
+			}, &keyRes)
+			require.NoError(t, err)
+			assert.NotEmpty(t, keyRes.Key)
+		})
+
+		t.Run("AnonymousCanCreateQueue", func(t *testing.T) {
+			d, _ := newDaemonWithAuth(t, setup)
+			defer d.Shutdown(t)
+
+			c := newClientWithAPIKey(t, d, "")
+			ctx := d.Context()
+
+			err := c.QueuesCreate(ctx, &pb.QueueInfo{
+				QueueName:           random.String("queue-", 10),
+				LeaseTimeout:        LeaseTimeout,
+				ExpireTimeout:       ExpireTimeout,
+				RequestedPartitions: 1,
+			})
+			require.NoError(t, err)
+		})
+	})
 }
 
 // authTestDaemon wraps testDaemon with auth-specific fields

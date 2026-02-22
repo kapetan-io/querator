@@ -3,7 +3,6 @@ package service_test
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"sync"
@@ -15,18 +14,17 @@ import (
 	"github.com/kapetan-io/querator/daemon"
 	"github.com/kapetan-io/querator/internal/auth"
 	"github.com/kapetan-io/querator/internal/store"
-	"github.com/kapetan-io/querator/internal/types"
 	pb "github.com/kapetan-io/querator/proto"
 	svc "github.com/kapetan-io/querator/service"
 	"github.com/kapetan-io/querator/transport"
 	tauth "github.com/kapetan-io/querator/transport/auth"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/random"
-	"github.com/kapetan-io/tackle/set"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestAuth(t *testing.T) {
@@ -111,8 +109,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 
 	t.Run("Authentication", func(t *testing.T) {
 		t.Run("ValidAPIKey", func(t *testing.T) {
-			storageConf := setup()
-			d, apiKey := newDaemonWithAuth(t, storageConf)
+			d, apiKey := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
 
 			// Create client with valid API key
@@ -126,8 +123,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 		})
 
 		t.Run("InvalidAPIKey", func(t *testing.T) {
-			storageConf := setup()
-			d, _ := newDaemonWithAuth(t, storageConf)
+			d, _ := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
 
 			// Create client with invalid API key
@@ -144,8 +140,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 		})
 
 		t.Run("AnonymousAccessInOpenDoor", func(t *testing.T) {
-			storageConf := setup()
-			d, _ := newDaemonWithAuth(t, storageConf)
+			d, _ := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
 
 			// Create client without API key (anonymous)
@@ -159,37 +154,39 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 		})
 
 		t.Run("ExpiredAPIKey", func(t *testing.T) {
-			storageConf := setup()
-			d, _ := newDaemonWithAuth(t, storageConf)
+			d, adminKey := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
 
 			ctx := d.Context()
+			adminClient := newClientWithAPIKey(t, d, adminKey)
 
-			// Create user directly in storage
-			user := types.User{
-				ID:       random.String("user-", 10),
+			// Create a user via the API
+			var userRes pb.UserCreateResponse
+			err := adminClient.UsersCreate(ctx, &pb.UserCreateRequest{
 				Username: "expired-" + random.String("", 5),
-			}
-			err := storageConf.Users.Add(ctx, user)
+			}, &userRes)
 			require.NoError(t, err)
 
-			// Generate an API key and store it with an expiration in the past
-			generatedKey, err := auth.GenerateAPIKey("")
+			// Bind the user to Admin role so the key would have permissions (if not expired)
+			var bindingRes pb.RoleBindingCreateResponse
+			err = adminClient.RoleBindingsCreate(ctx, &pb.RoleBindingCreateRequest{
+				Namespace: tauth.SystemNamespace,
+				UserId:    userRes.Id,
+				RoleName:  tauth.RoleAdmin,
+			}, &bindingRes)
 			require.NoError(t, err)
 
-			expiredAt := clock.Now().UTC().Add(-clock.Hour)
-			err = storageConf.APIKeys.Add(ctx, types.APIKey{
-				ExpiresAt: &expiredAt,
-				KeyPrefix: generatedKey.Prefix,
-				KeyHash:   generatedKey.KeyHash,
-				UserID:    user.ID,
+			// Create an API key with an expiration in the past
+			var keyRes pb.APIKeyCreateResponse
+			err = adminClient.APIKeysCreate(ctx, &pb.APIKeyCreateRequest{
+				UserId:    userRes.Id,
 				Name:      "expired-key",
-				ID:        random.String("key-", 10),
-			})
+				ExpiresAt: timestamppb.New(clock.Now().UTC().Add(-clock.Hour)),
+			}, &keyRes)
 			require.NoError(t, err)
 
 			// Authenticate with the expired key
-			c := newClientWithAPIKey(t, d, generatedKey.Key)
+			c := newClientWithAPIKey(t, d, keyRes.Key)
 			var listRes pb.QueuesListResponse
 			err = c.QueuesList(ctx, &listRes, nil)
 			require.Error(t, err)
@@ -202,8 +199,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 
 	t.Run("Authorization", func(t *testing.T) {
 		t.Run("HasPermission", func(t *testing.T) {
-			storageConf := setup()
-			d, apiKey := newDaemonWithAuth(t, storageConf)
+			d, apiKey := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
 
 			c := newClientWithAPIKey(t, d, apiKey)
@@ -235,8 +231,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 		})
 
 		t.Run("LacksPermission", func(t *testing.T) {
-			storageConf := setup()
-			d, adminKey := newDaemonWithAuth(t, storageConf)
+			d, adminKey := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
 
 			ctx := d.Context()
@@ -267,8 +262,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 		})
 
 		t.Run("NamespaceScoping", func(t *testing.T) {
-			storageConf := setup()
-			d, adminKey := newDaemonWithAuth(t, storageConf)
+			d, adminKey := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
 
 			ctx := d.Context()
@@ -317,8 +311,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 		})
 
 		t.Run("AdminCanUpdateQueue", func(t *testing.T) {
-			storageConf := setup()
-			d, adminKey := newDaemonWithAuth(t, storageConf)
+			d, adminKey := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
 
 			ctx := d.Context()
@@ -343,8 +336,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 		})
 
 		t.Run("AdminCanDeleteQueue", func(t *testing.T) {
-			storageConf := setup()
-			d, adminKey := newDaemonWithAuth(t, storageConf)
+			d, adminKey := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
 
 			ctx := d.Context()
@@ -368,8 +360,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 		})
 
 		t.Run("QueuesUpdateDenied", func(t *testing.T) {
-			storageConf := setup()
-			d, adminKey := newDaemonWithAuth(t, storageConf)
+			d, adminKey := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
 
 			ctx := d.Context()
@@ -399,8 +390,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 		})
 
 		t.Run("QueuesDeleteDenied", func(t *testing.T) {
-			storageConf := setup()
-			d, adminKey := newDaemonWithAuth(t, storageConf)
+			d, adminKey := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
 
 			ctx := d.Context()
@@ -429,8 +419,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 		})
 
 		t.Run("SystemNamespaceCascade", func(t *testing.T) {
-			storageConf := setup()
-			d, adminKey := newDaemonWithAuth(t, storageConf)
+			d, adminKey := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
 
 			ctx := d.Context()
@@ -469,8 +458,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 
 	t.Run("CacheInvalidation", func(t *testing.T) {
 		t.Run("DeletedAPIKeyDenied", func(t *testing.T) {
-			storageConf := setup()
-			d, adminKey := newDaemonWithAuth(t, storageConf)
+			d, adminKey := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
 
 			ctx := d.Context()
@@ -513,8 +501,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 		})
 
 		t.Run("DeletedUserDenied", func(t *testing.T) {
-			storageConf := setup()
-			d, adminKey := newDaemonWithAuth(t, storageConf)
+			d, adminKey := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
 
 			ctx := d.Context()
@@ -586,8 +573,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 	})
 
 	t.Run("DoubleClose", func(t *testing.T) {
-		storageConf := setup()
-		d, _ := newDaemonWithAuth(t, storageConf)
+		d, _ := newDaemonWithAuth(t, setup)
 
 		// First close via Shutdown (calls authBackend.Close())
 		d.authBackend.Close()
@@ -598,8 +584,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 	})
 
 	t.Run("ConcurrentAuthentication", func(t *testing.T) {
-		storageConf := setup()
-		d, adminKey := newDaemonWithAuth(t, storageConf)
+		d, adminKey := newDaemonWithAuth(t, setup)
 		defer d.Shutdown(t)
 
 		ctx := d.Context()
@@ -631,8 +616,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 
 	t.Run("Errors", func(t *testing.T) {
 		t.Run("MalformedAuthHeader", func(t *testing.T) {
-			storageConf := setup()
-			d, _ := newDaemonWithAuth(t, storageConf)
+			d, _ := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
 
 			ctx := d.Context()
@@ -663,7 +647,6 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 type authTestDaemon struct {
 	*testDaemon
 	authBackend *daemon.AuthBackendAdapter
-	storageConf store.Config
 }
 
 func (a *authTestDaemon) Shutdown(t *testing.T) {
@@ -672,15 +655,13 @@ func (a *authTestDaemon) Shutdown(t *testing.T) {
 	a.testDaemon.Shutdown(t)
 }
 
-// newDaemonWithAuth creates a daemon with DefaultAuthBackend and returns the admin API key
-func newDaemonWithAuth(t *testing.T, storageConf store.Config) (*authTestDaemon, string) {
+// newDaemonWithAuth creates a daemon with DefaultAuthBackend and returns the admin API key.
+// Bootstrap runs automatically during service.New(), creating the _system namespace, anonymous
+// user, standard roles, and anonymous->Admin binding (Open Door mode).
+func newDaemonWithAuth(t *testing.T, setup NewStorageFunc) (*authTestDaemon, string) {
 	t.Helper()
 
-	set.Default(&storageConf.Namespaces, store.NewMemoryNamespaces(log))
-	set.Default(&storageConf.Users, store.NewMemoryUsers(log))
-	set.Default(&storageConf.APIKeys, store.NewMemoryAPIKeys(log))
-	set.Default(&storageConf.Roles, store.NewMemoryRoles(log))
-	set.Default(&storageConf.RoleBindings, store.NewMemoryRoleBindings(log))
+	storageConf := setup()
 
 	// Create internal auth backend
 	internalBackend := auth.NewDefaultAuthBackend(auth.DefaultAuthBackendConfig{
@@ -701,18 +682,20 @@ func newDaemonWithAuth(t *testing.T, storageConf store.Config) (*authTestDaemon,
 	td.d, err = daemon.NewDaemon(td.ctx, daemon.Config{
 		Service:       svc.Config{StorageConfig: storageConf, Auth: internalBackend, Log: log},
 		AuthBackend:   authAdapter,
-		ListenAddress: "localhost:0", // Use random available port
+		ListenAddress: "localhost:0",
 	})
 	require.NoError(t, err)
 
-	// Create admin user and API key
-	adminKey := createAdminUser(t, td.ctx, storageConf)
-
-	return &authTestDaemon{
+	atd := &authTestDaemon{
 		testDaemon:  td,
 		authBackend: authAdapter,
-		storageConf: storageConf,
-	}, adminKey
+	}
+
+	// Use Open Door mode (anonymous has admin) to create admin credentials via the public API
+	anonClient := newClientWithAPIKey(t, atd, "")
+	adminKey := createAdminUser(t, td.ctx, anonClient)
+
+	return atd, adminKey
 }
 
 // newClientWithAPIKey creates a client with the specified API key
@@ -727,62 +710,36 @@ func newClientWithAPIKey(t *testing.T, d *authTestDaemon, apiKey string) *querat
 	return c
 }
 
-// createAdminUser creates an admin user with all permissions and returns the API key
-func createAdminUser(t *testing.T, ctx context.Context, storageConf store.Config) string {
+// createAdminUser creates an admin user with all permissions via the public API and returns the API key.
+// The caller must provide an unauthenticated client (anonymous = admin via Open Door bootstrap).
+func createAdminUser(t *testing.T, ctx context.Context, c *querator.Client) string {
 	t.Helper()
 
-	// Ensure _system namespace exists (may already exist from bootstrap)
-	err := storageConf.Namespaces.Add(ctx, types.Namespace{
-		Name:        tauth.SystemNamespace,
-		Description: "System namespace for global administration",
-	})
-	if err != nil && !errors.Is(err, types.ErrNamespaceAlreadyExists) {
-		require.NoError(t, err)
-	}
-
-	// Create admin role in _system namespace
-	adminRole := types.Role{
-		ID:          random.String("role-", 10),
-		Name:        "admin-" + random.String("", 5),
-		Namespace:   tauth.SystemNamespace,
-		Permissions: tauth.AllPermissions,
-	}
-	err = storageConf.Roles.Add(ctx, adminRole)
-	require.NoError(t, err)
-
-	// Create admin user
-	adminUser := types.User{
-		ID:       random.String("user-", 10),
+	// Create user via the API
+	var userRes pb.UserCreateResponse
+	err := c.UsersCreate(ctx, &pb.UserCreateRequest{
 		Username: "admin-" + random.String("", 5),
-	}
-	err = storageConf.Users.Add(ctx, adminUser)
+	}, &userRes)
 	require.NoError(t, err)
 
-	// Create role binding
-	binding := types.RoleBinding{
-		ID:        random.String("binding-", 10),
-		UserID:    adminUser.ID,
-		RoleID:    adminRole.ID,
+	// Bind the new user to the existing Admin role in _system (created by bootstrap)
+	var bindingRes pb.RoleBindingCreateResponse
+	err = c.RoleBindingsCreate(ctx, &pb.RoleBindingCreateRequest{
 		Namespace: tauth.SystemNamespace,
-	}
-	err = storageConf.RoleBindings.Add(ctx, binding)
+		UserId:    userRes.Id,
+		RoleName:  tauth.RoleAdmin,
+	}, &bindingRes)
 	require.NoError(t, err)
 
-	// Generate and store API key
-	generatedKey, err := auth.GenerateAPIKey("")
+	// Create an API key for the admin user
+	var keyRes pb.APIKeyCreateResponse
+	err = c.APIKeysCreate(ctx, &pb.APIKeyCreateRequest{
+		UserId: userRes.Id,
+		Name:   "admin-key",
+	}, &keyRes)
 	require.NoError(t, err)
 
-	apiKey := types.APIKey{
-		ID:        random.String("key-", 10),
-		UserID:    adminUser.ID,
-		Name:      "admin-key",
-		KeyHash:   generatedKey.KeyHash,
-		KeyPrefix: generatedKey.Prefix,
-	}
-	err = storageConf.APIKeys.Add(ctx, apiKey)
-	require.NoError(t, err)
-
-	return generatedKey.Key
+	return keyRes.Key
 }
 
 // createUserWithLimitedPermissions creates a user with specific permissions in _system namespace

@@ -2,7 +2,7 @@ package internal
 
 import (
 	"github.com/kapetan-io/querator/internal/types"
-	"github.com/kapetan-io/querator/transport"
+	"github.com/kapetan-io/querator/reply"
 	"sync"
 )
 
@@ -88,13 +88,13 @@ func (q *Queue) GetByPartition(partition int) (Remote, *Logical, error) {
 	q.mutex.RLock()
 
 	if partition < 0 || partition >= len(q.logical) {
-		return nil, nil, transport.NewInvalidOption("partition is invalid; '%d' is not a valid partition", partition)
+		return nil, nil, reply.NewInvalidOption("partition is invalid; '%d' is not a valid partition", partition)
 	}
 
 	if q.logical[partition] == nil {
 		// TODO: This is likely to not happen until we support the concept of 'remote'. We may need to remove this
 		//  check later.
-		return nil, nil, transport.NewInvalidOption("partition is invalid; '%d' has no valid logical queue", partition)
+		return nil, nil, reply.NewInvalidOption("partition is invalid; '%d' has no valid logical queue", partition)
 	}
 
 	return nil, q.logical[partition], nil

@@ -6,7 +6,7 @@ import (
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/proto"
-	"github.com/kapetan-io/querator/transport"
+	"github.com/kapetan-io/querator/reply"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/set"
 	"log/slog"
@@ -19,7 +19,7 @@ import (
 
 const MsgServiceInShutdown = "service is shutting down"
 
-var ErrServiceShutdown = transport.NewRequestFailed(MsgServiceInShutdown)
+var ErrServiceShutdown = reply.NewRequestFailed(MsgServiceInShutdown)
 
 type QueuesManagerConfig struct {
 	StorageConfig store.Config
@@ -82,7 +82,7 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Que
 
 	q, ok := qm.queues[info.Name]
 	if ok {
-		return q, transport.NewInvalidOption("invalid queue; '%s' already exists", info.Name)
+		return q, reply.NewInvalidOption("invalid queue; '%s' already exists", info.Name)
 	}
 
 	// Validate DLQ configuration before creating queue
@@ -144,7 +144,7 @@ func (qm *QueuesManager) get(ctx context.Context, name string) (*Queue, error) {
 	var queue types.QueueInfo
 	if err := qm.conf.StorageConfig.Queues.Get(ctx, name, &queue); err != nil {
 		if errors.Is(err, store.ErrQueueNotExist) {
-			return nil, transport.NewInvalidOption("queue does not exist; no such queue named '%s'", name)
+			return nil, reply.NewInvalidOption("queue does not exist; no such queue named '%s'", name)
 		}
 		return nil, err
 	}
@@ -341,28 +341,28 @@ func (qm *QueuesManager) validateDeadQueue(ctx context.Context, info types.Queue
 	// Validate DeadQueue format first (before checking existence)
 	const maxQueueNameLength = 500
 	if len(info.DeadQueue) > maxQueueNameLength {
-		return transport.NewInvalidOption("dead queue is invalid; cannot be greater than '%d' characters", maxQueueNameLength)
+		return reply.NewInvalidOption("dead queue is invalid; cannot be greater than '%d' characters", maxQueueNameLength)
 	}
 
 	if strings.ContainsFunc(info.DeadQueue, unicode.IsSpace) {
-		return transport.NewInvalidOption("dead queue is invalid; '%s' cannot contain whitespace", info.DeadQueue)
+		return reply.NewInvalidOption("dead queue is invalid; '%s' cannot contain whitespace", info.DeadQueue)
 	}
 
 	if strings.Contains(info.DeadQueue, "~") {
-		return transport.NewInvalidOption("dead queue is invalid; '%s' cannot contain '~' character", info.DeadQueue)
+		return reply.NewInvalidOption("dead queue is invalid; '%s' cannot contain '~' character", info.DeadQueue)
 	}
 
 	// Prevent self-reference
 	if info.DeadQueue == info.Name {
-		return transport.NewInvalidOption("dead_queue cannot reference itself")
+		return reply.NewInvalidOption("dead_queue cannot reference itself")
 	}
 
 	// Fetch the DLQ to ensure it exists
 	dlq, err := qm.get(ctx, info.DeadQueue)
 	if err != nil {
 		if errors.Is(err, store.ErrQueueNotExist) ||
-		   (func() bool { var e *transport.ErrInvalidOption; return errors.As(err, &e) })() {
-			return transport.NewInvalidOption("dead_queue '%s' does not exist; create it first", info.DeadQueue)
+		   (func() bool { var e *reply.ErrInvalidOption; return errors.As(err, &e) })() {
+			return reply.NewInvalidOption("dead_queue '%s' does not exist; create it first", info.DeadQueue)
 		}
 		return err
 	}
@@ -370,7 +370,7 @@ func (qm *QueuesManager) validateDeadQueue(ctx context.Context, info types.Queue
 	// Enforce no DLQ chains: a DLQ cannot have its own DLQ
 	dlqInfo := dlq.Info()
 	if dlqInfo.DeadQueue != "" {
-		return transport.NewInvalidOption("dead_queue '%s' cannot have its own dead_queue", info.DeadQueue)
+		return reply.NewInvalidOption("dead_queue '%s' cannot have its own dead_queue", info.DeadQueue)
 	}
 
 	return nil
@@ -383,7 +383,7 @@ func (qm *QueuesManager) Delete(ctx context.Context, name string) error {
 	defer qm.mutex.Unlock()
 	qm.mutex.Lock()
 
-	// TODO: Delete should return transport.NewInvalidOption("queue does not exist; no such queue named '%s'", name)
+	// TODO: Delete should return reply.NewInvalidOption("queue does not exist; no such queue named '%s'", name)
 	if err := qm.conf.StorageConfig.Queues.Delete(ctx, name); err != nil {
 		return errors.Errorf("Queues.Delete(): %w", err)
 	}

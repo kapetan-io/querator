@@ -3,7 +3,7 @@ package store
 import (
 	"context"
 	"github.com/kapetan-io/querator/internal/types"
-	"github.com/kapetan-io/querator/transport"
+	"github.com/kapetan-io/querator/reply"
 	"github.com/kapetan-io/tackle/clock"
 	"iter"
 	"log/slog"
@@ -16,8 +16,8 @@ const (
 )
 
 var (
-	ErrQueueAlreadyExists = transport.NewInvalidOption("queue already exists")
-	ErrQueueNotExist      = transport.NewRequestFailed("queue does not exist")
+	ErrQueueAlreadyExists = reply.NewInvalidOption("queue already exists")
+	ErrQueueNotExist      = reply.NewRequestFailed("queue does not exist")
 	theFuture             = time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.UTC)
 )
 

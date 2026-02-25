@@ -3,12 +3,12 @@ package store
 import (
 	"bytes"
 	"github.com/kapetan-io/querator/internal/types"
-	"github.com/kapetan-io/querator/transport"
+	"github.com/kapetan-io/querator/reply"
 	"strings"
 	"unicode"
 )
 
-var ErrEmptyQueueName = transport.NewInvalidOption("queue name is invalid; queue name cannot be empty")
+var ErrEmptyQueueName = reply.NewInvalidOption("queue name is invalid; queue name cannot be empty")
 
 const maxReferenceLength = 2_000
 const maxQueueNameLength = 512
@@ -22,14 +22,14 @@ func (s QueuesValidation) validateGet(name string) error {
 	}
 
 	if strings.Contains(name, "~") {
-		return transport.NewInvalidOption("queue name is invalid; '%s' cannot contain '~' character", name)
+		return reply.NewInvalidOption("queue name is invalid; '%s' cannot contain '~' character", name)
 	}
 
 	return nil
 }
 func (s QueuesValidation) validateQueueName(info types.QueueInfo) error {
 	if len(info.Name) > maxQueueNameLength {
-		return transport.NewInvalidOption("queue name is invalid; cannot be greater than '%d' characters", maxQueueNameLength)
+		return reply.NewInvalidOption("queue name is invalid; cannot be greater than '%d' characters", maxQueueNameLength)
 	}
 
 	if strings.TrimSpace(info.Name) == "" {
@@ -37,11 +37,11 @@ func (s QueuesValidation) validateQueueName(info types.QueueInfo) error {
 	}
 
 	if strings.ContainsFunc(info.Name, unicode.IsSpace) {
-		return transport.NewInvalidOption("queue name is invalid; '%s' cannot contain whitespace", info.Name)
+		return reply.NewInvalidOption("queue name is invalid; '%s' cannot contain whitespace", info.Name)
 	}
 
 	if strings.Contains(info.Name, "~") {
-		return transport.NewInvalidOption("queue name is invalid; '%s' cannot contain '~' character", info.Name)
+		return reply.NewInvalidOption("queue name is invalid; '%s' cannot contain '~' character", info.Name)
 	}
 	return nil
 }
@@ -52,32 +52,32 @@ func (s QueuesValidation) validateQueueInfo(info types.QueueInfo) error {
 	}
 
 	if len(info.DeadQueue) > maxQueueNameLength {
-		return transport.NewInvalidOption("dead queue is invalid; cannot be greater than '%d' characters", maxQueueNameLength)
+		return reply.NewInvalidOption("dead queue is invalid; cannot be greater than '%d' characters", maxQueueNameLength)
 	}
 
 	if strings.ContainsFunc(info.DeadQueue, unicode.IsSpace) {
-		return transport.NewInvalidOption("dead queue is invalid; '%s' cannot contain whitespace", info.DeadQueue)
+		return reply.NewInvalidOption("dead queue is invalid; '%s' cannot contain whitespace", info.DeadQueue)
 	}
 
 	if strings.Contains(info.DeadQueue, "~") {
-		return transport.NewInvalidOption("dead queue is invalid; '%s' cannot contain '~' character", info.DeadQueue)
+		return reply.NewInvalidOption("dead queue is invalid; '%s' cannot contain '~' character", info.DeadQueue)
 	}
 
 	if len(info.Reference) > maxReferenceLength {
-		return transport.NewInvalidOption("reference field is invalid; cannot be greater than '%d' characters", maxReferenceLength)
+		return reply.NewInvalidOption("reference field is invalid; cannot be greater than '%d' characters", maxReferenceLength)
 	}
 
 	if info.MaxAttempts > maxInt16 {
-		return transport.NewInvalidOption("max attempts is invalid; cannot be greater than %d", maxInt16)
+		return reply.NewInvalidOption("max attempts is invalid; cannot be greater than %d", maxInt16)
 	}
 
 	if info.MaxAttempts < 0 {
-		return transport.NewInvalidOption("max attempts is invalid; cannot be negative number")
+		return reply.NewInvalidOption("max attempts is invalid; cannot be negative number")
 	}
 
 	// TODO: Add this check to the errors test
 	if info.RequestedPartitions < 1 {
-		return transport.NewInvalidOption("partitions is invalid; cannot be less than 1")
+		return reply.NewInvalidOption("partitions is invalid; cannot be less than 1")
 	}
 
 	return nil
@@ -89,15 +89,15 @@ func (s QueuesValidation) validateAdd(info types.QueueInfo) error {
 	}
 
 	if info.LeaseTimeout.Microseconds() == 0 {
-		return transport.NewInvalidOption("lease timeout is invalid; cannot be empty")
+		return reply.NewInvalidOption("lease timeout is invalid; cannot be empty")
 	}
 
 	if info.ExpireTimeout.Microseconds() == 0 {
-		return transport.NewInvalidOption("expire timeout is invalid; cannot be empty")
+		return reply.NewInvalidOption("expire timeout is invalid; cannot be empty")
 	}
 
 	if info.LeaseTimeout > info.ExpireTimeout {
-		return transport.NewInvalidOption("lease timeout is too long; %s cannot be greater than the "+
+		return reply.NewInvalidOption("lease timeout is too long; %s cannot be greater than the "+
 			"expire timeout %s", info.LeaseTimeout.String(), info.ExpireTimeout.String())
 	}
 
@@ -111,15 +111,15 @@ func (s QueuesValidation) validateUpdate(info types.QueueInfo) error {
 func (s QueuesValidation) validateList(opts types.ListOptions) error {
 
 	if opts.Limit < 0 {
-		return transport.NewInvalidOption("limit is invalid; limit cannot be negative")
+		return reply.NewInvalidOption("limit is invalid; limit cannot be negative")
 	}
 
 	if opts.Limit > maxInt16 {
-		return transport.NewInvalidOption("limit is invalid; cannot be greater than %d", maxInt16)
+		return reply.NewInvalidOption("limit is invalid; cannot be greater than %d", maxInt16)
 	}
 
 	if bytes.Contains(opts.Pivot, []byte("~")) {
-		return transport.NewInvalidOption("pivot is invalid; '%s' cannot contain '~' character", opts.Pivot)
+		return reply.NewInvalidOption("pivot is invalid; '%s' cannot contain '~' character", opts.Pivot)
 	}
 
 	return nil
@@ -127,7 +127,7 @@ func (s QueuesValidation) validateList(opts types.ListOptions) error {
 
 func (s QueuesValidation) validateDelete(name string) error {
 	if len(name) > maxQueueNameLength {
-		return transport.NewInvalidOption("queue name is invalid; cannot be greater than '%d' characters", maxQueueNameLength)
+		return reply.NewInvalidOption("queue name is invalid; cannot be greater than '%d' characters", maxQueueNameLength)
 	}
 
 	if strings.TrimSpace(name) == "" {
@@ -135,11 +135,11 @@ func (s QueuesValidation) validateDelete(name string) error {
 	}
 
 	if strings.ContainsFunc(name, unicode.IsSpace) {
-		return transport.NewInvalidOption("queue name is invalid; '%s' cannot contain whitespace", name)
+		return reply.NewInvalidOption("queue name is invalid; '%s' cannot contain whitespace", name)
 	}
 
 	if strings.Contains(name, "~") {
-		return transport.NewInvalidOption("queue name is invalid; '%s' cannot contain '~' character", name)
+		return reply.NewInvalidOption("queue name is invalid; '%s' cannot contain '~' character", name)
 	}
 	return nil
 }

@@ -7,7 +7,7 @@ import (
 	"github.com/kapetan-io/errors"
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
-	"github.com/kapetan-io/querator/transport"
+	"github.com/kapetan-io/querator/reply"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/random"
 	"github.com/kapetan-io/tackle/retry"
@@ -54,9 +54,9 @@ const (
 )
 
 var (
-	ErrQueueShutdown  = transport.NewRequestFailed(MsgQueueInShutdown)
-	ErrRequestTimeout = transport.NewRetryRequest(MsgRequestTimeout)
-	ErrInternalRetry  = transport.NewRetryRequest("internal error, try your request again")
+	ErrQueueShutdown  = reply.NewRequestFailed(MsgQueueInShutdown)
+	ErrRequestTimeout = reply.NewRetryRequest(MsgRequestTimeout)
+	ErrInternalRetry  = reply.NewRetryRequest("internal error, try your request again")
 
 	lifecycleBackOff = retry.IntervalBackOff{
 		Min:    500 * time.Millisecond,
@@ -149,25 +149,25 @@ func (l *Logical) Produce(ctx context.Context, req *types.ProduceRequest) error 
 	defer l.inFlight.Add(-1)
 
 	if req.RequestTimeout == clock.Duration(0) {
-		return transport.NewInvalidOption("request timeout is required; '5m' is recommended, 15m is the maximum")
+		return reply.NewInvalidOption("request timeout is required; '5m' is recommended, 15m is the maximum")
 	}
 
 	if req.RequestTimeout >= maxRequestTimeout {
-		return transport.NewInvalidOption("request timeout is invalid; maximum timeout is '15m' but"+
+		return reply.NewInvalidOption("request timeout is invalid; maximum timeout is '15m' but"+
 			" '%s' was requested", req.RequestTimeout.String())
 	}
 
 	if req.RequestTimeout <= minRequestTimeout {
-		return transport.NewInvalidOption("request timeout is invalid; minimum timeout is '10ms' but"+
+		return reply.NewInvalidOption("request timeout is invalid; minimum timeout is '10ms' but"+
 			" '%s' was requested", req.RequestTimeout.String())
 	}
 
 	if len(req.Items) == 0 {
-		return transport.NewInvalidOption("items cannot be empty; at least one item is required")
+		return reply.NewInvalidOption("items cannot be empty; at least one item is required")
 	}
 
 	if len(req.Items) > l.conf.MaxProduceBatchSize {
-		return transport.NewInvalidOption("items is invalid; max_produce_batch_size is"+
+		return reply.NewInvalidOption("items is invalid; max_produce_batch_size is"+
 			" %d but received %d", l.conf.MaxProduceBatchSize, len(req.Items))
 	}
 
@@ -181,7 +181,7 @@ func (l *Logical) Produce(ctx context.Context, req *types.ProduceRequest) error 
 		Request: req,
 	}:
 	default:
-		return transport.NewRetryRequest(MsgQueueOverLoaded)
+		return reply.NewRetryRequest(MsgQueueOverLoaded)
 	}
 
 	// Wait until the request has been processed
@@ -212,29 +212,29 @@ func (l *Logical) Lease(ctx context.Context, req *types.LeaseRequest) error {
 	defer l.inFlight.Add(-1)
 
 	if strings.TrimSpace(req.ClientID) == "" {
-		return transport.NewInvalidOption("invalid client id; cannot be empty")
+		return reply.NewInvalidOption("invalid client id; cannot be empty")
 	}
 
 	if req.NumRequested <= 0 {
-		return transport.NewInvalidOption("invalid batch size; must be greater than zero")
+		return reply.NewInvalidOption("invalid batch size; must be greater than zero")
 	}
 
 	if req.NumRequested > l.conf.MaxLeaseBatchSize {
-		return transport.NewInvalidOption("invalid batch size; max_lease_batch_size is %d, "+
+		return reply.NewInvalidOption("invalid batch size; max_lease_batch_size is %d, "+
 			"but %d was requested", l.conf.MaxProduceBatchSize, req.NumRequested)
 	}
 
 	if req.RequestTimeout == clock.Duration(0) {
-		return transport.NewInvalidOption("request timeout is required; '5m' is recommended, 15m is the maximum")
+		return reply.NewInvalidOption("request timeout is required; '5m' is recommended, 15m is the maximum")
 	}
 
 	if req.RequestTimeout > maxRequestTimeout {
-		return transport.NewInvalidOption("request timeout is invalid; maximum timeout is '15m' but '%s' "+
+		return reply.NewInvalidOption("request timeout is invalid; maximum timeout is '15m' but '%s' "+
 			"requested", req.RequestTimeout.String())
 	}
 
 	if req.RequestTimeout <= minRequestTimeout {
-		return transport.NewInvalidOption("request timeout is invalid; minimum timeout is '10ms' but"+
+		return reply.NewInvalidOption("request timeout is invalid; minimum timeout is '10ms' but"+
 			" '%s' was requested", req.RequestTimeout.String())
 	}
 
@@ -248,7 +248,7 @@ func (l *Logical) Lease(ctx context.Context, req *types.LeaseRequest) error {
 		Request: req,
 	}:
 	default:
-		return transport.NewRetryRequest(MsgQueueOverLoaded)
+		return reply.NewRetryRequest(MsgQueueOverLoaded)
 	}
 
 	// Wait until the request has been processed
@@ -267,21 +267,21 @@ func (l *Logical) Complete(ctx context.Context, req *types.CompleteRequest) erro
 	defer l.inFlight.Add(-1)
 
 	if len(req.Ids) == 0 {
-		return transport.NewInvalidOption("ids is invalid; list of ids cannot be empty")
+		return reply.NewInvalidOption("ids is invalid; list of ids cannot be empty")
 	}
 
 	if len(req.Ids) > l.conf.MaxCompleteBatchSize {
-		return transport.NewInvalidOption("ids is invalid; max_complete_batch_size is"+
+		return reply.NewInvalidOption("ids is invalid; max_complete_batch_size is"+
 			" %d but received %d", l.conf.MaxCompleteBatchSize, len(req.Ids))
 	}
 
 	if req.RequestTimeout > maxRequestTimeout {
-		return transport.NewInvalidOption("request timeout is invalid; maximum timeout is '15m' but '%s' "+
+		return reply.NewInvalidOption("request timeout is invalid; maximum timeout is '15m' but '%s' "+
 			"requested", req.RequestTimeout.String())
 	}
 
 	if req.RequestTimeout == clock.Duration(0) {
-		return transport.NewInvalidOption("request timeout is required; '5m' is recommended, 15m is the maximum")
+		return reply.NewInvalidOption("request timeout is required; '5m' is recommended, 15m is the maximum")
 	}
 
 	req.RequestDeadline = l.conf.Clock.Now().UTC().Add(req.RequestTimeout)
@@ -294,7 +294,7 @@ func (l *Logical) Complete(ctx context.Context, req *types.CompleteRequest) erro
 		Request: req,
 	}:
 	default:
-		return transport.NewRetryRequest(MsgQueueOverLoaded)
+		return reply.NewRetryRequest(MsgQueueOverLoaded)
 	}
 
 	// Wait until the request has been processed
@@ -310,21 +310,21 @@ func (l *Logical) Retry(ctx context.Context, req *types.RetryRequest) error {
 	defer l.inFlight.Add(-1)
 
 	if len(req.Items) == 0 {
-		return transport.NewInvalidOption("items is invalid; list of items cannot be empty")
+		return reply.NewInvalidOption("items is invalid; list of items cannot be empty")
 	}
 
 	if len(req.Items) > l.conf.MaxCompleteBatchSize {
-		return transport.NewInvalidOption("items is invalid; max_complete_batch_size is"+
+		return reply.NewInvalidOption("items is invalid; max_complete_batch_size is"+
 			" %d but received %d", l.conf.MaxCompleteBatchSize, len(req.Items))
 	}
 
 	if req.RequestTimeout > maxRequestTimeout {
-		return transport.NewInvalidOption("request timeout is invalid; maximum timeout is '15m' but '%s' "+
+		return reply.NewInvalidOption("request timeout is invalid; maximum timeout is '15m' but '%s' "+
 			"requested", req.RequestTimeout.String())
 	}
 
 	if req.RequestTimeout == clock.Duration(0) {
-		return transport.NewInvalidOption("request timeout is required; '5m' is recommended, 15m is the maximum")
+		return reply.NewInvalidOption("request timeout is required; '5m' is recommended, 15m is the maximum")
 	}
 
 	req.RequestDeadline = l.conf.Clock.Now().UTC().Add(req.RequestTimeout)
@@ -337,7 +337,7 @@ func (l *Logical) Retry(ctx context.Context, req *types.RetryRequest) error {
 		Request: req,
 	}:
 	default:
-		return transport.NewRetryRequest(MsgQueueOverLoaded)
+		return reply.NewRetryRequest(MsgQueueOverLoaded)
 	}
 
 	// Wait until the request has been processed
@@ -429,7 +429,7 @@ func (l *Logical) Clear(ctx context.Context, req *types.ClearRequest) error {
 	}
 
 	if !req.Queue && !req.Scheduled {
-		return transport.NewInvalidOption("invalid clear request; one of 'queue'," +
+		return reply.NewInvalidOption("invalid clear request; one of 'queue'," +
 			" 'scheduled' must be true")
 	}
 
@@ -499,7 +499,7 @@ func (l *Logical) StorageItemsDelete(ctx context.Context, partition int, ids []t
 		return ErrQueueShutdown
 	}
 	if len(ids) == 0 {
-		return transport.NewInvalidOption("ids is invalid; cannot be empty")
+		return reply.NewInvalidOption("ids is invalid; cannot be empty")
 	}
 
 	r := Request{
@@ -903,7 +903,7 @@ func addIfUnique(r *types.LeaseBatch, req *types.LeaseRequest) {
 	}
 	for _, existing := range r.Requests {
 		if existing != nil && existing.ClientID == req.ClientID {
-			req.Err = transport.NewInvalidOption(MsgDuplicateClientID)
+			req.Err = reply.NewInvalidOption(MsgDuplicateClientID)
 			close(req.ReadyCh)
 			return
 		}

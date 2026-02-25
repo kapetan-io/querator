@@ -5,7 +5,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/kapetan-io/querator/internal/types"
-	"github.com/kapetan-io/querator/transport"
+	"github.com/kapetan-io/querator/reply"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/set"
 	"github.com/segmentio/ksuid"
@@ -116,13 +116,13 @@ nextBatch:
 	for i := range batch.Requests {
 		for _, id := range batch.Requests[i].Ids {
 			if err := m.validateID(id); err != nil {
-				batch.Requests[i].Err = transport.NewInvalidOption("invalid storage id; '%s': %s", id, err)
+				batch.Requests[i].Err = reply.NewInvalidOption("invalid storage id; '%s': %s", id, err)
 				continue nextBatch
 			}
 
 			idx, ok := m.findID(id)
 			if !ok {
-				batch.Requests[i].Err = transport.NewInvalidOption("invalid storage id; '%s' does not exist", id)
+				batch.Requests[i].Err = reply.NewInvalidOption("invalid storage id; '%s' does not exist", id)
 				continue nextBatch
 			}
 
@@ -130,12 +130,12 @@ nextBatch:
 			if !m.mem[idx].EnqueueAt.IsZero() {
 				m.log.LogAttrs(ctx, slog.LevelWarn, "attempted to complete a scheduled item; reported does not exist",
 					slog.String("id", string(m.mem[idx].ID)))
-				batch.Requests[i].Err = transport.NewInvalidOption("invalid storage id; '%s' does not exist", id)
+				batch.Requests[i].Err = reply.NewInvalidOption("invalid storage id; '%s' does not exist", id)
 				continue nextBatch
 			}
 
 			if !m.mem[idx].IsLeased {
-				batch.Requests[i].Err = transport.NewConflict("item(s) cannot be completed; '%s' is not "+
+				batch.Requests[i].Err = reply.NewConflict("item(s) cannot be completed; '%s' is not "+
 					"marked as leased", id)
 				continue nextBatch
 			}
@@ -154,13 +154,13 @@ nextBatch:
 	for i := range batch.Requests {
 		for _, retryItem := range batch.Requests[i].Items {
 			if err := m.validateID(retryItem.ID); err != nil {
-				batch.Requests[i].Err = transport.NewInvalidOption("invalid storage id; '%s': %s", retryItem.ID, err)
+				batch.Requests[i].Err = reply.NewInvalidOption("invalid storage id; '%s': %s", retryItem.ID, err)
 				continue nextBatch
 			}
 
 			idx, ok := m.findID(retryItem.ID)
 			if !ok {
-				batch.Requests[i].Err = transport.NewInvalidOption("invalid storage id; '%s' does not exist", retryItem.ID)
+				batch.Requests[i].Err = reply.NewInvalidOption("invalid storage id; '%s' does not exist", retryItem.ID)
 				continue nextBatch
 			}
 
@@ -168,12 +168,12 @@ nextBatch:
 			if !m.mem[idx].EnqueueAt.IsZero() {
 				m.log.LogAttrs(ctx, slog.LevelWarn, "attempted to retry a scheduled item; reported does not exist",
 					slog.String("id", string(m.mem[idx].ID)))
-				batch.Requests[i].Err = transport.NewInvalidOption("invalid storage id; '%s' does not exist", retryItem.ID)
+				batch.Requests[i].Err = reply.NewInvalidOption("invalid storage id; '%s' does not exist", retryItem.ID)
 				continue nextBatch
 			}
 
 			if !m.mem[idx].IsLeased {
-				batch.Requests[i].Err = transport.NewConflict("item(s) cannot be retried; '%s' is not "+
+				batch.Requests[i].Err = reply.NewConflict("item(s) cannot be retried; '%s' is not "+
 					"marked as leased", retryItem.ID)
 				continue nextBatch
 			}
@@ -219,7 +219,7 @@ func (m *MemoryPartition) List(_ context.Context, items *[]*types.Item, opts typ
 
 	if opts.Pivot != nil {
 		if err := m.validateID(opts.Pivot); err != nil {
-			return transport.NewInvalidOption("invalid storage id; '%s': %s", opts.Pivot, err)
+			return reply.NewInvalidOption("invalid storage id; '%s': %s", opts.Pivot, err)
 		}
 		idx, _ = m.findID(opts.Pivot)
 	}
@@ -246,7 +246,7 @@ func (m *MemoryPartition) ListScheduled(_ context.Context, items *[]*types.Item,
 
 	if opts.Pivot != nil {
 		if err := m.validateID(opts.Pivot); err != nil {
-			return transport.NewInvalidOption("invalid storage id; '%s': %s", opts.Pivot, err)
+			return reply.NewInvalidOption("invalid storage id; '%s': %s", opts.Pivot, err)
 		}
 		idx, _ = m.findID(opts.Pivot)
 	}
@@ -271,7 +271,7 @@ func (m *MemoryPartition) Add(_ context.Context, items []*types.Item, now clock.
 	m.mu.Lock()
 
 	if len(items) == 0 {
-		return transport.NewInvalidOption("items is invalid; cannot be empty")
+		return reply.NewInvalidOption("items is invalid; cannot be empty")
 	}
 
 	for _, item := range items {
@@ -303,7 +303,7 @@ func (m *MemoryPartition) Delete(_ context.Context, ids []types.ItemID) error {
 
 	for _, id := range ids {
 		if err := m.validateID(id); err != nil {
-			return transport.NewInvalidOption("invalid storage id; '%s': %s", id, err)
+			return reply.NewInvalidOption("invalid storage id; '%s': %s", id, err)
 		}
 
 		idx, ok := m.findID(id)
@@ -659,7 +659,7 @@ func (s *MemoryQueues) Add(_ context.Context, info types.QueueInfo) error {
 
 	_, ok := s.findQueue(info.Name)
 	if ok {
-		return transport.NewInvalidOption("invalid queue; '%s' already exists", info.Name)
+		return reply.NewInvalidOption("invalid queue; '%s' already exists", info.Name)
 	}
 
 	s.mem = append(s.mem, info)
@@ -678,13 +678,13 @@ func (s *MemoryQueues) Update(_ context.Context, info types.QueueInfo) error {
 
 	if info.ExpireTimeout.Nanoseconds() != 0 {
 		if info.LeaseTimeout > info.ExpireTimeout {
-			return transport.NewInvalidOption("lease timeout is too long; %s cannot be greater than the "+
+			return reply.NewInvalidOption("lease timeout is too long; %s cannot be greater than the "+
 				"expire timeout %s", info.LeaseTimeout.String(), info.ExpireTimeout.String())
 		}
 	}
 
 	if info.LeaseTimeout > s.mem[idx].ExpireTimeout {
-		return transport.NewInvalidOption("lease timeout is too long; %s cannot be greater than the "+
+		return reply.NewInvalidOption("lease timeout is too long; %s cannot be greater than the "+
 			"expire timeout %s", info.LeaseTimeout.String(), s.mem[idx].ExpireTimeout.String())
 	}
 
@@ -833,7 +833,7 @@ func (s *MemoryNamespaces) Add(_ context.Context, ns types.Namespace) error {
 	defer s.mu.Unlock()
 
 	if strings.TrimSpace(ns.Name) == "" {
-		return transport.NewInvalidOption("namespace name is invalid; cannot be empty")
+		return reply.NewInvalidOption("namespace name is invalid; cannot be empty")
 	}
 
 	_, ok := s.findNamespace(ns.Name)
@@ -969,11 +969,11 @@ func (m *MemoryUsers) Add(_ context.Context, user types.User) error {
 	defer m.mu.Unlock()
 
 	if strings.TrimSpace(user.ID) == "" {
-		return transport.NewInvalidOption("user id is invalid; cannot be empty")
+		return reply.NewInvalidOption("user id is invalid; cannot be empty")
 	}
 
 	if strings.TrimSpace(user.Username) == "" {
-		return transport.NewInvalidOption("username is invalid; cannot be empty")
+		return reply.NewInvalidOption("username is invalid; cannot be empty")
 	}
 
 	if _, ok := m.users[user.ID]; ok {
@@ -1126,19 +1126,19 @@ func (m *MemoryAPIKeys) Add(_ context.Context, key types.APIKey) error {
 	defer m.mu.Unlock()
 
 	if strings.TrimSpace(key.ID) == "" {
-		return transport.NewInvalidOption("api key id is invalid; cannot be empty")
+		return reply.NewInvalidOption("api key id is invalid; cannot be empty")
 	}
 
 	if strings.TrimSpace(key.KeyHash) == "" {
-		return transport.NewInvalidOption("api key hash is invalid; cannot be empty")
+		return reply.NewInvalidOption("api key hash is invalid; cannot be empty")
 	}
 
 	if _, ok := m.keys[key.ID]; ok {
-		return transport.NewInvalidOption("api key already exists")
+		return reply.NewInvalidOption("api key already exists")
 	}
 
 	if _, ok := m.byHash[key.KeyHash]; ok {
-		return transport.NewInvalidOption("api key hash already exists")
+		return reply.NewInvalidOption("api key hash already exists")
 	}
 
 	m.keys[key.ID] = key
@@ -1370,15 +1370,15 @@ func (m *MemoryRoles) Add(_ context.Context, role types.Role) error {
 	defer m.mu.Unlock()
 
 	if strings.TrimSpace(role.ID) == "" {
-		return transport.NewInvalidOption("role id is invalid; cannot be empty")
+		return reply.NewInvalidOption("role id is invalid; cannot be empty")
 	}
 
 	if strings.TrimSpace(role.Name) == "" {
-		return transport.NewInvalidOption("role name is invalid; cannot be empty")
+		return reply.NewInvalidOption("role name is invalid; cannot be empty")
 	}
 
 	if strings.TrimSpace(role.Namespace) == "" {
-		return transport.NewInvalidOption("role namespace is invalid; cannot be empty")
+		return reply.NewInvalidOption("role namespace is invalid; cannot be empty")
 	}
 
 	key := role.Namespace + ":" + role.Name
@@ -1536,19 +1536,19 @@ func (m *MemoryRoleBindings) Add(_ context.Context, binding types.RoleBinding) e
 	defer m.mu.Unlock()
 
 	if strings.TrimSpace(binding.ID) == "" {
-		return transport.NewInvalidOption("role binding id is invalid; cannot be empty")
+		return reply.NewInvalidOption("role binding id is invalid; cannot be empty")
 	}
 
 	if strings.TrimSpace(binding.UserID) == "" {
-		return transport.NewInvalidOption("role binding user_id is invalid; cannot be empty")
+		return reply.NewInvalidOption("role binding user_id is invalid; cannot be empty")
 	}
 
 	if strings.TrimSpace(binding.RoleID) == "" {
-		return transport.NewInvalidOption("role binding role_id is invalid; cannot be empty")
+		return reply.NewInvalidOption("role binding role_id is invalid; cannot be empty")
 	}
 
 	if strings.TrimSpace(binding.Namespace) == "" {
-		return transport.NewInvalidOption("role binding namespace is invalid; cannot be empty")
+		return reply.NewInvalidOption("role binding namespace is invalid; cannot be empty")
 	}
 
 	// Check for duplicate (same user, namespace, role combination)

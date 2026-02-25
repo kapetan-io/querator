@@ -8,7 +8,7 @@ import (
 	"github.com/dgraph-io/badger/v4"
 	"github.com/kapetan-io/errors"
 	"github.com/kapetan-io/querator/internal/types"
-	"github.com/kapetan-io/querator/transport"
+	"github.com/kapetan-io/querator/reply"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/set"
 	"github.com/segmentio/ksuid"
@@ -228,20 +228,20 @@ nextBatch:
 	for i := range batch.Requests {
 		for _, id := range batch.Requests[i].Ids {
 			if err = b.validateID(id); err != nil {
-				batch.Requests[i].Err = transport.NewInvalidOption("invalid storage id; '%s': %s", id, err)
+				batch.Requests[i].Err = reply.NewInvalidOption("invalid storage id; '%s': %s", id, err)
 				continue nextBatch
 			}
 
 			// TODO: Test complete with id's that do not exist in the database
 			kvItem, err := txn.Get(id)
 			if err != nil {
-				batch.Requests[i].Err = transport.NewInvalidOption("invalid storage id; '%s' does not exist", id)
+				batch.Requests[i].Err = reply.NewInvalidOption("invalid storage id; '%s' does not exist", id)
 				continue nextBatch
 			}
 			var v []byte
 			v, err = kvItem.ValueCopy(v)
 			if err != nil {
-				batch.Requests[i].Err = transport.NewInvalidOption("invalid storage id; '%s' does not exist", id)
+				batch.Requests[i].Err = reply.NewInvalidOption("invalid storage id; '%s' does not exist", id)
 				continue nextBatch
 			}
 
@@ -251,7 +251,7 @@ nextBatch:
 			}
 
 			if !item.IsLeased {
-				batch.Requests[i].Err = transport.NewConflict("item(s) cannot be completed; '%s' is not "+
+				batch.Requests[i].Err = reply.NewConflict("item(s) cannot be completed; '%s' is not "+
 					"marked as leased", id)
 				continue nextBatch
 			}
@@ -291,19 +291,19 @@ nextBatch:
 	for i := range batch.Requests {
 		for _, retryItem := range batch.Requests[i].Items {
 			if err = b.validateID(retryItem.ID); err != nil {
-				batch.Requests[i].Err = transport.NewInvalidOption("invalid storage id; '%s': %s", retryItem.ID, err)
+				batch.Requests[i].Err = reply.NewInvalidOption("invalid storage id; '%s': %s", retryItem.ID, err)
 				continue nextBatch
 			}
 
 			kvItem, err := txn.Get(retryItem.ID)
 			if err != nil {
-				batch.Requests[i].Err = transport.NewInvalidOption("invalid storage id; '%s' does not exist", retryItem.ID)
+				batch.Requests[i].Err = reply.NewInvalidOption("invalid storage id; '%s' does not exist", retryItem.ID)
 				continue nextBatch
 			}
 			var v []byte
 			v, err = kvItem.ValueCopy(v)
 			if err != nil {
-				batch.Requests[i].Err = transport.NewInvalidOption("invalid storage id; '%s' does not exist", retryItem.ID)
+				batch.Requests[i].Err = reply.NewInvalidOption("invalid storage id; '%s' does not exist", retryItem.ID)
 				continue nextBatch
 			}
 
@@ -313,7 +313,7 @@ nextBatch:
 			}
 
 			if !item.IsLeased {
-				batch.Requests[i].Err = transport.NewConflict("item(s) cannot be retried; '%s' is not "+
+				batch.Requests[i].Err = reply.NewConflict("item(s) cannot be retried; '%s' is not "+
 					"marked as leased", retryItem.ID)
 				continue nextBatch
 			}
@@ -373,7 +373,7 @@ func (b *BadgerPartition) List(_ context.Context, items *[]*types.Item, opts typ
 
 	if opts.Pivot != nil {
 		if err := b.validateID(opts.Pivot); err != nil {
-			return transport.NewInvalidOption("invalid storage id; '%s': %s", opts.Pivot, err)
+			return reply.NewInvalidOption("invalid storage id; '%s': %s", opts.Pivot, err)
 		}
 	}
 
@@ -432,7 +432,7 @@ func (b *BadgerPartition) ListScheduled(_ context.Context, items *[]*types.Item,
 
 	if opts.Pivot != nil {
 		if err := b.validateID(opts.Pivot); err != nil {
-			return transport.NewInvalidOption("invalid storage id; '%s': %s", opts.Pivot, err)
+			return reply.NewInvalidOption("invalid storage id; '%s': %s", opts.Pivot, err)
 		}
 	}
 
@@ -489,7 +489,7 @@ func (b *BadgerPartition) Add(_ context.Context, items []*types.Item, now clock.
 	}
 
 	if len(items) == 0 {
-		return transport.NewInvalidOption("items is invalid; cannot be empty")
+		return reply.NewInvalidOption("items is invalid; cannot be empty")
 	}
 
 	return db.Update(func(txn *badger.Txn) error {
@@ -544,7 +544,7 @@ func (b *BadgerPartition) Delete(_ context.Context, ids []types.ItemID) error {
 
 		for _, id := range ids {
 			if err := b.validateID(id); err != nil {
-				return transport.NewInvalidOption("invalid storage id; '%s': %s", id, err)
+				return reply.NewInvalidOption("invalid storage id; '%s': %s", id, err)
 			}
 
 			// Get the item to check for SourceID
@@ -1147,7 +1147,7 @@ func (b *BadgerQueues) Add(_ context.Context, info types.QueueInfo) error {
 		// If the queue already exists in the store
 		_, err := txn.Get([]byte(info.Name))
 		if err == nil {
-			return transport.NewInvalidOption("invalid queue; '%s' already exists", info.Name)
+			return reply.NewInvalidOption("invalid queue; '%s' already exists", info.Name)
 		}
 
 		var buf bytes.Buffer // TODO: memory pool
@@ -1200,7 +1200,7 @@ func (b *BadgerQueues) Update(_ context.Context, info types.QueueInfo) error {
 		}
 
 		if found.LeaseTimeout > found.ExpireTimeout {
-			return transport.NewInvalidOption("lease timeout is too long; %s cannot be greater than the "+
+			return reply.NewInvalidOption("lease timeout is too long; %s cannot be greater than the "+
 				"expire timeout %s", info.LeaseTimeout.String(), found.ExpireTimeout.String())
 		}
 
@@ -1394,7 +1394,7 @@ func (b *BadgerNamespaces) Get(_ context.Context, name string, ns *types.Namespa
 
 func (b *BadgerNamespaces) Add(_ context.Context, ns types.Namespace) error {
 	if strings.TrimSpace(ns.Name) == "" {
-		return transport.NewInvalidOption("namespace name is invalid; cannot be empty")
+		return reply.NewInvalidOption("namespace name is invalid; cannot be empty")
 	}
 
 	db, err := b.getDB()
@@ -1624,11 +1624,11 @@ func (b *BadgerUsers) GetByUsername(_ context.Context, username string, user *ty
 
 func (b *BadgerUsers) Add(_ context.Context, user types.User) error {
 	if strings.TrimSpace(user.ID) == "" {
-		return transport.NewInvalidOption("user id is invalid; cannot be empty")
+		return reply.NewInvalidOption("user id is invalid; cannot be empty")
 	}
 
 	if strings.TrimSpace(user.Username) == "" {
-		return transport.NewInvalidOption("username is invalid; cannot be empty")
+		return reply.NewInvalidOption("username is invalid; cannot be empty")
 	}
 
 	db, err := b.getDB()
@@ -1891,11 +1891,11 @@ func (b *BadgerAPIKeys) GetByHash(_ context.Context, hash string, key *types.API
 
 func (b *BadgerAPIKeys) Add(_ context.Context, key types.APIKey) error {
 	if strings.TrimSpace(key.ID) == "" {
-		return transport.NewInvalidOption("api key id is invalid; cannot be empty")
+		return reply.NewInvalidOption("api key id is invalid; cannot be empty")
 	}
 
 	if strings.TrimSpace(key.KeyHash) == "" {
-		return transport.NewInvalidOption("api key hash is invalid; cannot be empty")
+		return reply.NewInvalidOption("api key hash is invalid; cannot be empty")
 	}
 
 	db, err := b.getDB()
@@ -1907,7 +1907,7 @@ func (b *BadgerAPIKeys) Add(_ context.Context, key types.APIKey) error {
 		// Check if key ID already exists
 		_, err := txn.Get([]byte("apikey:" + key.ID))
 		if err == nil {
-			return transport.NewInvalidOption("api key already exists")
+			return reply.NewInvalidOption("api key already exists")
 		}
 		if !errors.Is(err, badger.ErrKeyNotFound) {
 			return errors.Errorf("during Get(): %w", err)
@@ -1916,7 +1916,7 @@ func (b *BadgerAPIKeys) Add(_ context.Context, key types.APIKey) error {
 		// Check if hash is already taken
 		_, err = txn.Get([]byte("apikey-hash:" + key.KeyHash))
 		if err == nil {
-			return transport.NewInvalidOption("api key hash already exists")
+			return reply.NewInvalidOption("api key hash already exists")
 		}
 		if !errors.Is(err, badger.ErrKeyNotFound) {
 			return errors.Errorf("during Get(): %w", err)
@@ -2368,15 +2368,15 @@ func (b *BadgerRoles) GetByID(_ context.Context, id string, role *types.Role) er
 
 func (b *BadgerRoles) Add(_ context.Context, role types.Role) error {
 	if strings.TrimSpace(role.ID) == "" {
-		return transport.NewInvalidOption("role id is invalid; cannot be empty")
+		return reply.NewInvalidOption("role id is invalid; cannot be empty")
 	}
 
 	if strings.TrimSpace(role.Name) == "" {
-		return transport.NewInvalidOption("role name is invalid; cannot be empty")
+		return reply.NewInvalidOption("role name is invalid; cannot be empty")
 	}
 
 	if strings.TrimSpace(role.Namespace) == "" {
-		return transport.NewInvalidOption("role namespace is invalid; cannot be empty")
+		return reply.NewInvalidOption("role namespace is invalid; cannot be empty")
 	}
 
 	db, err := b.getDB()
@@ -2642,19 +2642,19 @@ func (b *BadgerRoleBindings) Get(_ context.Context, id string, binding *types.Ro
 
 func (b *BadgerRoleBindings) Add(_ context.Context, binding types.RoleBinding) error {
 	if strings.TrimSpace(binding.ID) == "" {
-		return transport.NewInvalidOption("role binding id is invalid; cannot be empty")
+		return reply.NewInvalidOption("role binding id is invalid; cannot be empty")
 	}
 
 	if strings.TrimSpace(binding.UserID) == "" {
-		return transport.NewInvalidOption("role binding user_id is invalid; cannot be empty")
+		return reply.NewInvalidOption("role binding user_id is invalid; cannot be empty")
 	}
 
 	if strings.TrimSpace(binding.RoleID) == "" {
-		return transport.NewInvalidOption("role binding role_id is invalid; cannot be empty")
+		return reply.NewInvalidOption("role binding role_id is invalid; cannot be empty")
 	}
 
 	if strings.TrimSpace(binding.Namespace) == "" {
-		return transport.NewInvalidOption("role binding namespace is invalid; cannot be empty")
+		return reply.NewInvalidOption("role binding namespace is invalid; cannot be empty")
 	}
 
 	db, err := b.getDB()

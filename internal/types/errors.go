@@ -1,47 +1,47 @@
 package types
 
-import "github.com/kapetan-io/querator/transport"
+import "github.com/kapetan-io/querator/reply"
 
 // Namespace errors
 var (
-	ErrNamespaceNotExist      = transport.NewRequestFailed("namespace does not exist")
-	ErrNamespaceAlreadyExists = transport.NewInvalidOption("namespace already exists")
-	ErrNamespaceHasQueues     = transport.NewInvalidOption("namespace has queues; delete queues first")
-	ErrNamespaceReserved      = transport.NewInvalidOption("namespace name is reserved; names starting with '_' are reserved")
+	ErrNamespaceNotExist      = reply.NewRequestFailed("namespace does not exist")
+	ErrNamespaceAlreadyExists = reply.NewInvalidOption("namespace already exists")
+	ErrNamespaceHasQueues     = reply.NewInvalidOption("namespace has queues; delete queues first")
+	ErrNamespaceReserved      = reply.NewInvalidOption("namespace name is reserved; names starting with '_' are reserved")
 )
 
 // User errors
 var (
-	ErrUserNotExist         = transport.NewRequestFailed("user does not exist")
-	ErrUserAlreadyExists    = transport.NewInvalidOption("user already exists")
-	ErrUsernameAlreadyTaken = transport.NewInvalidOption("username is already taken")
+	ErrUserNotExist         = reply.NewRequestFailed("user does not exist")
+	ErrUserAlreadyExists    = reply.NewInvalidOption("user already exists")
+	ErrUsernameAlreadyTaken = reply.NewInvalidOption("username is already taken")
 )
 
 // API Key errors
 var (
-	ErrAPIKeyNotExist = transport.NewUnauthorized("api key does not exist")
-	ErrAPIKeyExpired  = transport.NewUnauthorized("api key has expired")
-	ErrAPIKeyInvalid  = transport.NewUnauthorized("api key is invalid")
+	ErrAPIKeyNotExist = reply.NewUnauthorized("api key does not exist")
+	ErrAPIKeyExpired  = reply.NewUnauthorized("api key has expired")
+	ErrAPIKeyInvalid  = reply.NewUnauthorized("api key is invalid")
 )
 
 // Authorization errors
 var (
-	ErrAuthRequired = transport.NewUnauthorized("authentication required")
-	ErrAccessDenied = transport.NewForbidden("access denied")
+	ErrAuthRequired = reply.NewUnauthorized("authentication required")
+	ErrAccessDenied = reply.NewForbidden("access denied")
 )
 
 // Role errors
 var (
-	ErrRoleNotExist             = transport.NewRequestFailed("role does not exist")
-	ErrRoleAlreadyExists        = transport.NewInvalidOption("role already exists")
-	ErrRoleBindingAlreadyExists = transport.NewInvalidOption("role binding already exists")
-	ErrRoleHasBindings          = transport.NewInvalidOption("role has active bindings; delete bindings first")
-	ErrRoleIsStandard           = transport.NewInvalidOption("cannot modify or delete standard role")
-	ErrRoleBindingNotExist      = transport.NewRequestFailed("role binding does not exist")
+	ErrRoleNotExist             = reply.NewRequestFailed("role does not exist")
+	ErrRoleAlreadyExists        = reply.NewInvalidOption("role already exists")
+	ErrRoleBindingAlreadyExists = reply.NewInvalidOption("role binding already exists")
+	ErrRoleHasBindings          = reply.NewInvalidOption("role has active bindings; delete bindings first")
+	ErrRoleIsStandard           = reply.NewInvalidOption("cannot modify or delete standard role")
+	ErrRoleBindingNotExist      = reply.NewRequestFailed("role binding does not exist")
 )
 
 // Namespace auth resource errors
 var (
-	ErrNamespaceHasRoles        = transport.NewInvalidOption("namespace has roles; delete roles first")
-	ErrNamespaceHasRoleBindings = transport.NewInvalidOption("namespace has role bindings; delete role bindings first")
+	ErrNamespaceHasRoles        = reply.NewInvalidOption("namespace has roles; delete roles first")
+	ErrNamespaceHasRoleBindings = reply.NewInvalidOption("namespace has role bindings; delete role bindings first")
 )

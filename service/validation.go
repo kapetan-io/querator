@@ -6,7 +6,7 @@ import (
 
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/proto"
-	"github.com/kapetan-io/querator/transport"
+	"github.com/kapetan-io/querator/reply"
 	"github.com/kapetan-io/tackle/clock"
 )
 
@@ -21,19 +21,19 @@ const (
 // This validation happens at the service layer to protect downstream systems.
 func validateQueueName(name string) error {
 	if len(name) > maxQueueNameLength {
-		return transport.NewInvalidOption("queue name is invalid; cannot be greater than '%d' characters", maxQueueNameLength)
+		return reply.NewInvalidOption("queue name is invalid; cannot be greater than '%d' characters", maxQueueNameLength)
 	}
 
 	if strings.TrimSpace(name) == "" {
-		return transport.NewInvalidOption("queue name is invalid; queue name cannot be empty")
+		return reply.NewInvalidOption("queue name is invalid; queue name cannot be empty")
 	}
 
 	if strings.ContainsFunc(name, unicode.IsSpace) {
-		return transport.NewInvalidOption("queue name is invalid; '%s' cannot contain whitespace", name)
+		return reply.NewInvalidOption("queue name is invalid; '%s' cannot contain whitespace", name)
 	}
 
 	if strings.Contains(name, "~") {
-		return transport.NewInvalidOption("queue name is invalid; '%s' cannot contain '~' character", name)
+		return reply.NewInvalidOption("queue name is invalid; '%s' cannot contain '~' character", name)
 	}
 	return nil
 }
@@ -54,7 +54,7 @@ func (s *Service) validateQueueProduceProto(in *proto.QueueProduceRequest, out *
 	if in.RequestTimeout != "" {
 		out.RequestTimeout, err = clock.ParseDuration(in.RequestTimeout)
 		if err != nil {
-			return transport.NewInvalidOption("request timeout is invalid; %s - expected format: 900ms, 5m or 15m", err.Error())
+			return reply.NewInvalidOption("request timeout is invalid; %s - expected format: 900ms, 5m or 15m", err.Error())
 		}
 	}
 
@@ -81,7 +81,7 @@ func (s *Service) validateQueueLeaseProto(in *proto.QueueLeaseRequest, out *type
 	if in.RequestTimeout != "" {
 		out.RequestTimeout, err = clock.ParseDuration(in.RequestTimeout)
 		if err != nil {
-			return transport.NewInvalidOption("request timeout is invalid; %s - expected format: 900ms, 5m or 15m", err.Error())
+			return reply.NewInvalidOption("request timeout is invalid; %s - expected format: 900ms, 5m or 15m", err.Error())
 		}
 	}
 
@@ -96,13 +96,13 @@ func (s *Service) validateQueueCompleteProto(in *proto.QueueCompleteRequest, out
 
 	// TODO: Move this into Queue.Complete()
 	// if strings.TrimSpace(in.QueueName) == "" {
-	// 	return transport.NewInvalidOption("'queue_name' cannot be empty")
+	// 	return reply.NewInvalidOption("'queue_name' cannot be empty")
 	// }
 
 	if in.RequestTimeout != "" {
 		out.RequestTimeout, err = clock.ParseDuration(in.RequestTimeout)
 		if err != nil {
-			return transport.NewInvalidOption("request timeout is invalid; %s - expected format: 900ms, 5m or 15m", err.Error())
+			return reply.NewInvalidOption("request timeout is invalid; %s - expected format: 900ms, 5m or 15m", err.Error())
 		}
 	}
 
@@ -142,24 +142,24 @@ func (s *Service) validateQueueOptionsProto(in *proto.QueueInfo, out *types.Queu
 	var err error
 
 	if len(in.LeaseTimeout) > maxTimeoutLength {
-		return transport.NewInvalidOption("lease timeout is invalid; cannot be greater than '%d' characters", maxTimeoutLength)
+		return reply.NewInvalidOption("lease timeout is invalid; cannot be greater than '%d' characters", maxTimeoutLength)
 	}
 
 	if len(in.ExpireTimeout) > maxTimeoutLength {
-		return transport.NewInvalidOption("expire timeout is invalid; cannot be greater than '%d' characters", maxTimeoutLength)
+		return reply.NewInvalidOption("expire timeout is invalid; cannot be greater than '%d' characters", maxTimeoutLength)
 	}
 
 	if in.ExpireTimeout != "" {
 		out.ExpireTimeout, err = clock.ParseDuration(in.ExpireTimeout)
 		if err != nil {
-			return transport.NewInvalidOption("expire timeout is invalid; %s - expected format: 60m, 2h or 24h", err.Error())
+			return reply.NewInvalidOption("expire timeout is invalid; %s - expected format: 60m, 2h or 24h", err.Error())
 		}
 	}
 
 	if in.LeaseTimeout != "" {
 		out.LeaseTimeout, err = clock.ParseDuration(in.LeaseTimeout)
 		if err != nil {
-			return transport.NewInvalidOption("lease timeout is invalid; %s -  expected format: 8m, 15m or 1h", err.Error())
+			return reply.NewInvalidOption("lease timeout is invalid; %s -  expected format: 8m, 15m or 1h", err.Error())
 		}
 	}
 
@@ -176,19 +176,19 @@ func (s *Service) validateNamespaceProto(in *proto.NamespaceInfo, out *types.Nam
 	const maxNamespaceNameLength = 256
 
 	if len(in.Name) > maxNamespaceNameLength {
-		return transport.NewInvalidOption("namespace name is invalid; cannot be greater than '%d' characters", maxNamespaceNameLength)
+		return reply.NewInvalidOption("namespace name is invalid; cannot be greater than '%d' characters", maxNamespaceNameLength)
 	}
 
 	if strings.TrimSpace(in.Name) == "" {
-		return transport.NewInvalidOption("namespace name is invalid; cannot be empty")
+		return reply.NewInvalidOption("namespace name is invalid; cannot be empty")
 	}
 
 	if strings.ContainsFunc(in.Name, unicode.IsSpace) {
-		return transport.NewInvalidOption("namespace name is invalid; '%s' cannot contain whitespace", in.Name)
+		return reply.NewInvalidOption("namespace name is invalid; '%s' cannot contain whitespace", in.Name)
 	}
 
 	if strings.Contains(in.Name, "~") {
-		return transport.NewInvalidOption("namespace name is invalid; '%s' cannot contain '~' character", in.Name)
+		return reply.NewInvalidOption("namespace name is invalid; '%s' cannot contain '~' character", in.Name)
 	}
 
 	out.Description = in.Description
@@ -202,19 +202,19 @@ func (s *Service) validateUserCreateProto(in *proto.UserCreateRequest, out *type
 	const maxExternalIDLength = 256
 
 	if len(in.Username) > maxUsernameLength {
-		return transport.NewInvalidOption("username is invalid; cannot be greater than '%d' characters", maxUsernameLength)
+		return reply.NewInvalidOption("username is invalid; cannot be greater than '%d' characters", maxUsernameLength)
 	}
 
 	if in.Username == "" {
-		return transport.NewInvalidOption("username is invalid; cannot be empty")
+		return reply.NewInvalidOption("username is invalid; cannot be empty")
 	}
 
 	if len(in.Email) > maxEmailLength {
-		return transport.NewInvalidOption("email is invalid; cannot be greater than '%d' characters", maxEmailLength)
+		return reply.NewInvalidOption("email is invalid; cannot be greater than '%d' characters", maxEmailLength)
 	}
 
 	if len(in.ExternalId) > maxExternalIDLength {
-		return transport.NewInvalidOption("external_id is invalid; cannot be greater than '%d' characters", maxExternalIDLength)
+		return reply.NewInvalidOption("external_id is invalid; cannot be greater than '%d' characters", maxExternalIDLength)
 	}
 
 	out.ExternalID = in.ExternalId
@@ -227,11 +227,11 @@ func (s *Service) validateAPIKeyCreateProto(in *proto.APIKeyCreateRequest, out *
 	const maxNameLength = 128
 
 	if in.UserId == "" {
-		return transport.NewInvalidOption("user_id is invalid; cannot be empty")
+		return reply.NewInvalidOption("user_id is invalid; cannot be empty")
 	}
 
 	if len(in.Name) > maxNameLength {
-		return transport.NewInvalidOption("name is invalid; cannot be greater than '%d' characters", maxNameLength)
+		return reply.NewInvalidOption("name is invalid; cannot be greater than '%d' characters", maxNameLength)
 	}
 
 	out.UserID = in.UserId
@@ -253,15 +253,15 @@ func (s *Service) validateRoleCreateProto(in *proto.RoleCreateRequest, out *type
 	const maxNameLength = 128
 
 	if in.Namespace == "" {
-		return transport.NewInvalidOption("namespace is invalid; cannot be empty")
+		return reply.NewInvalidOption("namespace is invalid; cannot be empty")
 	}
 
 	if in.Name == "" {
-		return transport.NewInvalidOption("name is invalid; cannot be empty")
+		return reply.NewInvalidOption("name is invalid; cannot be empty")
 	}
 
 	if len(in.Name) > maxNameLength {
-		return transport.NewInvalidOption("name is invalid; cannot be greater than '%d' characters", maxNameLength)
+		return reply.NewInvalidOption("name is invalid; cannot be greater than '%d' characters", maxNameLength)
 	}
 
 	out.Namespace = in.Namespace
@@ -272,11 +272,11 @@ func (s *Service) validateRoleCreateProto(in *proto.RoleCreateRequest, out *type
 
 func (s *Service) validateRoleUpdateProto(in *proto.RoleUpdateRequest, out *types.Role) error {
 	if in.Namespace == "" {
-		return transport.NewInvalidOption("namespace is invalid; cannot be empty")
+		return reply.NewInvalidOption("namespace is invalid; cannot be empty")
 	}
 
 	if in.Name == "" {
-		return transport.NewInvalidOption("name is invalid; cannot be empty")
+		return reply.NewInvalidOption("name is invalid; cannot be empty")
 	}
 
 	out.Namespace = in.Namespace
@@ -287,15 +287,15 @@ func (s *Service) validateRoleUpdateProto(in *proto.RoleUpdateRequest, out *type
 
 func (s *Service) validateRoleBindingCreateProto(in *proto.RoleBindingCreateRequest, out *types.RoleBinding) error {
 	if in.Namespace == "" {
-		return transport.NewInvalidOption("namespace is invalid; cannot be empty")
+		return reply.NewInvalidOption("namespace is invalid; cannot be empty")
 	}
 
 	if in.RoleName == "" {
-		return transport.NewInvalidOption("role_name is invalid; cannot be empty")
+		return reply.NewInvalidOption("role_name is invalid; cannot be empty")
 	}
 
 	if in.UserId == "" {
-		return transport.NewInvalidOption("user_id is invalid; cannot be empty")
+		return reply.NewInvalidOption("user_id is invalid; cannot be empty")
 	}
 
 	out.Namespace = in.Namespace

@@ -28,6 +28,7 @@ import (
 	"github.com/duh-rpc/duh-go"
 	v1 "github.com/duh-rpc/duh-go/proto/v1"
 	pb "github.com/kapetan-io/querator/proto"
+	"github.com/kapetan-io/querator/reply"
 	tauth "github.com/kapetan-io/querator/transport/auth"
 	"github.com/kapetan-io/tackle/set"
 	"github.com/prometheus/client_golang/prometheus"
@@ -145,14 +146,14 @@ func (h *HTTPHandler) authenticate(ctx context.Context, r *http.Request) (contex
 	if authHeader == "" {
 		principal, err := h.auth.Authenticate(ctx, "")
 		if err != nil {
-			return ctx, NewUnauthorized("authentication required")
+			return ctx, reply.NewUnauthorized("authentication required")
 		}
 		return tauth.ContextWithPrincipal(ctx, principal), nil
 	}
 
 	const bearerPrefix = "Bearer "
 	if !strings.HasPrefix(authHeader, bearerPrefix) {
-		return ctx, NewUnauthorized("invalid authorization header format")
+		return ctx, reply.NewUnauthorized("invalid authorization header format")
 	}
 	token := strings.TrimPrefix(authHeader, bearerPrefix)
 
@@ -168,10 +169,10 @@ func (h *HTTPHandler) authorize(ctx context.Context, namespace, permission strin
 	principal := tauth.PrincipalFromContext(ctx)
 	hasPermission, err := h.auth.HasPermission(ctx, principal, namespace, permission)
 	if err != nil {
-		return NewRequestFailed("authorization check failed: %s", err.Error())
+		return reply.NewRequestFailed("authorization check failed: %s", err.Error())
 	}
 	if !hasPermission {
-		return NewForbidden("access denied")
+		return reply.NewForbidden("access denied")
 	}
 	return nil
 }

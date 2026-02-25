@@ -27,6 +27,7 @@ import (
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/proto"
+	"github.com/kapetan-io/querator/reply"
 	"github.com/kapetan-io/querator/transport"
 	tauth "github.com/kapetan-io/querator/transport/auth"
 	"github.com/kapetan-io/tackle/clock"
@@ -125,10 +126,10 @@ func (s *Service) authorize(ctx context.Context, namespace, permission string) e
 	principal := tauth.PrincipalFromContext(ctx)
 	hasPermission, err := s.auth.HasPermission(ctx, principal, namespace, permission)
 	if err != nil {
-		return transport.NewRequestFailed("authorization check failed: %s", err.Error())
+		return reply.NewRequestFailed("authorization check failed: %s", err.Error())
 	}
 	if !hasPermission {
-		return transport.NewForbidden("access denied")
+		return reply.NewForbidden("access denied")
 	}
 	return nil
 }
@@ -801,7 +802,7 @@ func (s *Service) APIKeysCreate(ctx context.Context, req *proto.APIKeyCreateRequ
 
 	generated, err := tauth.GenerateAPIKey(envTag)
 	if err != nil {
-		return transport.NewRequestFailed("failed to generate api key: %s", err.Error())
+		return reply.NewRequestFailed("failed to generate api key: %s", err.Error())
 	}
 
 	key.ID = internal.NewUID()
@@ -883,7 +884,7 @@ func (s *Service) RolesCreate(ctx context.Context, req *proto.RoleCreateRequest,
 	// Validate all permissions
 	for _, perm := range role.Permissions {
 		if !tauth.IsValidPermission(perm) {
-			return transport.NewInvalidOption("permission '%s' is invalid", perm)
+			return reply.NewInvalidOption("permission '%s' is invalid", perm)
 		}
 	}
 
@@ -946,7 +947,7 @@ func (s *Service) RolesUpdate(ctx context.Context, req *proto.RoleUpdateRequest)
 	// Validate all permissions
 	for _, perm := range role.Permissions {
 		if !tauth.IsValidPermission(perm) {
-			return transport.NewInvalidOption("permission '%s' is invalid", perm)
+			return reply.NewInvalidOption("permission '%s' is invalid", perm)
 		}
 	}
 

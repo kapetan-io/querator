@@ -377,7 +377,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					var duhErr duh.Error
 					require.True(t, errors.As(err, &duhErr))
 					assert.Equal(t, duh.CodeBadRequest, duhErr.Code())
-					assert.Contains(t, duhErr.Message(), "cannot have its own dead_queue")
+					assert.Contains(t, duhErr.Message(), "cannot reference itself")
 				})
 
 				t.Run("ValidDLQ", func(t *testing.T) {
@@ -622,7 +622,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 						QueueName:    "InvalidLeaseTimeout",
 						LeaseTimeout: "foo",
 					},
-					Msg:  "lease timeout is invalid; time: invalid duration \"foo\" -  expected format: 8m, 15m or 1h",
+					Msg:  "lease timeout is invalid; time: invalid duration \"foo\" - expected format: 8m, 15m or 1h",
 					Code: duh.CodeBadRequest,
 				},
 				{
@@ -810,7 +810,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 						QueueName:    queueName,
 						LeaseTimeout: "foo",
 					},
-					Msg:  "lease timeout is invalid; time: invalid duration \"foo\" -  expected format: 8m, 15m or 1h",
+					Msg:  "lease timeout is invalid; time: invalid duration \"foo\" - expected format: 8m, 15m or 1h",
 					Code: duh.CodeBadRequest,
 				},
 				{

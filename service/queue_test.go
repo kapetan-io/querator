@@ -1820,7 +1820,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 						BatchSize:      1_000,
 						RequestTimeout: "16m",
 					},
-					Msg:  "request timeout is invalid; maximum timeout is '15m' but '16m0s' requested",
+					Msg:  "request timeout is invalid; maximum timeout is '15m' but '16m0s' was requested",
 					Code: duh.CodeBadRequest,
 				},
 				{
@@ -1976,7 +1976,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 						QueueName:      queueName,
 						RequestTimeout: "16m0s",
 					},
-					Msg:  "request timeout is invalid; maximum timeout is '15m' but '16m0s' requested",
+					Msg:  "request timeout is invalid; maximum timeout is '15m' but '16m0s' was requested",
 					Code: duh.CodeBadRequest,
 				},
 				{

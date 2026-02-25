@@ -231,7 +231,7 @@ func (l *Logical) Lease(ctx context.Context, req *types.LeaseRequest) error {
 
 	if req.RequestTimeout > maxRequestTimeout {
 		return reply.NewInvalidOption("request timeout is invalid; maximum timeout is '15m' but '%s' "+
-			"requested", req.RequestTimeout.String())
+			"was requested", req.RequestTimeout.String())
 	}
 
 	if req.RequestTimeout <= minRequestTimeout {
@@ -278,7 +278,7 @@ func (l *Logical) Complete(ctx context.Context, req *types.CompleteRequest) erro
 
 	if req.RequestTimeout > maxRequestTimeout {
 		return reply.NewInvalidOption("request timeout is invalid; maximum timeout is '15m' but '%s' "+
-			"requested", req.RequestTimeout.String())
+			"was requested", req.RequestTimeout.String())
 	}
 
 	if req.RequestTimeout == clock.Duration(0) {
@@ -321,7 +321,7 @@ func (l *Logical) Retry(ctx context.Context, req *types.RetryRequest) error {
 
 	if req.RequestTimeout > maxRequestTimeout {
 		return reply.NewInvalidOption("request timeout is invalid; maximum timeout is '15m' but '%s' "+
-			"requested", req.RequestTimeout.String())
+			"was requested", req.RequestTimeout.String())
 	}
 
 	if req.RequestTimeout == clock.Duration(0) {

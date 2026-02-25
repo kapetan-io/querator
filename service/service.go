@@ -886,7 +886,7 @@ func (s *Service) RolesCreate(ctx context.Context, req *proto.RoleCreateRequest,
 	// Validate all permissions
 	for _, perm := range role.Permissions {
 		if !auth.IsValidPermission(perm) {
-			return reply.NewInvalidOption("permission '%s' is invalid", perm)
+			return reply.NewInvalidOption("permission is invalid; '%s' is not a recognized permission", perm)
 		}
 	}
 
@@ -949,7 +949,7 @@ func (s *Service) RolesUpdate(ctx context.Context, req *proto.RoleUpdateRequest)
 	// Validate all permissions
 	for _, perm := range role.Permissions {
 		if !auth.IsValidPermission(perm) {
-			return reply.NewInvalidOption("permission '%s' is invalid", perm)
+			return reply.NewInvalidOption("permission is invalid; '%s' is not a recognized permission", perm)
 		}
 	}
 

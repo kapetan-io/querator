@@ -159,7 +159,7 @@ func (s *Service) validateQueueOptionsProto(in *proto.QueueInfo, out *types.Queu
 	if in.LeaseTimeout != "" {
 		out.LeaseTimeout, err = clock.ParseDuration(in.LeaseTimeout)
 		if err != nil {
-			return reply.NewInvalidOption("lease timeout is invalid; %s -  expected format: 8m, 15m or 1h", err.Error())
+			return reply.NewInvalidOption("lease timeout is invalid; %s - expected format: 8m, 15m or 1h", err.Error())
 		}
 	}
 

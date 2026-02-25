@@ -448,14 +448,14 @@ func testRetry(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					Code: duh.CodeBadRequest,
 				},
 				{
-					Name: "NotLeased",
+					Name: "DoesNotExist",
 					Req: &pb.QueueRetryRequest{
 						QueueName: queueName,
 						Items: []*pb.QueueRetryItem{
 							{Id: ksuid.New().String()},
 						},
 					},
-					Msg:  "does not exist",
+					Msg:  "invalid storage id;",
 					Code: duh.CodeBadRequest,
 				},
 			} {
@@ -470,6 +470,38 @@ func testRetry(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					}
 				})
 			}
+		})
+
+		t.Run("RetryNotLeased", func(t *testing.T) {
+			var queueName = random.String("queue-", 10)
+			d, c, ctx := newDaemon(t, 5*clock.Second, svc.Config{StorageConfig: storage})
+			defer d.Shutdown(t)
+
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				LeaseTimeout:        LeaseTimeout,
+				ExpireTimeout:       ExpireTimeout,
+				QueueName:           queueName,
+				RequestedPartitions: 1,
+			})
+
+			// Write items directly to storage (IsLeased = false by default)
+			items := writeRandomItems(t, ctx, c, queueName, 1)
+			require.Len(t, items, 1)
+
+			// Attempt to retry an item that is not leased
+			err := c.QueueRetry(ctx, &pb.QueueRetryRequest{
+				QueueName: queueName,
+				Items: []*pb.QueueRetryItem{
+					{Id: items[0].Id},
+				},
+			})
+
+			require.Error(t, err)
+			var e duh.Error
+			require.True(t, errors.As(err, &e))
+			assert.Contains(t, e.Message(), "item(s) cannot be retried;")
+			assert.Contains(t, e.Message(), "is not marked as leased")
+			assert.Equal(t, duh.CodeBadRequest, e.Code())
 		})
 	})
 }

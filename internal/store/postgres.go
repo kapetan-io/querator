@@ -928,7 +928,7 @@ nextBatch:
 				retryItem.ID).Scan(&isLeased, &enqueueAt)
 
 			if err == pgx.ErrNoRows {
-				batch.Requests[i].Err = reply.NewInvalidOption("id does not exist")
+				batch.Requests[i].Err = reply.NewInvalidOption("invalid storage id; '%s' does not exist", retryItem.ID)
 				continue nextBatch
 			}
 			if err != nil {
@@ -945,7 +945,7 @@ nextBatch:
 			}
 
 			if !isLeased {
-				batch.Requests[i].Err = reply.NewConflict("item not leased")
+				batch.Requests[i].Err = reply.NewConflict("item(s) cannot be retried; '%s' is not marked as leased", retryItem.ID)
 				continue nextBatch
 			}
 
@@ -984,8 +984,7 @@ nextBatch:
 			}
 
 			if err != nil {
-				batch.Requests[i].Err = reply.NewInvalidOption("failed to retry item: %s", err)
-				continue nextBatch
+				return errors.Errorf("during Retry(): %w", err)
 			}
 		}
 	}

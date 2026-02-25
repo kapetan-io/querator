@@ -168,7 +168,8 @@ func (h *HTTPHandler) authorize(ctx context.Context, namespace, permission strin
 	principal := auth.PrincipalFromContext(ctx)
 	hasPermission, err := h.auth.HasPermission(ctx, principal, namespace, permission)
 	if err != nil {
-		return reply.NewRequestFailed("authorization check failed: %s", err.Error())
+		h.log.Error("authorization check failed", "error", err)
+		return reply.NewRequestFailed("authorization check failed")
 	}
 	if !hasPermission {
 		return reply.NewForbidden("access denied")

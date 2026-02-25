@@ -126,7 +126,8 @@ func (s *Service) authorize(ctx context.Context, namespace, permission string) e
 	principal := auth.PrincipalFromContext(ctx)
 	hasPermission, err := s.auth.HasPermission(ctx, principal, namespace, permission)
 	if err != nil {
-		return reply.NewRequestFailed("authorization check failed: %s", err.Error())
+		s.conf.Log.Error("authorization check failed", "error", err)
+		return reply.NewRequestFailed("authorization check failed")
 	}
 	if !hasPermission {
 		return reply.NewForbidden("access denied")
@@ -802,7 +803,8 @@ func (s *Service) APIKeysCreate(ctx context.Context, req *proto.APIKeyCreateRequ
 
 	generated, err := auth.GenerateAPIKey(envTag)
 	if err != nil {
-		return reply.NewRequestFailed("failed to generate api key: %s", err.Error())
+		s.conf.Log.Error("failed to generate api key", "error", err)
+		return reply.NewRequestFailed("failed to generate api key")
 	}
 
 	key.ID = internal.NewUID()

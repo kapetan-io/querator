@@ -33,56 +33,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// Principal represents an authenticated entity making a request
-type Principal struct {
-	NamespaceScope *string
-	UserID         string
-	Username       string
-}
-
-// AnonymousPrincipal represents an unauthenticated user
-var AnonymousPrincipal = Principal{Username: "anonymous"}
-
-// AuthBackend defines the interface for authentication and authorization in the HTTP layer.
-// This interface is defined locally to avoid import cycles with internal/auth.
-type AuthBackend interface {
-	// Authenticate validates a token and returns the principal
-	Authenticate(ctx context.Context, token string) (Principal, error)
-	// HasPermission checks if a principal has a permission in a namespace
-	HasPermission(ctx context.Context, principal Principal, targetNS string, perm string) (bool, error)
-}
-
-// NoOpAuthBackend is an AuthBackend that always allows access (default open)
-type NoOpAuthBackend struct{}
-
-// Authenticate returns the anonymous principal
-func (n *NoOpAuthBackend) Authenticate(_ context.Context, _ string) (Principal, error) {
-	return AnonymousPrincipal, nil
-}
-
-// HasPermission always returns true
-func (n *NoOpAuthBackend) HasPermission(_ context.Context, _ Principal, _ string, _ string) (bool, error) {
-	return true, nil
-}
-
-type contextKey string
-
-const principalKey contextKey = "principal"
-
-// PrincipalFromContext extracts the Principal from the context
-func PrincipalFromContext(ctx context.Context) Principal {
-	p, ok := ctx.Value(principalKey).(Principal)
-	if !ok {
-		return AnonymousPrincipal
-	}
-	return p
-}
-
-// ContextWithPrincipal returns a new context with the Principal stored in it
-func ContextWithPrincipal(ctx context.Context, p Principal) context.Context {
-	return context.WithValue(ctx, principalKey, p)
-}
-
 
 // TODO: Document pause in OpenAPI, "Pauses queue processing such that requests to produce, lease,
 //  retry and complete are all paused. While a queue is on pause, Querator will queue those requests
@@ -155,14 +105,14 @@ type HTTPHandler struct {
 	maxProduceSize int64
 	metrics        http.Handler
 	service        Service
-	auth           AuthBackend
+	auth           tauth.AuthBackend
 	log            *slog.Logger
 }
 
 // HTTPHandlerConfig configures the HTTPHandler
 type HTTPHandlerConfig struct {
 	MaxProduceSize int64
-	AuthBackend    AuthBackend
+	AuthBackend    tauth.AuthBackend
 	Metrics        http.Handler
 	Service        Service
 	Log            *slog.Logger
@@ -170,7 +120,7 @@ type HTTPHandlerConfig struct {
 
 func NewHTTPHandler(conf HTTPHandlerConfig) *HTTPHandler {
 	set.Default(&conf.MaxProduceSize, int64(5*duh.MegaByte))
-	set.Default(&conf.AuthBackend, &NoOpAuthBackend{})
+	set.Default(&conf.AuthBackend, &tauth.NoOpAuthBackend{})
 
 	return &HTTPHandler{
 		duration: prometheus.NewSummaryVec(prometheus.SummaryOpts{
@@ -197,7 +147,7 @@ func (h *HTTPHandler) authenticate(ctx context.Context, r *http.Request) (contex
 		if err != nil {
 			return ctx, NewUnauthorized("authentication required")
 		}
-		return ContextWithPrincipal(ctx, principal), nil
+		return tauth.ContextWithPrincipal(ctx, principal), nil
 	}
 
 	const bearerPrefix = "Bearer "
@@ -210,12 +160,12 @@ func (h *HTTPHandler) authenticate(ctx context.Context, r *http.Request) (contex
 	if err != nil {
 		return ctx, err
 	}
-	return ContextWithPrincipal(ctx, principal), nil
+	return tauth.ContextWithPrincipal(ctx, principal), nil
 }
 
 // authorize checks if the principal has the required permission in the namespace
 func (h *HTTPHandler) authorize(ctx context.Context, namespace, permission string) error {
-	principal := PrincipalFromContext(ctx)
+	principal := tauth.PrincipalFromContext(ctx)
 	hasPermission, err := h.auth.HasPermission(ctx, principal, namespace, permission)
 	if err != nil {
 		return NewRequestFailed("authorization check failed: %s", err.Error())

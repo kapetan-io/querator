@@ -15,7 +15,7 @@ import (
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/service"
-	"github.com/kapetan-io/querator/transport"
+	tauth "github.com/kapetan-io/querator/transport/auth"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/color"
 	"github.com/kapetan-io/tackle/set"
@@ -44,7 +44,7 @@ type Config struct {
 
 	// AuthBackend is the authentication and authorization backend.
 	// If nil, defaults to NoOpAuthBackend which allows all requests (open access).
-	AuthBackend transport.AuthBackend
+	AuthBackend tauth.AuthBackend
 }
 
 func (c *Config) ClientTLS() *tls.Config {

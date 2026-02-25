@@ -1,4 +1,4 @@
-package auth
+package internal
 
 import (
 	"context"
@@ -7,6 +7,7 @@ import (
 
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
+	tauth "github.com/kapetan-io/querator/transport/auth"
 	"github.com/kapetan-io/tackle/clock"
 )
 
@@ -17,18 +18,18 @@ const (
 	DefaultCleanupInterval = time.Minute
 )
 
-// CacheConfig configures the auth cache
-type CacheConfig struct {
+// AuthCacheConfig configures the auth cache
+type AuthCacheConfig struct {
 	CleanupInterval time.Duration
 	APIKeys         store.APIKeys
 	Users           store.Users
 	TTL             time.Duration
 }
 
-// Cache provides caching for API key lookups to reduce storage load
-type Cache struct {
+// AuthCache provides caching for API key lookups to reduce storage load
+type AuthCache struct {
 	cleanupInterval time.Duration
-	byKeyHash       map[string]cacheEntry
+	byKeyHash       map[string]authCacheEntry
 	users           store.Users
 	apiKeys         store.APIKeys
 	stopCleanup     chan struct{}
@@ -38,13 +39,13 @@ type Cache struct {
 	ttl             time.Duration
 }
 
-type cacheEntry struct {
+type authCacheEntry struct {
 	expiresAt time.Time
-	principal types.Principal
+	principal tauth.Principal
 }
 
-// NewCache creates a new auth cache
-func NewCache(conf CacheConfig) *Cache {
+// NewAuthCache creates a new auth cache
+func NewAuthCache(conf AuthCacheConfig) *AuthCache {
 	if conf.TTL == 0 {
 		conf.TTL = DefaultCacheTTL
 	}
@@ -52,9 +53,9 @@ func NewCache(conf CacheConfig) *Cache {
 		conf.CleanupInterval = DefaultCleanupInterval
 	}
 
-	c := &Cache{
+	c := &AuthCache{
 		cleanupInterval: conf.CleanupInterval,
-		byKeyHash:       make(map[string]cacheEntry),
+		byKeyHash:       make(map[string]authCacheEntry),
 		stopCleanup:     make(chan struct{}),
 		apiKeys:         conf.APIKeys,
 		users:           conf.Users,
@@ -67,12 +68,12 @@ func NewCache(conf CacheConfig) *Cache {
 }
 
 // Authenticate validates an API key and returns the principal
-func (c *Cache) Authenticate(ctx context.Context, key string) (types.Principal, error) {
-	if err := ValidateAPIKeyFormat(key); err != nil {
-		return types.Principal{}, types.ErrAPIKeyInvalid
+func (c *AuthCache) Authenticate(ctx context.Context, key string) (tauth.Principal, error) {
+	if err := tauth.ValidateAPIKeyFormat(key); err != nil {
+		return tauth.Principal{}, types.ErrAPIKeyInvalid
 	}
 
-	keyHash := HashAPIKey(key)
+	keyHash := tauth.HashAPIKey(key)
 
 	// Check cache first
 	c.mu.RLock()
@@ -86,29 +87,29 @@ func (c *Cache) Authenticate(ctx context.Context, key string) (types.Principal, 
 	// Cache miss or expired - lookup from storage
 	var apiKey types.APIKey
 	if err := c.apiKeys.GetByHash(ctx, keyHash, &apiKey); err != nil {
-		return types.Principal{}, err
+		return tauth.Principal{}, err
 	}
 
 	// Check if key is expired
 	if apiKey.ExpiresAt != nil && clock.Now().UTC().After(*apiKey.ExpiresAt) {
-		return types.Principal{}, types.ErrAPIKeyExpired
+		return tauth.Principal{}, types.ErrAPIKeyExpired
 	}
 
 	// Fetch the user
 	var user types.User
 	if err := c.users.Get(ctx, apiKey.UserID, &user); err != nil {
-		return types.Principal{}, types.ErrAPIKeyInvalid
+		return tauth.Principal{}, types.ErrAPIKeyInvalid
 	}
 
-	principal := types.Principal{
+	principal := tauth.Principal{
 		NamespaceScope: apiKey.NamespaceScope,
-		IsAnonymous:    false,
-		User:           user,
+		UserID:         user.ID,
+		Username:       user.Username,
 	}
 
 	// Update cache
 	c.mu.Lock()
-	c.byKeyHash[keyHash] = cacheEntry{
+	c.byKeyHash[keyHash] = authCacheEntry{
 		expiresAt: clock.Now().UTC().Add(c.ttl),
 		principal: principal,
 	}
@@ -117,7 +118,6 @@ func (c *Cache) Authenticate(ctx context.Context, key string) (types.Principal, 
 	// Update last used time asynchronously
 	select {
 	case <-c.stopCleanup:
-		// Cache is closed, don't spawn new goroutines
 	default:
 		c.wg.Add(1)
 		go func() {
@@ -130,17 +130,17 @@ func (c *Cache) Authenticate(ctx context.Context, key string) (types.Principal, 
 }
 
 // Invalidate removes a cached entry by key hash
-func (c *Cache) Invalidate(keyHash string) {
+func (c *AuthCache) Invalidate(keyHash string) {
 	c.mu.Lock()
 	delete(c.byKeyHash, keyHash)
 	c.mu.Unlock()
 }
 
 // InvalidateUser removes all cached entries for a user
-func (c *Cache) InvalidateUser(userID string) {
+func (c *AuthCache) InvalidateUser(userID string) {
 	c.mu.Lock()
 	for hash, entry := range c.byKeyHash {
-		if entry.principal.User.ID == userID {
+		if entry.principal.UserID == userID {
 			delete(c.byKeyHash, hash)
 		}
 	}
@@ -148,14 +148,14 @@ func (c *Cache) InvalidateUser(userID string) {
 }
 
 // Close stops the cleanup goroutine and waits for pending operations
-func (c *Cache) Close() {
+func (c *AuthCache) Close() {
 	c.once.Do(func() {
 		close(c.stopCleanup)
 		c.wg.Wait()
 	})
 }
 
-func (c *Cache) cleanupLoop() {
+func (c *AuthCache) cleanupLoop() {
 	ticker := time.NewTicker(c.cleanupInterval)
 	defer ticker.Stop()
 
@@ -169,7 +169,7 @@ func (c *Cache) cleanupLoop() {
 	}
 }
 
-func (c *Cache) cleanup() {
+func (c *AuthCache) cleanup() {
 	now := clock.Now().UTC()
 	c.mu.Lock()
 	for hash, entry := range c.byKeyHash {

@@ -12,7 +12,7 @@ import (
 	v1 "github.com/duh-rpc/duh-go/proto/v1"
 	"github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/daemon"
-	"github.com/kapetan-io/querator/internal/auth"
+	"github.com/kapetan-io/querator/internal"
 	"github.com/kapetan-io/querator/internal/store"
 	pb "github.com/kapetan-io/querator/proto"
 	svc "github.com/kapetan-io/querator/service"
@@ -816,7 +816,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 // authTestDaemon wraps testDaemon with auth-specific fields
 type authTestDaemon struct {
 	*testDaemon
-	authBackend *daemon.AuthBackendAdapter
+	authBackend tauth.AuthBackend
 }
 
 func (a *authTestDaemon) Shutdown(t *testing.T) {
@@ -833,8 +833,7 @@ func newDaemonWithAuth(t *testing.T, setup NewStorageFunc) (*authTestDaemon, str
 
 	storageConf := setup()
 
-	// Create internal auth backend
-	internalBackend := auth.NewDefaultAuthBackend(auth.DefaultAuthBackendConfig{
+	backend := internal.NewAuthBackend(internal.AuthBackendConfig{
 		RoleBindings: storageConf.RoleBindings,
 		APIKeys:      storageConf.APIKeys,
 		Users:        storageConf.Users,
@@ -842,23 +841,20 @@ func newDaemonWithAuth(t *testing.T, setup NewStorageFunc) (*authTestDaemon, str
 		Log:          log,
 	})
 
-	// Create adapter
-	authAdapter := daemon.NewAuthBackendAdapter(internalBackend)
-
 	td := &testDaemon{}
 	var err error
 	td.ctx, td.cancel = context.WithTimeout(context.Background(), clock.Minute*10)
 
 	td.d, err = daemon.NewDaemon(td.ctx, daemon.Config{
-		Service:       svc.Config{StorageConfig: storageConf, Auth: internalBackend, Log: log},
-		AuthBackend:   authAdapter,
+		Service:       svc.Config{StorageConfig: storageConf, Auth: backend, Log: log},
+		AuthBackend:   backend,
 		ListenAddress: "localhost:0",
 	})
 	require.NoError(t, err)
 
 	atd := &authTestDaemon{
 		testDaemon:  td,
-		authBackend: authAdapter,
+		authBackend: backend,
 	}
 
 	// Use Open Door mode (anonymous has admin) to create admin credentials via the public API

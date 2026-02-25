@@ -24,7 +24,6 @@ import (
 
 	"github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/internal"
-	"github.com/kapetan-io/querator/internal/auth"
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/proto"
@@ -45,7 +44,7 @@ type Config struct {
 	// StorageConfig is the configured storage backends
 	StorageConfig store.Config
 	// Auth is the authentication/authorization backend (optional, defaults to NoOp)
-	Auth auth.AuthBackend
+	Auth tauth.AuthBackend
 	// InstanceID is a unique id for this instance of Querator
 	InstanceID string
 	// WriteTimeout The time it should take for a single batched write to complete
@@ -71,7 +70,7 @@ type Config struct {
 type Service struct {
 	queues *internal.QueuesManager
 	conf   Config
-	auth   auth.AuthBackend
+	auth   tauth.AuthBackend
 }
 
 func New(ctx context.Context, conf Config) (*Service, error) {
@@ -105,7 +104,7 @@ func New(ctx context.Context, conf Config) (*Service, error) {
 
 	// Default to NoOp auth if not provided
 	if conf.Auth == nil {
-		conf.Auth = &auth.NoOpAuthBackend{}
+		conf.Auth = &tauth.NoOpAuthBackend{}
 	}
 
 	s := &Service{
@@ -123,15 +122,7 @@ func New(ctx context.Context, conf Config) (*Service, error) {
 
 // authorize checks if the principal in context has the required permission in the namespace
 func (s *Service) authorize(ctx context.Context, namespace, permission string) error {
-	tp := transport.PrincipalFromContext(ctx)
-	principal := types.Principal{
-		NamespaceScope: tp.NamespaceScope,
-		IsAnonymous:    tp.UserID == "" || tp.Username == "anonymous",
-		User: types.User{
-			Username: tp.Username,
-			ID:       tp.UserID,
-		},
-	}
+	principal := tauth.PrincipalFromContext(ctx)
 	hasPermission, err := s.auth.HasPermission(ctx, principal, namespace, permission)
 	if err != nil {
 		return transport.NewRequestFailed("authorization check failed: %s", err.Error())
@@ -808,7 +799,7 @@ func (s *Service) APIKeysCreate(ctx context.Context, req *proto.APIKeyCreateRequ
 		envTag = "qtr"
 	}
 
-	generated, err := auth.GenerateAPIKey(envTag)
+	generated, err := tauth.GenerateAPIKey(envTag)
 	if err != nil {
 		return transport.NewRequestFailed("failed to generate api key: %s", err.Error())
 	}
@@ -1089,7 +1080,7 @@ func (s *Service) RoleBindingsDelete(ctx context.Context, req *proto.RoleBinding
 // and anonymous->Admin role binding. Safe to call on every startup.
 func (s *Service) Bootstrap(ctx context.Context) error {
 	// Skip bootstrap when auth is disabled (NoOp) or auth storage backends are not configured
-	if _, ok := s.auth.(*auth.NoOpAuthBackend); ok {
+	if _, ok := s.auth.(*tauth.NoOpAuthBackend); ok {
 		return nil
 	}
 	if s.conf.StorageConfig.Namespaces == nil || s.conf.StorageConfig.Users == nil ||
@@ -1129,8 +1120,8 @@ func (s *Service) bootstrapSystemNamespace(ctx context.Context) error {
 func (s *Service) bootstrapAnonymousUser(ctx context.Context) error {
 	now := s.conf.Clock.Now().UTC()
 	err := s.conf.StorageConfig.Users.Add(ctx, types.User{
-		ID:        types.AnonymousUser.ID,
-		Username:  types.AnonymousUser.Username,
+		ID:        tauth.AnonymousUserID,
+		Username:  tauth.AnonymousUsername,
 		CreatedAt: now,
 		UpdatedAt: now,
 	})
@@ -1188,7 +1179,7 @@ func (s *Service) bootstrapAnonymousAdminBinding(ctx context.Context) error {
 	// Create the binding
 	err := s.conf.StorageConfig.RoleBindings.Add(ctx, types.RoleBinding{
 		ID:        internal.NewUID(),
-		UserID:    types.AnonymousUser.ID,
+		UserID:    tauth.AnonymousUserID,
 		RoleID:    adminRole.ID,
 		Namespace: tauth.SystemNamespace,
 		CreatedAt: s.conf.Clock.Now().UTC(),
@@ -1199,7 +1190,7 @@ func (s *Service) bootstrapAnonymousAdminBinding(ctx context.Context) error {
 
 	// Check if the anonymous->Admin binding exists and log a warning
 	var bindings []types.RoleBinding
-	if err := s.conf.StorageConfig.RoleBindings.ListByUser(ctx, types.AnonymousUser.ID, &bindings); err != nil {
+	if err := s.conf.StorageConfig.RoleBindings.ListByUser(ctx, tauth.AnonymousUserID, &bindings); err != nil {
 		return err
 	}
 	for _, binding := range bindings {

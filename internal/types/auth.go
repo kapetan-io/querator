@@ -6,13 +6,6 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// Principal represents the authenticated entity making a request
-type Principal struct {
-	User           User
-	NamespaceScope *string
-	IsAnonymous    bool
-}
-
 // User represents a user in the system
 type User struct {
 	ExternalID string
@@ -36,18 +29,6 @@ func (u *User) ToProto(p *proto.User) *proto.User {
 		p.UpdatedAt = timestamppb.New(u.UpdatedAt)
 	}
 	return p
-}
-
-// AnonymousUser is the default user for unauthenticated requests
-var AnonymousUser = User{
-	Username: "anonymous",
-	ID:       "anonymous",
-}
-
-// AnonymousPrincipal is the default principal for unauthenticated requests
-var AnonymousPrincipal = Principal{
-	User:        AnonymousUser,
-	IsAnonymous: true,
 }
 
 // APIKey represents an API key for authentication

@@ -3,17 +3,17 @@ package auth_test
 import (
 	"testing"
 
-	tauth "github.com/kapetan-io/querator/transport/auth"
+	"github.com/kapetan-io/querator/transport/auth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestAdminPermissionsIndependentOfAllPermissions(t *testing.T) {
-	originalLen := len(tauth.AllPermissions)
+	originalLen := len(auth.AllPermissions)
 
 	// Append to AdminPermissions should not affect AllPermissions
-	tauth.AdminPermissions = append(tauth.AdminPermissions, "test.permission")
+	auth.AdminPermissions = append(auth.AdminPermissions, "test.permission")
 
-	require.Equal(t, originalLen, len(tauth.AllPermissions))
-	assert.NotContains(t, tauth.AllPermissions, "test.permission")
+	require.Equal(t, originalLen, len(auth.AllPermissions))
+	assert.NotContains(t, auth.AllPermissions, "test.permission")
 }

@@ -4,16 +4,17 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/kapetan-io/querator/internal/types"
-	"github.com/kapetan-io/querator/reply"
-	"github.com/kapetan-io/tackle/clock"
-	"github.com/kapetan-io/tackle/set"
-	"github.com/segmentio/ksuid"
 	"iter"
 	"log/slog"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/kapetan-io/querator/internal/types"
+	"github.com/kapetan-io/querator/transport/reply"
+	"github.com/kapetan-io/tackle/clock"
+	"github.com/kapetan-io/tackle/set"
+	"github.com/segmentio/ksuid"
 )
 
 var bucketName = []byte("partition")

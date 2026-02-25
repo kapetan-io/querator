@@ -2,19 +2,20 @@ package internal
 
 import (
 	"context"
-	"github.com/kapetan-io/errors"
-	"github.com/kapetan-io/querator/internal/store"
-	"github.com/kapetan-io/querator/internal/types"
-	"github.com/kapetan-io/querator/proto"
-	"github.com/kapetan-io/querator/reply"
-	"github.com/kapetan-io/tackle/clock"
-	"github.com/kapetan-io/tackle/set"
 	"log/slog"
 	"math"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"unicode"
+
+	"github.com/kapetan-io/errors"
+	"github.com/kapetan-io/querator/internal/store"
+	"github.com/kapetan-io/querator/internal/types"
+	"github.com/kapetan-io/querator/proto"
+	"github.com/kapetan-io/querator/transport/reply"
+	"github.com/kapetan-io/tackle/clock"
+	"github.com/kapetan-io/tackle/set"
 )
 
 const MsgServiceInShutdown = "service is shutting down"

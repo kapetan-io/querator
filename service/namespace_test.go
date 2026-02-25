@@ -11,7 +11,7 @@ import (
 	"github.com/kapetan-io/querator/internal/store"
 	pb "github.com/kapetan-io/querator/proto"
 	svc "github.com/kapetan-io/querator/service"
-	tauth "github.com/kapetan-io/querator/transport/auth"
+	"github.com/kapetan-io/querator/transport/auth"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/random"
 	"github.com/stretchr/testify/assert"
@@ -272,7 +272,7 @@ func testNamespaces(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			err := c.RolesCreate(ctx, &pb.RoleCreateRequest{
 				Namespace:   ns,
 				Name:        "test-role-" + random.String("", 5),
-				Permissions: []string{tauth.QueueList},
+				Permissions: []string{auth.QueueList},
 			}, &roleRes)
 			require.NoError(t, err)
 
@@ -301,7 +301,7 @@ func testNamespaces(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			err = c.RolesCreate(ctx, &pb.RoleCreateRequest{
 				Namespace:   ns,
 				Name:        roleName,
-				Permissions: []string{tauth.QueueList},
+				Permissions: []string{auth.QueueList},
 			}, &roleRes)
 			require.NoError(t, err)
 

@@ -17,7 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/kapetan-io/errors"
 	"github.com/kapetan-io/querator/internal/types"
-	"github.com/kapetan-io/querator/reply"
+	"github.com/kapetan-io/querator/transport/reply"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/set"
 	"github.com/segmentio/ksuid"

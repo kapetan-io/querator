@@ -27,9 +27,9 @@ import (
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/proto"
-	"github.com/kapetan-io/querator/reply"
 	"github.com/kapetan-io/querator/transport"
-	tauth "github.com/kapetan-io/querator/transport/auth"
+	"github.com/kapetan-io/querator/transport/auth"
+	"github.com/kapetan-io/querator/transport/reply"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/set"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -45,7 +45,7 @@ type Config struct {
 	// StorageConfig is the configured storage backends
 	StorageConfig store.Config
 	// Auth is the authentication/authorization backend (optional, defaults to NoOp)
-	Auth tauth.AuthBackend
+	Auth auth.AuthBackend
 	// InstanceID is a unique id for this instance of Querator
 	InstanceID string
 	// WriteTimeout The time it should take for a single batched write to complete
@@ -71,7 +71,7 @@ type Config struct {
 type Service struct {
 	queues *internal.QueuesManager
 	conf   Config
-	auth   tauth.AuthBackend
+	auth   auth.AuthBackend
 }
 
 func New(ctx context.Context, conf Config) (*Service, error) {
@@ -105,7 +105,7 @@ func New(ctx context.Context, conf Config) (*Service, error) {
 
 	// Default to NoOp auth if not provided
 	if conf.Auth == nil {
-		conf.Auth = &tauth.NoOpAuthBackend{}
+		conf.Auth = &auth.NoOpAuthBackend{}
 	}
 
 	s := &Service{
@@ -123,7 +123,7 @@ func New(ctx context.Context, conf Config) (*Service, error) {
 
 // authorize checks if the principal in context has the required permission in the namespace
 func (s *Service) authorize(ctx context.Context, namespace, permission string) error {
-	principal := tauth.PrincipalFromContext(ctx)
+	principal := auth.PrincipalFromContext(ctx)
 	hasPermission, err := s.auth.HasPermission(ctx, principal, namespace, permission)
 	if err != nil {
 		return reply.NewRequestFailed("authorization check failed: %s", err.Error())
@@ -377,7 +377,7 @@ func (s *Service) QueuesUpdate(ctx context.Context, req *proto.QueueInfo) error 
 	}
 
 	// Authorize
-	if err := s.authorize(ctx, ns, tauth.QueueUpdate); err != nil {
+	if err := s.authorize(ctx, ns, auth.QueueUpdate); err != nil {
 		return err
 	}
 
@@ -400,7 +400,7 @@ func (s *Service) QueuesDelete(ctx context.Context, req *proto.QueuesDeleteReque
 	}
 
 	// Authorize
-	if err := s.authorize(ctx, ns, tauth.QueueDelete); err != nil {
+	if err := s.authorize(ctx, ns, auth.QueueDelete); err != nil {
 		return err
 	}
 
@@ -800,7 +800,7 @@ func (s *Service) APIKeysCreate(ctx context.Context, req *proto.APIKeyCreateRequ
 		envTag = "qtr"
 	}
 
-	generated, err := tauth.GenerateAPIKey(envTag)
+	generated, err := auth.GenerateAPIKey(envTag)
 	if err != nil {
 		return reply.NewRequestFailed("failed to generate api key: %s", err.Error())
 	}
@@ -877,13 +877,13 @@ func (s *Service) RolesCreate(ctx context.Context, req *proto.RoleCreateRequest,
 	}
 
 	// Check if this is a standard role name that cannot be created
-	if tauth.IsStandardRole(role.Name) {
+	if auth.IsStandardRole(role.Name) {
 		return types.ErrRoleIsStandard
 	}
 
 	// Validate all permissions
 	for _, perm := range role.Permissions {
-		if !tauth.IsValidPermission(perm) {
+		if !auth.IsValidPermission(perm) {
 			return reply.NewInvalidOption("permission '%s' is invalid", perm)
 		}
 	}
@@ -940,13 +940,13 @@ func (s *Service) RolesUpdate(ctx context.Context, req *proto.RoleUpdateRequest)
 	}
 
 	// Check if this is a standard role that cannot be updated
-	if tauth.IsStandardRole(existing.Name) {
+	if auth.IsStandardRole(existing.Name) {
 		return types.ErrRoleIsStandard
 	}
 
 	// Validate all permissions
 	for _, perm := range role.Permissions {
-		if !tauth.IsValidPermission(perm) {
+		if !auth.IsValidPermission(perm) {
 			return reply.NewInvalidOption("permission '%s' is invalid", perm)
 		}
 	}
@@ -966,7 +966,7 @@ func (s *Service) RolesDelete(ctx context.Context, req *proto.RolesDeleteRequest
 	}
 
 	// Check if this is a standard role that cannot be deleted
-	if tauth.IsStandardRole(role.Name) {
+	if auth.IsStandardRole(role.Name) {
 		return types.ErrRoleIsStandard
 	}
 
@@ -1081,7 +1081,7 @@ func (s *Service) RoleBindingsDelete(ctx context.Context, req *proto.RoleBinding
 // and anonymous->Admin role binding. Safe to call on every startup.
 func (s *Service) Bootstrap(ctx context.Context) error {
 	// Skip bootstrap when auth is disabled (NoOp) or auth storage backends are not configured
-	if _, ok := s.auth.(*tauth.NoOpAuthBackend); ok {
+	if _, ok := s.auth.(*auth.NoOpAuthBackend); ok {
 		return nil
 	}
 	if s.conf.StorageConfig.Namespaces == nil || s.conf.StorageConfig.Users == nil ||
@@ -1108,7 +1108,7 @@ func (s *Service) Bootstrap(ctx context.Context) error {
 // bypassing NamespacesCreate which rejects reserved namespace names.
 func (s *Service) bootstrapSystemNamespace(ctx context.Context) error {
 	err := s.conf.StorageConfig.Namespaces.Add(ctx, types.Namespace{
-		Name:      tauth.SystemNamespace,
+		Name:      auth.SystemNamespace,
 		CreatedAt: s.conf.Clock.Now().UTC(),
 	})
 	if err != nil && !errors.Is(err, types.ErrNamespaceAlreadyExists) {
@@ -1121,8 +1121,8 @@ func (s *Service) bootstrapSystemNamespace(ctx context.Context) error {
 func (s *Service) bootstrapAnonymousUser(ctx context.Context) error {
 	now := s.conf.Clock.Now().UTC()
 	err := s.conf.StorageConfig.Users.Add(ctx, types.User{
-		ID:        tauth.AnonymousUserID,
-		Username:  tauth.AnonymousUsername,
+		ID:        auth.AnonymousUserID,
+		Username:  auth.AnonymousUsername,
 		CreatedAt: now,
 		UpdatedAt: now,
 	})
@@ -1139,23 +1139,23 @@ func (s *Service) bootstrapStandardRoles(ctx context.Context) error {
 	roles := []types.Role{
 		{
 			ID:          internal.NewUID(),
-			Name:        tauth.RoleAdmin,
-			Namespace:   tauth.SystemNamespace,
-			Permissions: tauth.AdminPermissions,
+			Name:        auth.RoleAdmin,
+			Namespace:   auth.SystemNamespace,
+			Permissions: auth.AdminPermissions,
 			CreatedAt:   now,
 		},
 		{
 			ID:          internal.NewUID(),
-			Name:        tauth.RoleNamespaceOwner,
-			Namespace:   tauth.SystemNamespace,
-			Permissions: tauth.NamespaceOwnerPermissions,
+			Name:        auth.RoleNamespaceOwner,
+			Namespace:   auth.SystemNamespace,
+			Permissions: auth.NamespaceOwnerPermissions,
 			CreatedAt:   now,
 		},
 		{
 			ID:          internal.NewUID(),
-			Name:        tauth.RolePublicViewer,
-			Namespace:   tauth.SystemNamespace,
-			Permissions: tauth.PublicViewerPermissions,
+			Name:        auth.RolePublicViewer,
+			Namespace:   auth.SystemNamespace,
+			Permissions: auth.PublicViewerPermissions,
 			CreatedAt:   now,
 		},
 	}
@@ -1173,16 +1173,16 @@ func (s *Service) bootstrapStandardRoles(ctx context.Context) error {
 func (s *Service) bootstrapAnonymousAdminBinding(ctx context.Context) error {
 	// Look up the Admin role to get its ID
 	var adminRole types.Role
-	if err := s.conf.StorageConfig.Roles.Get(ctx, tauth.SystemNamespace, tauth.RoleAdmin, &adminRole); err != nil {
+	if err := s.conf.StorageConfig.Roles.Get(ctx, auth.SystemNamespace, auth.RoleAdmin, &adminRole); err != nil {
 		return err
 	}
 
 	// Create the binding
 	err := s.conf.StorageConfig.RoleBindings.Add(ctx, types.RoleBinding{
 		ID:        internal.NewUID(),
-		UserID:    tauth.AnonymousUserID,
+		UserID:    auth.AnonymousUserID,
 		RoleID:    adminRole.ID,
-		Namespace: tauth.SystemNamespace,
+		Namespace: auth.SystemNamespace,
 		CreatedAt: s.conf.Clock.Now().UTC(),
 	})
 	if err != nil && !errors.Is(err, types.ErrRoleBindingAlreadyExists) {
@@ -1191,11 +1191,11 @@ func (s *Service) bootstrapAnonymousAdminBinding(ctx context.Context) error {
 
 	// Check if the anonymous->Admin binding exists and log a warning
 	var bindings []types.RoleBinding
-	if err := s.conf.StorageConfig.RoleBindings.ListByUser(ctx, tauth.AnonymousUserID, &bindings); err != nil {
+	if err := s.conf.StorageConfig.RoleBindings.ListByUser(ctx, auth.AnonymousUserID, &bindings); err != nil {
 		return err
 	}
 	for _, binding := range bindings {
-		if binding.RoleID == adminRole.ID && binding.Namespace == tauth.SystemNamespace {
+		if binding.RoleID == adminRole.ID && binding.Namespace == auth.SystemNamespace {
 			s.conf.Log.Warn("SYSTEM RUNNING IN OPEN DOOR MODE - anonymous user has admin privileges. " +
 				"Remove the anonymous admin binding to secure the system.")
 			break

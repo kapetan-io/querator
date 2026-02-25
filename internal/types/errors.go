@@ -1,6 +1,6 @@
 package types
 
-import "github.com/kapetan-io/querator/reply"
+import "github.com/kapetan-io/querator/transport/reply"
 
 // Namespace errors
 var (

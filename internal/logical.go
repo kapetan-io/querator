@@ -3,20 +3,21 @@ package internal
 import (
 	"context"
 	"fmt"
-	"github.com/dustin/go-humanize"
-	"github.com/kapetan-io/errors"
-	"github.com/kapetan-io/querator/internal/store"
-	"github.com/kapetan-io/querator/internal/types"
-	"github.com/kapetan-io/querator/reply"
-	"github.com/kapetan-io/tackle/clock"
-	"github.com/kapetan-io/tackle/random"
-	"github.com/kapetan-io/tackle/retry"
-	"github.com/kapetan-io/tackle/set"
 	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/dustin/go-humanize"
+	"github.com/kapetan-io/errors"
+	"github.com/kapetan-io/querator/internal/store"
+	"github.com/kapetan-io/querator/internal/types"
+	"github.com/kapetan-io/querator/transport/reply"
+	"github.com/kapetan-io/tackle/clock"
+	"github.com/kapetan-io/tackle/random"
+	"github.com/kapetan-io/tackle/retry"
+	"github.com/kapetan-io/tackle/set"
 )
 
 type MethodKind int

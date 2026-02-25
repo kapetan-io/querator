@@ -7,7 +7,7 @@ import (
 
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
-	tauth "github.com/kapetan-io/querator/transport/auth"
+	"github.com/kapetan-io/querator/transport/auth"
 	"github.com/kapetan-io/tackle/clock"
 )
 
@@ -41,7 +41,7 @@ type AuthCache struct {
 
 type authCacheEntry struct {
 	expiresAt time.Time
-	principal tauth.Principal
+	principal auth.Principal
 }
 
 // NewAuthCache creates a new auth cache
@@ -68,12 +68,12 @@ func NewAuthCache(conf AuthCacheConfig) *AuthCache {
 }
 
 // Authenticate validates an API key and returns the principal
-func (c *AuthCache) Authenticate(ctx context.Context, key string) (tauth.Principal, error) {
-	if err := tauth.ValidateAPIKeyFormat(key); err != nil {
-		return tauth.Principal{}, types.ErrAPIKeyInvalid
+func (c *AuthCache) Authenticate(ctx context.Context, key string) (auth.Principal, error) {
+	if err := auth.ValidateAPIKeyFormat(key); err != nil {
+		return auth.Principal{}, types.ErrAPIKeyInvalid
 	}
 
-	keyHash := tauth.HashAPIKey(key)
+	keyHash := auth.HashAPIKey(key)
 
 	// Check cache first
 	c.mu.RLock()
@@ -87,21 +87,21 @@ func (c *AuthCache) Authenticate(ctx context.Context, key string) (tauth.Princip
 	// Cache miss or expired - lookup from storage
 	var apiKey types.APIKey
 	if err := c.apiKeys.GetByHash(ctx, keyHash, &apiKey); err != nil {
-		return tauth.Principal{}, err
+		return auth.Principal{}, err
 	}
 
 	// Check if key is expired
 	if apiKey.ExpiresAt != nil && clock.Now().UTC().After(*apiKey.ExpiresAt) {
-		return tauth.Principal{}, types.ErrAPIKeyExpired
+		return auth.Principal{}, types.ErrAPIKeyExpired
 	}
 
 	// Fetch the user
 	var user types.User
 	if err := c.users.Get(ctx, apiKey.UserID, &user); err != nil {
-		return tauth.Principal{}, types.ErrAPIKeyInvalid
+		return auth.Principal{}, types.ErrAPIKeyInvalid
 	}
 
-	principal := tauth.Principal{
+	principal := auth.Principal{
 		NamespaceScope: apiKey.NamespaceScope,
 		UserID:         user.ID,
 		Username:       user.Username,

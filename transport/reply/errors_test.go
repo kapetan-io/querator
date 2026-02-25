@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/duh-rpc/duh-go"
-	"github.com/kapetan-io/querator/reply"
+	"github.com/kapetan-io/querator/transport/reply"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

@@ -17,7 +17,7 @@ import (
 	pb "github.com/kapetan-io/querator/proto"
 	svc "github.com/kapetan-io/querator/service"
 	"github.com/kapetan-io/querator/transport"
-	tauth "github.com/kapetan-io/querator/transport/auth"
+	"github.com/kapetan-io/querator/transport/auth"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/random"
 	"github.com/stretchr/testify/assert"
@@ -170,9 +170,9 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 			// Bind the user to Admin role so the key would have permissions (if not expired)
 			var bindingRes pb.RoleBindingCreateResponse
 			err = adminClient.RoleBindingsCreate(ctx, &pb.RoleBindingCreateRequest{
-				Namespace: tauth.SystemNamespace,
+				Namespace: auth.SystemNamespace,
 				UserId:    userRes.Id,
-				RoleName:  tauth.RoleAdmin,
+				RoleName:  auth.RoleAdmin,
 			}, &bindingRes)
 			require.NoError(t, err)
 
@@ -238,7 +238,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 			adminClient := newClientWithAPIKey(t, d, adminKey)
 
 			// Create a user with limited permissions (only queue.list, no queue.create)
-			limitedKey := createUserWithLimitedPermissions(t, ctx, adminClient, []string{tauth.QueueList})
+			limitedKey := createUserWithLimitedPermissions(t, ctx, adminClient, []string{auth.QueueList})
 
 			// Create client with limited API key
 			limitedClient := newClientWithAPIKey(t, d, limitedKey)
@@ -279,7 +279,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 			require.NoError(t, err)
 
 			// Create a user with permissions only in ns1
-			ns1Key := createUserWithNamespacePermissions(t, ctx, adminClient, ns1, tauth.NamespaceOwnerPermissions)
+			ns1Key := createUserWithNamespacePermissions(t, ctx, adminClient, ns1, auth.NamespaceOwnerPermissions)
 
 			// Create client with ns1-scoped API key
 			ns1Client := newClientWithAPIKey(t, d, ns1Key)
@@ -376,7 +376,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 			require.NoError(t, err)
 
 			// Create user with only queue.list — no queue.update
-			limitedKey := createUserWithLimitedPermissions(t, ctx, adminClient, []string{tauth.QueueList})
+			limitedKey := createUserWithLimitedPermissions(t, ctx, adminClient, []string{auth.QueueList})
 			limitedClient := newClientWithAPIKey(t, d, limitedKey)
 
 			err = limitedClient.QueuesUpdate(ctx, &pb.QueueInfo{
@@ -406,7 +406,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 			require.NoError(t, err)
 
 			// Create user with only queue.list — no queue.delete
-			limitedKey := createUserWithLimitedPermissions(t, ctx, adminClient, []string{tauth.QueueList})
+			limitedKey := createUserWithLimitedPermissions(t, ctx, adminClient, []string{auth.QueueList})
 			limitedClient := newClientWithAPIKey(t, d, limitedKey)
 
 			err = limitedClient.QueuesDelete(ctx, &pb.QueuesDeleteRequest{
@@ -465,7 +465,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 			adminClient := newClientWithAPIKey(t, d, adminKey)
 
 			// Create a user with permissions
-			userKey := createUserWithLimitedPermissions(t, ctx, adminClient, []string{tauth.QueueList})
+			userKey := createUserWithLimitedPermissions(t, ctx, adminClient, []string{auth.QueueList})
 			userClient := newClientWithAPIKey(t, d, userKey)
 
 			// Authenticate successfully with the key
@@ -517,15 +517,15 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 			// Create role and binding for the user
 			var roleRes pb.RoleCreateResponse
 			err = adminClient.RolesCreate(ctx, &pb.RoleCreateRequest{
-				Namespace:   tauth.SystemNamespace,
+				Namespace:   auth.SystemNamespace,
 				Name:        "delete-cache-role-" + random.String("", 5),
-				Permissions: []string{tauth.QueueList},
+				Permissions: []string{auth.QueueList},
 			}, &roleRes)
 			require.NoError(t, err)
 
 			// Find the role name
 			var rolesListRes pb.RolesListResponse
-			err = adminClient.RolesList(ctx, tauth.SystemNamespace, &rolesListRes, nil)
+			err = adminClient.RolesList(ctx, auth.SystemNamespace, &rolesListRes, nil)
 			require.NoError(t, err)
 			var roleName string
 			for _, role := range rolesListRes.Items {
@@ -538,7 +538,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 
 			var bindingRes pb.RoleBindingCreateResponse
 			err = adminClient.RoleBindingsCreate(ctx, &pb.RoleBindingCreateRequest{
-				Namespace: tauth.SystemNamespace,
+				Namespace: auth.SystemNamespace,
 				UserId:    userRes.Id,
 				RoleName:  roleName,
 			}, &bindingRes)
@@ -594,7 +594,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 		keys := make([]string, numUsers)
 		for i := 0; i < numUsers; i++ {
 			keys[i] = createUserWithLimitedPermissions(t, ctx,
-				newClientWithAPIKey(t, d, adminKey), []string{tauth.QueueList})
+				newClientWithAPIKey(t, d, adminKey), []string{auth.QueueList})
 		}
 
 		// Authenticate all keys concurrently, triggering concurrent UpdateLastUsed goroutines
@@ -656,7 +656,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 
 			var found bool
 			for _, ns := range listRes.Items {
-				if ns.Name == tauth.SystemNamespace {
+				if ns.Name == auth.SystemNamespace {
 					found = true
 					break
 				}
@@ -693,7 +693,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 			ctx := d.Context()
 
 			var listRes pb.RolesListResponse
-			err := c.RolesList(ctx, tauth.SystemNamespace, &listRes, nil)
+			err := c.RolesList(ctx, auth.SystemNamespace, &listRes, nil)
 			require.NoError(t, err)
 
 			roles := make(map[string][]string)
@@ -702,19 +702,19 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 			}
 
 			// Verify Admin role exists with correct permissions
-			adminPerms, ok := roles[tauth.RoleAdmin]
+			adminPerms, ok := roles[auth.RoleAdmin]
 			require.True(t, ok)
-			assert.ElementsMatch(t, tauth.AdminPermissions, adminPerms)
+			assert.ElementsMatch(t, auth.AdminPermissions, adminPerms)
 
 			// Verify NamespaceOwner role exists with correct permissions
-			ownerPerms, ok := roles[tauth.RoleNamespaceOwner]
+			ownerPerms, ok := roles[auth.RoleNamespaceOwner]
 			require.True(t, ok)
-			assert.ElementsMatch(t, tauth.NamespaceOwnerPermissions, ownerPerms)
+			assert.ElementsMatch(t, auth.NamespaceOwnerPermissions, ownerPerms)
 
 			// Verify PublicViewer role exists with correct permissions
-			viewerPerms, ok := roles[tauth.RolePublicViewer]
+			viewerPerms, ok := roles[auth.RolePublicViewer]
 			require.True(t, ok)
-			assert.ElementsMatch(t, tauth.PublicViewerPermissions, viewerPerms)
+			assert.ElementsMatch(t, auth.PublicViewerPermissions, viewerPerms)
 		})
 
 		t.Run("AnonymousAdminBindingExists", func(t *testing.T) {
@@ -726,12 +726,12 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 
 			// Find the Admin role ID
 			var rolesRes pb.RolesListResponse
-			err := c.RolesList(ctx, tauth.SystemNamespace, &rolesRes, nil)
+			err := c.RolesList(ctx, auth.SystemNamespace, &rolesRes, nil)
 			require.NoError(t, err)
 
 			var adminRoleID string
 			for _, role := range rolesRes.Items {
-				if role.Name == tauth.RoleAdmin {
+				if role.Name == auth.RoleAdmin {
 					adminRoleID = role.Id
 					break
 				}
@@ -740,7 +740,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 
 			// List role bindings and find the anonymous->Admin binding
 			var bindingsRes pb.RoleBindingsListResponse
-			err = c.RoleBindingsList(ctx, tauth.SystemNamespace, &bindingsRes, nil)
+			err = c.RoleBindingsList(ctx, auth.SystemNamespace, &bindingsRes, nil)
 			require.NoError(t, err)
 
 			var found bool
@@ -816,7 +816,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 // authTestDaemon wraps testDaemon with auth-specific fields
 type authTestDaemon struct {
 	*testDaemon
-	authBackend tauth.AuthBackend
+	authBackend auth.AuthBackend
 }
 
 func (a *authTestDaemon) Shutdown(t *testing.T) {
@@ -891,9 +891,9 @@ func createAdminUser(t *testing.T, ctx context.Context, c *querator.Client) stri
 	// Bind the new user to the existing Admin role in _system (created by bootstrap)
 	var bindingRes pb.RoleBindingCreateResponse
 	err = c.RoleBindingsCreate(ctx, &pb.RoleBindingCreateRequest{
-		Namespace: tauth.SystemNamespace,
+		Namespace: auth.SystemNamespace,
 		UserId:    userRes.Id,
-		RoleName:  tauth.RoleAdmin,
+		RoleName:  auth.RoleAdmin,
 	}, &bindingRes)
 	require.NoError(t, err)
 
@@ -922,7 +922,7 @@ func createUserWithLimitedPermissions(t *testing.T, ctx context.Context, c *quer
 	// Create role with limited permissions
 	var roleRes pb.RoleCreateResponse
 	err = c.RolesCreate(ctx, &pb.RoleCreateRequest{
-		Namespace:   tauth.SystemNamespace,
+		Namespace:   auth.SystemNamespace,
 		Name:        "limited-role-" + random.String("", 5),
 		Permissions: perms,
 	}, &roleRes)
@@ -930,7 +930,7 @@ func createUserWithLimitedPermissions(t *testing.T, ctx context.Context, c *quer
 
 	// Get the role to find its name for role binding
 	var rolesListRes pb.RolesListResponse
-	err = c.RolesList(ctx, tauth.SystemNamespace, &rolesListRes, nil)
+	err = c.RolesList(ctx, auth.SystemNamespace, &rolesListRes, nil)
 	require.NoError(t, err)
 
 	// Find the role we just created
@@ -946,7 +946,7 @@ func createUserWithLimitedPermissions(t *testing.T, ctx context.Context, c *quer
 	// Create role binding
 	var bindingRes pb.RoleBindingCreateResponse
 	err = c.RoleBindingsCreate(ctx, &pb.RoleBindingCreateRequest{
-		Namespace: tauth.SystemNamespace,
+		Namespace: auth.SystemNamespace,
 		UserId:    userRes.Id,
 		RoleName:  roleName,
 	}, &bindingRes)

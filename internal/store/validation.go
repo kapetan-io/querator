@@ -2,10 +2,11 @@ package store
 
 import (
 	"bytes"
-	"github.com/kapetan-io/querator/internal/types"
-	"github.com/kapetan-io/querator/reply"
 	"strings"
 	"unicode"
+
+	"github.com/kapetan-io/querator/internal/types"
+	"github.com/kapetan-io/querator/transport/reply"
 )
 
 var ErrEmptyQueueName = reply.NewInvalidOption("queue name is invalid; queue name cannot be empty")

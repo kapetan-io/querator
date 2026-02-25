@@ -6,7 +6,7 @@ import (
 
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
-	tauth "github.com/kapetan-io/querator/transport/auth"
+	"github.com/kapetan-io/querator/transport/auth"
 	"github.com/kapetan-io/tackle/set"
 )
 
@@ -19,7 +19,7 @@ type AuthBackendConfig struct {
 	Log          *slog.Logger
 }
 
-// AuthBackend implements tauth.AuthBackend using storage backends
+// AuthBackend implements auth.AuthBackend using storage backends
 type AuthBackend struct {
 	roleBindings store.RoleBindings
 	apiKeys      store.APIKeys
@@ -29,7 +29,7 @@ type AuthBackend struct {
 	log          *slog.Logger
 }
 
-var _ tauth.AuthBackend = &AuthBackend{}
+var _ auth.AuthBackend = &AuthBackend{}
 
 // NewAuthBackend creates a new AuthBackend
 func NewAuthBackend(conf AuthBackendConfig) *AuthBackend {
@@ -49,9 +49,9 @@ func NewAuthBackend(conf AuthBackendConfig) *AuthBackend {
 }
 
 // Authenticate validates a token and returns the principal
-func (a *AuthBackend) Authenticate(ctx context.Context, token string) (tauth.Principal, error) {
+func (a *AuthBackend) Authenticate(ctx context.Context, token string) (auth.Principal, error) {
 	if token == "" {
-		return tauth.AnonymousPrincipal, nil
+		return auth.AnonymousPrincipal, nil
 	}
 	return a.cache.Authenticate(ctx, token)
 }
@@ -60,7 +60,7 @@ func (a *AuthBackend) Authenticate(ctx context.Context, token string) (tauth.Pri
 // 1. Check API key scope: If scoped and scope != target namespace, return FALSE immediately
 // 2. Check target namespace for permission (User has role in target NS)
 // 3. If not found and target != _system, check _system namespace (User has role in _system)
-func (a *AuthBackend) HasPermission(ctx context.Context, principal tauth.Principal, targetNS string, perm string) (bool, error) {
+func (a *AuthBackend) HasPermission(ctx context.Context, principal auth.Principal, targetNS string, perm string) (bool, error) {
 	// Step 1: Check API key scope
 	if principal.NamespaceScope != nil && *principal.NamespaceScope != targetNS {
 		return false, nil
@@ -76,8 +76,8 @@ func (a *AuthBackend) HasPermission(ctx context.Context, principal tauth.Princip
 	}
 
 	// Step 3: If target is not _system, check permission in _system namespace (admin fallback)
-	if targetNS != tauth.SystemNamespace {
-		hasPermission, err = a.checkPermissionInNamespace(ctx, principal.UserID, tauth.SystemNamespace, perm)
+	if targetNS != auth.SystemNamespace {
+		hasPermission, err = a.checkPermissionInNamespace(ctx, principal.UserID, auth.SystemNamespace, perm)
 		if err != nil {
 			return false, err
 		}

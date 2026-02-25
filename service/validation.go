@@ -6,7 +6,7 @@ import (
 
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/proto"
-	"github.com/kapetan-io/querator/reply"
+	"github.com/kapetan-io/querator/transport/reply"
 	"github.com/kapetan-io/tackle/clock"
 )
 

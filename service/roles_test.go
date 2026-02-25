@@ -10,7 +10,7 @@ import (
 	"github.com/kapetan-io/querator/internal/types"
 	pb "github.com/kapetan-io/querator/proto"
 	svc "github.com/kapetan-io/querator/service"
-	tauth "github.com/kapetan-io/querator/transport/auth"
+	"github.com/kapetan-io/querator/transport/auth"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/random"
 	"github.com/stretchr/testify/assert"
@@ -58,7 +58,7 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 		roleName := "test-role-" + random.String("", 5)
 		var createRes pb.RoleCreateResponse
 		err = c.RolesCreate(ctx, &pb.RoleCreateRequest{
-			Permissions: []string{tauth.QueueCreate, tauth.QueueList},
+			Permissions: []string{auth.QueueCreate, auth.QueueList},
 			Namespace:   ns,
 			Name:        roleName,
 		}, &createRes)
@@ -73,7 +73,7 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 		assert.Equal(t, createRes.Id, listRes.Items[0].Id)
 		assert.Equal(t, roleName, listRes.Items[0].Name)
 		assert.Equal(t, ns, listRes.Items[0].Namespace)
-		assert.ElementsMatch(t, []string{tauth.QueueCreate, tauth.QueueList}, listRes.Items[0].Permissions)
+		assert.ElementsMatch(t, []string{auth.QueueCreate, auth.QueueList}, listRes.Items[0].Permissions)
 	})
 
 	t.Run("RoleUpdate", func(t *testing.T) {
@@ -88,7 +88,7 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 		roleName := "update-role-" + random.String("", 5)
 		var createRes pb.RoleCreateResponse
 		err = c.RolesCreate(ctx, &pb.RoleCreateRequest{
-			Permissions: []string{tauth.QueueCreate},
+			Permissions: []string{auth.QueueCreate},
 			Namespace:   ns,
 			Name:        roleName,
 		}, &createRes)
@@ -96,7 +96,7 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 
 		// Update the role with new permissions
 		err = c.RolesUpdate(ctx, &pb.RoleUpdateRequest{
-			Permissions: []string{tauth.QueueCreate, tauth.QueueDelete},
+			Permissions: []string{auth.QueueCreate, auth.QueueDelete},
 			Namespace:   ns,
 			Name:        roleName,
 		})
@@ -107,7 +107,7 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 		err = c.RolesList(ctx, ns, &listRes, nil)
 		require.NoError(t, err)
 		require.Len(t, listRes.Items, 1)
-		assert.ElementsMatch(t, []string{tauth.QueueCreate, tauth.QueueDelete}, listRes.Items[0].Permissions)
+		assert.ElementsMatch(t, []string{auth.QueueCreate, auth.QueueDelete}, listRes.Items[0].Permissions)
 	})
 
 	t.Run("RoleDelete", func(t *testing.T) {
@@ -122,7 +122,7 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 		roleName := "delete-role-" + random.String("", 5)
 		var createRes pb.RoleCreateResponse
 		err = c.RolesCreate(ctx, &pb.RoleCreateRequest{
-			Permissions: []string{tauth.QueueList},
+			Permissions: []string{auth.QueueList},
 			Namespace:   ns,
 			Name:        roleName,
 		}, &createRes)
@@ -161,7 +161,7 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 		roleName := "binding-role-" + random.String("", 5)
 		var roleRes pb.RoleCreateResponse
 		err = c.RolesCreate(ctx, &pb.RoleCreateRequest{
-			Permissions: []string{tauth.QueueCreate, tauth.QueueList},
+			Permissions: []string{auth.QueueCreate, auth.QueueList},
 			Namespace:   ns,
 			Name:        roleName,
 		}, &roleRes)
@@ -206,7 +206,7 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 		roleName := "del-binding-role-" + random.String("", 5)
 		var roleRes pb.RoleCreateResponse
 		err = c.RolesCreate(ctx, &pb.RoleCreateRequest{
-			Permissions: []string{tauth.QueueList},
+			Permissions: []string{auth.QueueList},
 			Namespace:   ns,
 			Name:        roleName,
 		}, &roleRes)
@@ -255,7 +255,7 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 		roleName := "cascade-binding-role-" + random.String("", 5)
 		var roleRes pb.RoleCreateResponse
 		err = c.RolesCreate(ctx, &pb.RoleCreateRequest{
-			Permissions: []string{tauth.QueueCreate, tauth.QueueList},
+			Permissions: []string{auth.QueueCreate, auth.QueueList},
 			Namespace:   ns,
 			Name:        roleName,
 		}, &roleRes)
@@ -296,7 +296,7 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 			err := c.RolesCreate(ctx, &pb.RoleCreateRequest{
 				Namespace:   ns,
 				Name:        fmt.Sprintf("page-role-%02d-%s", i, random.String("", 5)),
-				Permissions: []string{tauth.QueueList},
+				Permissions: []string{auth.QueueList},
 			}, &res)
 			require.NoError(t, err)
 		}
@@ -330,7 +330,7 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 		err = c.RolesCreate(ctx, &pb.RoleCreateRequest{
 			Namespace:   ns,
 			Name:        roleName,
-			Permissions: []string{tauth.QueueList},
+			Permissions: []string{auth.QueueList},
 		}, &roleRes)
 		require.NoError(t, err)
 
@@ -385,7 +385,7 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 				{
 					Name: "EmptyNamespace",
 					Req: &pb.RoleCreateRequest{
-						Permissions: []string{tauth.QueueList},
+						Permissions: []string{auth.QueueList},
 						Name:        "some-role",
 					},
 					WantErr: "namespace is invalid",
@@ -393,7 +393,7 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 				{
 					Name: "EmptyName",
 					Req: &pb.RoleCreateRequest{
-						Permissions: []string{tauth.QueueList},
+						Permissions: []string{auth.QueueList},
 						Namespace:   ns,
 					},
 					WantErr: "name is invalid",
@@ -401,9 +401,9 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 				{
 					Name: "StandardRoleName",
 					Req: &pb.RoleCreateRequest{
-						Permissions: []string{tauth.QueueList},
+						Permissions: []string{auth.QueueList},
 						Namespace:   ns,
-						Name:        tauth.RoleAdmin,
+						Name:        auth.RoleAdmin,
 					},
 					WantErr: "cannot modify or delete standard role",
 				},
@@ -419,7 +419,7 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 				{
 					Name: "NamespaceNotExist",
 					Req: &pb.RoleCreateRequest{
-						Permissions: []string{tauth.QueueList},
+						Permissions: []string{auth.QueueList},
 						Namespace:   "non-existent-ns-" + random.String("", 5),
 						Name:        "orphan-role",
 					},
@@ -449,18 +449,18 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 
 				// Seed standard role directly in storage since the API rejects standard names
 				err = storageConf.Roles.Add(ctx, types.Role{
-					Permissions: tauth.AdminPermissions,
+					Permissions: auth.AdminPermissions,
 					Namespace:   ns,
-					Name:        tauth.RoleAdmin,
+					Name:        auth.RoleAdmin,
 					ID:          random.String("role-", 10),
 				})
 				require.NoError(t, err)
 
 				// Attempt to update the standard role
 				err = c.RolesUpdate(ctx, &pb.RoleUpdateRequest{
-					Permissions: []string{tauth.QueueList},
+					Permissions: []string{auth.QueueList},
 					Namespace:   ns,
-					Name:        tauth.RoleAdmin,
+					Name:        auth.RoleAdmin,
 				})
 				require.Error(t, err)
 				var duhErr duh.Error
@@ -480,7 +480,7 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 				roleName := "update-invalid-role-" + random.String("", 5)
 				var createRes pb.RoleCreateResponse
 				err = c.RolesCreate(ctx, &pb.RoleCreateRequest{
-					Permissions: []string{tauth.QueueList},
+					Permissions: []string{auth.QueueList},
 					Namespace:   ns,
 					Name:        roleName,
 				}, &createRes)
@@ -511,9 +511,9 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 
 				// Seed standard role directly in storage
 				err = storageConf.Roles.Add(ctx, types.Role{
-					Permissions: tauth.AdminPermissions,
+					Permissions: auth.AdminPermissions,
 					Namespace:   ns,
-					Name:        tauth.RoleAdmin,
+					Name:        auth.RoleAdmin,
 					ID:          random.String("role-", 10),
 				})
 				require.NoError(t, err)
@@ -521,7 +521,7 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 				// Attempt to delete the standard role
 				err = c.RolesDelete(ctx, &pb.RolesDeleteRequest{
 					Namespace: ns,
-					Name:      tauth.RoleAdmin,
+					Name:      auth.RoleAdmin,
 				})
 				require.Error(t, err)
 				var duhErr duh.Error
@@ -548,7 +548,7 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 				roleName := "bound-role-" + random.String("", 5)
 				var roleRes pb.RoleCreateResponse
 				err = c.RolesCreate(ctx, &pb.RoleCreateRequest{
-					Permissions: []string{tauth.QueueList},
+					Permissions: []string{auth.QueueList},
 					Namespace:   ns,
 					Name:        roleName,
 				}, &roleRes)
@@ -611,7 +611,7 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 			roleName := "rb-create-role-" + random.String("", 5)
 			var roleRes pb.RoleCreateResponse
 			err = c.RolesCreate(ctx, &pb.RoleCreateRequest{
-				Permissions: []string{tauth.QueueList},
+				Permissions: []string{auth.QueueList},
 				Namespace:   ns,
 				Name:        roleName,
 			}, &roleRes)
@@ -689,7 +689,7 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 				roleName := "no-binding-role-" + random.String("", 5)
 				var roleRes pb.RoleCreateResponse
 				err = c.RolesCreate(ctx, &pb.RoleCreateRequest{
-					Permissions: []string{tauth.QueueList},
+					Permissions: []string{auth.QueueList},
 					Namespace:   ns,
 					Name:        roleName,
 				}, &roleRes)

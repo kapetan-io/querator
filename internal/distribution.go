@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/kapetan-io/querator/internal/store"
-	"github.com/kapetan-io/querator/reply"
+	"github.com/kapetan-io/querator/transport/reply"
 )
 
 // assignToPartitions assigns requests to appropriate partitions

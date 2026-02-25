@@ -1,9 +1,10 @@
 package internal
 
 import (
-	"github.com/kapetan-io/querator/internal/types"
-	"github.com/kapetan-io/querator/reply"
 	"sync"
+
+	"github.com/kapetan-io/querator/internal/types"
+	"github.com/kapetan-io/querator/transport/reply"
 )
 
 // TODO: When migrating from one data store to another, some partitions may be

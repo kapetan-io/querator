@@ -639,7 +639,7 @@ func (s *Service) NamespacesCreate(ctx context.Context, req *proto.NamespaceInfo
 
 	// Check for reserved namespace prefix
 	if ns.IsReserved() {
-		return types.ErrNamespaceReserved
+		return types.ErrNamespaceReserved(ns.Name)
 	}
 
 	ns.CreatedAt = s.conf.Clock.Now().UTC()
@@ -679,7 +679,7 @@ func (s *Service) NamespacesDelete(ctx context.Context, req *proto.NamespacesDel
 		return err
 	}
 	if len(bindings) > 0 {
-		return types.ErrNamespaceHasRoleBindings
+		return types.ErrNamespaceHasRoleBindings(req.Name)
 	}
 
 	// Check for child roles
@@ -688,7 +688,7 @@ func (s *Service) NamespacesDelete(ctx context.Context, req *proto.NamespacesDel
 		return err
 	}
 	if len(roles) > 0 {
-		return types.ErrNamespaceHasRoles
+		return types.ErrNamespaceHasRoles(req.Name)
 	}
 
 	// Check for child queues
@@ -698,7 +698,7 @@ func (s *Service) NamespacesDelete(ctx context.Context, req *proto.NamespacesDel
 	}
 	for _, q := range queues {
 		if q.Namespace == req.Name {
-			return types.ErrNamespaceHasQueues
+			return types.ErrNamespaceHasQueues(req.Name)
 		}
 	}
 
@@ -878,7 +878,7 @@ func (s *Service) RolesCreate(ctx context.Context, req *proto.RoleCreateRequest,
 
 	// Check if this is a standard role name that cannot be created
 	if auth.IsStandardRole(role.Name) {
-		return types.ErrRoleIsStandard
+		return types.ErrRoleIsStandard(role.Name)
 	}
 
 	// Validate all permissions
@@ -941,7 +941,7 @@ func (s *Service) RolesUpdate(ctx context.Context, req *proto.RoleUpdateRequest)
 
 	// Check if this is a standard role that cannot be updated
 	if auth.IsStandardRole(existing.Name) {
-		return types.ErrRoleIsStandard
+		return types.ErrRoleIsStandard(existing.Name)
 	}
 
 	// Validate all permissions
@@ -967,7 +967,7 @@ func (s *Service) RolesDelete(ctx context.Context, req *proto.RolesDeleteRequest
 
 	// Check if this is a standard role that cannot be deleted
 	if auth.IsStandardRole(role.Name) {
-		return types.ErrRoleIsStandard
+		return types.ErrRoleIsStandard(role.Name)
 	}
 
 	// Check if role has bindings
@@ -976,7 +976,7 @@ func (s *Service) RolesDelete(ctx context.Context, req *proto.RolesDeleteRequest
 		return err
 	}
 	if len(bindings) > 0 {
-		return types.ErrRoleHasBindings
+		return types.ErrRoleHasBindings(role.Name)
 	}
 
 	if err := s.conf.StorageConfig.Roles.Delete(ctx, role.ID); err != nil {
@@ -1064,7 +1064,7 @@ func (s *Service) RoleBindingsDelete(ctx context.Context, req *proto.RoleBinding
 	}
 
 	if bindingID == "" {
-		return types.ErrRoleBindingNotExist
+		return types.ErrRoleBindingNotExist(req.Namespace + ":" + req.RoleName + ":" + req.UserId)
 	}
 
 	if err := s.conf.StorageConfig.RoleBindings.Delete(ctx, bindingID); err != nil {
@@ -1111,7 +1111,7 @@ func (s *Service) bootstrapSystemNamespace(ctx context.Context) error {
 		Name:      auth.SystemNamespace,
 		CreatedAt: s.conf.Clock.Now().UTC(),
 	})
-	if err != nil && !errors.Is(err, types.ErrNamespaceAlreadyExists) {
+	if err != nil && !errors.Is(err, types.ErrNamespaceAlreadyExists("")) {
 		return err
 	}
 	return nil
@@ -1126,7 +1126,7 @@ func (s *Service) bootstrapAnonymousUser(ctx context.Context) error {
 		CreatedAt: now,
 		UpdatedAt: now,
 	})
-	if err != nil && !errors.Is(err, types.ErrUserAlreadyExists) && !errors.Is(err, types.ErrUsernameAlreadyTaken) {
+	if err != nil && !errors.Is(err, types.ErrUserAlreadyExists("")) && !errors.Is(err, types.ErrUsernameAlreadyTaken("")) {
 		return err
 	}
 	return nil
@@ -1161,7 +1161,7 @@ func (s *Service) bootstrapStandardRoles(ctx context.Context) error {
 	}
 	for _, role := range roles {
 		err := s.conf.StorageConfig.Roles.Add(ctx, role)
-		if err != nil && !errors.Is(err, types.ErrRoleAlreadyExists) {
+		if err != nil && !errors.Is(err, types.ErrRoleAlreadyExists("", "")) {
 			return err
 		}
 	}
@@ -1185,7 +1185,7 @@ func (s *Service) bootstrapAnonymousAdminBinding(ctx context.Context) error {
 		Namespace: auth.SystemNamespace,
 		CreatedAt: s.conf.Clock.Now().UTC(),
 	})
-	if err != nil && !errors.Is(err, types.ErrRoleBindingAlreadyExists) {
+	if err != nil && !errors.Is(err, types.ErrRoleBindingAlreadyExists("", "", "")) {
 		return err
 	}
 

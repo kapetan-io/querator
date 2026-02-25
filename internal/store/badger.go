@@ -1363,7 +1363,7 @@ func (b *BadgerNamespaces) getDB() (*badger.DB, error) {
 
 func (b *BadgerNamespaces) Get(_ context.Context, name string, ns *types.Namespace) error {
 	if strings.TrimSpace(name) == "" {
-		return types.ErrNamespaceNotExist
+		return types.ErrNamespaceNotExist(name)
 	}
 
 	db, err := b.getDB()
@@ -1375,7 +1375,7 @@ func (b *BadgerNamespaces) Get(_ context.Context, name string, ns *types.Namespa
 		kvItem, err := txn.Get([]byte(name))
 		if err != nil {
 			if errors.Is(err, badger.ErrKeyNotFound) {
-				return types.ErrNamespaceNotExist
+				return types.ErrNamespaceNotExist(name)
 			}
 			return errors.Errorf("during Get(): %w", err)
 		}
@@ -1407,7 +1407,7 @@ func (b *BadgerNamespaces) Add(_ context.Context, ns types.Namespace) error {
 		// If the namespace already exists in the store
 		_, err := txn.Get([]byte(ns.Name))
 		if err == nil {
-			return types.ErrNamespaceAlreadyExists
+			return types.ErrNamespaceAlreadyExists(ns.Name)
 		}
 		if !errors.Is(err, badger.ErrKeyNotFound) {
 			return errors.Errorf("during Get(): %w", err)
@@ -1466,7 +1466,7 @@ func (b *BadgerNamespaces) List(_ context.Context, namespaces *[]types.Namespace
 
 func (b *BadgerNamespaces) Delete(_ context.Context, name string) error {
 	if strings.TrimSpace(name) == "" {
-		return types.ErrNamespaceNotExist
+		return types.ErrNamespaceNotExist(name)
 	}
 
 	db, err := b.getDB()
@@ -1479,7 +1479,7 @@ func (b *BadgerNamespaces) Delete(_ context.Context, name string) error {
 		_, err := txn.Get([]byte(name))
 		if err != nil {
 			if errors.Is(err, badger.ErrKeyNotFound) {
-				return types.ErrNamespaceNotExist
+				return types.ErrNamespaceNotExist(name)
 			}
 			return errors.Errorf("during Get(): %w", err)
 		}
@@ -1545,7 +1545,7 @@ func (b *BadgerUsers) getDB() (*badger.DB, error) {
 
 func (b *BadgerUsers) Get(_ context.Context, id string, user *types.User) error {
 	if strings.TrimSpace(id) == "" {
-		return types.ErrUserNotExist
+		return types.ErrUserNotExist(id)
 	}
 
 	db, err := b.getDB()
@@ -1557,7 +1557,7 @@ func (b *BadgerUsers) Get(_ context.Context, id string, user *types.User) error 
 		kvItem, err := txn.Get([]byte("user:" + id))
 		if err != nil {
 			if errors.Is(err, badger.ErrKeyNotFound) {
-				return types.ErrUserNotExist
+				return types.ErrUserNotExist(id)
 			}
 			return errors.Errorf("during Get(): %w", err)
 		}
@@ -1577,7 +1577,7 @@ func (b *BadgerUsers) Get(_ context.Context, id string, user *types.User) error 
 
 func (b *BadgerUsers) GetByUsername(_ context.Context, username string, user *types.User) error {
 	if strings.TrimSpace(username) == "" {
-		return types.ErrUserNotExist
+		return types.ErrUserNotExist(username)
 	}
 
 	db, err := b.getDB()
@@ -1590,7 +1590,7 @@ func (b *BadgerUsers) GetByUsername(_ context.Context, username string, user *ty
 		kvItem, err := txn.Get([]byte("user-username:" + username))
 		if err != nil {
 			if errors.Is(err, badger.ErrKeyNotFound) {
-				return types.ErrUserNotExist
+				return types.ErrUserNotExist(username)
 			}
 			return errors.Errorf("during Get(): %w", err)
 		}
@@ -1605,7 +1605,7 @@ func (b *BadgerUsers) GetByUsername(_ context.Context, username string, user *ty
 		kvItem, err = txn.Get([]byte("user:" + string(idBytes)))
 		if err != nil {
 			if errors.Is(err, badger.ErrKeyNotFound) {
-				return types.ErrUserNotExist
+				return types.ErrUserNotExist(username)
 			}
 			return errors.Errorf("during Get(): %w", err)
 		}
@@ -1641,7 +1641,7 @@ func (b *BadgerUsers) Add(_ context.Context, user types.User) error {
 		// Check if user ID already exists
 		_, err := txn.Get([]byte("user:" + user.ID))
 		if err == nil {
-			return types.ErrUserAlreadyExists
+			return types.ErrUserAlreadyExists(user.ID)
 		}
 		if !errors.Is(err, badger.ErrKeyNotFound) {
 			return errors.Errorf("during Get(): %w", err)
@@ -1650,7 +1650,7 @@ func (b *BadgerUsers) Add(_ context.Context, user types.User) error {
 		// Check if username is taken
 		_, err = txn.Get([]byte("user-username:" + user.Username))
 		if err == nil {
-			return types.ErrUsernameAlreadyTaken
+			return types.ErrUsernameAlreadyTaken(user.Username)
 		}
 		if !errors.Is(err, badger.ErrKeyNotFound) {
 			return errors.Errorf("during Get(): %w", err)
@@ -1716,7 +1716,7 @@ func (b *BadgerUsers) List(_ context.Context, users *[]types.User, opts types.Li
 
 func (b *BadgerUsers) Delete(_ context.Context, id string) error {
 	if strings.TrimSpace(id) == "" {
-		return types.ErrUserNotExist
+		return types.ErrUserNotExist(id)
 	}
 
 	db, err := b.getDB()
@@ -1729,7 +1729,7 @@ func (b *BadgerUsers) Delete(_ context.Context, id string) error {
 		kvItem, err := txn.Get([]byte("user:" + id))
 		if err != nil {
 			if errors.Is(err, badger.ErrKeyNotFound) {
-				return types.ErrUserNotExist
+				return types.ErrUserNotExist(id)
 			}
 			return errors.Errorf("during Get(): %w", err)
 		}
@@ -2302,7 +2302,7 @@ func (b *BadgerRoles) Get(_ context.Context, namespace, name string, role *types
 		kvItem, err := txn.Get(indexKey)
 		if err != nil {
 			if errors.Is(err, badger.ErrKeyNotFound) {
-				return types.ErrRoleNotExist
+				return types.ErrRoleNotExist(namespace + ":" + name)
 			}
 			return errors.Errorf("during Get(): %w", err)
 		}
@@ -2317,7 +2317,7 @@ func (b *BadgerRoles) Get(_ context.Context, namespace, name string, role *types
 		kvItem, err = txn.Get([]byte("role:" + string(idBytes)))
 		if err != nil {
 			if errors.Is(err, badger.ErrKeyNotFound) {
-				return types.ErrRoleNotExist
+				return types.ErrRoleNotExist(namespace + ":" + name)
 			}
 			return errors.Errorf("during Get(): %w", err)
 		}
@@ -2337,7 +2337,7 @@ func (b *BadgerRoles) Get(_ context.Context, namespace, name string, role *types
 
 func (b *BadgerRoles) GetByID(_ context.Context, id string, role *types.Role) error {
 	if strings.TrimSpace(id) == "" {
-		return types.ErrRoleNotExist
+		return types.ErrRoleNotExist(id)
 	}
 
 	db, err := b.getDB()
@@ -2349,7 +2349,7 @@ func (b *BadgerRoles) GetByID(_ context.Context, id string, role *types.Role) er
 		kvItem, err := txn.Get([]byte("role:" + id))
 		if err != nil {
 			if errors.Is(err, badger.ErrKeyNotFound) {
-				return types.ErrRoleNotExist
+				return types.ErrRoleNotExist(id)
 			}
 			return errors.Errorf("during Get(): %w", err)
 		}
@@ -2390,7 +2390,7 @@ func (b *BadgerRoles) Add(_ context.Context, role types.Role) error {
 		indexKey := []byte("role-ns-name:" + role.Namespace + ":" + role.Name)
 		_, err := txn.Get(indexKey)
 		if err == nil {
-			return types.ErrRoleAlreadyExists
+			return types.ErrRoleAlreadyExists(role.Namespace, role.Name)
 		}
 
 		// Encode role
@@ -2415,7 +2415,7 @@ func (b *BadgerRoles) Add(_ context.Context, role types.Role) error {
 
 func (b *BadgerRoles) Update(_ context.Context, role types.Role) error {
 	if strings.TrimSpace(role.ID) == "" {
-		return types.ErrRoleNotExist
+		return types.ErrRoleNotExist(role.ID)
 	}
 
 	db, err := b.getDB()
@@ -2428,7 +2428,7 @@ func (b *BadgerRoles) Update(_ context.Context, role types.Role) error {
 		kvItem, err := txn.Get([]byte("role:" + role.ID))
 		if err != nil {
 			if errors.Is(err, badger.ErrKeyNotFound) {
-				return types.ErrRoleNotExist
+				return types.ErrRoleNotExist(role.ID)
 			}
 			return errors.Errorf("during Get(): %w", err)
 		}
@@ -2514,7 +2514,7 @@ func (b *BadgerRoles) List(_ context.Context, namespace string, roles *[]types.R
 
 func (b *BadgerRoles) Delete(_ context.Context, id string) error {
 	if strings.TrimSpace(id) == "" {
-		return types.ErrRoleNotExist
+		return types.ErrRoleNotExist(id)
 	}
 
 	db, err := b.getDB()
@@ -2527,7 +2527,7 @@ func (b *BadgerRoles) Delete(_ context.Context, id string) error {
 		kvItem, err := txn.Get([]byte("role:" + id))
 		if err != nil {
 			if errors.Is(err, badger.ErrKeyNotFound) {
-				return types.ErrRoleNotExist
+				return types.ErrRoleNotExist(id)
 			}
 			return errors.Errorf("during Get(): %w", err)
 		}
@@ -2611,7 +2611,7 @@ func (b *BadgerRoleBindings) getDB() (*badger.DB, error) {
 
 func (b *BadgerRoleBindings) Get(_ context.Context, id string, binding *types.RoleBinding) error {
 	if strings.TrimSpace(id) == "" {
-		return types.ErrRoleBindingNotExist
+		return types.ErrRoleBindingNotExist(id)
 	}
 
 	db, err := b.getDB()
@@ -2623,7 +2623,7 @@ func (b *BadgerRoleBindings) Get(_ context.Context, id string, binding *types.Ro
 		kvItem, err := txn.Get([]byte("rolebinding:" + id))
 		if err != nil {
 			if errors.Is(err, badger.ErrKeyNotFound) {
-				return types.ErrRoleBindingNotExist
+				return types.ErrRoleBindingNotExist(id)
 			}
 			return errors.Errorf("during Get(): %w", err)
 		}
@@ -2668,7 +2668,7 @@ func (b *BadgerRoleBindings) Add(_ context.Context, binding types.RoleBinding) e
 		uniqueKey := []byte("rolebinding-unique:" + binding.UserID + ":" + binding.Namespace + ":" + binding.RoleID)
 		_, err := txn.Get(uniqueKey)
 		if err == nil {
-			return types.ErrRoleBindingAlreadyExists
+			return types.ErrRoleBindingAlreadyExists(binding.Namespace, binding.UserID, binding.RoleID)
 		}
 
 		// Encode binding
@@ -2882,7 +2882,7 @@ func (b *BadgerRoleBindings) ListByRole(_ context.Context, roleID string, bindin
 
 func (b *BadgerRoleBindings) Delete(_ context.Context, id string) error {
 	if strings.TrimSpace(id) == "" {
-		return types.ErrRoleBindingNotExist
+		return types.ErrRoleBindingNotExist(id)
 	}
 
 	db, err := b.getDB()
@@ -2895,7 +2895,7 @@ func (b *BadgerRoleBindings) Delete(_ context.Context, id string) error {
 		kvItem, err := txn.Get([]byte("rolebinding:" + id))
 		if err != nil {
 			if errors.Is(err, badger.ErrKeyNotFound) {
-				return types.ErrRoleBindingNotExist
+				return types.ErrRoleBindingNotExist(id)
 			}
 			return errors.Errorf("during Get(): %w", err)
 		}

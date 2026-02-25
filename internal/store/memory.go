@@ -818,12 +818,12 @@ func (s *MemoryNamespaces) Get(_ context.Context, name string, ns *types.Namespa
 	defer s.mu.RUnlock()
 
 	if strings.TrimSpace(name) == "" {
-		return types.ErrNamespaceNotExist
+		return types.ErrNamespaceNotExist(name)
 	}
 
 	idx, ok := s.findNamespace(name)
 	if !ok {
-		return types.ErrNamespaceNotExist
+		return types.ErrNamespaceNotExist(name)
 	}
 	*ns = s.mem[idx]
 	return nil
@@ -839,7 +839,7 @@ func (s *MemoryNamespaces) Add(_ context.Context, ns types.Namespace) error {
 
 	_, ok := s.findNamespace(ns.Name)
 	if ok {
-		return types.ErrNamespaceAlreadyExists
+		return types.ErrNamespaceAlreadyExists(ns.Name)
 	}
 
 	s.mem = append(s.mem, ns)
@@ -870,12 +870,12 @@ func (s *MemoryNamespaces) Delete(_ context.Context, name string) error {
 	defer s.mu.Unlock()
 
 	if strings.TrimSpace(name) == "" {
-		return types.ErrNamespaceNotExist
+		return types.ErrNamespaceNotExist(name)
 	}
 
 	idx, ok := s.findNamespace(name)
 	if !ok {
-		return types.ErrNamespaceNotExist
+		return types.ErrNamespaceNotExist(name)
 	}
 	s.mem = append(s.mem[:idx], s.mem[idx+1:]...)
 	return nil
@@ -933,12 +933,12 @@ func (m *MemoryUsers) Get(_ context.Context, id string, user *types.User) error 
 	defer m.mu.RUnlock()
 
 	if strings.TrimSpace(id) == "" {
-		return types.ErrUserNotExist
+		return types.ErrUserNotExist(id)
 	}
 
 	u, ok := m.users[id]
 	if !ok {
-		return types.ErrUserNotExist
+		return types.ErrUserNotExist(id)
 	}
 	*user = u
 	return nil
@@ -949,17 +949,17 @@ func (m *MemoryUsers) GetByUsername(_ context.Context, username string, user *ty
 	defer m.mu.RUnlock()
 
 	if strings.TrimSpace(username) == "" {
-		return types.ErrUserNotExist
+		return types.ErrUserNotExist(username)
 	}
 
 	id, ok := m.byUsername[username]
 	if !ok {
-		return types.ErrUserNotExist
+		return types.ErrUserNotExist(username)
 	}
 
 	u, ok := m.users[id]
 	if !ok {
-		return types.ErrUserNotExist
+		return types.ErrUserNotExist(username)
 	}
 	*user = u
 	return nil
@@ -978,11 +978,11 @@ func (m *MemoryUsers) Add(_ context.Context, user types.User) error {
 	}
 
 	if _, ok := m.users[user.ID]; ok {
-		return types.ErrUserAlreadyExists
+		return types.ErrUserAlreadyExists(user.ID)
 	}
 
 	if _, ok := m.byUsername[user.Username]; ok {
-		return types.ErrUsernameAlreadyTaken
+		return types.ErrUsernameAlreadyTaken(user.Username)
 	}
 
 	m.users[user.ID] = user
@@ -1039,12 +1039,12 @@ func (m *MemoryUsers) Delete(_ context.Context, id string) error {
 	defer m.mu.Unlock()
 
 	if strings.TrimSpace(id) == "" {
-		return types.ErrUserNotExist
+		return types.ErrUserNotExist(id)
 	}
 
 	user, ok := m.users[id]
 	if !ok {
-		return types.ErrUserNotExist
+		return types.ErrUserNotExist(id)
 	}
 
 	delete(m.byUsername, user.Username)
@@ -1339,12 +1339,12 @@ func (m *MemoryRoles) Get(_ context.Context, namespace, name string, role *types
 	key := namespace + ":" + name
 	id, ok := m.byNamespaceName[key]
 	if !ok {
-		return types.ErrRoleNotExist
+		return types.ErrRoleNotExist(namespace + ":" + name)
 	}
 
 	r, ok := m.roles[id]
 	if !ok {
-		return types.ErrRoleNotExist
+		return types.ErrRoleNotExist(namespace + ":" + name)
 	}
 	*role = r
 	return nil
@@ -1355,12 +1355,12 @@ func (m *MemoryRoles) GetByID(_ context.Context, id string, role *types.Role) er
 	defer m.mu.RUnlock()
 
 	if strings.TrimSpace(id) == "" {
-		return types.ErrRoleNotExist
+		return types.ErrRoleNotExist(id)
 	}
 
 	r, ok := m.roles[id]
 	if !ok {
-		return types.ErrRoleNotExist
+		return types.ErrRoleNotExist(id)
 	}
 	*role = r
 	return nil
@@ -1384,11 +1384,11 @@ func (m *MemoryRoles) Add(_ context.Context, role types.Role) error {
 
 	key := role.Namespace + ":" + role.Name
 	if _, ok := m.byNamespaceName[key]; ok {
-		return types.ErrRoleAlreadyExists
+		return types.ErrRoleAlreadyExists(role.Namespace, role.Name)
 	}
 
 	if _, ok := m.roles[role.ID]; ok {
-		return types.ErrRoleAlreadyExists
+		return types.ErrRoleAlreadyExists(role.Namespace, role.Name)
 	}
 
 	m.roles[role.ID] = role
@@ -1401,12 +1401,12 @@ func (m *MemoryRoles) Update(_ context.Context, role types.Role) error {
 	defer m.mu.Unlock()
 
 	if strings.TrimSpace(role.ID) == "" {
-		return types.ErrRoleNotExist
+		return types.ErrRoleNotExist(role.ID)
 	}
 
 	existing, ok := m.roles[role.ID]
 	if !ok {
-		return types.ErrRoleNotExist
+		return types.ErrRoleNotExist(role.ID)
 	}
 
 	// Update permissions only, keep other fields
@@ -1467,12 +1467,12 @@ func (m *MemoryRoles) Delete(_ context.Context, id string) error {
 	defer m.mu.Unlock()
 
 	if strings.TrimSpace(id) == "" {
-		return types.ErrRoleNotExist
+		return types.ErrRoleNotExist(id)
 	}
 
 	role, ok := m.roles[id]
 	if !ok {
-		return types.ErrRoleNotExist
+		return types.ErrRoleNotExist(id)
 	}
 
 	key := role.Namespace + ":" + role.Name
@@ -1521,12 +1521,12 @@ func (m *MemoryRoleBindings) Get(_ context.Context, id string, binding *types.Ro
 	defer m.mu.RUnlock()
 
 	if strings.TrimSpace(id) == "" {
-		return types.ErrRoleBindingNotExist
+		return types.ErrRoleBindingNotExist(id)
 	}
 
 	b, ok := m.bindings[id]
 	if !ok {
-		return types.ErrRoleBindingNotExist
+		return types.ErrRoleBindingNotExist(id)
 	}
 	*binding = b
 	return nil
@@ -1555,11 +1555,11 @@ func (m *MemoryRoleBindings) Add(_ context.Context, binding types.RoleBinding) e
 	// Check for duplicate (same user, namespace, role combination)
 	uniqueKey := binding.UserID + ":" + binding.Namespace + ":" + binding.RoleID
 	if _, ok := m.byUserNamespaceRole[uniqueKey]; ok {
-		return types.ErrRoleBindingAlreadyExists
+		return types.ErrRoleBindingAlreadyExists(binding.Namespace, binding.UserID, binding.RoleID)
 	}
 
 	if _, ok := m.bindings[binding.ID]; ok {
-		return types.ErrRoleBindingAlreadyExists
+		return types.ErrRoleBindingAlreadyExists(binding.Namespace, binding.UserID, binding.RoleID)
 	}
 
 	m.bindings[binding.ID] = binding
@@ -1655,12 +1655,12 @@ func (m *MemoryRoleBindings) Delete(_ context.Context, id string) error {
 	defer m.mu.Unlock()
 
 	if strings.TrimSpace(id) == "" {
-		return types.ErrRoleBindingNotExist
+		return types.ErrRoleBindingNotExist(id)
 	}
 
 	binding, ok := m.bindings[id]
 	if !ok {
-		return types.ErrRoleBindingNotExist
+		return types.ErrRoleBindingNotExist(id)
 	}
 
 	// Remove from uniqueness index

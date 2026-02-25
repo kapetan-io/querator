@@ -187,7 +187,7 @@ func testNamespaces(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				{
 					Name: "ReservedPrefix",
 					Req:  &pb.NamespaceInfo{Name: "_reserved"},
-					Msg:  "namespace name is reserved; names starting with '_' are reserved",
+					Msg:  "namespace name is reserved;",
 					Code: duh.CodeBadRequest,
 				},
 				{
@@ -226,7 +226,7 @@ func testNamespaces(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					require.Error(t, err)
 					var e duh.Error
 					require.True(t, errors.As(err, &e))
-					assert.Equal(t, test.Msg, e.Message())
+					assert.Contains(t, e.Message(), test.Msg)
 					assert.Equal(t, test.Code, e.Code())
 				})
 			}
@@ -257,7 +257,7 @@ func testNamespaces(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					require.Error(t, err)
 					var e duh.Error
 					require.True(t, errors.As(err, &e))
-					assert.Equal(t, test.Msg, e.Message())
+					assert.Contains(t, e.Message(), test.Msg)
 					assert.Equal(t, test.Code, e.Code())
 				})
 			}

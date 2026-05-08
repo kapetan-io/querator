@@ -739,10 +739,7 @@ func (s *Service) NamespacesUpdate(ctx context.Context, req *proto.NamespaceInfo
 		return types.ErrNamespaceReserved(ns.Name)
 	}
 
-	if err := s.conf.StorageConfig.Namespaces.Update(ctx, ns); err != nil {
-		return err
-	}
-	return nil
+	return s.conf.StorageConfig.Namespaces.Update(ctx, ns)
 }
 
 func (s *Service) NamespacesList(ctx context.Context, req *proto.NamespacesListRequest,
@@ -917,10 +914,6 @@ func (s *Service) APIKeysCreate(ctx context.Context, req *proto.APIKeyCreateRequ
 		return err
 	}
 
-	// Resolve the tag using the three-level cascade:
-	// 1. Use req.KeyTag if provided
-	// 2. Else use the namespace APIKeyTag if NamespaceScope is set
-	// 3. Else fall back to "live"
 	resolvedTag := req.KeyTag
 	if resolvedTag == "" && key.NamespaceScope != nil {
 		var ns types.Namespace
@@ -929,7 +922,7 @@ func (s *Service) APIKeysCreate(ctx context.Context, req *proto.APIKeyCreateRequ
 		}
 	}
 	if resolvedTag == "" {
-		resolvedTag = "live"
+		resolvedTag = auth.DefaultKeyTag
 	}
 
 	generated, err := auth.GenerateAPIKey(resolvedTag)

@@ -16,7 +16,20 @@ const (
 	maxQueueNameLength = 512
 	defaultAllocation  = 512  // 2<<8
 	maxAllocation      = 2048 // 2<<10
+	maxTagLength       = 16
 )
+
+func validateTag(field, value string) error {
+	if len(value) > maxTagLength {
+		return reply.NewInvalidOption("%s is invalid; cannot be greater than %d characters", field, maxTagLength)
+	}
+	for _, c := range value {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'z') {
+			return reply.NewInvalidOption("%s is invalid; must be lowercase alphanumeric only", field)
+		}
+	}
+	return nil
+}
 
 // validateQueueName validates the queue name format.
 // This validation happens at the service layer to protect downstream systems.
@@ -196,14 +209,8 @@ func (s *Service) validateNamespaceProto(in *proto.NamespaceInfo, out *types.Nam
 		return reply.NewInvalidOption("namespace name is invalid; '%s' cannot contain ':' character", in.Name)
 	}
 
-	if len(in.ApiKeyTag) > 16 {
-		return reply.NewInvalidOption("api_key_tag is invalid; cannot be greater than 16 characters")
-	}
-
-	for _, c := range in.ApiKeyTag {
-		if (c < '0' || c > '9') && (c < 'a' || c > 'z') {
-			return reply.NewInvalidOption("api_key_tag is invalid; must be lowercase alphanumeric only")
-		}
+	if err := validateTag("api_key_tag", in.ApiKeyTag); err != nil {
+		return err
 	}
 
 	out.APIKeyTag = in.ApiKeyTag
@@ -263,13 +270,8 @@ func (s *Service) validateAPIKeyCreateProto(in *proto.APIKeyCreateRequest, out *
 	}
 
 	if in.KeyTag != "" {
-		if len(in.KeyTag) > 16 {
-			return reply.NewInvalidOption("key_tag is invalid; cannot be greater than 16 characters")
-		}
-		for _, c := range in.KeyTag {
-			if (c < '0' || c > '9') && (c < 'a' || c > 'z') {
-				return reply.NewInvalidOption("key_tag is invalid; must be lowercase alphanumeric only")
-			}
+		if err := validateTag("key_tag", in.KeyTag); err != nil {
+			return err
 		}
 	}
 

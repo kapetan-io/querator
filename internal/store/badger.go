@@ -1430,7 +1430,7 @@ func (b *BadgerNamespaces) Add(_ context.Context, ns types.Namespace) error {
 
 func (b *BadgerNamespaces) Update(_ context.Context, ns types.Namespace) error {
 	if strings.TrimSpace(ns.Name) == "" {
-		return types.ErrNamespaceNotExist(ns.Name)
+		return reply.NewInvalidOption("namespace name is invalid; cannot be empty")
 	}
 
 	db, err := b.getDB()

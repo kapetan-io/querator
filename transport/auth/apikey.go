@@ -12,6 +12,8 @@ import (
 const (
 	// KeyLength is the total number of random bytes in the secret key
 	KeyLength = 32
+	// DefaultKeyTag is the fallback tag used when no tag is supplied at any cascade level
+	DefaultKeyTag = "live"
 
 	base62Alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 )
@@ -23,29 +25,24 @@ type GeneratedKey struct {
 	Key     string // Full API key to return to user (shown once)
 }
 
-// base62Encode encodes random bytes as a Base62 string using the big-integer approach.
 func base62Encode(b []byte) string {
 	n := new(big.Int).SetBytes(b)
 	base := big.NewInt(62)
 	mod := new(big.Int)
-	var digits []byte
+	digits := make([]byte, 0, 43)
 	for n.Sign() > 0 {
 		n.DivMod(n, base, mod)
 		digits = append(digits, base62Alphabet[mod.Int64()])
 	}
-	// reverse
 	for i, j := 0, len(digits)-1; i < j; i, j = i+1, j-1 {
 		digits[i], digits[j] = digits[j], digits[i]
 	}
 	return string(digits)
 }
 
-// GenerateAPIKey generates a new API key in qtr-[tag]-[entropy] format.
-// tag must already be resolved (non-empty); caller is responsible for cascade.
-// If tag is empty, it defaults to "live" as a safety net.
 func GenerateAPIKey(tag string) (GeneratedKey, error) {
 	if tag == "" {
-		tag = "live"
+		tag = DefaultKeyTag
 	}
 
 	randomBytes := make([]byte, KeyLength)

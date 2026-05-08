@@ -79,6 +79,7 @@ const (
 	RPCStorageScheduledDelete   = "/v1/storage/scheduled.delete"
 
 	RPCNamespacesCreate = "/v1/namespaces.create"
+	RPCNamespacesUpdate = "/v1/namespaces.update"
 	RPCNamespacesList   = "/v1/namespaces.list"
 	RPCNamespacesDelete = "/v1/namespaces.delete"
 
@@ -244,6 +245,9 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	case RPCNamespacesCreate:
 		h.NamespacesCreate(ctx, w, r)
+		return
+	case RPCNamespacesUpdate:
+		h.NamespacesUpdate(ctx, w, r)
 		return
 	case RPCNamespacesList:
 		h.NamespacesList(ctx, w, r)
@@ -590,6 +594,20 @@ func (h *HTTPHandler) NamespacesCreate(ctx context.Context, w http.ResponseWrite
 	}
 
 	if err := h.service.NamespacesCreate(ctx, &req); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
+}
+
+func (h *HTTPHandler) NamespacesUpdate(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.NamespaceInfo
+	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	if err := h.service.NamespacesUpdate(ctx, &req); err != nil {
 		h.ReplyError(w, r, err)
 		return
 	}

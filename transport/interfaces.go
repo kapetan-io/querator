@@ -37,6 +37,7 @@ type StorageInspector interface {
 // NamespaceAdmin handles namespace lifecycle management
 type NamespaceAdmin interface {
 	NamespacesCreate(context.Context, *pb.NamespaceInfo) error
+	NamespacesUpdate(context.Context, *pb.NamespaceInfo) error
 	NamespacesList(context.Context, *pb.NamespacesListRequest, *pb.NamespacesListResponse) error
 	NamespacesDelete(context.Context, *pb.NamespacesDeleteRequest) error
 }

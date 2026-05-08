@@ -1428,6 +1428,37 @@ func (b *BadgerNamespaces) Add(_ context.Context, ns types.Namespace) error {
 	})
 }
 
+func (b *BadgerNamespaces) Update(_ context.Context, ns types.Namespace) error {
+	if strings.TrimSpace(ns.Name) == "" {
+		return types.ErrNamespaceNotExist(ns.Name)
+	}
+
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.Update(func(txn *badger.Txn) error {
+		_, err := txn.Get([]byte(ns.Name))
+		if err != nil {
+			if errors.Is(err, badger.ErrKeyNotFound) {
+				return types.ErrNamespaceNotExist(ns.Name)
+			}
+			return errors.Errorf("during Get(): %w", err)
+		}
+
+		var buf bytes.Buffer
+		if err := gob.NewEncoder(&buf).Encode(ns); err != nil {
+			return errors.Errorf("during gob.Encode(): %w", err)
+		}
+
+		if err := txn.Set([]byte(ns.Name), buf.Bytes()); err != nil {
+			return errors.Errorf("during Set(): %w", err)
+		}
+		return nil
+	})
+}
+
 func (b *BadgerNamespaces) List(_ context.Context, namespaces *[]types.Namespace, opts types.ListOptions) error {
 	db, err := b.getDB()
 	if err != nil {

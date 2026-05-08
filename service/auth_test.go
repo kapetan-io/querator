@@ -127,7 +127,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 			defer d.Shutdown(t)
 
 			// Create client with invalid API key
-			c := newClientWithAPIKey(t, d, "qtr_invalid_invalidkey")
+			c := newClientWithAPIKey(t, d, "bad_key_format")
 			ctx := d.Context()
 
 			// Request should fail with 401
@@ -893,6 +893,147 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 				RequestedPartitions: 1,
 			})
 			require.NoError(t, err)
+		})
+	})
+
+	testAPIKeyTagCascade(t, setup)
+}
+
+func testAPIKeyTagCascade(t *testing.T, setup NewStorageFunc) {
+	t.Helper()
+	t.Run("KeyTagCascade", func(t *testing.T) {
+		t.Run("RequestKeyTagOverridesAll", func(t *testing.T) {
+			d, adminKey := newDaemonWithAuth(t, setup)
+			defer d.Shutdown(t)
+
+			c := newClientWithAPIKey(t, d, adminKey)
+			ctx := d.Context()
+
+			// Create a namespace with APIKeyTag "prod"
+			nsName := random.String("ns-", 10)
+			require.NoError(t, c.NamespacesCreate(ctx, &pb.NamespaceInfo{
+				Name:      nsName,
+				ApiKeyTag: "prod",
+			}))
+
+			// Create user and key with explicit KeyTag "ci" scoped to that namespace
+			var userRes pb.UserCreateResponse
+			require.NoError(t, c.UsersCreate(ctx, &pb.UserCreateRequest{
+				Username: "cascade-user-" + random.String("", 5),
+			}, &userRes))
+
+			var keyRes pb.APIKeyCreateResponse
+			require.NoError(t, c.APIKeysCreate(ctx, &pb.APIKeyCreateRequest{
+				UserId:         userRes.Id,
+				Name:           "cascade-key",
+				KeyTag:         "ci",
+				NamespaceScope: nsName,
+			}, &keyRes))
+
+			// The explicit KeyTag "ci" overrides the namespace APIKeyTag "prod"
+			assert.True(t, len(keyRes.Key) > 0)
+			assert.Contains(t, keyRes.Key, "qtr-ci-")
+		})
+
+		t.Run("NamespaceTagUsedWhenNoRequestTag", func(t *testing.T) {
+			d, adminKey := newDaemonWithAuth(t, setup)
+			defer d.Shutdown(t)
+
+			c := newClientWithAPIKey(t, d, adminKey)
+			ctx := d.Context()
+
+			// Create a namespace with APIKeyTag "stg"
+			nsName := random.String("ns-", 10)
+			require.NoError(t, c.NamespacesCreate(ctx, &pb.NamespaceInfo{
+				Name:      nsName,
+				ApiKeyTag: "stg",
+			}))
+
+			var userRes pb.UserCreateResponse
+			require.NoError(t, c.UsersCreate(ctx, &pb.UserCreateRequest{
+				Username: "ns-tag-user-" + random.String("", 5),
+			}, &userRes))
+
+			// No KeyTag on request — should pick up namespace APIKeyTag "stg"
+			var keyRes pb.APIKeyCreateResponse
+			require.NoError(t, c.APIKeysCreate(ctx, &pb.APIKeyCreateRequest{
+				UserId:         userRes.Id,
+				Name:           "ns-tag-key",
+				NamespaceScope: nsName,
+			}, &keyRes))
+
+			assert.Contains(t, keyRes.Key, "qtr-stg-")
+		})
+
+		t.Run("DefaultTagLiveWhenNoCascadeMatch", func(t *testing.T) {
+			d, adminKey := newDaemonWithAuth(t, setup)
+			defer d.Shutdown(t)
+
+			c := newClientWithAPIKey(t, d, adminKey)
+			ctx := d.Context()
+
+			var userRes pb.UserCreateResponse
+			require.NoError(t, c.UsersCreate(ctx, &pb.UserCreateRequest{
+				Username: "default-tag-user-" + random.String("", 5),
+			}, &userRes))
+
+			// No KeyTag and no NamespaceScope — should default to "live"
+			var keyRes pb.APIKeyCreateResponse
+			require.NoError(t, c.APIKeysCreate(ctx, &pb.APIKeyCreateRequest{
+				UserId: userRes.Id,
+				Name:   "default-tag-key",
+			}, &keyRes))
+
+			assert.Contains(t, keyRes.Key, "qtr-live-")
+		})
+
+		t.Run("KeyTagValidationRejectsInvalidValues", func(t *testing.T) {
+			d, adminKey := newDaemonWithAuth(t, setup)
+			defer d.Shutdown(t)
+
+			c := newClientWithAPIKey(t, d, adminKey)
+			ctx := d.Context()
+
+			var userRes pb.UserCreateResponse
+			require.NoError(t, c.UsersCreate(ctx, &pb.UserCreateRequest{
+				Username: "tag-validation-user-" + random.String("", 5),
+			}, &userRes))
+
+			for _, test := range []struct {
+				Name   string
+				KeyTag string
+				Msg    string
+			}{
+				{
+					Name:   "UppercaseLetters",
+					KeyTag: "PROD",
+					Msg:    "key_tag is invalid; must be lowercase alphanumeric only",
+				},
+				{
+					Name:   "ContainsSpace",
+					KeyTag: "my tag",
+					Msg:    "key_tag is invalid; must be lowercase alphanumeric only",
+				},
+				{
+					Name:   "TooLong",
+					KeyTag: "thistagistoolong1",
+					Msg:    "key_tag is invalid; cannot be greater than 16 characters",
+				},
+			} {
+				t.Run(test.Name, func(t *testing.T) {
+					var keyRes pb.APIKeyCreateResponse
+					err := c.APIKeysCreate(ctx, &pb.APIKeyCreateRequest{
+						UserId: userRes.Id,
+						Name:   "invalid-tag-key",
+						KeyTag: test.KeyTag,
+					}, &keyRes)
+					require.Error(t, err)
+					var duhErr duh.Error
+					require.ErrorAs(t, err, &duhErr)
+					assert.Equal(t, duh.CodeBadRequest, duhErr.Code())
+					assert.Contains(t, duhErr.Message(), test.Msg)
+				})
+			}
 		})
 	})
 }

@@ -6,6 +6,7 @@ const (
 	NamespaceCreate = "namespace.create"
 	NamespaceDelete = "namespace.delete"
 	NamespaceList   = "namespace.list"
+	NamespaceUpdate = "namespace.update"
 
 	// Queue permissions
 	QueueCreate   = "queue.create"
@@ -58,6 +59,7 @@ var AllPermissions = []string{
 	NamespaceCreate,
 	NamespaceDelete,
 	NamespaceList,
+	NamespaceUpdate,
 	QueueCreate,
 	QueueDelete,
 	QueueUpdate,

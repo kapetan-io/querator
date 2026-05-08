@@ -196,6 +196,17 @@ func (s *Service) validateNamespaceProto(in *proto.NamespaceInfo, out *types.Nam
 		return reply.NewInvalidOption("namespace name is invalid; '%s' cannot contain ':' character", in.Name)
 	}
 
+	if len(in.ApiKeyTag) > 16 {
+		return reply.NewInvalidOption("api_key_tag is invalid; cannot be greater than 16 characters")
+	}
+
+	for _, c := range in.ApiKeyTag {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'z') {
+			return reply.NewInvalidOption("api_key_tag is invalid; must be lowercase alphanumeric only")
+		}
+	}
+
+	out.APIKeyTag = in.ApiKeyTag
 	out.Description = in.Description
 	out.Name = in.Name
 	return nil
@@ -249,6 +260,17 @@ func (s *Service) validateAPIKeyCreateProto(in *proto.APIKeyCreateRequest, out *
 	if in.ExpiresAt != nil && in.ExpiresAt.IsValid() {
 		expiresAt := clock.Time(in.ExpiresAt.AsTime())
 		out.ExpiresAt = &expiresAt
+	}
+
+	if in.KeyTag != "" {
+		if len(in.KeyTag) > 16 {
+			return reply.NewInvalidOption("key_tag is invalid; cannot be greater than 16 characters")
+		}
+		for _, c := range in.KeyTag {
+			if (c < '0' || c > '9') && (c < 'a' || c > 'z') {
+				return reply.NewInvalidOption("key_tag is invalid; must be lowercase alphanumeric only")
+			}
+		}
 	}
 
 	return nil

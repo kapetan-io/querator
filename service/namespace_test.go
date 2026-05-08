@@ -53,6 +53,9 @@ func TestNamespaces(t *testing.T) {
 func testNamespaces(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	defer goleak.VerifyNone(t, goleakOptions...)
 
+	testNamespaceAPIKeyTag(t, setup, tearDown)
+	testNamespacesUpdate(t, setup, tearDown)
+
 	t.Run("CRUD", func(t *testing.T) {
 		d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
 		defer func() {
@@ -434,5 +437,194 @@ func testNamespaces(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			}(i)
 		}
 		wg.Wait()
+	})
+}
+
+func testNamespaceAPIKeyTag(t *testing.T, setup NewStorageFunc, tearDown func()) {
+	t.Helper()
+	t.Run("APIKeyTag", func(t *testing.T) {
+		t.Run("CreateWithAPIKeyTag", func(t *testing.T) {
+			d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+			defer func() {
+				d.Shutdown(t)
+				tearDown()
+			}()
+
+			nsName := random.String("ns-", 10)
+			require.NoError(t, c.NamespacesCreate(ctx, &pb.NamespaceInfo{
+				Name:      nsName,
+				ApiKeyTag: "dev",
+			}))
+
+			var list pb.NamespacesListResponse
+			require.NoError(t, c.NamespacesList(ctx, &list, &querator.ListOptions{
+				Pivot: nsName,
+				Limit: 1,
+			}))
+			require.Equal(t, 1, len(list.Items))
+			assert.Equal(t, nsName, list.Items[0].Name)
+			assert.Equal(t, "dev", list.Items[0].ApiKeyTag)
+		})
+
+		t.Run("CreateWithEmptyAPIKeyTag", func(t *testing.T) {
+			d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+			defer func() {
+				d.Shutdown(t)
+				tearDown()
+			}()
+
+			nsName := random.String("ns-", 10)
+			require.NoError(t, c.NamespacesCreate(ctx, &pb.NamespaceInfo{
+				Name: nsName,
+			}))
+
+			var list pb.NamespacesListResponse
+			require.NoError(t, c.NamespacesList(ctx, &list, &querator.ListOptions{
+				Pivot: nsName,
+				Limit: 1,
+			}))
+			require.Equal(t, 1, len(list.Items))
+			assert.Equal(t, nsName, list.Items[0].Name)
+			assert.Empty(t, list.Items[0].ApiKeyTag)
+		})
+
+		t.Run("APIKeyTagValidationErrors", func(t *testing.T) {
+			d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+			defer func() {
+				d.Shutdown(t)
+				tearDown()
+			}()
+
+			for _, test := range []struct {
+				Name   string
+				Tag    string
+				Msg    string
+				Code   int
+			}{
+				{
+					Name: "UppercaseLetters",
+					Tag:  "PROD",
+					Msg:  "api_key_tag is invalid; must be lowercase alphanumeric only",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "ContainsSymbol",
+					Tag:  "my-tag",
+					Msg:  "api_key_tag is invalid; must be lowercase alphanumeric only",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "TooLong",
+					Tag:  "thistagistoolong1",
+					Msg:  "api_key_tag is invalid; cannot be greater than 16 characters",
+					Code: duh.CodeBadRequest,
+				},
+			} {
+				t.Run(test.Name, func(t *testing.T) {
+					err := c.NamespacesCreate(ctx, &pb.NamespaceInfo{
+						Name:      random.String("ns-", 10),
+						ApiKeyTag: test.Tag,
+					})
+					require.Error(t, err)
+					var e duh.Error
+					require.ErrorAs(t, err, &e)
+					assert.Contains(t, e.Message(), test.Msg)
+					assert.Equal(t, test.Code, e.Code())
+				})
+			}
+		})
+	})
+}
+
+func testNamespacesUpdate(t *testing.T, setup NewStorageFunc, tearDown func()) {
+	t.Helper()
+	t.Run("NamespacesUpdate", func(t *testing.T) {
+		t.Run("UpdateAPIKeyTag", func(t *testing.T) {
+			d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+			defer func() {
+				d.Shutdown(t)
+				tearDown()
+			}()
+
+			nsName := random.String("ns-", 10)
+			require.NoError(t, c.NamespacesCreate(ctx, &pb.NamespaceInfo{
+				Name: nsName,
+			}))
+
+			require.NoError(t, c.NamespacesUpdate(ctx, &pb.NamespaceInfo{
+				Name:      nsName,
+				ApiKeyTag: "stg",
+			}))
+
+			var list pb.NamespacesListResponse
+			require.NoError(t, c.NamespacesList(ctx, &list, &querator.ListOptions{
+				Pivot: nsName,
+				Limit: 1,
+			}))
+			require.Equal(t, 1, len(list.Items))
+			assert.Equal(t, "stg", list.Items[0].ApiKeyTag)
+		})
+
+		t.Run("UpdateClearsAPIKeyTag", func(t *testing.T) {
+			d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+			defer func() {
+				d.Shutdown(t)
+				tearDown()
+			}()
+
+			nsName := random.String("ns-", 10)
+			require.NoError(t, c.NamespacesCreate(ctx, &pb.NamespaceInfo{
+				Name:      nsName,
+				ApiKeyTag: "prod",
+			}))
+
+			require.NoError(t, c.NamespacesUpdate(ctx, &pb.NamespaceInfo{
+				Name: nsName,
+			}))
+
+			var list pb.NamespacesListResponse
+			require.NoError(t, c.NamespacesList(ctx, &list, &querator.ListOptions{
+				Pivot: nsName,
+				Limit: 1,
+			}))
+			require.Equal(t, 1, len(list.Items))
+			assert.Empty(t, list.Items[0].ApiKeyTag)
+		})
+
+		t.Run("UpdateNonExistentNamespace", func(t *testing.T) {
+			d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+			defer func() {
+				d.Shutdown(t)
+				tearDown()
+			}()
+
+			err := c.NamespacesUpdate(ctx, &pb.NamespaceInfo{
+				Name:      "nonexistent-ns-" + random.String("", 5),
+				ApiKeyTag: "stg",
+			})
+			require.Error(t, err)
+			var e duh.Error
+			require.ErrorAs(t, err, &e)
+			assert.Contains(t, e.Message(), "namespace does not exist")
+			assert.Equal(t, duh.CodeRequestFailed, e.Code())
+		})
+
+		t.Run("UpdateReservedNamespace", func(t *testing.T) {
+			d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+			defer func() {
+				d.Shutdown(t)
+				tearDown()
+			}()
+
+			err := c.NamespacesUpdate(ctx, &pb.NamespaceInfo{
+				Name:      "_system",
+				ApiKeyTag: "stg",
+			})
+			require.Error(t, err)
+			var e duh.Error
+			require.ErrorAs(t, err, &e)
+			assert.Contains(t, e.Message(), "namespace name is reserved")
+			assert.Equal(t, duh.CodeBadRequest, e.Code())
+		})
 	})
 }

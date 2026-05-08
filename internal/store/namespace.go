@@ -20,6 +20,10 @@ type Namespaces interface {
 	// List returns a list of namespaces with pagination support.
 	List(ctx context.Context, namespaces *[]types.Namespace, opts types.ListOptions) error
 
+	// Update updates a Namespace. Returns ErrNamespaceNotExist if the
+	// namespace does not exist.
+	Update(ctx context.Context, ns types.Namespace) error
+
 	// Delete deletes a namespace. Returns ErrNamespaceNotExist if the namespace does not exist.
 	Delete(ctx context.Context, name string) error
 

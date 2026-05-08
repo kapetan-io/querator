@@ -501,6 +501,24 @@ func (c *Client) NamespacesCreate(ctx context.Context, req *pb.NamespaceInfo) er
 	return c.client.Do(r, &res)
 }
 
+func (c *Client) NamespacesUpdate(ctx context.Context, req *pb.NamespaceInfo) error {
+	payload, err := proto.Marshal(req)
+	if err != nil {
+		return duh.NewClientError("while marshaling request payload: %w", err, nil)
+	}
+
+	r, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("%s%s", c.conf.Endpoint, transport.RPCNamespacesUpdate), bytes.NewReader(payload))
+	if err != nil {
+		return duh.NewClientError("", err, nil)
+	}
+
+	r.Header.Set("Content-Type", duh.ContentTypeProtoBuf)
+	c.setAuthHeader(r)
+	var res v1.Reply
+	return c.client.Do(r, &res)
+}
+
 func (c *Client) NamespacesList(ctx context.Context, res *pb.NamespacesListResponse, opts *ListOptions) error {
 	var req pb.NamespacesListRequest
 	if opts != nil {

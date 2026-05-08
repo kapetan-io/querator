@@ -850,6 +850,18 @@ func (s *MemoryNamespaces) Add(_ context.Context, ns types.Namespace) error {
 	return nil
 }
 
+func (s *MemoryNamespaces) Update(_ context.Context, ns types.Namespace) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	idx, ok := s.findNamespace(ns.Name)
+	if !ok {
+		return types.ErrNamespaceNotExist(ns.Name)
+	}
+	s.mem[idx] = ns
+	return nil
+}
+
 func (s *MemoryNamespaces) List(_ context.Context, namespaces *[]types.Namespace, opts types.ListOptions) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

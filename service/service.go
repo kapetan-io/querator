@@ -724,6 +724,27 @@ func (s *Service) NamespacesCreate(ctx context.Context, req *proto.NamespaceInfo
 	return nil
 }
 
+func (s *Service) NamespacesUpdate(ctx context.Context, req *proto.NamespaceInfo) error {
+	var ns types.Namespace
+
+	if err := s.validateNamespaceProto(req, &ns); err != nil {
+		return err
+	}
+
+	if err := s.authorize(ctx, auth.SystemNamespace, auth.NamespaceUpdate); err != nil {
+		return err
+	}
+
+	if ns.IsReserved() {
+		return types.ErrNamespaceReserved(ns.Name)
+	}
+
+	if err := s.conf.StorageConfig.Namespaces.Update(ctx, ns); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (s *Service) NamespacesList(ctx context.Context, req *proto.NamespacesListRequest,
 	resp *proto.NamespacesListResponse) error {
 
@@ -896,13 +917,22 @@ func (s *Service) APIKeysCreate(ctx context.Context, req *proto.APIKeyCreateRequ
 		return err
 	}
 
-	// Generate the API key
-	envTag := req.KeyTag
-	if envTag == "" {
-		envTag = "qtr"
+	// Resolve the tag using the three-level cascade:
+	// 1. Use req.KeyTag if provided
+	// 2. Else use the namespace APIKeyTag if NamespaceScope is set
+	// 3. Else fall back to "live"
+	resolvedTag := req.KeyTag
+	if resolvedTag == "" && key.NamespaceScope != nil {
+		var ns types.Namespace
+		if err := s.conf.StorageConfig.Namespaces.Get(ctx, *key.NamespaceScope, &ns); err == nil {
+			resolvedTag = ns.APIKeyTag
+		}
+	}
+	if resolvedTag == "" {
+		resolvedTag = "live"
 	}
 
-	generated, err := auth.GenerateAPIKey(envTag)
+	generated, err := auth.GenerateAPIKey(resolvedTag)
 	if err != nil {
 		s.conf.Log.Error("failed to generate api key", "error", err)
 		return reply.NewRequestFailed("failed to generate api key")

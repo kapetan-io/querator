@@ -93,7 +93,7 @@ func ValidateAPIKeyFormat(key string) error {
 		return fmt.Errorf("invalid api key format; tag must be at most 16 characters")
 	}
 	for _, c := range tag {
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z')) {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'z') {
 			return fmt.Errorf("invalid api key format; tag must be lowercase alphanumeric only")
 		}
 	}

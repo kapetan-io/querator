@@ -197,7 +197,6 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Authenticate the request
 	ctx, err := h.authenticate(ctx, r)
 	if err != nil {
 		h.ReplyError(w, r, err)
@@ -315,7 +314,6 @@ func (h *HTTPHandler) QueueProduce(ctx context.Context, w http.ResponseWriter, r
 		return
 	}
 
-	// Get queue namespace for authorization
 	ns, err := h.service.GetQueueNamespace(ctx, req.QueueName)
 	if err != nil {
 		h.ReplyError(w, r, err)
@@ -340,7 +338,6 @@ func (h *HTTPHandler) QueueLease(ctx context.Context, w http.ResponseWriter, r *
 		return
 	}
 
-	// Get queue namespace for authorization
 	ns, err := h.service.GetQueueNamespace(ctx, req.QueueName)
 	if err != nil {
 		h.ReplyError(w, r, err)
@@ -366,7 +363,6 @@ func (h *HTTPHandler) QueueComplete(ctx context.Context, w http.ResponseWriter, 
 		return
 	}
 
-	// Get queue namespace for authorization
 	ns, err := h.service.GetQueueNamespace(ctx, req.QueueName)
 	if err != nil {
 		h.ReplyError(w, r, err)
@@ -391,7 +387,6 @@ func (h *HTTPHandler) QueueRetry(ctx context.Context, w http.ResponseWriter, r *
 		return
 	}
 
-	// Get queue namespace for authorization
 	ns, err := h.service.GetQueueNamespace(ctx, req.QueueName)
 	if err != nil {
 		h.ReplyError(w, r, err)
@@ -420,7 +415,6 @@ func (h *HTTPHandler) QueuesCreate(ctx context.Context, w http.ResponseWriter, r
 		return
 	}
 
-	// Authorize against the namespace from the request
 	ns := req.Namespace
 	if ns == "" {
 		ns = auth.SystemNamespace
@@ -444,7 +438,6 @@ func (h *HTTPHandler) QueuesList(ctx context.Context, w http.ResponseWriter, r *
 		return
 	}
 
-	// QueuesList requires system-level permission
 	if err := h.authorize(ctx, auth.SystemNamespace, auth.QueueList); err != nil {
 		h.ReplyError(w, r, err)
 		return
@@ -494,7 +487,6 @@ func (h *HTTPHandler) QueuesInfo(ctx context.Context, w http.ResponseWriter, r *
 		return
 	}
 
-	// Get queue namespace for authorization
 	ns, err := h.service.GetQueueNamespace(ctx, req.QueueName)
 	if err != nil {
 		h.ReplyError(w, r, err)
@@ -520,7 +512,6 @@ func (h *HTTPHandler) QueueStats(ctx context.Context, w http.ResponseWriter, r *
 		return
 	}
 
-	// Get queue namespace for authorization
 	ns, err := h.service.GetQueueNamespace(ctx, req.QueueName)
 	if err != nil {
 		h.ReplyError(w, r, err)
@@ -546,7 +537,6 @@ func (h *HTTPHandler) QueueClear(ctx context.Context, w http.ResponseWriter, r *
 		return
 	}
 
-	// Get queue namespace for authorization
 	ns, err := h.service.GetQueueNamespace(ctx, req.QueueName)
 	if err != nil {
 		h.ReplyError(w, r, err)
@@ -571,7 +561,6 @@ func (h *HTTPHandler) QueueReload(ctx context.Context, w http.ResponseWriter, r 
 		return
 	}
 
-	// Get queue namespace for authorization
 	ns, err := h.service.GetQueueNamespace(ctx, req.QueueName)
 	if err != nil {
 		h.ReplyError(w, r, err)
@@ -596,7 +585,6 @@ func (h *HTTPHandler) StorageItemsList(ctx context.Context, w http.ResponseWrite
 		return
 	}
 
-	// Get queue namespace for authorization
 	ns, err := h.service.GetQueueNamespace(ctx, req.QueueName)
 	if err != nil {
 		h.ReplyError(w, r, err)
@@ -622,7 +610,6 @@ func (h *HTTPHandler) StorageScheduledList(ctx context.Context, w http.ResponseW
 		return
 	}
 
-	// Get queue namespace for authorization
 	ns, err := h.service.GetQueueNamespace(ctx, req.QueueName)
 	if err != nil {
 		h.ReplyError(w, r, err)
@@ -648,7 +635,6 @@ func (h *HTTPHandler) StorageItemsImport(ctx context.Context, w http.ResponseWri
 		return
 	}
 
-	// Get queue namespace for authorization
 	ns, err := h.service.GetQueueNamespace(ctx, req.QueueName)
 	if err != nil {
 		h.ReplyError(w, r, err)
@@ -674,7 +660,6 @@ func (h *HTTPHandler) StorageItemsDelete(ctx context.Context, w http.ResponseWri
 		return
 	}
 
-	// Get queue namespace for authorization
 	ns, err := h.service.GetQueueNamespace(ctx, req.QueueName)
 	if err != nil {
 		h.ReplyError(w, r, err)
@@ -751,7 +736,6 @@ func (h *HTTPHandler) NamespacesCreate(ctx context.Context, w http.ResponseWrite
 		return
 	}
 
-	// Namespace operations require system-level permission
 	if err := h.authorize(ctx, auth.SystemNamespace, auth.NamespaceCreate); err != nil {
 		h.ReplyError(w, r, err)
 		return
@@ -771,7 +755,6 @@ func (h *HTTPHandler) NamespacesList(ctx context.Context, w http.ResponseWriter,
 		return
 	}
 
-	// Namespace operations require system-level permission
 	if err := h.authorize(ctx, auth.SystemNamespace, auth.NamespaceList); err != nil {
 		h.ReplyError(w, r, err)
 		return
@@ -792,7 +775,6 @@ func (h *HTTPHandler) NamespacesDelete(ctx context.Context, w http.ResponseWrite
 		return
 	}
 
-	// Namespace operations require system-level permission
 	if err := h.authorize(ctx, auth.SystemNamespace, auth.NamespaceDelete); err != nil {
 		h.ReplyError(w, r, err)
 		return
@@ -948,7 +930,6 @@ func (h *HTTPHandler) RolesCreate(ctx context.Context, w http.ResponseWriter, r 
 		return
 	}
 
-	// Role operations are scoped to the namespace in the request
 	if err := h.authorize(ctx, req.Namespace, auth.RoleCreate); err != nil {
 		h.ReplyError(w, r, err)
 		return
@@ -969,7 +950,6 @@ func (h *HTTPHandler) RolesList(ctx context.Context, w http.ResponseWriter, r *h
 		return
 	}
 
-	// Role operations are scoped to the namespace in the request
 	if err := h.authorize(ctx, req.Namespace, auth.RoleList); err != nil {
 		h.ReplyError(w, r, err)
 		return
@@ -990,7 +970,6 @@ func (h *HTTPHandler) RolesUpdate(ctx context.Context, w http.ResponseWriter, r 
 		return
 	}
 
-	// Role operations are scoped to the namespace in the request
 	if err := h.authorize(ctx, req.Namespace, auth.RoleUpdate); err != nil {
 		h.ReplyError(w, r, err)
 		return
@@ -1010,7 +989,6 @@ func (h *HTTPHandler) RolesDelete(ctx context.Context, w http.ResponseWriter, r 
 		return
 	}
 
-	// Role operations are scoped to the namespace in the request
 	if err := h.authorize(ctx, req.Namespace, auth.RoleDelete); err != nil {
 		h.ReplyError(w, r, err)
 		return
@@ -1034,7 +1012,6 @@ func (h *HTTPHandler) RoleBindingsCreate(ctx context.Context, w http.ResponseWri
 		return
 	}
 
-	// Role binding operations are scoped to the namespace in the request
 	if err := h.authorize(ctx, req.Namespace, auth.RoleBindingCreate); err != nil {
 		h.ReplyError(w, r, err)
 		return
@@ -1055,7 +1032,6 @@ func (h *HTTPHandler) RoleBindingsList(ctx context.Context, w http.ResponseWrite
 		return
 	}
 
-	// Role binding operations are scoped to the namespace in the request
 	if err := h.authorize(ctx, req.Namespace, auth.RoleBindingList); err != nil {
 		h.ReplyError(w, r, err)
 		return
@@ -1076,7 +1052,6 @@ func (h *HTTPHandler) RoleBindingsDelete(ctx context.Context, w http.ResponseWri
 		return
 	}
 
-	// Role binding operations are scoped to the namespace in the request
 	if err := h.authorize(ctx, req.Namespace, auth.RoleBindingDelete); err != nil {
 		h.ReplyError(w, r, err)
 		return

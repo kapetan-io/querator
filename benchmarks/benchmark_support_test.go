@@ -238,9 +238,9 @@ func GenerateSummary(results []BenchmarkMetrics) string {
 		}
 	}
 
-	buf.WriteString(fmt.Sprintf("**Maximum Throughput**: %.2f ops/sec (%s)\n", maxThroughput, maxThroughputOp))
-	buf.WriteString(fmt.Sprintf("**Slowest Operation (P99)**: %.2f ms (%s)\n", float64(slowestLatency)/1e6, slowestOp))
-	buf.WriteString(fmt.Sprintf("**Total Benchmarks**: %d\n\n", len(results)))
+	fmt.Fprintf(&buf, "**Maximum Throughput**: %.2f ops/sec (%s)\n", maxThroughput, maxThroughputOp)
+	fmt.Fprintf(&buf, "**Slowest Operation (P99)**: %.2f ms (%s)\n", float64(slowestLatency)/1e6, slowestOp)
+	fmt.Fprintf(&buf, "**Total Benchmarks**: %d\n\n", len(results))
 
 	concurrencyScaling := make(map[int]float64)
 	for _, r := range results {
@@ -254,7 +254,7 @@ func GenerateSummary(results []BenchmarkMetrics) string {
 		buf.WriteString("## Concurrency Scaling (Produce, 1KB payload, batch=10)\n")
 		for c := 1; c <= 10; c++ {
 			if ops, ok := concurrencyScaling[c]; ok {
-				buf.WriteString(fmt.Sprintf("- Concurrency %d: %.2f ops/sec\n", c, ops))
+				fmt.Fprintf(&buf, "- Concurrency %d: %.2f ops/sec\n", c, ops)
 			}
 		}
 		buf.WriteString("\n")

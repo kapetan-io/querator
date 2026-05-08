@@ -1996,12 +1996,6 @@ func (b *BadgerAPIKeys) List(_ context.Context, keys *[]types.APIKey, opts types
 		}
 
 		for ; iter.ValidForPrefix(prefix); iter.Next() {
-			key := iter.Item().Key()
-			// Skip index keys
-			if bytes.HasPrefix(key, []byte("apikey-hash:")) || bytes.HasPrefix(key, []byte("apikey-user:")) {
-				continue
-			}
-
 			var v []byte
 			v, err := iter.Item().ValueCopy(v)
 			if err != nil {
@@ -2479,12 +2473,6 @@ func (b *BadgerRoles) List(_ context.Context, namespace string, roles *[]types.R
 		}
 
 		for ; iter.ValidForPrefix(prefix); iter.Next() {
-			key := iter.Item().Key()
-			// Skip index keys
-			if bytes.HasPrefix(key, []byte("role-ns-name:")) {
-				continue
-			}
-
 			var v []byte
 			v, err := iter.Item().ValueCopy(v)
 			if err != nil {
@@ -2777,14 +2765,6 @@ func (b *BadgerRoleBindings) List(_ context.Context, namespace string, bindings 
 		}
 
 		for ; iter.ValidForPrefix(prefix); iter.Next() {
-			key := iter.Item().Key()
-			// Skip index keys
-			if bytes.HasPrefix(key, []byte("rolebinding-unique:")) ||
-				bytes.HasPrefix(key, []byte("rolebinding-user:")) ||
-				bytes.HasPrefix(key, []byte("rolebinding-role:")) {
-				continue
-			}
-
 			var v []byte
 			v, err := iter.Item().ValueCopy(v)
 			if err != nil {

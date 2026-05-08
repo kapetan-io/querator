@@ -22,8 +22,6 @@ type AuthBackendConfig struct {
 // AuthBackend implements auth.AuthBackend using storage backends
 type AuthBackend struct {
 	roleBindings store.RoleBindings
-	apiKeys      store.APIKeys
-	users        store.Users
 	roles        store.Roles
 	cache        *AuthCache
 	log          *slog.Logger
@@ -37,8 +35,6 @@ func NewAuthBackend(conf AuthBackendConfig) *AuthBackend {
 
 	return &AuthBackend{
 		roleBindings: conf.RoleBindings,
-		apiKeys:      conf.APIKeys,
-		users:        conf.Users,
 		roles:        conf.Roles,
 		log:          conf.Log,
 		cache: NewAuthCache(AuthCacheConfig{

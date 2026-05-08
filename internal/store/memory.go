@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"iter"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -1001,19 +1002,11 @@ func (m *MemoryUsers) List(_ context.Context, users *[]types.User, opts types.Li
 		pastPivot = true
 	}
 
-	// Collect and sort IDs for deterministic ordering
 	ids := make([]string, 0, len(m.users))
 	for id := range m.users {
 		ids = append(ids, id)
 	}
-	// Sort by ID
-	for i := 0; i < len(ids)-1; i++ {
-		for j := i + 1; j < len(ids); j++ {
-			if strings.Compare(ids[i], ids[j]) > 0 {
-				ids[i], ids[j] = ids[j], ids[i]
-			}
-		}
-	}
+	sort.Strings(ids)
 
 	for _, id := range ids {
 		if count >= opts.Limit {
@@ -1159,19 +1152,11 @@ func (m *MemoryAPIKeys) List(_ context.Context, keys *[]types.APIKey, opts types
 		pastPivot = true
 	}
 
-	// Collect and sort IDs for deterministic ordering
 	ids := make([]string, 0, len(m.keys))
 	for id := range m.keys {
 		ids = append(ids, id)
 	}
-	// Sort by ID
-	for i := 0; i < len(ids)-1; i++ {
-		for j := i + 1; j < len(ids); j++ {
-			if strings.Compare(ids[i], ids[j]) > 0 {
-				ids[i], ids[j] = ids[j], ids[i]
-			}
-		}
-	}
+	sort.Strings(ids)
 
 	for _, id := range ids {
 		if count >= opts.Limit {
@@ -1208,16 +1193,9 @@ func (m *MemoryAPIKeys) ListByUser(_ context.Context, userID string, keys *[]typ
 		pastPivot = true
 	}
 
-	// Sort IDs for deterministic ordering
 	sortedIDs := make([]string, len(ids))
 	copy(sortedIDs, ids)
-	for i := 0; i < len(sortedIDs)-1; i++ {
-		for j := i + 1; j < len(sortedIDs); j++ {
-			if strings.Compare(sortedIDs[i], sortedIDs[j]) > 0 {
-				sortedIDs[i], sortedIDs[j] = sortedIDs[j], sortedIDs[i]
-			}
-		}
-	}
+	sort.Strings(sortedIDs)
 
 	for _, id := range sortedIDs {
 		if count >= opts.Limit {
@@ -1426,7 +1404,6 @@ func (m *MemoryRoles) List(_ context.Context, namespace string, roles *[]types.R
 		pastPivot = true
 	}
 
-	// Collect and sort IDs for deterministic ordering
 	ids := make([]string, 0, len(m.roles))
 	for id, role := range m.roles {
 		if namespace != "" && role.Namespace != namespace {
@@ -1434,14 +1411,7 @@ func (m *MemoryRoles) List(_ context.Context, namespace string, roles *[]types.R
 		}
 		ids = append(ids, id)
 	}
-	// Sort by ID
-	for i := 0; i < len(ids)-1; i++ {
-		for j := i + 1; j < len(ids); j++ {
-			if strings.Compare(ids[i], ids[j]) > 0 {
-				ids[i], ids[j] = ids[j], ids[i]
-			}
-		}
-	}
+	sort.Strings(ids)
 
 	for _, id := range ids {
 		if count >= opts.Limit {
@@ -1580,7 +1550,6 @@ func (m *MemoryRoleBindings) List(_ context.Context, namespace string, bindings 
 		pastPivot = true
 	}
 
-	// Collect and sort IDs for deterministic ordering
 	ids := make([]string, 0, len(m.bindings))
 	for id, binding := range m.bindings {
 		if namespace != "" && binding.Namespace != namespace {
@@ -1588,14 +1557,7 @@ func (m *MemoryRoleBindings) List(_ context.Context, namespace string, bindings 
 		}
 		ids = append(ids, id)
 	}
-	// Sort by ID
-	for i := 0; i < len(ids)-1; i++ {
-		for j := i + 1; j < len(ids); j++ {
-			if strings.Compare(ids[i], ids[j]) > 0 {
-				ids[i], ids[j] = ids[j], ids[i]
-			}
-		}
-	}
+	sort.Strings(ids)
 
 	for _, id := range ids {
 		if count >= opts.Limit {

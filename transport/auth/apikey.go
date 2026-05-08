@@ -79,5 +79,10 @@ func ValidateAPIKeyFormat(key string) error {
 		return fmt.Errorf("invalid api key format; secret cannot be empty")
 	}
 
+	// Secret is hex.EncodeToString(32 random bytes) = 64 characters minimum
+	if len(parts[2]) < 64 {
+		return fmt.Errorf("invalid api key format; secret must be at least 64 characters")
+	}
+
 	return nil
 }

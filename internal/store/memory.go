@@ -715,6 +715,9 @@ func (s *MemoryQueues) List(_ context.Context, queues *[]types.QueueInfo, opts t
 		if count >= opts.Limit {
 			return nil
 		}
+		if opts.Namespace != "" && info.Namespace != opts.Namespace {
+			continue
+		}
 		*queues = append(*queues, info)
 		count++
 	}
@@ -1314,7 +1317,7 @@ func (m *MemoryRoles) Get(_ context.Context, namespace, name string, role *types
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	key := namespace + ":" + name
+	key := namespace + "\x00" + name
 	id, ok := m.byNamespaceName[key]
 	if !ok {
 		return types.ErrRoleNotExist(namespace + ":" + name)
@@ -1360,7 +1363,7 @@ func (m *MemoryRoles) Add(_ context.Context, role types.Role) error {
 		return reply.NewInvalidOption("role namespace is invalid; cannot be empty")
 	}
 
-	key := role.Namespace + ":" + role.Name
+	key := role.Namespace + "\x00" + role.Name
 	if _, ok := m.byNamespaceName[key]; ok {
 		return types.ErrRoleAlreadyExists(role.Namespace, role.Name)
 	}
@@ -1445,7 +1448,7 @@ func (m *MemoryRoles) Delete(_ context.Context, id string) error {
 		return types.ErrRoleNotExist(id)
 	}
 
-	key := role.Namespace + ":" + role.Name
+	key := role.Namespace + "\x00" + role.Name
 	delete(m.byNamespaceName, key)
 	delete(m.roles, id)
 	return nil
@@ -1465,7 +1468,7 @@ func (m *MemoryRoles) Close(_ context.Context) error {
 // ---------------------------------------------
 
 type MemoryRoleBindings struct {
-	byUserNamespaceRole map[string]string   // "userID:namespace:roleID" -> ID (for uniqueness)
+	byUserNamespaceRole map[string]string   // "userID\x00namespace\x00roleID" -> ID (for uniqueness)
 	byUser              map[string][]string // userID -> []binding IDs
 	byRole              map[string][]string // roleID -> []binding IDs
 	bindings            map[string]types.RoleBinding
@@ -1523,7 +1526,7 @@ func (m *MemoryRoleBindings) Add(_ context.Context, binding types.RoleBinding) e
 	}
 
 	// Check for duplicate (same user, namespace, role combination)
-	uniqueKey := binding.UserID + ":" + binding.Namespace + ":" + binding.RoleID
+	uniqueKey := binding.UserID + "\x00" + binding.Namespace + "\x00" + binding.RoleID
 	if _, ok := m.byUserNamespaceRole[uniqueKey]; ok {
 		return types.ErrRoleBindingAlreadyExists(binding.Namespace, binding.UserID, binding.RoleID)
 	}
@@ -1626,7 +1629,7 @@ func (m *MemoryRoleBindings) Delete(_ context.Context, id string) error {
 	}
 
 	// Remove from uniqueness index
-	uniqueKey := binding.UserID + ":" + binding.Namespace + ":" + binding.RoleID
+	uniqueKey := binding.UserID + "\x00" + binding.Namespace + "\x00" + binding.RoleID
 	delete(m.byUserNamespaceRole, uniqueKey)
 	delete(m.bindings, id)
 
@@ -1663,7 +1666,7 @@ func (m *MemoryRoleBindings) DeleteByUser(_ context.Context, userID string) erro
 	for _, id := range ids {
 		if binding, ok := m.bindings[id]; ok {
 			// Remove from uniqueness index
-			uniqueKey := binding.UserID + ":" + binding.Namespace + ":" + binding.RoleID
+			uniqueKey := binding.UserID + "\x00" + binding.Namespace + "\x00" + binding.RoleID
 			delete(m.byUserNamespaceRole, uniqueKey)
 			delete(m.bindings, id)
 

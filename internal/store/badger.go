@@ -1249,6 +1249,9 @@ func (b *BadgerQueues) List(_ context.Context, queues *[]types.QueueInfo, opts t
 			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(&info); err != nil {
 				return errors.Errorf("during Decode(): %w", err)
 			}
+			if opts.Namespace != "" && info.Namespace != opts.Namespace {
+				continue
+			}
 			*queues = append(*queues, info)
 			count++
 

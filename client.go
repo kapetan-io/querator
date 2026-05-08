@@ -32,8 +32,9 @@ const (
 )
 
 type ListOptions struct {
-	Pivot string
-	Limit int
+	Pivot     string
+	Limit     int
+	Namespace string
 }
 
 type ClientConfig struct {
@@ -213,6 +214,7 @@ func (c *Client) QueuesList(ctx context.Context, res *pb.QueuesListResponse, opt
 	if opts != nil {
 		req.Limit = int32(opts.Limit)
 		req.Pivot = opts.Pivot
+		req.Namespace = opts.Namespace
 	}
 
 	payload, err := proto.Marshal(&req)

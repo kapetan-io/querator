@@ -2,6 +2,7 @@ package service_test
 
 import (
 	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/duh-rpc/duh-go"
@@ -705,6 +706,76 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 				var duhErr duh.Error
 				require.ErrorAs(t, err, &duhErr)
 				assert.Contains(t, duhErr.Message(), "role binding does not exist")
+			})
+
+			// ConcurrentDelete verifies the TOCTOU race in RoleBindingsDelete: two goroutines
+			// both deleting the same binding. The service does fetch→list→delete non-atomically,
+			// so the second caller may receive ErrRoleBindingNotExist even though the end state
+			// (binding removed) is correct. This test documents that the current implementation
+			// is not idempotent for concurrent deletes.
+			t.Run("ConcurrentDelete", func(t *testing.T) {
+				d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
+				defer d.Shutdown(t)
+
+				ns := random.String("ns-", 10)
+				err := c.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: ns})
+				require.NoError(t, err)
+
+				var userRes pb.UserCreateResponse
+				err = c.UsersCreate(ctx, &pb.UserCreateRequest{
+					Username: "concurrent-del-user-" + random.String("", 5),
+				}, &userRes)
+				require.NoError(t, err)
+
+				roleName := "concurrent-del-role-" + random.String("", 5)
+				var roleRes pb.RoleCreateResponse
+				err = c.RolesCreate(ctx, &pb.RoleCreateRequest{
+					Permissions: []string{auth.QueueList},
+					Namespace:   ns,
+					Name:        roleName,
+				}, &roleRes)
+				require.NoError(t, err)
+
+				var bindingRes pb.RoleBindingCreateResponse
+				err = c.RoleBindingsCreate(ctx, &pb.RoleBindingCreateRequest{
+					Namespace: ns,
+					RoleName:  roleName,
+					UserId:    userRes.Id,
+				}, &bindingRes)
+				require.NoError(t, err)
+
+				// Two goroutines both attempt to delete the same binding concurrently.
+				// One succeeds; the other may receive ErrRoleBindingNotExist due to the
+				// non-atomic fetch→list→delete in RoleBindingsDelete.
+				var wg sync.WaitGroup
+				wg.Add(2)
+				errs := make([]error, 2)
+				for i := range 2 {
+					go func(idx int) {
+						defer wg.Done()
+						errs[idx] = c.RoleBindingsDelete(ctx, &pb.RoleBindingDeleteRequest{
+							Namespace: ns,
+							RoleName:  roleName,
+							UserId:    userRes.Id,
+						})
+					}(i)
+				}
+				wg.Wait()
+
+				// The binding must be gone regardless of which goroutine "won"
+				var listRes pb.RoleBindingsListResponse
+				err = c.RoleBindingsList(ctx, ns, &listRes, nil)
+				require.NoError(t, err)
+				assert.Empty(t, listRes.Items)
+
+				// At least one call must have succeeded
+				successCount := 0
+				for _, e := range errs {
+					if e == nil {
+						successCount++
+					}
+				}
+				assert.GreaterOrEqual(t, successCount, 1)
 			})
 		})
 	})

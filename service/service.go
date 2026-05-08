@@ -363,6 +363,14 @@ func (s *Service) QueuesCreate(ctx context.Context, req *proto.QueueInfo) error 
 		return err
 	}
 
+	// Verify the namespace exists
+	if s.conf.StorageConfig.Namespaces != nil {
+		var namespace types.Namespace
+		if err := s.conf.StorageConfig.Namespaces.Get(ctx, ns, &namespace); err != nil {
+			return err
+		}
+	}
+
 	_, err := s.queues.Create(ctx, info)
 	if err != nil {
 		return err
@@ -374,7 +382,11 @@ func (s *Service) QueuesCreate(ctx context.Context, req *proto.QueueInfo) error 
 func (s *Service) QueuesList(ctx context.Context, req *proto.QueuesListRequest,
 	resp *proto.QueuesListResponse) error {
 
-	if err := s.authorize(ctx, auth.SystemNamespace, auth.QueueList); err != nil {
+	ns := req.Namespace
+	if ns == "" {
+		ns = auth.SystemNamespace
+	}
+	if err := s.authorize(ctx, ns, auth.QueueList); err != nil {
 		return err
 	}
 
@@ -384,8 +396,9 @@ func (s *Service) QueuesList(ctx context.Context, req *proto.QueuesListRequest,
 
 	items := make([]types.QueueInfo, 0, allocInt32(req.Limit))
 	if err := s.queues.List(ctx, &items, types.ListOptions{
-		Pivot: types.ToItemID(req.Pivot),
-		Limit: int(req.Limit),
+		Pivot:     types.ToItemID(req.Pivot),
+		Limit:     int(req.Limit),
+		Namespace: req.Namespace,
 	}); err != nil {
 		return err
 	}
@@ -741,6 +754,12 @@ func (s *Service) NamespacesDelete(ctx context.Context, req *proto.NamespacesDel
 		return err
 	}
 
+	// Check for reserved namespace prefix
+	ns := types.Namespace{Name: req.Name}
+	if ns.IsReserved() {
+		return types.ErrNamespaceReserved(req.Name)
+	}
+
 	// Check for child role bindings (check before roles so users get actionable errors:
 	// delete bindings first, then roles, then namespace)
 	var bindings []types.RoleBinding
@@ -762,13 +781,11 @@ func (s *Service) NamespacesDelete(ctx context.Context, req *proto.NamespacesDel
 
 	// Check for child queues
 	var queues []types.QueueInfo
-	if err := s.conf.StorageConfig.Queues.List(ctx, &queues, types.ListOptions{Limit: maxAllocation}); err != nil {
+	if err := s.conf.StorageConfig.Queues.List(ctx, &queues, types.ListOptions{Limit: 1, Namespace: req.Name}); err != nil {
 		return err
 	}
-	for _, q := range queues {
-		if q.Namespace == req.Name {
-			return types.ErrNamespaceHasQueues(req.Name)
-		}
+	if len(queues) > 0 {
+		return types.ErrNamespaceHasQueues(req.Name)
 	}
 
 	if err := s.conf.StorageConfig.Namespaces.Delete(ctx, req.Name); err != nil {
@@ -1188,18 +1205,22 @@ func (s *Service) RoleBindingsDelete(ctx context.Context, req *proto.RoleBinding
 // Bootstrap idempotently creates the _system namespace, anonymous user, standard roles,
 // and anonymous->Admin role binding. Safe to call on every startup.
 func (s *Service) Bootstrap(ctx context.Context) error {
-	// Skip bootstrap when auth is disabled (NoOp) or auth storage backends are not configured
+	// Always ensure the _system namespace exists when namespace storage is configured
+	if s.conf.StorageConfig.Namespaces != nil {
+		if err := s.bootstrapSystemNamespace(ctx); err != nil {
+			return err
+		}
+	}
+
+	// Skip auth bootstrapping when auth is disabled (NoOp) or auth storage backends are not configured
 	if _, ok := s.auth.(*auth.NoOpAuthBackend); ok {
 		return nil
 	}
-	if s.conf.StorageConfig.Namespaces == nil || s.conf.StorageConfig.Users == nil ||
-		s.conf.StorageConfig.Roles == nil || s.conf.StorageConfig.RoleBindings == nil {
+	if s.conf.StorageConfig.Users == nil || s.conf.StorageConfig.Roles == nil ||
+		s.conf.StorageConfig.RoleBindings == nil {
 		return nil
 	}
 
-	if err := s.bootstrapSystemNamespace(ctx); err != nil {
-		return err
-	}
 	if err := s.bootstrapAnonymousUser(ctx); err != nil {
 		return err
 	}

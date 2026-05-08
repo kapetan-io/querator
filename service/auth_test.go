@@ -418,6 +418,90 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 			assert.Equal(t, duh.CodeForbidden, duhErr.Code())
 		})
 
+		t.Run("QueuesListNamespaceScoping", func(t *testing.T) {
+			d, adminKey := newDaemonWithAuth(t, setup)
+			defer d.Shutdown(t)
+
+			ctx := d.Context()
+			adminClient := newClientWithAPIKey(t, d, adminKey)
+
+			// Create two tenant namespaces
+			tenantA := random.String("tenant-a-", 10)
+			tenantB := random.String("tenant-b-", 10)
+			require.NoError(t, adminClient.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: tenantA}))
+			require.NoError(t, adminClient.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: tenantB}))
+
+			// Create queues in each namespace using the admin client
+			require.NoError(t, adminClient.QueuesCreate(ctx, &pb.QueueInfo{
+				Namespace:           tenantA,
+				QueueName:           random.String("q-a-", 10),
+				LeaseTimeout:        LeaseTimeout,
+				ExpireTimeout:       ExpireTimeout,
+				RequestedPartitions: 1,
+			}))
+			require.NoError(t, adminClient.QueuesCreate(ctx, &pb.QueueInfo{
+				Namespace:           tenantB,
+				QueueName:           random.String("q-b-", 10),
+				LeaseTimeout:        LeaseTimeout,
+				ExpireTimeout:       ExpireTimeout,
+				RequestedPartitions: 1,
+			}))
+
+			// Create a tenant-a scoped API key with QueueList permission in tenant-a only
+			tenantAKey := createUserWithNamespacePermissions(t, ctx, adminClient, tenantA, auth.NamespaceOwnerPermissions)
+			tenantAClient := newClientWithAPIKey(t, d, tenantAKey)
+
+			t.Run("SystemAdminNoFilterSeesAllNamespaces", func(t *testing.T) {
+				// System admin with no namespace filter can list across all namespaces
+				var res pb.QueuesListResponse
+				err := adminClient.QueuesList(ctx, &res, nil)
+				require.NoError(t, err)
+				assert.GreaterOrEqual(t, len(res.Items), 2)
+			})
+
+			t.Run("SystemAdminWithNamespaceFilterSeesOnlyThatNamespace", func(t *testing.T) {
+				// System admin with namespace filter only sees queues in that namespace
+				var res pb.QueuesListResponse
+				err := adminClient.QueuesList(ctx, &res, &querator.ListOptions{Namespace: tenantA})
+				require.NoError(t, err)
+				require.NotEmpty(t, res.Items)
+				for _, item := range res.Items {
+					assert.Equal(t, tenantA, item.Namespace)
+				}
+			})
+
+			t.Run("TenantPrincipalCanListOwnNamespace", func(t *testing.T) {
+				// Tenant-a principal with QueueList in tenant-a can list queues in tenant-a
+				var res pb.QueuesListResponse
+				err := tenantAClient.QueuesList(ctx, &res, &querator.ListOptions{Namespace: tenantA})
+				require.NoError(t, err)
+				require.NotEmpty(t, res.Items)
+				for _, item := range res.Items {
+					assert.Equal(t, tenantA, item.Namespace)
+				}
+			})
+
+			t.Run("TenantPrincipalDeniedWithNoNamespaceFilter", func(t *testing.T) {
+				// Tenant-a principal without a namespace filter requires _system access — denied
+				var res pb.QueuesListResponse
+				err := tenantAClient.QueuesList(ctx, &res, nil)
+				require.Error(t, err)
+				var duhErr duh.Error
+				require.ErrorAs(t, err, &duhErr)
+				assert.Equal(t, duh.CodeForbidden, duhErr.Code())
+			})
+
+			t.Run("TenantPrincipalDeniedForOtherNamespace", func(t *testing.T) {
+				// Tenant-a principal is denied when listing queues in tenant-b
+				var res pb.QueuesListResponse
+				err := tenantAClient.QueuesList(ctx, &res, &querator.ListOptions{Namespace: tenantB})
+				require.Error(t, err)
+				var duhErr duh.Error
+				require.ErrorAs(t, err, &duhErr)
+				assert.Equal(t, duh.CodeForbidden, duhErr.Code())
+			})
+		})
+
 		t.Run("SystemNamespaceCascade", func(t *testing.T) {
 			d, adminKey := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)

@@ -135,8 +135,9 @@ type ShutdownRequest struct {
 }
 
 type ListOptions struct {
-	Pivot []byte
-	Limit int
+	Pivot     []byte
+	Limit     int
+	Namespace string
 }
 
 type LogicalStats struct {

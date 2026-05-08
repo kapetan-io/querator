@@ -420,6 +420,9 @@ func (p *PostgresQueues) List(ctx context.Context, queues *[]types.QueueInfo, op
 			}
 		}
 
+		if opts.Namespace != "" && info.Namespace != opts.Namespace {
+			continue
+		}
 		*queues = append(*queues, info)
 	}
 

@@ -192,6 +192,10 @@ func (s *Service) validateNamespaceProto(in *proto.NamespaceInfo, out *types.Nam
 		return reply.NewInvalidOption("namespace name is invalid; '%s' cannot contain '~' character", in.Name)
 	}
 
+	if strings.Contains(in.Name, ":") {
+		return reply.NewInvalidOption("namespace name is invalid; '%s' cannot contain ':' character", in.Name)
+	}
+
 	out.Description = in.Description
 	out.Name = in.Name
 	return nil
@@ -263,6 +267,10 @@ func (s *Service) validateRoleCreateProto(in *proto.RoleCreateRequest, out *type
 
 	if len(in.Name) > maxNameLength {
 		return reply.NewInvalidOption("name is invalid; cannot be greater than '%d' characters", maxNameLength)
+	}
+
+	if strings.Contains(in.Name, ":") {
+		return reply.NewInvalidOption("name is invalid; '%s' cannot contain ':' character", in.Name)
 	}
 
 	for _, perm := range in.Permissions {

@@ -251,6 +251,12 @@ func testNamespaces(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					Msg:  "namespace does not exist",
 					Code: duh.CodeRequestFailed,
 				},
+				{
+					Name: "SystemNamespace",
+					Req:  &pb.NamespacesDeleteRequest{Name: "_system"},
+					Msg:  "namespace name is reserved",
+					Code: duh.CodeBadRequest,
+				},
 			} {
 				t.Run(test.Name, func(t *testing.T) {
 					err := c.NamespacesDelete(ctx, test.Req)
@@ -320,6 +326,83 @@ func testNamespaces(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			var duhErr duh.Error
 			require.ErrorAs(t, err, &duhErr)
 			assert.Contains(t, duhErr.Message(), "namespace has role bindings")
+		})
+	})
+
+	t.Run("Queues", func(t *testing.T) {
+		t.Run("QueuesList", func(t *testing.T) {
+			d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+			defer func() {
+				d.Shutdown(t)
+				tearDown()
+			}()
+
+			ns1 := random.String("ns1-", 10)
+			ns2 := random.String("ns2-", 10)
+			require.NoError(t, c.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: ns1}))
+			require.NoError(t, c.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: ns2}))
+
+			// Create queues in ns1
+			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+				QueueName:           random.String("q-ns1-", 10),
+				Namespace:           ns1,
+				LeaseTimeout:        "1m",
+				ExpireTimeout:       "10m",
+				RequestedPartitions: 1,
+			}))
+			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+				QueueName:           random.String("q-ns1-", 10),
+				Namespace:           ns1,
+				LeaseTimeout:        "1m",
+				ExpireTimeout:       "10m",
+				RequestedPartitions: 1,
+			}))
+
+			// Create a queue in ns2
+			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+				QueueName:           random.String("q-ns2-", 10),
+				Namespace:           ns2,
+				LeaseTimeout:        "1m",
+				ExpireTimeout:       "10m",
+				RequestedPartitions: 1,
+			}))
+
+			// List queues scoped to ns1 — should only return ns1 queues
+			var ns1List pb.QueuesListResponse
+			require.NoError(t, c.QueuesList(ctx, &ns1List, &querator.ListOptions{Namespace: ns1}))
+			require.Len(t, ns1List.Items, 2)
+			for _, item := range ns1List.Items {
+				assert.Equal(t, ns1, item.Namespace)
+			}
+
+			// List queues scoped to ns2 — should only return ns2 queues
+			var ns2List pb.QueuesListResponse
+			require.NoError(t, c.QueuesList(ctx, &ns2List, &querator.ListOptions{Namespace: ns2}))
+			require.Len(t, ns2List.Items, 1)
+			assert.Equal(t, ns2, ns2List.Items[0].Namespace)
+		})
+
+		t.Run("Errors", func(t *testing.T) {
+			t.Run("QueuesCreate", func(t *testing.T) {
+				d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+				defer func() {
+					d.Shutdown(t)
+					tearDown()
+				}()
+
+				// Attempting to create a queue in a namespace that does not exist should fail
+				err := c.QueuesCreate(ctx, &pb.QueueInfo{
+					QueueName:           random.String("q-", 10),
+					Namespace:           "nonexistent-ns-" + random.String("", 5),
+					LeaseTimeout:        "1m",
+					ExpireTimeout:       "10m",
+					RequestedPartitions: 1,
+				})
+				require.Error(t, err)
+				var e duh.Error
+				require.ErrorAs(t, err, &e)
+				assert.Contains(t, e.Message(), "namespace does not exist")
+			})
 		})
 	})
 

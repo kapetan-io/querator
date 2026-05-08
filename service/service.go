@@ -897,7 +897,7 @@ func (s *Service) APIKeysCreate(ctx context.Context, req *proto.APIKeyCreateRequ
 	}
 
 	// Generate the API key
-	envTag := req.EnvTag
+	envTag := req.KeyTag
 	if envTag == "" {
 		envTag = "qtr"
 	}

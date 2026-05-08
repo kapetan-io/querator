@@ -12,6 +12,7 @@ import (
 type Namespace struct {
 	Description string
 	CreatedAt   clock.Time
+	APIKeyTag   string
 	Name        string
 }
 
@@ -24,6 +25,7 @@ func (n *Namespace) IsReserved() bool {
 func (n *Namespace) ToProto(in *pb.NamespaceInfo) *pb.NamespaceInfo {
 	in.Description = n.Description
 	in.CreatedAt = timestamppb.New(n.CreatedAt)
+	in.ApiKeyTag = n.APIKeyTag
 	in.Name = n.Name
 	return in
 }

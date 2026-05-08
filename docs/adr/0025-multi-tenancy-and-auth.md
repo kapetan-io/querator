@@ -27,7 +27,7 @@ We will implement a **Namespace-based Isolation Model** coupled with a **Key-Cen
 - **Deletion Constraints**: To prevent accidental data loss, a namespace **cannot** be deleted if it contains any resources (queues), custom roles, or active role-bindings. These must be explicitly deleted by an administrator before the namespace itself can be removed. API Keys scoped to a deleted namespace become immediately invalid.
 
 ### Authentication (Passwordless API Keys)
-- **Primary Credential**: Long-lived API Keys (`sk-live-...`) are the *only* credential type.
+- **Primary Credential**: Long-lived API Keys (`qtr-live-...`) are the *only* credential type.
 - **No Passwords**: The `User` entity has no password field. This eliminates the need for password hashing complexity (bcrypt), password reset flows, and brute-force protection logic.
 - **Provisioning Model**: 
     - **Bootstrap (Open Door)**: On startup, the `Anonymous` principal is granted `Admin` privileges by default. This allows immediate access for setup and testing. To secure the cluster, the admin must delete the `Anonymous` -> `Admin` role binding. They may optionally bind `Anonymous` to the `PublicViewer` role (read-only health/metrics) if public monitoring is desired.
@@ -39,14 +39,14 @@ We will implement a **Namespace-based Isolation Model** coupled with a **Key-Cen
 
 ### Key Format & Design
 We adopt a **Prefixed Token Format** (inspired by Stripe) to improve security and developer experience.
-- **Format**: `sk-[env]-[entropy]`
-    - `sk` = **Secret Key**. Explicitly identifies the credential as sensitive.
-    - `[env]` = Environment/Tag. **MANDATORY**. Defaults to `live` (e.g., `sk-live-...`). Can be customized (e.g., `sk-ci-...`, `sk-test-...`) for audit clarity.
+- **Format**: `qtr-[tag]-[entropy]`
+    - `qtr` = **Querator**. Fixed prefix; identifies the credential as a Querator API key and provides a stable scanner target.
+    - `[tag]` = Tag. **MANDATORY**. Resolved via a three-level cascade: (1) `req.KeyTag` if supplied by the caller, (2) `namespace.APIKeyTag` if configured on the target namespace, (3) `"live"` as the global default. Can be customized (e.g., `qtr-ci-...`, `qtr-staging-...`) for audit clarity.
     - `[entropy]` = 32+ characters of cryptographically secure random string (Base62).
-    - Example: `sk-live-9d8f7e6a5b4c3d2e1f0a9b8c7d6e5f4a`
-- **Parsing Rules**: The system treats the **entire string** (prefix included) as the authentication token. The `[env]` tag is not parsed for logic; it exists solely for human identification and scanner targeting.
+    - Example: `qtr-live-9d8f7e6a5b4c3d2e1f0a9b8c7d6e5f4a`
+- **Parsing Rules**: The system treats the **entire string** (prefix included) as the authentication token. The `[tag]` segment is not parsed for logic; it exists solely for human identification and scanner targeting.
 - **Rationale**:
-    1.  **Regex Reliability**: Enforcing the 3-part structure allows security scanners to use strict patterns (e.g., `^sk-[a-z0-9]+-[a-zA-Z0-9]{32}$`), eliminating false positives from random variables.
+    1.  **Regex Reliability**: Enforcing the 3-part structure allows security scanners to use strict patterns (e.g., `^qtr-[a-z0-9]+-[a-zA-Z0-9]{32}$`), eliminating false positives from random variables.
     2.  **Visual Safety**: The `live` tag clearly communicates "Production Credential", reducing the risk of accidental usage in test environments.
     3.  **API Consistency**: Using hyphens (`-`) matches the hyphenated naming convention used across the REST-RPC method names.
 

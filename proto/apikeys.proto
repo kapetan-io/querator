@@ -37,7 +37,7 @@ message APIKeyCreateRequest {
   string name = 2;
   string namespace_scope = 3 [json_name = "namespace_scope"];
   google.protobuf.Timestamp expires_at = 4 [json_name = "expires_at"];
-  string env_tag = 5 [json_name = "env_tag"];
+  string key_tag = 5 [json_name = "key_tag"];
 }
 
 message APIKeyCreateResponse {

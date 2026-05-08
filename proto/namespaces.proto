@@ -28,6 +28,8 @@ message NamespaceInfo {
   string description = 2;
   // The date the namespace was created
   google.protobuf.Timestamp createdAt = 3 [json_name = "created_at"];
+  // The tag to embed in API keys created within this namespace
+  string api_key_tag = 4 [json_name = "api_key_tag"];
 }
 
 message NamespacesListRequest {

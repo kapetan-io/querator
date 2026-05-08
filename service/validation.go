@@ -6,6 +6,7 @@ import (
 
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/proto"
+	"github.com/kapetan-io/querator/transport/auth"
 	"github.com/kapetan-io/querator/transport/reply"
 	"github.com/kapetan-io/tackle/clock"
 )
@@ -264,6 +265,12 @@ func (s *Service) validateRoleCreateProto(in *proto.RoleCreateRequest, out *type
 		return reply.NewInvalidOption("name is invalid; cannot be greater than '%d' characters", maxNameLength)
 	}
 
+	for _, perm := range in.Permissions {
+		if !auth.IsValidPermission(perm) {
+			return reply.NewInvalidOption("permission is invalid; '%s' is not a recognized permission", perm)
+		}
+	}
+
 	out.Namespace = in.Namespace
 	out.Name = in.Name
 	out.Permissions = in.Permissions
@@ -277,6 +284,12 @@ func (s *Service) validateRoleUpdateProto(in *proto.RoleUpdateRequest, out *type
 
 	if in.Name == "" {
 		return reply.NewInvalidOption("name is invalid; cannot be empty")
+	}
+
+	for _, perm := range in.Permissions {
+		if !auth.IsValidPermission(perm) {
+			return reply.NewInvalidOption("permission is invalid; '%s' is not a recognized permission", perm)
+		}
 	}
 
 	out.Namespace = in.Namespace

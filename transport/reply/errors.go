@@ -56,11 +56,18 @@ var _ duh.Error = &ErrRequestFailed{}
 
 // ErrInvalidOption is used to indicate an option provided was invalid for some reason
 type ErrInvalidOption struct {
-	msg string
+	msg  string
+	kind string
 }
 
 func NewInvalidOption(msg string, args ...any) *ErrInvalidOption {
 	return &ErrInvalidOption{msg: fmt.Sprintf(msg, args...)}
+}
+
+// NewInvalidOptionKind creates an ErrInvalidOption with a kind tag for precise errors.Is matching.
+// Use when a specific condition needs to be distinguished from other ErrInvalidOption errors.
+func NewInvalidOptionKind(kind, msg string, args ...any) *ErrInvalidOption {
+	return &ErrInvalidOption{kind: kind, msg: fmt.Sprintf(msg, args...)}
 }
 
 func (e *ErrInvalidOption) Error() string {
@@ -68,8 +75,16 @@ func (e *ErrInvalidOption) Error() string {
 }
 
 func (e *ErrInvalidOption) Is(target error) bool {
-	var err *ErrInvalidOption
-	return errors.As(target, &err)
+	var t *ErrInvalidOption
+	if !errors.As(target, &t) {
+		return false
+	}
+	// Empty kind on target matches any ErrInvalidOption (broad match, backward compatible)
+	if t.kind == "" {
+		return true
+	}
+	// Non-empty kind on target requires exact kind match
+	return e.kind == t.kind
 }
 
 func (e *ErrInvalidOption) Code() int {

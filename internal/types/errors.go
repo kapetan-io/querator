@@ -2,6 +2,15 @@ package types
 
 import "github.com/kapetan-io/querator/transport/reply"
 
+// Kind constants for errors that must be sentinel-matched with errors.Is
+const (
+	KindNamespaceAlreadyExists   = "namespace.already_exists"
+	KindUserAlreadyExists        = "user.already_exists"
+	KindUsernameAlreadyTaken     = "user.username_taken"
+	KindRoleAlreadyExists        = "role.already_exists"
+	KindRoleBindingAlreadyExists = "role_binding.already_exists"
+)
+
 // Namespace errors
 
 func ErrNamespaceNotExist(name string) *reply.ErrRequestFailed {
@@ -9,7 +18,7 @@ func ErrNamespaceNotExist(name string) *reply.ErrRequestFailed {
 }
 
 func ErrNamespaceAlreadyExists(name string) *reply.ErrInvalidOption {
-	return reply.NewInvalidOption("namespace already exists; '%s' already exists", name)
+	return reply.NewInvalidOptionKind(KindNamespaceAlreadyExists, "namespace already exists; '%s' already exists", name)
 }
 
 func ErrNamespaceHasQueues(name string) *reply.ErrInvalidOption {
@@ -27,11 +36,11 @@ func ErrUserNotExist(identifier string) *reply.ErrRequestFailed {
 }
 
 func ErrUserAlreadyExists(id string) *reply.ErrInvalidOption {
-	return reply.NewInvalidOption("user already exists; '%s' already exists", id)
+	return reply.NewInvalidOptionKind(KindUserAlreadyExists, "user already exists; '%s' already exists", id)
 }
 
 func ErrUsernameAlreadyTaken(username string) *reply.ErrInvalidOption {
-	return reply.NewInvalidOption("username is already taken; '%s' is already taken", username)
+	return reply.NewInvalidOptionKind(KindUsernameAlreadyTaken, "username is already taken; '%s' is already taken", username)
 }
 
 // API Key errors — kept as static sentinels for security (no details)
@@ -48,11 +57,11 @@ func ErrRoleNotExist(identifier string) *reply.ErrRequestFailed {
 }
 
 func ErrRoleAlreadyExists(namespace, name string) *reply.ErrInvalidOption {
-	return reply.NewInvalidOption("role already exists; '%s:%s' already exists", namespace, name)
+	return reply.NewInvalidOptionKind(KindRoleAlreadyExists, "role already exists; '%s:%s' already exists", namespace, name)
 }
 
 func ErrRoleBindingAlreadyExists(namespace, userID, roleID string) *reply.ErrInvalidOption {
-	return reply.NewInvalidOption("role binding already exists; binding for user '%s' to role '%s' in namespace '%s' already exists", userID, roleID, namespace)
+	return reply.NewInvalidOptionKind(KindRoleBindingAlreadyExists, "role binding already exists; binding for user '%s' to role '%s' in namespace '%s' already exists", userID, roleID, namespace)
 }
 
 func ErrRoleHasBindings(name string) *reply.ErrInvalidOption {

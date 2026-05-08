@@ -9,7 +9,7 @@ type Principal struct {
 
 const (
 	AnonymousUserID   = "anonymous"
-	AnonymousUsername  = "anonymous"
+	AnonymousUsername = "anonymous"
 )
 
 // AnonymousPrincipal represents an unauthenticated user.

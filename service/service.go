@@ -19,6 +19,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -710,7 +711,7 @@ func (s *Service) NamespacesCreate(ctx context.Context, req *proto.NamespaceInfo
 	}
 
 	if ns.IsReserved() {
-		return types.ErrNamespaceReserved(ns.Name)
+		return types.NewErrNamespaceReserved(ns.Name)
 	}
 
 	ns.CreatedAt = s.conf.Clock.Now().UTC()
@@ -733,7 +734,7 @@ func (s *Service) NamespacesUpdate(ctx context.Context, req *proto.NamespaceInfo
 	}
 
 	if ns.IsReserved() {
-		return types.ErrNamespaceReserved(ns.Name)
+		return types.NewErrNamespaceReserved(ns.Name)
 	}
 
 	return s.conf.StorageConfig.Namespaces.Update(ctx, ns)
@@ -775,7 +776,7 @@ func (s *Service) NamespacesDelete(ctx context.Context, req *proto.NamespacesDel
 
 	ns := types.Namespace{Name: req.Name}
 	if ns.IsReserved() {
-		return types.ErrNamespaceReserved(req.Name)
+		return types.NewErrNamespaceReserved(req.Name)
 	}
 
 	// Bindings are checked before roles so users get actionable errors:
@@ -785,7 +786,7 @@ func (s *Service) NamespacesDelete(ctx context.Context, req *proto.NamespacesDel
 		return err
 	}
 	if len(bindings) > 0 {
-		return types.ErrNamespaceHasRoleBindings(req.Name)
+		return types.NewErrNamespaceHasRoleBindings(req.Name)
 	}
 
 	var roles []types.Role
@@ -793,7 +794,7 @@ func (s *Service) NamespacesDelete(ctx context.Context, req *proto.NamespacesDel
 		return err
 	}
 	if len(roles) > 0 {
-		return types.ErrNamespaceHasRoles(req.Name)
+		return types.NewErrNamespaceHasRoles(req.Name)
 	}
 
 	var queues []types.QueueInfo
@@ -801,7 +802,7 @@ func (s *Service) NamespacesDelete(ctx context.Context, req *proto.NamespacesDel
 		return err
 	}
 	if len(queues) > 0 {
-		return types.ErrNamespaceHasQueues(req.Name)
+		return types.NewErrNamespaceHasQueues(req.Name)
 	}
 
 	if err := s.conf.StorageConfig.Namespaces.Delete(ctx, req.Name); err != nil {
@@ -874,17 +875,14 @@ func (s *Service) UsersDelete(ctx context.Context, req *proto.UsersDeleteRequest
 
 	s.auth.InvalidateUser(req.Id)
 
+	var errs []error
 	if err := s.conf.StorageConfig.RoleBindings.DeleteByUser(ctx, req.Id); err != nil {
-		s.conf.Log.Warn("failed to delete role bindings during user cascade delete",
-			"user_id", req.Id, "error", err)
+		errs = append(errs, fmt.Errorf("cascade delete role bindings: %w", err))
 	}
-
 	if err := s.conf.StorageConfig.APIKeys.DeleteByUser(ctx, req.Id); err != nil {
-		s.conf.Log.Warn("failed to delete api keys during user cascade delete",
-			"user_id", req.Id, "error", err)
+		errs = append(errs, fmt.Errorf("cascade delete api keys: %w", err))
 	}
-
-	return nil
+	return errors.Join(errs...)
 }
 
 // -------------------------------------------------
@@ -1011,7 +1009,7 @@ func (s *Service) RolesCreate(ctx context.Context, req *proto.RoleCreateRequest,
 
 	// Check if this is a standard role name that cannot be created
 	if auth.IsStandardRole(role.Name) {
-		return types.ErrRoleIsStandard(role.Name)
+		return types.NewErrRoleIsStandard(role.Name)
 	}
 
 	// Verify the namespace exists
@@ -1038,7 +1036,11 @@ func (s *Service) RolesList(ctx context.Context, req *proto.RolesListRequest,
 		req.Limit = DefaultListLimit
 	}
 
-	if err := s.authorize(ctx, req.Namespace, auth.RoleList); err != nil {
+	ns := req.Namespace
+	if ns == "" {
+		ns = auth.SystemNamespace
+	}
+	if err := s.authorize(ctx, ns, auth.RoleList); err != nil {
 		return err
 	}
 
@@ -1075,7 +1077,7 @@ func (s *Service) RolesUpdate(ctx context.Context, req *proto.RoleUpdateRequest)
 
 	// Check if this is a standard role that cannot be updated
 	if auth.IsStandardRole(existing.Name) {
-		return types.ErrRoleIsStandard(existing.Name)
+		return types.NewErrRoleIsStandard(existing.Name)
 	}
 
 	role.ID = existing.ID
@@ -1098,7 +1100,7 @@ func (s *Service) RolesDelete(ctx context.Context, req *proto.RolesDeleteRequest
 
 	// Check if this is a standard role that cannot be deleted
 	if auth.IsStandardRole(role.Name) {
-		return types.ErrRoleIsStandard(role.Name)
+		return types.NewErrRoleIsStandard(role.Name)
 	}
 
 	// Check if role has bindings
@@ -1107,7 +1109,7 @@ func (s *Service) RolesDelete(ctx context.Context, req *proto.RolesDeleteRequest
 		return err
 	}
 	if len(bindings) > 0 {
-		return types.ErrRoleHasBindings(role.Name)
+		return types.NewErrRoleHasBindings(role.Name)
 	}
 
 	if err := s.conf.StorageConfig.Roles.Delete(ctx, role.ID); err != nil {
@@ -1163,7 +1165,11 @@ func (s *Service) RoleBindingsList(ctx context.Context, req *proto.RoleBindingsL
 		req.Limit = DefaultListLimit
 	}
 
-	if err := s.authorize(ctx, req.Namespace, auth.RoleBindingList); err != nil {
+	ns := req.Namespace
+	if ns == "" {
+		ns = auth.SystemNamespace
+	}
+	if err := s.authorize(ctx, ns, auth.RoleBindingList); err != nil {
 		return err
 	}
 
@@ -1182,35 +1188,21 @@ func (s *Service) RoleBindingsList(ctx context.Context, req *proto.RoleBindingsL
 }
 
 func (s *Service) RoleBindingsDelete(ctx context.Context, req *proto.RoleBindingDeleteRequest) error {
-	if err := s.authorize(ctx, req.Namespace, auth.RoleBindingDelete); err != nil {
+	ns := req.Namespace
+	if ns == "" {
+		ns = auth.SystemNamespace
+	}
+	if err := s.authorize(ctx, ns, auth.RoleBindingDelete); err != nil {
 		return err
 	}
 
-	// Get the role first to find the binding
+	// Get the role first to obtain its ID
 	var role types.Role
 	if err := s.conf.StorageConfig.Roles.Get(ctx, req.Namespace, req.RoleName, &role); err != nil {
 		return err
 	}
 
-	// Find the binding for this user and role
-	var bindings []types.RoleBinding
-	if err := s.conf.StorageConfig.RoleBindings.ListByRole(ctx, role.ID, &bindings); err != nil {
-		return err
-	}
-
-	var bindingID string
-	for _, b := range bindings {
-		if b.UserID == req.UserId && b.Namespace == req.Namespace {
-			bindingID = b.ID
-			break
-		}
-	}
-
-	if bindingID == "" {
-		return types.ErrRoleBindingNotExist(req.Namespace + ":" + req.RoleName + ":" + req.UserId)
-	}
-
-	if err := s.conf.StorageConfig.RoleBindings.Delete(ctx, bindingID); err != nil {
+	if err := s.conf.StorageConfig.RoleBindings.DeleteByUserAndRole(ctx, req.Namespace, req.UserId, role.ID); err != nil {
 		return err
 	}
 	return nil
@@ -1258,7 +1250,7 @@ func (s *Service) bootstrapSystemNamespace(ctx context.Context) error {
 		Name:      auth.SystemNamespace,
 		CreatedAt: s.conf.Clock.Now().UTC(),
 	})
-	if err != nil && !errors.Is(err, types.ErrNamespaceAlreadyExists("")) {
+	if err != nil && !errors.Is(err, types.ErrNamespaceAlreadyExists) {
 		return err
 	}
 	return nil
@@ -1273,7 +1265,7 @@ func (s *Service) bootstrapAnonymousUser(ctx context.Context) error {
 		CreatedAt: now,
 		UpdatedAt: now,
 	})
-	if err != nil && !errors.Is(err, types.ErrUserAlreadyExists("")) && !errors.Is(err, types.ErrUsernameAlreadyTaken("")) {
+	if err != nil && !errors.Is(err, types.ErrUserAlreadyExists) && !errors.Is(err, types.ErrUsernameAlreadyTaken) {
 		return err
 	}
 	return nil
@@ -1288,7 +1280,7 @@ func (s *Service) bootstrapStandardRoles(ctx context.Context) error {
 			ID:          internal.NewUID(),
 			Name:        auth.RoleAdmin,
 			Namespace:   auth.SystemNamespace,
-			Permissions: auth.AdminPermissions,
+			Permissions: auth.AdminPermissions(),
 			CreatedAt:   now,
 		},
 		{
@@ -1308,7 +1300,7 @@ func (s *Service) bootstrapStandardRoles(ctx context.Context) error {
 	}
 	for _, role := range roles {
 		err := s.conf.StorageConfig.Roles.Add(ctx, role)
-		if err != nil && !errors.Is(err, types.ErrRoleAlreadyExists("", "")) {
+		if err != nil && !errors.Is(err, types.ErrRoleAlreadyExists) {
 			return err
 		}
 	}
@@ -1332,7 +1324,7 @@ func (s *Service) bootstrapAnonymousAdminBinding(ctx context.Context) error {
 		Namespace: auth.SystemNamespace,
 		CreatedAt: s.conf.Clock.Now().UTC(),
 	})
-	if err != nil && !errors.Is(err, types.ErrRoleBindingAlreadyExists("", "", "")) {
+	if err != nil && !errors.Is(err, types.ErrRoleBindingAlreadyExists) {
 		return err
 	}
 

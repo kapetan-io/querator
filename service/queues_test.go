@@ -687,6 +687,42 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					Msg:  "max attempts is invalid; cannot be greater than 65536",
 					Code: duh.CodeBadRequest,
 				},
+				{
+					Name: "NamespaceContainsTilde",
+					Req: &pb.QueueInfo{
+						QueueName: random.String("queue-", 10),
+						Namespace: "invalid~namespace",
+					},
+					Msg:  "namespace name is invalid; 'invalid~namespace' cannot contain '~' character",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "NamespaceContainsColon",
+					Req: &pb.QueueInfo{
+						QueueName: random.String("queue-", 10),
+						Namespace: "invalid:namespace",
+					},
+					Msg:  "namespace name is invalid; 'invalid:namespace' cannot contain ':' character",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "NamespaceContainsWhitespace",
+					Req: &pb.QueueInfo{
+						QueueName: random.String("queue-", 10),
+						Namespace: "invalid namespace",
+					},
+					Msg:  "namespace name is invalid; 'invalid namespace' cannot contain whitespace",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "NamespaceExceedsMaxLength",
+					Req: &pb.QueueInfo{
+						QueueName: random.String("queue-", 10),
+						Namespace: random.String("ns-", 300),
+					},
+					Msg:  "namespace name is invalid; cannot be greater than '256' characters",
+					Code: duh.CodeBadRequest,
+				},
 			} {
 				t.Run(test.Name, func(t *testing.T) {
 					err := c.QueuesCreate(ctx, test.Req)

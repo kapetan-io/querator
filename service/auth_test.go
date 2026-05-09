@@ -788,7 +788,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 			// Verify Admin role exists with correct permissions
 			adminPerms, ok := roles[auth.RoleAdmin]
 			require.True(t, ok)
-			assert.ElementsMatch(t, auth.AdminPermissions, adminPerms)
+			assert.ElementsMatch(t, auth.AdminPermissions(), adminPerms)
 
 			// Verify NamespaceOwner role exists with correct permissions
 			ownerPerms, ok := roles[auth.RoleNamespaceOwner]

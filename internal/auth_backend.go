@@ -40,6 +40,7 @@ func NewAuthBackend(conf AuthBackendConfig) *AuthBackend {
 		cache: NewAuthCache(AuthCacheConfig{
 			APIKeys: conf.APIKeys,
 			Users:   conf.Users,
+			Log:     conf.Log,
 		}),
 	}
 }
@@ -47,7 +48,7 @@ func NewAuthBackend(conf AuthBackendConfig) *AuthBackend {
 // Authenticate validates a token and returns the principal
 func (a *AuthBackend) Authenticate(ctx context.Context, token string) (auth.Principal, error) {
 	if token == "" {
-		return auth.AnonymousPrincipal, nil
+		return auth.AnonymousPrincipal(), nil
 	}
 	return a.cache.Authenticate(ctx, token)
 }
@@ -124,7 +125,5 @@ func (a *AuthBackend) InvalidateKey(keyHash string) {
 
 // Close releases resources
 func (a *AuthBackend) Close() {
-	if a.cache != nil {
-		a.cache.Close()
-	}
+	a.cache.Close()
 }

@@ -11,7 +11,7 @@ const principalKey contextKey = "principal"
 func PrincipalFromContext(ctx context.Context) Principal {
 	p, ok := ctx.Value(principalKey).(Principal)
 	if !ok {
-		return AnonymousPrincipal
+		return AnonymousPrincipal()
 	}
 	return p
 }

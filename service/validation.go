@@ -14,9 +14,11 @@ import (
 const (
 	maxTimeoutLength   = 15
 	maxQueueNameLength = 512
-	defaultAllocation  = 512  // 2<<8
-	maxAllocation      = 2048 // 2<<10
+	defaultAllocation  = 512  // 1<<9
+	maxAllocation      = 2048 // 1<<11
 	maxTagLength       = 16
+	// defaultRequestTimeout is used as a fallback for requests that lack an explicit timeout field.
+	defaultRequestTimeout = 5 * clock.Minute
 )
 
 func validateTag(field, value string) error {
@@ -160,7 +162,7 @@ func (s *Service) validateQueueCompleteProto(in *proto.QueueCompleteRequest, out
 func (s *Service) validateQueueRetryProto(in *proto.QueueRetryRequest, out *types.RetryRequest) error {
 	// Note: RequestTimeout field is not defined in proto, using default timeout
 	// TODO: Add RequestTimeout field to QueueRetryRequest proto definition
-	out.RequestTimeout = clock.Duration(5 * clock.Minute)
+	out.RequestTimeout = defaultRequestTimeout
 
 	for _, item := range in.Items {
 		retryItem := types.RetryItem{
@@ -207,6 +209,11 @@ func (s *Service) validateQueueOptionsProto(in *proto.QueueInfo, out *types.Queu
 
 	out.RequestedPartitions = int(in.RequestedPartitions)
 	out.MaxAttempts = int(in.MaxAttempts)
+	if in.Namespace != "" {
+		if err := validateNamespaceName(in.Namespace); err != nil {
+			return err
+		}
+	}
 	out.Namespace = in.Namespace
 	out.DeadQueue = in.DeadQueue
 	out.Reference = in.Reference
@@ -215,26 +222,8 @@ func (s *Service) validateQueueOptionsProto(in *proto.QueueInfo, out *types.Queu
 }
 
 func (s *Service) validateNamespaceProto(in *proto.NamespaceInfo, out *types.Namespace) error {
-	const maxNamespaceNameLength = 256
-
-	if len(in.Name) > maxNamespaceNameLength {
-		return reply.NewInvalidOption("namespace name is invalid; cannot be greater than '%d' characters", maxNamespaceNameLength)
-	}
-
-	if strings.TrimSpace(in.Name) == "" {
-		return reply.NewInvalidOption("namespace name is invalid; cannot be empty")
-	}
-
-	if strings.ContainsFunc(in.Name, unicode.IsSpace) {
-		return reply.NewInvalidOption("namespace name is invalid; '%s' cannot contain whitespace", in.Name)
-	}
-
-	if strings.Contains(in.Name, "~") {
-		return reply.NewInvalidOption("namespace name is invalid; '%s' cannot contain '~' character", in.Name)
-	}
-
-	if strings.Contains(in.Name, ":") {
-		return reply.NewInvalidOption("namespace name is invalid; '%s' cannot contain ':' character", in.Name)
+	if err := validateNamespaceName(in.Name); err != nil {
+		return err
 	}
 
 	if err := validateTag("api_key_tag", in.ApiKeyTag); err != nil {

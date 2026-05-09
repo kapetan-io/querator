@@ -54,41 +54,45 @@ const (
 	RolePublicViewer   = "PublicViewer"
 )
 
-// AllPermissions is the complete list of all available permissions
-var AllPermissions = []string{
-	NamespaceCreate,
-	NamespaceDelete,
-	NamespaceList,
-	NamespaceUpdate,
-	QueueCreate,
-	QueueDelete,
-	QueueUpdate,
-	QueueList,
-	QueueProduce,
-	QueueLease,
-	QueueComplete,
-	QueueRetry,
-	QueueStats,
-	QueueClear,
-	UserCreate,
-	UserDelete,
-	UserList,
-	APIKeyCreate,
-	APIKeyDelete,
-	APIKeyList,
-	RoleCreate,
-	RoleUpdate,
-	RoleDelete,
-	RoleList,
-	RoleBindingCreate,
-	RoleBindingDelete,
-	RoleBindingList,
-	SystemHealth,
-	SystemMetrics,
+// AllPermissions returns the complete list of all available permissions.
+// A new slice is returned on each call to prevent callers from mutating the canonical list.
+func AllPermissions() []string {
+	return []string{
+		NamespaceCreate,
+		NamespaceDelete,
+		NamespaceList,
+		NamespaceUpdate,
+		QueueCreate,
+		QueueDelete,
+		QueueUpdate,
+		QueueList,
+		QueueProduce,
+		QueueLease,
+		QueueComplete,
+		QueueRetry,
+		QueueStats,
+		QueueClear,
+		UserCreate,
+		UserDelete,
+		UserList,
+		APIKeyCreate,
+		APIKeyDelete,
+		APIKeyList,
+		RoleCreate,
+		RoleUpdate,
+		RoleDelete,
+		RoleList,
+		RoleBindingCreate,
+		RoleBindingDelete,
+		RoleBindingList,
+		SystemHealth,
+		SystemMetrics,
+	}
 }
 
-// AdminPermissions are all permissions granted to the Admin role
-var AdminPermissions = append([]string(nil), AllPermissions...)
+// AdminPermissions returns all permissions granted to the Admin role.
+// A new slice is returned on each call to prevent callers from mutating the canonical list.
+func AdminPermissions() []string { return AllPermissions() }
 
 // NamespaceOwnerPermissions are permissions for managing a namespace's resources
 var NamespaceOwnerPermissions = []string{
@@ -121,7 +125,7 @@ var PublicViewerPermissions = []string{
 
 // IsValidPermission checks if a permission string is valid
 func IsValidPermission(perm string) bool {
-	for _, p := range AllPermissions {
+	for _, p := range AllPermissions() {
 		if p == perm {
 			return true
 		}

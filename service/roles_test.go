@@ -237,6 +237,65 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 		assert.Empty(t, listRes.Items)
 	})
 
+	t.Run("RoleBindingDeleteWithManyBindings", func(t *testing.T) {
+		d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
+		defer d.Shutdown(t)
+
+		ns := random.String("ns-", 10)
+		err := c.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: ns})
+		require.NoError(t, err)
+
+		// Create a role shared by all users
+		roleName := "many-binding-role-" + random.String("", 5)
+		var roleRes pb.RoleCreateResponse
+		err = c.RolesCreate(ctx, &pb.RoleCreateRequest{
+			Permissions: []string{auth.QueueList},
+			Namespace:   ns,
+			Name:        roleName,
+		}, &roleRes)
+		require.NoError(t, err)
+
+		// Create 50 users and bind each to the role
+		const numBindings = 50
+		userIDs := make([]string, numBindings)
+		for i := 0; i < numBindings; i++ {
+			var userRes pb.UserCreateResponse
+			err = c.UsersCreate(ctx, &pb.UserCreateRequest{
+				Username: fmt.Sprintf("many-bind-user-%02d-%s", i, random.String("", 5)),
+			}, &userRes)
+			require.NoError(t, err)
+			userIDs[i] = userRes.Id
+
+			var bindRes pb.RoleBindingCreateResponse
+			err = c.RoleBindingsCreate(ctx, &pb.RoleBindingCreateRequest{
+				Namespace: ns,
+				RoleName:  roleName,
+				UserId:    userRes.Id,
+			}, &bindRes)
+			require.NoError(t, err)
+		}
+
+		// Delete the binding for the user in the middle of the list
+		const targetIdx = 25
+		err = c.RoleBindingsDelete(ctx, &pb.RoleBindingDeleteRequest{
+			Namespace: ns,
+			RoleName:  roleName,
+			UserId:    userIDs[targetIdx],
+		})
+		require.NoError(t, err)
+
+		// Verify only the target binding was removed; all others remain
+		var listRes pb.RoleBindingsListResponse
+		err = c.RoleBindingsList(ctx, ns, &listRes, &querator.ListOptions{Limit: numBindings})
+		require.NoError(t, err)
+		assert.Len(t, listRes.Items, numBindings-1)
+
+		// Verify the deleted user's binding is gone
+		for _, item := range listRes.Items {
+			assert.NotEqual(t, userIDs[targetIdx], item.UserId)
+		}
+	})
+
 	t.Run("UserDeleteCascadeRoleBindings", func(t *testing.T) {
 		d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
 		defer d.Shutdown(t)
@@ -450,7 +509,7 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 
 				// Seed standard role directly in storage since the API rejects standard names
 				err = storageConf.Roles.Add(ctx, types.Role{
-					Permissions: auth.AdminPermissions,
+					Permissions: auth.AdminPermissions(),
 					Namespace:   ns,
 					Name:        auth.RoleAdmin,
 					ID:          random.String("role-", 10),
@@ -512,7 +571,7 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 
 				// Seed standard role directly in storage
 				err = storageConf.Roles.Add(ctx, types.Role{
-					Permissions: auth.AdminPermissions,
+					Permissions: auth.AdminPermissions(),
 					Namespace:   ns,
 					Name:        auth.RoleAdmin,
 					ID:          random.String("role-", 10),
@@ -675,6 +734,28 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 					assert.Contains(t, duhErr.Message(), test.WantErr)
 				})
 			}
+
+			t.Run("DuplicateBinding", func(t *testing.T) {
+				// Create the binding successfully the first time
+				var res pb.RoleBindingCreateResponse
+				err := c.RoleBindingsCreate(ctx, &pb.RoleBindingCreateRequest{
+					Namespace: ns,
+					RoleName:  roleName,
+					UserId:    userRes.Id,
+				}, &res)
+				require.NoError(t, err)
+
+				// Attempt to create the same binding again
+				err = c.RoleBindingsCreate(ctx, &pb.RoleBindingCreateRequest{
+					Namespace: ns,
+					RoleName:  roleName,
+					UserId:    userRes.Id,
+				}, &res)
+				require.Error(t, err)
+				var duhErr duh.Error
+				require.ErrorAs(t, err, &duhErr)
+				assert.Contains(t, duhErr.Message(), "role binding already exists")
+			})
 		})
 
 		t.Run("RoleBindingsDelete", func(t *testing.T) {

@@ -54,6 +54,10 @@ type RoleBindings interface {
 	// ListByRole returns all role bindings for a specific role.
 	ListByRole(ctx context.Context, roleID string, bindings *[]types.RoleBinding) error
 
+	// DeleteByUserAndRole deletes the role binding identified by (namespace, userID, roleID).
+	// Returns ErrRoleBindingNotExist if no matching binding exists.
+	DeleteByUserAndRole(ctx context.Context, namespace, userID, roleID string) error
+
 	// Delete deletes a role binding by ID. Returns ErrRoleBindingNotExist if the binding does not exist.
 	Delete(ctx context.Context, id string) error
 

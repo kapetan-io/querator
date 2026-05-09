@@ -23,7 +23,7 @@ var _ AuthBackend = &NoOpAuthBackend{}
 
 // Authenticate returns the anonymous principal
 func (n *NoOpAuthBackend) Authenticate(_ context.Context, _ string) (Principal, error) {
-	return AnonymousPrincipal, nil
+	return AnonymousPrincipal(), nil
 }
 
 // HasPermission always returns true

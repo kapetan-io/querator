@@ -10,6 +10,7 @@ import (
 	"github.com/kapetan-io/querator/internal/store"
 	pb "github.com/kapetan-io/querator/proto"
 	svc "github.com/kapetan-io/querator/service"
+	"github.com/kapetan-io/querator/transport/auth"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/random"
 	"github.com/stretchr/testify/assert"
@@ -228,6 +229,70 @@ func testUsers(t *testing.T, setup NewStorageFunc) {
 		err = c.APIKeysList(ctx, &listRes, nil)
 		require.NoError(t, err)
 		assert.Empty(t, listRes.Items)
+	})
+
+	t.Run("UserDeleteCascadeBoth", func(t *testing.T) {
+		d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
+		defer d.Shutdown(t)
+
+		ns := random.String("ns-", 10)
+		err := c.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: ns})
+		require.NoError(t, err)
+
+		// Create a user
+		var userRes pb.UserCreateResponse
+		err = c.UsersCreate(ctx, &pb.UserCreateRequest{
+			Username: "cascade-both-user-" + random.String("", 5),
+		}, &userRes)
+		require.NoError(t, err)
+
+		// Create role and bind the user to it
+		roleName := "cascade-both-role-" + random.String("", 5)
+		var roleRes pb.RoleCreateResponse
+		err = c.RolesCreate(ctx, &pb.RoleCreateRequest{
+			Permissions: []string{auth.QueueList},
+			Namespace:   ns,
+			Name:        roleName,
+		}, &roleRes)
+		require.NoError(t, err)
+
+		var bindingRes pb.RoleBindingCreateResponse
+		err = c.RoleBindingsCreate(ctx, &pb.RoleBindingCreateRequest{
+			Namespace: ns,
+			RoleName:  roleName,
+			UserId:    userRes.Id,
+		}, &bindingRes)
+		require.NoError(t, err)
+
+		// Create an API key for the user
+		var keyRes pb.APIKeyCreateResponse
+		err = c.APIKeysCreate(ctx, &pb.APIKeyCreateRequest{
+			UserId: userRes.Id,
+			Name:   "cascade-both-key",
+		}, &keyRes)
+		require.NoError(t, err)
+
+		// Delete the user — should cascade delete both role bindings and API keys
+		err = c.UsersDelete(ctx, &pb.UsersDeleteRequest{Id: userRes.Id})
+		require.NoError(t, err)
+
+		// Verify the user is gone
+		var usersRes pb.UsersListResponse
+		err = c.UsersList(ctx, &usersRes, nil)
+		require.NoError(t, err)
+		assert.Empty(t, usersRes.Items)
+
+		// Verify the role binding is gone
+		var bindingsRes pb.RoleBindingsListResponse
+		err = c.RoleBindingsList(ctx, ns, &bindingsRes, nil)
+		require.NoError(t, err)
+		assert.Empty(t, bindingsRes.Items)
+
+		// Verify the API key is gone
+		var keysRes pb.APIKeysListResponse
+		err = c.APIKeysListByUser(ctx, userRes.Id, &keysRes, nil)
+		require.NoError(t, err)
+		assert.Empty(t, keysRes.Items)
 	})
 
 	t.Run("UsersListPagination", func(t *testing.T) {

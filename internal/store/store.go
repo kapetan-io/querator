@@ -19,7 +19,12 @@ const (
 var (
 	ErrQueueAlreadyExists = reply.NewInvalidOption("queue already exists")
 	ErrQueueNotExist      = reply.NewRequestFailed("queue does not exist")
-	theFuture             = time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.UTC)
+	// theFuture is a sentinel timestamp used to represent "no lease" or "no deadline set".
+	// Storage implementations store this value in the lease deadline column/field for items
+	// that are not currently leased. When scanning for expired leases, items with a lease
+	// deadline equal to theFuture are skipped. New storage backend implementors must use
+	// this sentinel (or an equivalent far-future value) rather than a zero/null time.
+	theFuture = time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.UTC)
 )
 
 type LeaseOptions struct {

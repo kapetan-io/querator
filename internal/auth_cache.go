@@ -2,6 +2,7 @@ package internal
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/transport/auth"
 	"github.com/kapetan-io/tackle/clock"
+	"github.com/kapetan-io/tackle/set"
 )
 
 const (
@@ -23,6 +25,7 @@ type AuthCacheConfig struct {
 	CleanupInterval time.Duration
 	APIKeys         store.APIKeys
 	Users           store.Users
+	Log             *slog.Logger
 	TTL             time.Duration
 }
 
@@ -32,6 +35,7 @@ type AuthCache struct {
 	byKeyHash       map[string]authCacheEntry
 	users           store.Users
 	apiKeys         store.APIKeys
+	log             *slog.Logger
 	stopCleanup     chan struct{}
 	mu              sync.RWMutex
 	wg              sync.WaitGroup
@@ -46,6 +50,7 @@ type authCacheEntry struct {
 
 // NewAuthCache creates a new auth cache
 func NewAuthCache(conf AuthCacheConfig) *AuthCache {
+	set.Default(&conf.Log, slog.Default())
 	if conf.TTL == 0 {
 		conf.TTL = DefaultCacheTTL
 	}
@@ -59,9 +64,11 @@ func NewAuthCache(conf AuthCacheConfig) *AuthCache {
 		stopCleanup:     make(chan struct{}),
 		apiKeys:         conf.APIKeys,
 		users:           conf.Users,
+		log:             conf.Log,
 		ttl:             conf.TTL,
 	}
 
+	c.wg.Add(1)
 	go c.cleanupLoop()
 
 	return c
@@ -94,6 +101,8 @@ func (c *AuthCache) Authenticate(ctx context.Context, key string) (auth.Principa
 
 	var user types.User
 	if err := c.users.Get(ctx, apiKey.UserID, &user); err != nil {
+		c.log.Warn("storage error during api key user lookup; returning 401 to caller",
+			"user_id", apiKey.UserID, "error", err)
 		return auth.Principal{}, types.ErrAPIKeyInvalid
 	}
 
@@ -110,10 +119,11 @@ func (c *AuthCache) Authenticate(ctx context.Context, key string) (auth.Principa
 	}
 	c.mu.Unlock()
 
+	c.wg.Add(1)
 	select {
 	case <-c.stopCleanup:
+		c.wg.Done()
 	default:
-		c.wg.Add(1)
 		go func() {
 			defer c.wg.Done()
 			_ = c.apiKeys.UpdateLastUsed(context.Background(), apiKey.ID, clock.Now().UTC())
@@ -150,6 +160,7 @@ func (c *AuthCache) Close() {
 }
 
 func (c *AuthCache) cleanupLoop() {
+	defer c.wg.Done()
 	ticker := time.NewTicker(c.cleanupInterval)
 	defer ticker.Stop()
 

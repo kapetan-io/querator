@@ -1,7 +1,6 @@
 package service_test
 
 import (
-	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -228,7 +227,7 @@ func testNamespaces(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					err := c.NamespacesCreate(ctx, test.Req)
 					require.Error(t, err)
 					var e duh.Error
-					require.True(t, errors.As(err, &e))
+					require.ErrorAs(t, err, &e)
 					assert.Contains(t, e.Message(), test.Msg)
 					assert.Equal(t, test.Code, e.Code())
 				})
@@ -265,7 +264,7 @@ func testNamespaces(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					err := c.NamespacesDelete(ctx, test.Req)
 					require.Error(t, err)
 					var e duh.Error
-					require.True(t, errors.As(err, &e))
+					require.ErrorAs(t, err, &e)
 					assert.Contains(t, e.Message(), test.Msg)
 					assert.Equal(t, test.Code, e.Code())
 				})

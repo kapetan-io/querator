@@ -9,11 +9,11 @@ import (
 )
 
 func TestAdminPermissionsIndependentOfAllPermissions(t *testing.T) {
-	originalLen := len(auth.AllPermissions)
+	// Both functions must return slices with the same contents
+	require.ElementsMatch(t, auth.AllPermissions(), auth.AdminPermissions())
 
-	// Append to AdminPermissions should not affect AllPermissions
-	auth.AdminPermissions = append(auth.AdminPermissions, "test.permission")
-
-	require.Equal(t, originalLen, len(auth.AllPermissions))
-	assert.NotContains(t, auth.AllPermissions, "test.permission")
+	// Each call returns a fresh slice; lengths must be stable across calls
+	require.Equal(t, len(auth.AllPermissions()), len(auth.AdminPermissions()))
+	assert.NotContains(t, auth.AllPermissions(), "test.permission")
+	assert.NotContains(t, auth.AdminPermissions(), "test.permission")
 }

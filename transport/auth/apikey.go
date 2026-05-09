@@ -48,6 +48,10 @@ func GenerateAPIKey(tag string) (GeneratedKey, error) {
 		tag = DefaultKeyTag
 	}
 
+	if err := validateKeyTag(tag); err != nil {
+		return GeneratedKey{}, err
+	}
+
 	randomBytes := make([]byte, KeyLength)
 	if _, err := rand.Read(randomBytes); err != nil {
 		return GeneratedKey{}, fmt.Errorf("generating random bytes: %w", err)
@@ -70,6 +74,22 @@ func HashAPIKey(key string) string {
 	return base64.RawURLEncoding.EncodeToString(hash[:])
 }
 
+// validateKeyTag checks that a tag is lowercase alphanumeric and at most 16 characters
+func validateKeyTag(tag string) error {
+	if len(tag) == 0 {
+		return fmt.Errorf("invalid api key format; tag cannot be empty")
+	}
+	if len(tag) > 16 {
+		return fmt.Errorf("invalid api key format; tag must be at most 16 characters")
+	}
+	for _, c := range tag {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'z') {
+			return fmt.Errorf("invalid api key format; tag must be lowercase alphanumeric only")
+		}
+	}
+	return nil
+}
+
 // ValidateAPIKeyFormat checks if an API key has the correct qtr-[tag]-[entropy] format
 func ValidateAPIKeyFormat(key string) error {
 	if key == "" {
@@ -85,22 +105,18 @@ func ValidateAPIKeyFormat(key string) error {
 		return fmt.Errorf("invalid api key format; must begin with 'qtr'")
 	}
 
-	tag := parts[1]
-	if len(tag) == 0 {
-		return fmt.Errorf("invalid api key format; tag cannot be empty")
-	}
-	if len(tag) > 16 {
-		return fmt.Errorf("invalid api key format; tag must be at most 16 characters")
-	}
-	for _, c := range tag {
-		if (c < '0' || c > '9') && (c < 'a' || c > 'z') {
-			return fmt.Errorf("invalid api key format; tag must be lowercase alphanumeric only")
-		}
+	if err := validateKeyTag(parts[1]); err != nil {
+		return err
 	}
 
 	entropy := parts[2]
 	if len(entropy) < 43 {
 		return fmt.Errorf("invalid api key format; entropy must be at least 43 characters")
+	}
+	for _, c := range entropy {
+		if !strings.ContainsRune(base62Alphabet, c) {
+			return fmt.Errorf("invalid api key format; entropy must contain only base62 characters (0-9, A-Z, a-z)")
+		}
 	}
 
 	return nil

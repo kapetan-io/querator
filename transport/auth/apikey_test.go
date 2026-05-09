@@ -61,67 +61,111 @@ func TestValidateAPIKeyFormat(t *testing.T) {
 	require.NoError(t, err)
 
 	for _, test := range []struct {
-		name    string
-		key     string
-		wantErr string
+		Name    string
+		Key     string
+		WantErr string
 	}{
 		{
-			name: "ValidGeneratedKey",
-			key:  validKey.Key,
+			Name: "ValidGeneratedKey",
+			Key:  validKey.Key,
 		},
 		{
-			name:    "EmptyString",
-			key:     "",
-			wantErr: "api key cannot be empty",
+			Name:    "EmptyString",
+			Key:     "",
+			WantErr: "api key cannot be empty",
 		},
 		{
-			name:    "OldUnderscoreFormat",
-			key:     "qtr_invalid_invalidkey",
-			wantErr: "expected qtr-[tag]-[entropy]",
+			Name:    "OldUnderscoreFormat",
+			Key:     "qtr_invalid_invalidkey",
+			WantErr: "expected qtr-[tag]-[entropy]",
 		},
 		{
-			name:    "MissingQtrPrefix",
-			key:     "bad-live-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-			wantErr: "must begin with 'qtr'",
+			Name:    "MissingQtrPrefix",
+			Key:     "bad-live-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			WantErr: "must begin with 'qtr'",
 		},
 		{
-			name:    "TagWithUppercaseLetters",
-			key:     "qtr-LIVE-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-			wantErr: "tag must be lowercase alphanumeric only",
+			Name:    "TagWithUppercaseLetters",
+			Key:     "qtr-LIVE-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			WantErr: "tag must be lowercase alphanumeric only",
 		},
 		{
-			name:    "TagLongerThan16Chars",
-			key:     "qtr-thistagiswaytoolong-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-			wantErr: "tag must be at most 16 characters",
+			Name:    "TagLongerThan16Chars",
+			Key:     "qtr-thistagiswaytoolong-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			WantErr: "tag must be at most 16 characters",
 		},
 		{
-			name:    "EntropyTooShort",
-			key:     "qtr-live-tooshort",
-			wantErr: "entropy must be at least 43 characters",
+			Name:    "EntropyTooShort",
+			Key:     "qtr-live-tooshort",
+			WantErr: "entropy must be at least 43 characters",
 		},
 		{
-			name:    "OnlyTwoSegments",
-			key:     "qtr-live",
-			wantErr: "expected qtr-[tag]-[entropy]",
+			Name:    "OnlyTwoSegments",
+			Key:     "qtr-live",
+			WantErr: "expected qtr-[tag]-[entropy]",
 		},
 		{
-			name:    "EmptyTag",
-			key:     "qtr--aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-			wantErr: "tag cannot be empty",
+			Name:    "EmptyTag",
+			Key:     "qtr--aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			WantErr: "tag cannot be empty",
 		},
 		{
-			name:    "TagWithSymbols",
-			key:     "qtr-live!-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-			wantErr: "tag must be lowercase alphanumeric only",
+			Name:    "TagWithSymbols",
+			Key:     "qtr-live!-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			WantErr: "tag must be lowercase alphanumeric only",
+		},
+		{
+			Name:    "EntropyWithExclamationMarks",
+			Key:     "qtr-live-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
+			WantErr: "entropy must contain only base62 characters",
+		},
+		{
+			Name:    "EntropyWithSpaces",
+			Key:     "qtr-live-" + "                                           ",
+			WantErr: "entropy must contain only base62 characters",
+		},
+		{
+			Name:    "EntropyWithEmbeddedDashes",
+			Key:     "qtr-live-aaaaaaaaaaaaaaaaaaaaaaa-aaaaaaaaaaaaaaaaaaa",
+			WantErr: "entropy must contain only base62 characters",
 		},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			err := auth.ValidateAPIKeyFormat(test.key)
-			if test.wantErr == "" {
+		t.Run(test.Name, func(t *testing.T) {
+			err := auth.ValidateAPIKeyFormat(test.Key)
+			if test.WantErr == "" {
 				require.NoError(t, err)
 			} else {
-				require.ErrorContains(t, err, test.wantErr)
+				require.ErrorContains(t, err, test.WantErr)
 			}
+		})
+	}
+}
+
+func TestGenerateAPIKeyTagValidation(t *testing.T) {
+	for _, test := range []struct {
+		Name    string
+		Tag     string
+		WantErr string
+	}{
+		{
+			Name:    "UppercaseTag",
+			Tag:     "PROD",
+			WantErr: "tag must be lowercase alphanumeric only",
+		},
+		{
+			Name:    "TagLongerThan16Chars",
+			Tag:     "thistagiswaytoolong",
+			WantErr: "tag must be at most 16 characters",
+		},
+		{
+			Name:    "TagWithHyphen",
+			Tag:     "my-tag",
+			WantErr: "tag must be lowercase alphanumeric only",
+		},
+	} {
+		t.Run(test.Name, func(t *testing.T) {
+			_, err := auth.GenerateAPIKey(test.Tag)
+			require.ErrorContains(t, err, test.WantErr)
 		})
 	}
 }

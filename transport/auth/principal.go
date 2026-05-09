@@ -12,9 +12,11 @@ const (
 	AnonymousUsername = "anonymous"
 )
 
-// AnonymousPrincipal represents an unauthenticated user.
+// AnonymousPrincipal returns a Principal representing an unauthenticated user.
 // UserID must be "anonymous" so DefaultAuthBackend permission lookups work correctly.
-var AnonymousPrincipal = Principal{
-	UserID:   AnonymousUserID,
-	Username: AnonymousUsername,
+func AnonymousPrincipal() Principal {
+	return Principal{
+		UserID:   AnonymousUserID,
+		Username: AnonymousUsername,
+	}
 }

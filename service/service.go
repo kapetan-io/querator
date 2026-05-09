@@ -1045,7 +1045,7 @@ func (s *Service) RolesList(ctx context.Context, req *proto.RolesListRequest,
 	}
 
 	roles := make([]types.Role, 0, allocInt32(req.Limit))
-	if err := s.conf.StorageConfig.Roles.List(ctx, req.Namespace, &roles, types.ListOptions{
+	if err := s.conf.StorageConfig.Roles.List(ctx, ns, &roles, types.ListOptions{
 		Pivot: types.ToItemID(req.Pivot),
 		Limit: int(req.Limit),
 	}); err != nil {
@@ -1174,7 +1174,7 @@ func (s *Service) RoleBindingsList(ctx context.Context, req *proto.RoleBindingsL
 	}
 
 	bindings := make([]types.RoleBinding, 0, allocInt32(req.Limit))
-	if err := s.conf.StorageConfig.RoleBindings.List(ctx, req.Namespace, &bindings, types.ListOptions{
+	if err := s.conf.StorageConfig.RoleBindings.List(ctx, ns, &bindings, types.ListOptions{
 		Pivot: types.ToItemID(req.Pivot),
 		Limit: int(req.Limit),
 	}); err != nil {
@@ -1198,7 +1198,7 @@ func (s *Service) RoleBindingsDelete(ctx context.Context, req *proto.RoleBinding
 
 	// Get the role first to obtain its ID
 	var role types.Role
-	if err := s.conf.StorageConfig.Roles.Get(ctx, req.Namespace, req.RoleName, &role); err != nil {
+	if err := s.conf.StorageConfig.Roles.Get(ctx, ns, req.RoleName, &role); err != nil {
 		return err
 	}
 
@@ -1287,14 +1287,14 @@ func (s *Service) bootstrapStandardRoles(ctx context.Context) error {
 			ID:          internal.NewUID(),
 			Name:        auth.RoleNamespaceOwner,
 			Namespace:   auth.SystemNamespace,
-			Permissions: auth.NamespaceOwnerPermissions,
+			Permissions: auth.NamespaceOwnerPermissions(),
 			CreatedAt:   now,
 		},
 		{
 			ID:          internal.NewUID(),
 			Name:        auth.RolePublicViewer,
 			Namespace:   auth.SystemNamespace,
-			Permissions: auth.PublicViewerPermissions,
+			Permissions: auth.PublicViewerPermissions(),
 			CreatedAt:   now,
 		},
 	}

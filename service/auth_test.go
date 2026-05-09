@@ -279,7 +279,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 			require.NoError(t, err)
 
 			// Create a user with permissions only in ns1
-			ns1Key := createUserWithNamespacePermissions(t, ctx, adminClient, ns1, auth.NamespaceOwnerPermissions)
+			ns1Key := createUserWithNamespacePermissions(t, ctx, adminClient, ns1, auth.NamespaceOwnerPermissions())
 
 			// Create client with ns1-scoped API key
 			ns1Client := newClientWithAPIKey(t, d, ns1Key)
@@ -448,7 +448,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 			}))
 
 			// Create a tenant-a scoped API key with QueueList permission in tenant-a only
-			tenantAKey := createUserWithNamespacePermissions(t, ctx, adminClient, tenantA, auth.NamespaceOwnerPermissions)
+			tenantAKey := createUserWithNamespacePermissions(t, ctx, adminClient, tenantA, auth.NamespaceOwnerPermissions())
 			tenantAClient := newClientWithAPIKey(t, d, tenantAKey)
 
 			t.Run("SystemAdminNoFilterSeesAllNamespaces", func(t *testing.T) {
@@ -793,12 +793,12 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 			// Verify NamespaceOwner role exists with correct permissions
 			ownerPerms, ok := roles[auth.RoleNamespaceOwner]
 			require.True(t, ok)
-			assert.ElementsMatch(t, auth.NamespaceOwnerPermissions, ownerPerms)
+			assert.ElementsMatch(t, auth.NamespaceOwnerPermissions(), ownerPerms)
 
 			// Verify PublicViewer role exists with correct permissions
 			viewerPerms, ok := roles[auth.RolePublicViewer]
 			require.True(t, ok)
-			assert.ElementsMatch(t, auth.PublicViewerPermissions, viewerPerms)
+			assert.ElementsMatch(t, auth.PublicViewerPermissions(), viewerPerms)
 		})
 
 		t.Run("AnonymousAdminBindingExists", func(t *testing.T) {

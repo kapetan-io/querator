@@ -14,6 +14,8 @@ const (
 	KeyLength = 32
 	// DefaultKeyTag is the fallback tag used when no tag is supplied at any cascade level
 	DefaultKeyTag = "live"
+	// MaxKeyTagLength is the maximum allowed length for an API key tag segment.
+	MaxKeyTagLength = 16
 
 	base62Alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 )
@@ -74,13 +76,13 @@ func HashAPIKey(key string) string {
 	return base64.RawURLEncoding.EncodeToString(hash[:])
 }
 
-// validateKeyTag checks that a tag is lowercase alphanumeric and at most 16 characters
+// validateKeyTag checks that a tag is lowercase alphanumeric and at most MaxKeyTagLength characters
 func validateKeyTag(tag string) error {
 	if len(tag) == 0 {
 		return fmt.Errorf("invalid api key format; tag cannot be empty")
 	}
-	if len(tag) > 16 {
-		return fmt.Errorf("invalid api key format; tag must be at most 16 characters")
+	if len(tag) > MaxKeyTagLength {
+		return fmt.Errorf("invalid api key format; tag must be at most %d characters", MaxKeyTagLength)
 	}
 	for _, c := range tag {
 		if (c < '0' || c > '9') && (c < 'a' || c > 'z') {

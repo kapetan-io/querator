@@ -94,33 +94,39 @@ func AllPermissions() []string {
 // A new slice is returned on each call to prevent callers from mutating the canonical list.
 func AdminPermissions() []string { return AllPermissions() }
 
-// NamespaceOwnerPermissions are permissions for managing a namespace's resources
-var NamespaceOwnerPermissions = []string{
-	QueueCreate,
-	QueueDelete,
-	QueueUpdate,
-	QueueList,
-	QueueProduce,
-	QueueLease,
-	QueueComplete,
-	QueueRetry,
-	QueueStats,
-	QueueClear,
-	RoleCreate,
-	RoleUpdate,
-	RoleDelete,
-	RoleList,
-	RoleBindingCreate,
-	RoleBindingDelete,
-	RoleBindingList,
-	SystemHealth,
-	SystemMetrics,
+// NamespaceOwnerPermissions returns permissions for managing a namespace's resources.
+// A new slice is returned on each call to prevent callers from mutating the canonical list.
+func NamespaceOwnerPermissions() []string {
+	return []string{
+		QueueCreate,
+		QueueDelete,
+		QueueUpdate,
+		QueueList,
+		QueueProduce,
+		QueueLease,
+		QueueComplete,
+		QueueRetry,
+		QueueStats,
+		QueueClear,
+		RoleCreate,
+		RoleUpdate,
+		RoleDelete,
+		RoleList,
+		RoleBindingCreate,
+		RoleBindingDelete,
+		RoleBindingList,
+		SystemHealth,
+		SystemMetrics,
+	}
 }
 
-// PublicViewerPermissions are minimal permissions for public access
-var PublicViewerPermissions = []string{
-	SystemHealth,
-	SystemMetrics,
+// PublicViewerPermissions returns minimal permissions for public access.
+// A new slice is returned on each call to prevent callers from mutating the canonical list.
+func PublicViewerPermissions() []string {
+	return []string{
+		SystemHealth,
+		SystemMetrics,
+	}
 }
 
 // IsValidPermission checks if a permission string is valid

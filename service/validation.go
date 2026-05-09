@@ -16,14 +16,13 @@ const (
 	maxQueueNameLength = 512
 	defaultAllocation  = 512  // 1<<9
 	maxAllocation      = 2048 // 1<<11
-	maxTagLength       = 16
 	// defaultRequestTimeout is used as a fallback for requests that lack an explicit timeout field.
 	defaultRequestTimeout = 5 * clock.Minute
 )
 
 func validateTag(field, value string) error {
-	if len(value) > maxTagLength {
-		return reply.NewInvalidOption("%s is invalid; cannot be greater than %d characters", field, maxTagLength)
+	if len(value) > auth.MaxKeyTagLength {
+		return reply.NewInvalidOption("%s is invalid; cannot be greater than %d characters", field, auth.MaxKeyTagLength)
 	}
 	for _, c := range value {
 		if (c < '0' || c > '9') && (c < 'a' || c > 'z') {

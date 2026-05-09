@@ -349,6 +349,10 @@ func (s *Service) PauseQueue(ctx context.Context, queueName string, pause bool) 
 // -------------------------------------------------
 
 func (s *Service) QueuesCreate(ctx context.Context, req *proto.QueueInfo) error {
+	if err := validateQueueName(req.QueueName); err != nil {
+		return err
+	}
+
 	var info types.QueueInfo
 
 	if err := s.validateQueueOptionsProto(req, &info); err != nil {
@@ -410,7 +414,6 @@ func (s *Service) QueuesList(ctx context.Context, req *proto.QueuesListRequest,
 }
 
 func (s *Service) QueuesUpdate(ctx context.Context, req *proto.QueueInfo) error {
-	// Validate queue name format first
 	if err := validateQueueName(req.QueueName); err != nil {
 		return err
 	}
@@ -420,13 +423,11 @@ func (s *Service) QueuesUpdate(ctx context.Context, req *proto.QueueInfo) error 
 		return err
 	}
 
-	// Get namespace for authorization
 	ns, err := s.GetQueueNamespace(ctx, req.QueueName)
 	if err != nil {
 		return err
 	}
 
-	// Authorize
 	if err := s.authorize(ctx, ns, auth.QueueUpdate); err != nil {
 		return err
 	}
@@ -438,18 +439,15 @@ func (s *Service) QueuesUpdate(ctx context.Context, req *proto.QueueInfo) error 
 }
 
 func (s *Service) QueuesDelete(ctx context.Context, req *proto.QueuesDeleteRequest) error {
-	// Validate queue name format first
 	if err := validateQueueName(req.QueueName); err != nil {
 		return err
 	}
 
-	// Get namespace for authorization
 	ns, err := s.GetQueueNamespace(ctx, req.QueueName)
 	if err != nil {
 		return err
 	}
 
-	// Authorize
 	if err := s.authorize(ctx, ns, auth.QueueDelete); err != nil {
 		return err
 	}
@@ -711,7 +709,6 @@ func (s *Service) NamespacesCreate(ctx context.Context, req *proto.NamespaceInfo
 		return err
 	}
 
-	// Check for reserved namespace prefix
 	if ns.IsReserved() {
 		return types.ErrNamespaceReserved(ns.Name)
 	}
@@ -768,18 +765,21 @@ func (s *Service) NamespacesList(ctx context.Context, req *proto.NamespacesListR
 }
 
 func (s *Service) NamespacesDelete(ctx context.Context, req *proto.NamespacesDeleteRequest) error {
+	if err := validateNamespaceName(req.Name); err != nil {
+		return err
+	}
+
 	if err := s.authorize(ctx, auth.SystemNamespace, auth.NamespaceDelete); err != nil {
 		return err
 	}
 
-	// Check for reserved namespace prefix
 	ns := types.Namespace{Name: req.Name}
 	if ns.IsReserved() {
 		return types.ErrNamespaceReserved(req.Name)
 	}
 
-	// Check for child role bindings (check before roles so users get actionable errors:
-	// delete bindings first, then roles, then namespace)
+	// Bindings are checked before roles so users get actionable errors:
+	// delete bindings first, then roles, then namespace.
 	var bindings []types.RoleBinding
 	if err := s.conf.StorageConfig.RoleBindings.List(ctx, req.Name, &bindings, types.ListOptions{Limit: 1}); err != nil {
 		return err
@@ -788,7 +788,6 @@ func (s *Service) NamespacesDelete(ctx context.Context, req *proto.NamespacesDel
 		return types.ErrNamespaceHasRoleBindings(req.Name)
 	}
 
-	// Check for child roles
 	var roles []types.Role
 	if err := s.conf.StorageConfig.Roles.List(ctx, req.Name, &roles, types.ListOptions{Limit: 1}); err != nil {
 		return err
@@ -797,7 +796,6 @@ func (s *Service) NamespacesDelete(ctx context.Context, req *proto.NamespacesDel
 		return types.ErrNamespaceHasRoles(req.Name)
 	}
 
-	// Check for child queues
 	var queues []types.QueueInfo
 	if err := s.conf.StorageConfig.Queues.List(ctx, &queues, types.ListOptions{Limit: 1, Namespace: req.Name}); err != nil {
 		return err
@@ -870,15 +868,12 @@ func (s *Service) UsersDelete(ctx context.Context, req *proto.UsersDeleteRequest
 		return err
 	}
 
-	// Delete the user first — this is the primary resource
 	if err := s.conf.StorageConfig.Users.Delete(ctx, req.Id); err != nil {
 		return err
 	}
 
-	// Invalidate cache immediately so the deleted user's credentials no longer authenticate
 	s.auth.InvalidateUser(req.Id)
 
-	// Best-effort cleanup of associated resources
 	if err := s.conf.StorageConfig.RoleBindings.DeleteByUser(ctx, req.Id); err != nil {
 		s.conf.Log.Warn("failed to delete role bindings during user cascade delete",
 			"user_id", req.Id, "error", err)

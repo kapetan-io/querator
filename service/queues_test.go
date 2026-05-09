@@ -538,6 +538,14 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					Code: duh.CodeBadRequest,
 				},
 				{
+					Name: "InvalidQueueName",
+					Req: &pb.QueueInfo{
+						QueueName: "invalid queue~name",
+					},
+					Msg:  "queue name is invalid; 'invalid queue~name' cannot contain whitespace",
+					Code: duh.CodeBadRequest,
+				},
+				{
 					Name: "QueueNameMaxLength",
 					Req: &pb.QueueInfo{
 						QueueName: random.String("", 2_001),

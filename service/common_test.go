@@ -240,7 +240,8 @@ func newDaemon(t *testing.T, duration clock.Duration, conf svc.Config) (*testDae
 
 	td.ctx, td.cancel = context.WithTimeout(context.Background(), duration)
 	td.d, err = daemon.NewDaemon(td.ctx, daemon.Config{
-		Service: conf,
+		Service:       conf,
+		ListenAddress: "localhost:0",
 	})
 	require.NoError(t, err)
 	return td, td.d.MustClient(), td.ctx

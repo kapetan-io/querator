@@ -75,7 +75,6 @@ func (c *AuthCache) Authenticate(ctx context.Context, key string) (auth.Principa
 
 	keyHash := auth.HashAPIKey(key)
 
-	// Check cache first
 	c.mu.RLock()
 	entry, ok := c.byKeyHash[keyHash]
 	c.mu.RUnlock()
@@ -84,18 +83,15 @@ func (c *AuthCache) Authenticate(ctx context.Context, key string) (auth.Principa
 		return entry.principal, nil
 	}
 
-	// Cache miss or expired - lookup from storage
 	var apiKey types.APIKey
 	if err := c.apiKeys.GetByHash(ctx, keyHash, &apiKey); err != nil {
 		return auth.Principal{}, err
 	}
 
-	// Check if key is expired
 	if apiKey.ExpiresAt != nil && clock.Now().UTC().After(*apiKey.ExpiresAt) {
 		return auth.Principal{}, types.ErrAPIKeyExpired
 	}
 
-	// Fetch the user
 	var user types.User
 	if err := c.users.Get(ctx, apiKey.UserID, &user); err != nil {
 		return auth.Principal{}, types.ErrAPIKeyInvalid
@@ -107,7 +103,6 @@ func (c *AuthCache) Authenticate(ctx context.Context, key string) (auth.Principa
 		Username:       user.Username,
 	}
 
-	// Update cache
 	c.mu.Lock()
 	c.byKeyHash[keyHash] = authCacheEntry{
 		expiresAt: clock.Now().UTC().Add(c.ttl),
@@ -115,7 +110,6 @@ func (c *AuthCache) Authenticate(ctx context.Context, key string) (auth.Principa
 	}
 	c.mu.Unlock()
 
-	// Update last used time asynchronously
 	select {
 	case <-c.stopCleanup:
 	default:

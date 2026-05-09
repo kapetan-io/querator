@@ -894,6 +894,35 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 			})
 			require.NoError(t, err)
 		})
+
+		t.Run("RemovingAnonymousBindingClosesOpenDoor", func(t *testing.T) {
+			d, adminKey := newDaemonWithAuth(t, setup)
+			defer d.Shutdown(t)
+
+			ctx := d.Context()
+			adminClient := newClientWithAPIKey(t, d, adminKey)
+			anonClient := newClientWithAPIKey(t, d, "")
+
+			// Unauthenticated requests succeed while Open Door is active
+			var listRes pb.NamespacesListResponse
+			err := anonClient.NamespacesList(ctx, &listRes, nil)
+			require.NoError(t, err)
+
+			// Delete the anonymous->Admin binding in _system
+			err = adminClient.RoleBindingsDelete(ctx, &pb.RoleBindingDeleteRequest{
+				Namespace: auth.SystemNamespace,
+				RoleName:  auth.RoleAdmin,
+				UserId:    auth.AnonymousUserID,
+			})
+			require.NoError(t, err)
+
+			// Unauthenticated requests are now denied
+			err = anonClient.NamespacesList(ctx, &listRes, nil)
+			require.Error(t, err)
+			var duhErr duh.Error
+			require.ErrorAs(t, err, &duhErr)
+			assert.Equal(t, duh.CodeForbidden, duhErr.Code())
+		})
 	})
 
 	testAPIKeyTagCascade(t, setup)

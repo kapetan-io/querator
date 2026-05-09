@@ -58,3 +58,61 @@ caller to pass the correct value.
 
 **Impact of current state**: Keys always use `"qtr"` as the prefix unless the caller remembers
 to pass `EnvTag`. Operators have no namespace-level control over key prefixes.
+
+## Open Door Mode is Enabled by Default When Auth Backends are Configured
+
+**Severity**: High  
+**Component**: `service/service.go`, `internal/auth_backend.go`
+
+When `AuthBackend` is configured with storage backends (Users, Roles, RoleBindings),
+`Service.Bootstrap` automatically creates a role binding that grants the anonymous
+(unauthenticated) user full Admin privileges in the `_system` namespace. This means any
+unauthenticated request has full administrative access. A warning is logged at startup, but
+the system is insecure by default. To lock down the system, the anonymous → Admin role binding
+in `_system` must be explicitly deleted after bootstrap.
+
+**Impact**: A freshly bootstrapped deployment with auth backends configured is fully open to
+unauthenticated callers until an operator explicitly removes the anonymous Admin binding.
+
+**Workaround**: After bootstrap, delete the anonymous → Admin role binding in the `_system`
+namespace via the role bindings API.
+
+## No Negative Caching for Failed API Key Authentication
+
+**Severity**: Medium  
+**Component**: `internal/auth_cache.go`
+
+`AuthCache.Authenticate` caches successful authentications with a TTL, but failed lookups
+(invalid or nonexistent keys) always result in a storage read. A caller continuously sending
+requests with random or invalid API keys generates unbounded storage reads with no back-pressure,
+creating a potential denial-of-service vector against the storage layer.
+
+**Impact**: A malicious or misconfigured client sending a high volume of invalid API keys can
+saturate the storage backend with read requests, degrading service for legitimate callers.
+
+**Workaround**: None currently. Operators can mitigate at the network layer by rate-limiting
+unauthenticated or repeatedly-failing clients.
+
+**Future mitigation**: Cache negative results (key-not-found) with a shorter TTL (e.g. 30
+seconds) to bound the storage read rate per unique invalid key.
+
+## Permission Checks Perform O(N) Storage Reads per Request
+
+**Severity**: Medium  
+**Component**: `internal/auth_backend.go`
+
+`AuthBackend.checkPermissionInNamespace` fetches all role bindings for a user via `ListByUser`
+(no limit applied), then fetches each referenced role individually from storage. A user with many
+role bindings triggers N storage round-trips per permission check. Each request performs up to
+two permission checks (target namespace and `_system`). Only principal identity is cached;
+permission results are not. Under sustained load this will become a performance bottleneck.
+
+**Impact**: Latency per authenticated request scales linearly with the number of role bindings
+assigned to the requesting principal. High role-binding counts or high request rates will
+increase storage load significantly.
+
+**Workaround**: Keep the number of role bindings per user small. Assign roles at the namespace
+level rather than creating many fine-grained bindings.
+
+**Future mitigation**: Cache resolved permission sets per principal with a TTL, and apply a
+reasonable limit to `ListByUser` to bound unbounded scans.

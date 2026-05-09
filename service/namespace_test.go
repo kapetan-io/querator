@@ -251,8 +251,8 @@ func testNamespaces(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				{
 					Name: "EmptyName",
 					Req:  &pb.NamespacesDeleteRequest{Name: ""},
-					Msg:  "namespace does not exist",
-					Code: duh.CodeRequestFailed,
+					Msg:  "namespace name is invalid; cannot be empty",
+					Code: duh.CodeBadRequest,
 				},
 				{
 					Name: "SystemNamespace",

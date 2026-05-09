@@ -164,7 +164,6 @@ func (h *HTTPHandler) authenticate(ctx context.Context, r *http.Request) (contex
 	return auth.ContextWithPrincipal(ctx, principal), nil
 }
 
-
 func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer prometheus.NewTimer(h.duration.WithLabelValues(r.URL.Path)).ObserveDuration()
 	ctx := r.Context()

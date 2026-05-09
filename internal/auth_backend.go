@@ -57,12 +57,10 @@ func (a *AuthBackend) Authenticate(ctx context.Context, token string) (auth.Prin
 // 2. Check target namespace for permission (User has role in target NS)
 // 3. If not found and target != _system, check _system namespace (User has role in _system)
 func (a *AuthBackend) HasPermission(ctx context.Context, principal auth.Principal, targetNS string, perm string) (bool, error) {
-	// Step 1: Check API key scope
 	if principal.NamespaceScope != nil && *principal.NamespaceScope != targetNS {
 		return false, nil
 	}
 
-	// Step 2: Check permission in target namespace
 	hasPermission, err := a.checkPermissionInNamespace(ctx, principal.UserID, targetNS, perm)
 	if err != nil {
 		return false, err
@@ -71,7 +69,6 @@ func (a *AuthBackend) HasPermission(ctx context.Context, principal auth.Principa
 		return true, nil
 	}
 
-	// Step 3: If target is not _system, check permission in _system namespace (admin fallback)
 	if targetNS != auth.SystemNamespace {
 		hasPermission, err = a.checkPermissionInNamespace(ctx, principal.UserID, auth.SystemNamespace, perm)
 		if err != nil {

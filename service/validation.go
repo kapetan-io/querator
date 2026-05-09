@@ -31,6 +31,34 @@ func validateTag(field, value string) error {
 	return nil
 }
 
+// validateNamespaceName validates the namespace name format.
+// This validation happens at the service layer to protect downstream systems.
+func validateNamespaceName(name string) error {
+	const maxNamespaceNameLength = 256
+
+	if len(name) > maxNamespaceNameLength {
+		return reply.NewInvalidOption("namespace name is invalid; cannot be greater than '%d' characters", maxNamespaceNameLength)
+	}
+
+	if strings.TrimSpace(name) == "" {
+		return reply.NewInvalidOption("namespace name is invalid; cannot be empty")
+	}
+
+	if strings.ContainsFunc(name, unicode.IsSpace) {
+		return reply.NewInvalidOption("namespace name is invalid; '%s' cannot contain whitespace", name)
+	}
+
+	if strings.Contains(name, "~") {
+		return reply.NewInvalidOption("namespace name is invalid; '%s' cannot contain '~' character", name)
+	}
+
+	if strings.Contains(name, ":") {
+		return reply.NewInvalidOption("namespace name is invalid; '%s' cannot contain ':' character", name)
+	}
+
+	return nil
+}
+
 // validateQueueName validates the queue name format.
 // This validation happens at the service layer to protect downstream systems.
 func validateQueueName(name string) error {

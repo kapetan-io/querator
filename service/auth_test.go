@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/duh-rpc/duh-go"
 	v1 "github.com/duh-rpc/duh-go/proto/v1"
@@ -238,7 +239,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 			adminClient := newClientWithAPIKey(t, d, adminKey)
 
 			// Create a user with limited permissions (only queue.list, no queue.create)
-			limitedKey := createUserWithLimitedPermissions(t, ctx, adminClient, []string{auth.QueueList})
+			limitedKey := CreateUserWithLimitedPermissions(t, ctx, adminClient, []string{auth.QueueList})
 
 			// Create client with limited API key
 			limitedClient := newClientWithAPIKey(t, d, limitedKey)
@@ -279,7 +280,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 			require.NoError(t, err)
 
 			// Create a user with permissions only in ns1
-			ns1Key := createUserWithNamespacePermissions(t, ctx, adminClient, ns1, auth.NamespaceOwnerPermissions())
+			ns1Key := CreateUserWithNamespacePermissions(t, ctx, adminClient, ns1, auth.NamespaceOwnerPermissions())
 
 			// Create client with ns1-scoped API key
 			ns1Client := newClientWithAPIKey(t, d, ns1Key)
@@ -376,7 +377,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 			require.NoError(t, err)
 
 			// Create user with only queue.list — no queue.update
-			limitedKey := createUserWithLimitedPermissions(t, ctx, adminClient, []string{auth.QueueList})
+			limitedKey := CreateUserWithLimitedPermissions(t, ctx, adminClient, []string{auth.QueueList})
 			limitedClient := newClientWithAPIKey(t, d, limitedKey)
 
 			err = limitedClient.QueuesUpdate(ctx, &pb.QueueInfo{
@@ -406,7 +407,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 			require.NoError(t, err)
 
 			// Create user with only queue.list — no queue.delete
-			limitedKey := createUserWithLimitedPermissions(t, ctx, adminClient, []string{auth.QueueList})
+			limitedKey := CreateUserWithLimitedPermissions(t, ctx, adminClient, []string{auth.QueueList})
 			limitedClient := newClientWithAPIKey(t, d, limitedKey)
 
 			err = limitedClient.QueuesDelete(ctx, &pb.QueuesDeleteRequest{
@@ -448,7 +449,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 			}))
 
 			// Create a tenant-a scoped API key with QueueList permission in tenant-a only
-			tenantAKey := createUserWithNamespacePermissions(t, ctx, adminClient, tenantA, auth.NamespaceOwnerPermissions())
+			tenantAKey := CreateUserWithNamespacePermissions(t, ctx, adminClient, tenantA, auth.NamespaceOwnerPermissions())
 			tenantAClient := newClientWithAPIKey(t, d, tenantAKey)
 
 			t.Run("SystemAdminNoFilterSeesAllNamespaces", func(t *testing.T) {
@@ -538,6 +539,89 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 			})
 			require.NoError(t, err)
 		})
+
+		// Issue 1: A namespace-scoped API key must still be able to exercise permissions
+		// granted via _system role bindings when the target namespace is _system directly.
+		t.Run("ScopedKeyWithSystemBindingCanAccessSystem", func(t *testing.T) {
+			d, adminKey := newDaemonWithAuth(t, setup)
+			defer d.Shutdown(t)
+
+			ctx := d.Context()
+			adminClient := newClientWithAPIKey(t, d, adminKey)
+
+			// Create a namespace to scope the key to
+			ns := random.String("ns-", 10)
+			require.NoError(t, adminClient.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: ns}))
+
+			// Create a user and bind them to the Admin role in _system
+			var userRes pb.UserCreateResponse
+			require.NoError(t, adminClient.UsersCreate(ctx, &pb.UserCreateRequest{
+				Username: "scoped-system-user-" + random.String("", 5),
+			}, &userRes))
+			var bindingRes pb.RoleBindingCreateResponse
+			require.NoError(t, adminClient.RoleBindingsCreate(ctx, &pb.RoleBindingCreateRequest{
+				Namespace: auth.SystemNamespace,
+				UserId:    userRes.Id,
+				RoleName:  auth.RoleAdmin,
+			}, &bindingRes))
+
+			// Create an API key scoped to ns (not _system)
+			var keyRes pb.APIKeyCreateResponse
+			require.NoError(t, adminClient.APIKeysCreate(ctx, &pb.APIKeyCreateRequest{
+				UserId:         userRes.Id,
+				Name:           "scoped-key",
+				NamespaceScope: ns,
+			}, &keyRes))
+
+			// The scoped key still holds an _system Admin binding. UsersList targets _system.
+			// Before the fix, the namespace scope guard fires ("ns" != "_system") and returns
+			// 403 even though the user has an Admin binding in _system.
+			scopedClient := newClientWithAPIKey(t, d, keyRes.Key)
+			var listRes pb.UsersListResponse
+			err := scopedClient.UsersList(ctx, &listRes, nil)
+			require.NoError(t, err)
+		})
+
+		// Issue 3 regression: an unauthorized user must receive the same error code
+		// for both existing and nonexistent namespaces in RolesCreate (no namespace oracle).
+		t.Run("RolesCreateNoNamespaceOracle", func(t *testing.T) {
+			d, adminKey := newDaemonWithAuth(t, setup)
+			defer d.Shutdown(t)
+
+			ctx := d.Context()
+			adminClient := newClientWithAPIKey(t, d, adminKey)
+
+			// Create a real namespace
+			existingNS := random.String("ns-", 10)
+			require.NoError(t, adminClient.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: existingNS}))
+
+			// Create a user with only queue.list — no role.create permission
+			limitedKey := CreateUserWithLimitedPermissions(t, ctx, adminClient, []string{auth.QueueList})
+			limitedClient := newClientWithAPIKey(t, d, limitedKey)
+
+			// Attempt in an existing namespace — must be 403 (unauthorized, not 404)
+			var roleRes pb.RoleCreateResponse
+			err := limitedClient.RolesCreate(ctx, &pb.RoleCreateRequest{
+				Namespace:   existingNS,
+				Name:        "some-role-" + random.String("", 5),
+				Permissions: []string{auth.QueueList},
+			}, &roleRes)
+			require.Error(t, err)
+			var duhErrExisting duh.Error
+			require.ErrorAs(t, err, &duhErrExisting)
+			assert.Equal(t, duh.CodeForbidden, duhErrExisting.Code())
+
+			// Attempt in a nonexistent namespace — must also be 403 (no namespace oracle)
+			err = limitedClient.RolesCreate(ctx, &pb.RoleCreateRequest{
+				Namespace:   "nonexistent-ns-" + random.String("", 5),
+				Name:        "some-role-" + random.String("", 5),
+				Permissions: []string{auth.QueueList},
+			}, &roleRes)
+			require.Error(t, err)
+			var duhErrMissing duh.Error
+			require.ErrorAs(t, err, &duhErrMissing)
+			assert.Equal(t, duh.CodeForbidden, duhErrMissing.Code())
+		})
 	})
 
 	t.Run("CacheInvalidation", func(t *testing.T) {
@@ -549,7 +633,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 			adminClient := newClientWithAPIKey(t, d, adminKey)
 
 			// Create a user with permissions
-			userKey := createUserWithLimitedPermissions(t, ctx, adminClient, []string{auth.QueueList})
+			userKey := CreateUserWithLimitedPermissions(t, ctx, adminClient, []string{auth.QueueList})
 			userClient := newClientWithAPIKey(t, d, userKey)
 
 			// Authenticate successfully with the key
@@ -654,6 +738,105 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 			require.ErrorAs(t, err, &duhErr)
 			assert.Equal(t, duh.CodeUnauthorized, duhErr.Code())
 		})
+
+		// Issue 2: Once an API key is cached, its own ExpiresAt must still be enforced.
+		// A key that expires within the cache TTL window must be rejected after expiry even
+		// when the cache entry itself has not yet been evicted.
+		t.Run("CachedExpiredKeyRejected", func(t *testing.T) {
+			d, adminKey := newDaemonWithAuth(t, setup)
+			defer d.Shutdown(t)
+
+			ctx := d.Context()
+			adminClient := newClientWithAPIKey(t, d, adminKey)
+
+			// Create a user with Admin permissions
+			var userRes pb.UserCreateResponse
+			require.NoError(t, adminClient.UsersCreate(ctx, &pb.UserCreateRequest{
+				Username: "cache-expire-user-" + random.String("", 5),
+			}, &userRes))
+			var bindingRes pb.RoleBindingCreateResponse
+			require.NoError(t, adminClient.RoleBindingsCreate(ctx, &pb.RoleBindingCreateRequest{
+				Namespace: auth.SystemNamespace,
+				UserId:    userRes.Id,
+				RoleName:  auth.RoleAdmin,
+			}, &bindingRes))
+
+			// Create an API key that expires in 200ms
+			expiresAt := clock.Now().UTC().Add(200 * time.Millisecond)
+			var keyRes pb.APIKeyCreateResponse
+			require.NoError(t, adminClient.APIKeysCreate(ctx, &pb.APIKeyCreateRequest{
+				UserId:    userRes.Id,
+				Name:      "short-lived-key",
+				ExpiresAt: timestamppb.New(expiresAt),
+			}, &keyRes))
+
+			shortLivedClient := newClientWithAPIKey(t, d, keyRes.Key)
+
+			// First request: key is not yet expired — must succeed and also populate the cache
+			var listRes pb.QueuesListResponse
+			require.NoError(t, shortLivedClient.QueuesList(ctx, &listRes, nil))
+
+			// Wait for the key's own ExpiresAt to pass while the cache entry is still live
+			time.Sleep(300 * time.Millisecond)
+
+			// Second request: key is now expired but the cache TTL has not elapsed.
+			// Before the fix, the cache hit skips the ExpiresAt check and returns success.
+			// After the fix, the cached entry evicts itself and returns 401.
+			err := shortLivedClient.QueuesList(ctx, &listRes, nil)
+			require.Error(t, err)
+			var duhErr duh.Error
+			require.ErrorAs(t, err, &duhErr)
+			assert.Equal(t, duh.CodeUnauthorized, duhErr.Code())
+			assert.Contains(t, duhErr.Message(), "api key has expired")
+		})
+	})
+
+	t.Run("UserDeleteCascadeOrder", func(t *testing.T) {
+		d, adminKey := newDaemonWithAuth(t, setup)
+		defer d.Shutdown(t)
+
+		ctx := d.Context()
+		adminClient := newClientWithAPIKey(t, d, adminKey)
+
+		// Create a user with a role binding and API key
+		var userRes pb.UserCreateResponse
+		err := adminClient.UsersCreate(ctx, &pb.UserCreateRequest{
+			Username: "cascade-order-user-" + random.String("", 5),
+		}, &userRes)
+		require.NoError(t, err)
+
+		var bindingRes pb.RoleBindingCreateResponse
+		err = adminClient.RoleBindingsCreate(ctx, &pb.RoleBindingCreateRequest{
+			Namespace: auth.SystemNamespace,
+			UserId:    userRes.Id,
+			RoleName:  auth.RoleAdmin,
+		}, &bindingRes)
+		require.NoError(t, err)
+
+		var keyRes pb.APIKeyCreateResponse
+		err = adminClient.APIKeysCreate(ctx, &pb.APIKeyCreateRequest{
+			UserId: userRes.Id,
+			Name:   "cascade-order-key",
+		}, &keyRes)
+		require.NoError(t, err)
+
+		userClient := newClientWithAPIKey(t, d, keyRes.Key)
+
+		// Verify the key works before deletion
+		var listRes pb.QueuesListResponse
+		err = userClient.QueuesList(ctx, &listRes, nil)
+		require.NoError(t, err)
+
+		// Delete the user
+		err = adminClient.UsersDelete(ctx, &pb.UsersDeleteRequest{Id: userRes.Id})
+		require.NoError(t, err)
+
+		// After deletion, the old key must return a clean 401 — not a 500 or panic
+		err = userClient.QueuesList(ctx, &listRes, nil)
+		require.Error(t, err)
+		var duhErr duh.Error
+		require.ErrorAs(t, err, &duhErr)
+		assert.Equal(t, duh.CodeUnauthorized, duhErr.Code())
 	})
 
 	t.Run("DoubleClose", func(t *testing.T) {
@@ -677,7 +860,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 		const numUsers = 10
 		keys := make([]string, numUsers)
 		for i := 0; i < numUsers; i++ {
-			keys[i] = createUserWithLimitedPermissions(t, ctx,
+			keys[i] = CreateUserWithLimitedPermissions(t, ctx,
 				newClientWithAPIKey(t, d, adminKey), []string{auth.QueueList})
 		}
 
@@ -1162,8 +1345,8 @@ func createAdminUser(t *testing.T, ctx context.Context, c *querator.Client) stri
 	return keyRes.Key
 }
 
-// createUserWithLimitedPermissions creates a user with specific permissions in _system namespace
-func createUserWithLimitedPermissions(t *testing.T, ctx context.Context, c *querator.Client, perms []string) string {
+// CreateUserWithLimitedPermissions creates a user with specific permissions in _system namespace
+func CreateUserWithLimitedPermissions(t *testing.T, ctx context.Context, c *querator.Client, perms []string) string {
 	t.Helper()
 
 	// Create user
@@ -1217,8 +1400,8 @@ func createUserWithLimitedPermissions(t *testing.T, ctx context.Context, c *quer
 	return keyRes.Key
 }
 
-// createUserWithNamespacePermissions creates a user with permissions in a specific namespace
-func createUserWithNamespacePermissions(t *testing.T, ctx context.Context, c *querator.Client, namespace string, perms []string) string {
+// CreateUserWithNamespacePermissions creates a user with permissions in a specific namespace
+func CreateUserWithNamespacePermissions(t *testing.T, ctx context.Context, c *querator.Client, namespace string, perms []string) string {
 	t.Helper()
 
 	// Create user

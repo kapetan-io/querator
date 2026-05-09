@@ -370,7 +370,9 @@ func (s *Service) QueuesCreate(ctx context.Context, req *proto.QueueInfo) error 
 		return err
 	}
 
-	// Verify the namespace exists
+	// Verify the namespace exists when namespace storage is configured.
+	// The nil guard is intentional: namespace storage is optional, and deployments
+	// that omit it skip namespace validation by design.
 	if s.conf.StorageConfig.Namespaces != nil {
 		var namespace types.Namespace
 		if err := s.conf.StorageConfig.Namespaces.Get(ctx, ns, &namespace); err != nil {
@@ -773,8 +775,7 @@ func (s *Service) NamespacesDelete(ctx context.Context, req *proto.NamespacesDel
 		return err
 	}
 
-	ns := types.Namespace{Name: req.Name}
-	if ns.IsReserved() {
+	if (&types.Namespace{Name: req.Name}).IsReserved() {
 		return types.NewErrNamespaceReserved(req.Name)
 	}
 
@@ -868,12 +869,8 @@ func (s *Service) UsersDelete(ctx context.Context, req *proto.UsersDeleteRequest
 		return err
 	}
 
-	if err := s.conf.StorageConfig.Users.Delete(ctx, req.Id); err != nil {
-		return err
-	}
-
-	s.conf.Auth.InvalidateUser(req.Id)
-
+	// Delete dependents before the user record to minimize the window where
+	// API keys exist in storage but the user record does not.
 	var errs []error
 	if err := s.conf.StorageConfig.RoleBindings.DeleteByUser(ctx, req.Id); err != nil {
 		errs = append(errs, fmt.Errorf("cascade delete role bindings: %w", err))
@@ -881,7 +878,16 @@ func (s *Service) UsersDelete(ctx context.Context, req *proto.UsersDeleteRequest
 	if err := s.conf.StorageConfig.APIKeys.DeleteByUser(ctx, req.Id); err != nil {
 		errs = append(errs, fmt.Errorf("cascade delete api keys: %w", err))
 	}
-	return errors.Join(errs...)
+	if len(errs) > 0 {
+		return errors.Join(errs...)
+	}
+
+	if err := s.conf.StorageConfig.Users.Delete(ctx, req.Id); err != nil {
+		return err
+	}
+
+	s.conf.Auth.InvalidateUser(req.Id)
+	return nil
 }
 
 // -------------------------------------------------
@@ -909,7 +915,12 @@ func (s *Service) APIKeysCreate(ctx context.Context, req *proto.APIKeyCreateRequ
 	resolvedTag := req.KeyTag
 	if resolvedTag == "" && key.NamespaceScope != nil {
 		var ns types.Namespace
-		if err := s.conf.StorageConfig.Namespaces.Get(ctx, *key.NamespaceScope, &ns); err == nil {
+		if err := s.conf.StorageConfig.Namespaces.Get(ctx, *key.NamespaceScope, &ns); err != nil {
+			var notFound *reply.ErrRequestFailed
+			if !errors.As(err, &notFound) {
+				return err
+			}
+		} else {
 			resolvedTag = ns.APIKeyTag
 		}
 	}
@@ -1192,7 +1203,7 @@ func (s *Service) RoleBindingsDelete(ctx context.Context, req *proto.RoleBinding
 		return err
 	}
 
-	if err := s.conf.StorageConfig.RoleBindings.DeleteByUserAndRole(ctx, req.Namespace, req.UserId, role.ID); err != nil {
+	if err := s.conf.StorageConfig.RoleBindings.DeleteByUserAndRole(ctx, ns, req.UserId, role.ID); err != nil {
 		return err
 	}
 	return nil

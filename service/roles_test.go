@@ -296,6 +296,59 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 		}
 	})
 
+	t.Run("RoleBindingDeleteWithEmptyNamespaceResolvesToSystem", func(t *testing.T) {
+		d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
+		defer d.Shutdown(t)
+
+		// Create a user
+		var userRes pb.UserCreateResponse
+		err := c.UsersCreate(ctx, &pb.UserCreateRequest{
+			Username: "empty-ns-binding-user-" + random.String("", 5),
+		}, &userRes)
+		require.NoError(t, err)
+
+		// Create a role in _system
+		roleName := "empty-ns-binding-role-" + random.String("", 5)
+		var roleRes pb.RoleCreateResponse
+		err = c.RolesCreate(ctx, &pb.RoleCreateRequest{
+			Permissions: []string{auth.QueueList},
+			Namespace:   auth.SystemNamespace,
+			Name:        roleName,
+		}, &roleRes)
+		require.NoError(t, err)
+
+		// Create a role binding in _system using the explicit namespace
+		var bindingRes pb.RoleBindingCreateResponse
+		err = c.RoleBindingsCreate(ctx, &pb.RoleBindingCreateRequest{
+			Namespace: auth.SystemNamespace,
+			RoleName:  roleName,
+			UserId:    userRes.Id,
+		}, &bindingRes)
+		require.NoError(t, err)
+
+		// Verify the binding exists in _system
+		var listRes pb.RoleBindingsListResponse
+		err = c.RoleBindingsList(ctx, auth.SystemNamespace, &listRes, nil)
+		require.NoError(t, err)
+		require.NotEmpty(t, listRes.Items)
+
+		// Delete using empty namespace — resolveNamespace("") == _system, so this should succeed
+		err = c.RoleBindingsDelete(ctx, &pb.RoleBindingDeleteRequest{
+			Namespace: "",
+			RoleName:  roleName,
+			UserId:    userRes.Id,
+		})
+		require.NoError(t, err)
+
+		// Verify the binding is gone from _system
+		var afterListRes pb.RoleBindingsListResponse
+		err = c.RoleBindingsList(ctx, auth.SystemNamespace, &afterListRes, nil)
+		require.NoError(t, err)
+		for _, item := range afterListRes.Items {
+			assert.NotEqual(t, userRes.Id, item.UserId)
+		}
+	})
+
 	t.Run("UserDeleteCascadeRoleBindings", func(t *testing.T) {
 		d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
 		defer d.Shutdown(t)

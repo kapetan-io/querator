@@ -44,8 +44,9 @@ type AuthCache struct {
 }
 
 type authCacheEntry struct {
-	expiresAt time.Time
-	principal auth.Principal
+	keyExpiresAt *time.Time
+	expiresAt    time.Time
+	principal    auth.Principal
 }
 
 // NewAuthCache creates a new auth cache
@@ -83,6 +84,12 @@ func (c *AuthCache) Authenticate(ctx context.Context, key string) (auth.Principa
 	c.mu.RUnlock()
 
 	if ok && clock.Now().UTC().Before(entry.expiresAt) {
+		if entry.keyExpiresAt != nil && clock.Now().UTC().After(*entry.keyExpiresAt) {
+			c.mu.Lock()
+			delete(c.byKeyHash, keyHash)
+			c.mu.Unlock()
+			return auth.Principal{}, types.ErrAPIKeyExpired
+		}
 		return entry.principal, nil
 	}
 
@@ -110,8 +117,9 @@ func (c *AuthCache) Authenticate(ctx context.Context, key string) (auth.Principa
 
 	c.mu.Lock()
 	c.byKeyHash[keyHash] = authCacheEntry{
-		expiresAt: clock.Now().UTC().Add(c.ttl),
-		principal: principal,
+		keyExpiresAt: apiKey.ExpiresAt,
+		expiresAt:    clock.Now().UTC().Add(c.ttl),
+		principal:    principal,
 	}
 	c.mu.Unlock()
 

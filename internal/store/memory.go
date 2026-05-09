@@ -1637,29 +1637,25 @@ func (m *MemoryRoleBindings) DeleteByUserAndRole(_ context.Context, namespace, u
 		return types.NewErrRoleBindingNotExist(namespace + ":" + userID + ":" + roleID)
 	}
 
-	binding, ok := m.bindings[id]
-	if !ok {
+	if _, ok := m.bindings[id]; !ok {
 		return types.NewErrRoleBindingNotExist(namespace + ":" + userID + ":" + roleID)
 	}
 
-	// Remove from uniqueness index
 	delete(m.byUserNamespaceRole, uniqueKey)
 	delete(m.bindings, id)
 
-	// Remove from user index
-	userBindings := m.byUser[binding.UserID]
+	userBindings := m.byUser[userID]
 	for i, bid := range userBindings {
 		if bid == id {
-			m.byUser[binding.UserID] = append(userBindings[:i], userBindings[i+1:]...)
+			m.byUser[userID] = append(userBindings[:i], userBindings[i+1:]...)
 			break
 		}
 	}
 
-	// Remove from role index
-	roleBindings := m.byRole[binding.RoleID]
+	roleBindings := m.byRole[roleID]
 	for i, bid := range roleBindings {
 		if bid == id {
-			m.byRole[binding.RoleID] = append(roleBindings[:i], roleBindings[i+1:]...)
+			m.byRole[roleID] = append(roleBindings[:i], roleBindings[i+1:]...)
 			break
 		}
 	}

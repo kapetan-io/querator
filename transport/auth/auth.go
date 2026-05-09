@@ -54,40 +54,42 @@ const (
 	RolePublicViewer   = "PublicViewer"
 )
 
+var allPermissions = []string{
+	NamespaceCreate,
+	NamespaceDelete,
+	NamespaceList,
+	NamespaceUpdate,
+	QueueCreate,
+	QueueDelete,
+	QueueUpdate,
+	QueueList,
+	QueueProduce,
+	QueueLease,
+	QueueComplete,
+	QueueRetry,
+	QueueStats,
+	QueueClear,
+	UserCreate,
+	UserDelete,
+	UserList,
+	APIKeyCreate,
+	APIKeyDelete,
+	APIKeyList,
+	RoleCreate,
+	RoleUpdate,
+	RoleDelete,
+	RoleList,
+	RoleBindingCreate,
+	RoleBindingDelete,
+	RoleBindingList,
+	SystemHealth,
+	SystemMetrics,
+}
+
 // AllPermissions returns the complete list of all available permissions.
 // A new slice is returned on each call to prevent callers from mutating the canonical list.
 func AllPermissions() []string {
-	return []string{
-		NamespaceCreate,
-		NamespaceDelete,
-		NamespaceList,
-		NamespaceUpdate,
-		QueueCreate,
-		QueueDelete,
-		QueueUpdate,
-		QueueList,
-		QueueProduce,
-		QueueLease,
-		QueueComplete,
-		QueueRetry,
-		QueueStats,
-		QueueClear,
-		UserCreate,
-		UserDelete,
-		UserList,
-		APIKeyCreate,
-		APIKeyDelete,
-		APIKeyList,
-		RoleCreate,
-		RoleUpdate,
-		RoleDelete,
-		RoleList,
-		RoleBindingCreate,
-		RoleBindingDelete,
-		RoleBindingList,
-		SystemHealth,
-		SystemMetrics,
-	}
+	return append([]string{}, allPermissions...)
 }
 
 // AdminPermissions returns all permissions granted to the Admin role.
@@ -131,7 +133,7 @@ func PublicViewerPermissions() []string {
 
 // IsValidPermission checks if a permission string is valid
 func IsValidPermission(perm string) bool {
-	for _, p := range AllPermissions() {
+	for _, p := range allPermissions {
 		if p == perm {
 			return true
 		}

@@ -72,7 +72,6 @@ type Config struct {
 type Service struct {
 	queues *internal.QueuesManager
 	conf   Config
-	auth   auth.AuthBackend
 }
 
 func New(ctx context.Context, conf Config) (*Service, error) {
@@ -112,7 +111,6 @@ func New(ctx context.Context, conf Config) (*Service, error) {
 	s := &Service{
 		queues: qm,
 		conf:   conf,
-		auth:   conf.Auth,
 	}
 
 	if err := s.Bootstrap(ctx); err != nil {
@@ -125,7 +123,7 @@ func New(ctx context.Context, conf Config) (*Service, error) {
 // authorize checks if the principal in context has the required permission in the namespace
 func (s *Service) authorize(ctx context.Context, namespace, permission string) error {
 	principal := auth.PrincipalFromContext(ctx)
-	hasPermission, err := s.auth.HasPermission(ctx, principal, namespace, permission)
+	hasPermission, err := s.conf.Auth.HasPermission(ctx, principal, namespace, permission)
 	if err != nil {
 		s.conf.Log.Error("authorization check failed", "error", err)
 		return reply.NewRequestFailed("authorization check failed")
@@ -134,6 +132,13 @@ func (s *Service) authorize(ctx context.Context, namespace, permission string) e
 		return reply.NewForbidden("access denied")
 	}
 	return nil
+}
+
+func resolveNamespace(ns string) string {
+	if ns == "" {
+		return auth.SystemNamespace
+	}
+	return ns
 }
 
 func (s *Service) QueueProduce(ctx context.Context, req *proto.QueueProduceRequest) error {
@@ -360,10 +365,7 @@ func (s *Service) QueuesCreate(ctx context.Context, req *proto.QueueInfo) error 
 		return err
 	}
 
-	ns := info.Namespace
-	if ns == "" {
-		ns = auth.SystemNamespace
-	}
+	ns := resolveNamespace(info.Namespace)
 	if err := s.authorize(ctx, ns, auth.QueueCreate); err != nil {
 		return err
 	}
@@ -387,10 +389,7 @@ func (s *Service) QueuesCreate(ctx context.Context, req *proto.QueueInfo) error 
 func (s *Service) QueuesList(ctx context.Context, req *proto.QueuesListRequest,
 	resp *proto.QueuesListResponse) error {
 
-	ns := req.Namespace
-	if ns == "" {
-		ns = auth.SystemNamespace
-	}
+	ns := resolveNamespace(req.Namespace)
 	if err := s.authorize(ctx, ns, auth.QueueList); err != nil {
 		return err
 	}
@@ -873,7 +872,7 @@ func (s *Service) UsersDelete(ctx context.Context, req *proto.UsersDeleteRequest
 		return err
 	}
 
-	s.auth.InvalidateUser(req.Id)
+	s.conf.Auth.InvalidateUser(req.Id)
 
 	var errs []error
 	if err := s.conf.StorageConfig.RoleBindings.DeleteByUser(ctx, req.Id); err != nil {
@@ -987,7 +986,7 @@ func (s *Service) APIKeysDelete(ctx context.Context, req *proto.APIKeysDeleteReq
 		return err
 	}
 
-	s.auth.InvalidateKey(key.KeyHash)
+	s.conf.Auth.InvalidateKey(key.KeyHash)
 	return nil
 }
 
@@ -1036,10 +1035,7 @@ func (s *Service) RolesList(ctx context.Context, req *proto.RolesListRequest,
 		req.Limit = DefaultListLimit
 	}
 
-	ns := req.Namespace
-	if ns == "" {
-		ns = auth.SystemNamespace
-	}
+	ns := resolveNamespace(req.Namespace)
 	if err := s.authorize(ctx, ns, auth.RoleList); err != nil {
 		return err
 	}
@@ -1165,10 +1161,7 @@ func (s *Service) RoleBindingsList(ctx context.Context, req *proto.RoleBindingsL
 		req.Limit = DefaultListLimit
 	}
 
-	ns := req.Namespace
-	if ns == "" {
-		ns = auth.SystemNamespace
-	}
+	ns := resolveNamespace(req.Namespace)
 	if err := s.authorize(ctx, ns, auth.RoleBindingList); err != nil {
 		return err
 	}
@@ -1188,10 +1181,7 @@ func (s *Service) RoleBindingsList(ctx context.Context, req *proto.RoleBindingsL
 }
 
 func (s *Service) RoleBindingsDelete(ctx context.Context, req *proto.RoleBindingDeleteRequest) error {
-	ns := req.Namespace
-	if ns == "" {
-		ns = auth.SystemNamespace
-	}
+	ns := resolveNamespace(req.Namespace)
 	if err := s.authorize(ctx, ns, auth.RoleBindingDelete); err != nil {
 		return err
 	}
@@ -1223,7 +1213,7 @@ func (s *Service) Bootstrap(ctx context.Context) error {
 	}
 
 	// Skip auth bootstrapping when auth is disabled (NoOp) or auth storage backends are not configured
-	if _, ok := s.auth.(*auth.NoOpAuthBackend); ok {
+	if _, ok := s.conf.Auth.(*auth.NoOpAuthBackend); ok {
 		return nil
 	}
 	if s.conf.StorageConfig.Users == nil || s.conf.StorageConfig.Roles == nil ||
@@ -1316,7 +1306,6 @@ func (s *Service) bootstrapAnonymousAdminBinding(ctx context.Context) error {
 		return err
 	}
 
-	// Create the binding
 	err := s.conf.StorageConfig.RoleBindings.Add(ctx, types.RoleBinding{
 		ID:        internal.NewUID(),
 		UserID:    auth.AnonymousUserID,
@@ -1327,18 +1316,7 @@ func (s *Service) bootstrapAnonymousAdminBinding(ctx context.Context) error {
 	if err != nil && !errors.Is(err, types.ErrRoleBindingAlreadyExists) {
 		return err
 	}
-
-	// Check if the anonymous->Admin binding exists and log a warning
-	var bindings []types.RoleBinding
-	if err := s.conf.StorageConfig.RoleBindings.ListByUser(ctx, auth.AnonymousUserID, &bindings); err != nil {
-		return err
-	}
-	for _, binding := range bindings {
-		if binding.RoleID == adminRole.ID && binding.Namespace == auth.SystemNamespace {
-			s.conf.Log.Warn("SYSTEM RUNNING IN OPEN DOOR MODE - anonymous user has admin privileges. " +
-				"Remove the anonymous admin binding to secure the system.")
-			break
-		}
-	}
+	s.conf.Log.Warn("SYSTEM RUNNING IN OPEN DOOR MODE - anonymous user has admin privileges. " +
+		"Remove the anonymous admin binding to secure the system.")
 	return nil
 }

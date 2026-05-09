@@ -51,12 +51,8 @@ type authCacheEntry struct {
 // NewAuthCache creates a new auth cache
 func NewAuthCache(conf AuthCacheConfig) *AuthCache {
 	set.Default(&conf.Log, slog.Default())
-	if conf.TTL == 0 {
-		conf.TTL = DefaultCacheTTL
-	}
-	if conf.CleanupInterval == 0 {
-		conf.CleanupInterval = DefaultCleanupInterval
-	}
+	set.Default(&conf.TTL, DefaultCacheTTL)
+	set.Default(&conf.CleanupInterval, DefaultCleanupInterval)
 
 	c := &AuthCache{
 		cleanupInterval: conf.CleanupInterval,

@@ -2919,31 +2919,9 @@ func (b *BadgerRoleBindings) DeleteByUserAndRole(_ context.Context, namespace, u
 		}
 		id := string(v)
 
-		// Get binding for full cleanup
-		kvItem, err = txn.Get([]byte("rolebinding:" + id))
-		if err != nil {
-			if errors.Is(err, badger.ErrKeyNotFound) {
-				return notExist
-			}
-			return errors.Errorf("during Get(): %w", err)
-		}
-
-		v = v[:0]
-		v, err = kvItem.ValueCopy(v)
-		if err != nil {
-			return errors.Errorf("during ValueCopy(): %w", err)
-		}
-
-		var binding types.RoleBinding
-		if err := gob.NewDecoder(bytes.NewReader(v)).Decode(&binding); err != nil {
-			return errors.Errorf("during Decode(): %w", err)
-		}
-
-		// Delete uniqueness index
 		_ = txn.Delete(uniqueKey)
 
-		// Update user index
-		userIDs, _ := b.getUserBindingIDs(txn, binding.UserID)
+		userIDs, _ := b.getUserBindingIDs(txn, userID)
 		newUserIDs := make([]string, 0, len(userIDs))
 		for _, existingID := range userIDs {
 			if existingID != id {
@@ -2955,15 +2933,14 @@ func (b *BadgerRoleBindings) DeleteByUserAndRole(_ context.Context, namespace, u
 			if err := gob.NewEncoder(&userBuf).Encode(newUserIDs); err != nil {
 				return errors.Errorf("during gob.Encode(): %w", err)
 			}
-			if err := txn.Set([]byte("rolebinding-user:"+binding.UserID), userBuf.Bytes()); err != nil {
+			if err := txn.Set([]byte("rolebinding-user:"+userID), userBuf.Bytes()); err != nil {
 				return errors.Errorf("during Set(): %w", err)
 			}
 		} else {
-			_ = txn.Delete([]byte("rolebinding-user:" + binding.UserID))
+			_ = txn.Delete([]byte("rolebinding-user:" + userID))
 		}
 
-		// Update role index
-		roleIDs, _ := b.getRoleBindingIDs(txn, binding.RoleID)
+		roleIDs, _ := b.getRoleBindingIDs(txn, roleID)
 		newRoleIDs := make([]string, 0, len(roleIDs))
 		for _, existingID := range roleIDs {
 			if existingID != id {
@@ -2975,14 +2952,13 @@ func (b *BadgerRoleBindings) DeleteByUserAndRole(_ context.Context, namespace, u
 			if err := gob.NewEncoder(&roleBuf).Encode(newRoleIDs); err != nil {
 				return errors.Errorf("during gob.Encode(): %w", err)
 			}
-			if err := txn.Set([]byte("rolebinding-role:"+binding.RoleID), roleBuf.Bytes()); err != nil {
+			if err := txn.Set([]byte("rolebinding-role:"+roleID), roleBuf.Bytes()); err != nil {
 				return errors.Errorf("during Set(): %w", err)
 			}
 		} else {
-			_ = txn.Delete([]byte("rolebinding-role:" + binding.RoleID))
+			_ = txn.Delete([]byte("rolebinding-role:" + roleID))
 		}
 
-		// Delete binding
 		if err := txn.Delete([]byte("rolebinding:" + id)); err != nil {
 			return errors.Errorf("during Delete(): %w", err)
 		}

@@ -37,6 +37,9 @@ func base62Encode(b []byte) string {
 	for i, j := 0, len(digits)-1; i < j; i, j = i+1, j-1 {
 		digits[i], digits[j] = digits[j], digits[i]
 	}
+	for len(digits) < 43 {
+		digits = append([]byte{base62Alphabet[0]}, digits...)
+	}
 	return string(digits)
 }
 

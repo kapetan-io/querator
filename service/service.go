@@ -425,12 +425,12 @@ func (s *Service) QueuesUpdate(ctx context.Context, req *proto.QueueInfo) error 
 		return err
 	}
 
-	ns, err := s.GetQueueNamespace(ctx, req.QueueName)
+	queue, err := s.queues.Get(ctx, req.QueueName)
 	if err != nil {
 		return err
 	}
 
-	if err := s.authorize(ctx, ns, auth.QueueUpdate); err != nil {
+	if err := s.authorize(ctx, queue.Info().Namespace, auth.QueueUpdate); err != nil {
 		return err
 	}
 
@@ -445,12 +445,12 @@ func (s *Service) QueuesDelete(ctx context.Context, req *proto.QueuesDeleteReque
 		return err
 	}
 
-	ns, err := s.GetQueueNamespace(ctx, req.QueueName)
+	queue, err := s.queues.Get(ctx, req.QueueName)
 	if err != nil {
 		return err
 	}
 
-	if err := s.authorize(ctx, ns, auth.QueueDelete); err != nil {
+	if err := s.authorize(ctx, queue.Info().Namespace, auth.QueueDelete); err != nil {
 		return err
 	}
 
@@ -1279,21 +1279,18 @@ func (s *Service) bootstrapStandardRoles(ctx context.Context) error {
 	now := s.conf.Clock.Now().UTC()
 	roles := []types.Role{
 		{
-			ID:          internal.NewUID(),
 			Name:        auth.RoleAdmin,
 			Namespace:   auth.SystemNamespace,
 			Permissions: auth.AdminPermissions(),
 			CreatedAt:   now,
 		},
 		{
-			ID:          internal.NewUID(),
 			Name:        auth.RoleNamespaceOwner,
 			Namespace:   auth.SystemNamespace,
 			Permissions: auth.NamespaceOwnerPermissions(),
 			CreatedAt:   now,
 		},
 		{
-			ID:          internal.NewUID(),
 			Name:        auth.RolePublicViewer,
 			Namespace:   auth.SystemNamespace,
 			Permissions: auth.PublicViewerPermissions(),
@@ -1301,8 +1298,14 @@ func (s *Service) bootstrapStandardRoles(ctx context.Context) error {
 		},
 	}
 	for _, role := range roles {
+		role.ID = internal.NewUID()
 		err := s.conf.StorageConfig.Roles.Add(ctx, role)
 		if errors.Is(err, types.ErrRoleAlreadyExists) {
+			var existing types.Role
+			if err = s.conf.StorageConfig.Roles.Get(ctx, role.Namespace, role.Name, &existing); err != nil {
+				return err
+			}
+			role.ID = existing.ID
 			err = s.conf.StorageConfig.Roles.Update(ctx, role)
 		}
 		if err != nil {

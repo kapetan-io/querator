@@ -20,6 +20,14 @@ const (
 	base62Alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 )
 
+var base62Lookup [128]bool
+
+func init() {
+	for _, c := range base62Alphabet {
+		base62Lookup[c] = true
+	}
+}
+
 // GeneratedKey contains the components of a newly generated API key
 type GeneratedKey struct {
 	KeyHash string // SHA256 hash of the full key (for storage)
@@ -116,7 +124,7 @@ func ValidateAPIKeyFormat(key string) error {
 		return fmt.Errorf("invalid api key format; entropy must be at least 43 characters")
 	}
 	for _, c := range entropy {
-		if !strings.ContainsRune(base62Alphabet, c) {
+		if c >= 128 || !base62Lookup[c] {
 			return fmt.Errorf("invalid api key format; entropy must contain only base62 characters (0-9, A-Z, a-z)")
 		}
 	}

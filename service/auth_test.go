@@ -1019,6 +1019,49 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 			}
 			assert.True(t, found)
 		})
+
+		t.Run("SurvivesRestart", func(t *testing.T) {
+			d, adminKey := newDaemonWithAuth(t, setup)
+			defer d.Shutdown(t)
+
+			ctx := d.Context()
+			adminClient := newClientWithAPIKey(t, d, adminKey)
+
+			// Record the Admin role ID before re-bootstrap
+			var rolesRes pb.RolesListResponse
+			err := adminClient.RolesList(ctx, auth.SystemNamespace, &rolesRes, nil)
+			require.NoError(t, err)
+			var adminRoleID string
+			for _, role := range rolesRes.Items {
+				if role.Name == auth.RoleAdmin {
+					adminRoleID = role.Id
+					break
+				}
+			}
+			require.NotEmpty(t, adminRoleID)
+
+			// Simulate restart: call Bootstrap again on the same storage
+			err = d.Service().Bootstrap(ctx)
+			require.NoError(t, err)
+
+			// Admin role ID should be stable (not regenerated)
+			var rolesRes2 pb.RolesListResponse
+			err = adminClient.RolesList(ctx, auth.SystemNamespace, &rolesRes2, nil)
+			require.NoError(t, err)
+			var adminRoleID2 string
+			for _, role := range rolesRes2.Items {
+				if role.Name == auth.RoleAdmin {
+					adminRoleID2 = role.Id
+					break
+				}
+			}
+			require.Equal(t, adminRoleID, adminRoleID2)
+
+			// Admin API key should still work (role bindings reference unchanged IDs)
+			var listRes pb.NamespacesListResponse
+			err = adminClient.NamespacesList(ctx, &listRes, nil)
+			require.NoError(t, err)
+		})
 	})
 
 	t.Run("OpenDoor", func(t *testing.T) {

@@ -1,5 +1,7 @@
 package auth
 
+import "slices"
+
 // Permission constants define all available permissions in the system
 const (
 	// Namespace permissions
@@ -86,10 +88,19 @@ var allPermissions = []string{
 	SystemMetrics,
 }
 
+var permissionSet map[string]struct{}
+
+func init() {
+	permissionSet = make(map[string]struct{}, len(allPermissions))
+	for _, p := range allPermissions {
+		permissionSet[p] = struct{}{}
+	}
+}
+
 // AllPermissions returns the complete list of all available permissions.
 // A new slice is returned on each call to prevent callers from mutating the canonical list.
 func AllPermissions() []string {
-	return append([]string{}, allPermissions...)
+	return slices.Clone(allPermissions)
 }
 
 // AdminPermissions returns all permissions granted to the Admin role.
@@ -133,12 +144,8 @@ func PublicViewerPermissions() []string {
 
 // IsValidPermission checks if a permission string is valid
 func IsValidPermission(perm string) bool {
-	for _, p := range allPermissions {
-		if p == perm {
-			return true
-		}
-	}
-	return false
+	_, ok := permissionSet[perm]
+	return ok
 }
 
 // IsStandardRole checks if a role name is a standard immutable role

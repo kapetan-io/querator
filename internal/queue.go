@@ -51,7 +51,7 @@ skip:
 		for _, l := range q.ordered {
 			// If this logical already exists, skip
 			if l == add {
-				break skip
+				continue skip
 			}
 		}
 		q.ordered = append(q.ordered, add)
@@ -76,6 +76,9 @@ func (q *Queue) GetNext() (Remote, *Logical) {
 	defer q.mutex.Unlock()
 	q.mutex.Lock()
 
+	if len(q.ordered) == 0 {
+		return nil, nil
+	}
 	l := q.ordered[q.idx]
 	q.idx++
 	if q.idx >= len(q.ordered) {

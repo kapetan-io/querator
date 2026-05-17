@@ -240,6 +240,9 @@ func sortPartitionsByLoad(partitions []*Partition) {
 		if a.State.Failures < b.State.Failures {
 			return -1
 		}
+		if a.State.Failures > b.State.Failures {
+			return +1
+		}
 		if a.State.UnLeased < b.State.UnLeased {
 			return -1
 		}

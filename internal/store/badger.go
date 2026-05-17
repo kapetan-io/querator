@@ -602,6 +602,12 @@ func (b *BadgerPartition) Clear(_ context.Context, req types.ClearRequest) error
 		for iter.Rewind(); iter.Valid(); iter.Next() {
 			var k, v []byte
 			k = iter.Item().KeyCopy(k)
+
+			// Skip secondary index keys (source:xxx)
+			if bytes.HasPrefix(k, []byte("source:")) {
+				continue
+			}
+
 			v, err := iter.Item().ValueCopy(v)
 			if err != nil {
 				return err
@@ -925,6 +931,13 @@ func (b *BadgerPartition) LifeCycleInfo(_ context.Context, info *types.LifeCycle
 		defer iter.Close()
 
 		for iter.Rewind(); iter.Valid(); iter.Next() {
+			key := iter.Item().Key()
+
+			// Skip secondary index keys (source:xxx)
+			if bytes.HasPrefix(key, []byte("source:")) {
+				continue
+			}
+
 			var v []byte
 			v, err := iter.Item().ValueCopy(v)
 			if err != nil {
@@ -2691,9 +2704,18 @@ func (b *BadgerRoleBindings) Add(_ context.Context, binding types.RoleBinding) e
 	}
 
 	return db.Update(func(txn *badger.Txn) error {
+		// Check if binding ID already exists
+		_, err := txn.Get([]byte("rolebinding:" + binding.ID))
+		if err == nil {
+			return types.NewErrRoleBindingAlreadyExists(binding.UserID, binding.RoleID, binding.Namespace)
+		}
+		if !errors.Is(err, badger.ErrKeyNotFound) {
+			return errors.Errorf("during Get(): %w", err)
+		}
+
 		// Check for duplicate (same user, namespace, role combination)
 		uniqueKey := []byte("rolebinding-unique:" + binding.UserID + ":" + binding.Namespace + ":" + binding.RoleID)
-		_, err := txn.Get(uniqueKey)
+		_, err = txn.Get(uniqueKey)
 		if err == nil {
 			return types.NewErrRoleBindingAlreadyExists(binding.UserID, binding.RoleID, binding.Namespace)
 		}

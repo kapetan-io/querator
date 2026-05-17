@@ -156,6 +156,9 @@ func (s *Service) QueueProduce(ctx context.Context, req *proto.QueueProduceReque
 	if proxy != nil {
 		return proxy.QueueProduce(ctx, req)
 	}
+	if logical == nil {
+		return reply.NewRequestFailed("queue has no available partitions")
+	}
 
 	var r types.ProduceRequest
 	if err := s.validateQueueProduceProto(req, &r); err != nil {
@@ -185,6 +188,9 @@ func (s *Service) QueueLease(ctx context.Context, req *proto.QueueLeaseRequest,
 	proxy, logical := queue.GetNext()
 	if proxy != nil {
 		return proxy.QueueLease(ctx, req, res)
+	}
+	if logical == nil {
+		return reply.NewRequestFailed("queue has no available partitions")
 	}
 
 	var r types.LeaseRequest
@@ -693,6 +699,10 @@ func (s *Service) Shutdown(ctx context.Context) error {
 // -------------------------------------------------
 
 func (s *Service) NamespacesCreate(ctx context.Context, req *proto.NamespaceInfo) error {
+	if s.conf.StorageConfig.Namespaces == nil {
+		return reply.NewRequestFailed("namespace storage not configured")
+	}
+
 	var ns types.Namespace
 
 	if err := s.validateNamespaceProto(req, &ns); err != nil {
@@ -716,6 +726,10 @@ func (s *Service) NamespacesCreate(ctx context.Context, req *proto.NamespaceInfo
 }
 
 func (s *Service) NamespacesUpdate(ctx context.Context, req *proto.NamespaceInfo) error {
+	if s.conf.StorageConfig.Namespaces == nil {
+		return reply.NewRequestFailed("namespace storage not configured")
+	}
+
 	var ns types.Namespace
 
 	if err := s.validateNamespaceProto(req, &ns); err != nil {
@@ -735,6 +749,10 @@ func (s *Service) NamespacesUpdate(ctx context.Context, req *proto.NamespaceInfo
 
 func (s *Service) NamespacesList(ctx context.Context, req *proto.NamespacesListRequest,
 	resp *proto.NamespacesListResponse) error {
+	if s.conf.StorageConfig.Namespaces == nil {
+		return reply.NewRequestFailed("namespace storage not configured")
+	}
+
 	if req.Limit == 0 {
 		req.Limit = DefaultListLimit
 	}
@@ -758,6 +776,16 @@ func (s *Service) NamespacesList(ctx context.Context, req *proto.NamespacesListR
 }
 
 func (s *Service) NamespacesDelete(ctx context.Context, req *proto.NamespacesDeleteRequest) error {
+	if s.conf.StorageConfig.Namespaces == nil {
+		return reply.NewRequestFailed("namespace storage not configured")
+	}
+	if s.conf.StorageConfig.RoleBindings == nil {
+		return reply.NewRequestFailed("role binding storage not configured")
+	}
+	if s.conf.StorageConfig.Roles == nil {
+		return reply.NewRequestFailed("role storage not configured")
+	}
+
 	if err := validateNamespaceName(req.Name); err != nil {
 		return err
 	}
@@ -808,6 +836,10 @@ func (s *Service) NamespacesDelete(ctx context.Context, req *proto.NamespacesDel
 
 func (s *Service) UsersCreate(ctx context.Context, req *proto.UserCreateRequest,
 	resp *proto.UserCreateResponse) error {
+	if s.conf.StorageConfig.Users == nil {
+		return reply.NewRequestFailed("user storage not configured")
+	}
+
 	var user types.User
 
 	if err := s.validateUserCreateProto(req, &user); err != nil {
@@ -832,6 +864,10 @@ func (s *Service) UsersCreate(ctx context.Context, req *proto.UserCreateRequest,
 
 func (s *Service) UsersList(ctx context.Context, req *proto.UsersListRequest,
 	resp *proto.UsersListResponse) error {
+	if s.conf.StorageConfig.Users == nil {
+		return reply.NewRequestFailed("user storage not configured")
+	}
+
 	if req.Limit == 0 {
 		req.Limit = DefaultListLimit
 	}
@@ -855,6 +891,16 @@ func (s *Service) UsersList(ctx context.Context, req *proto.UsersListRequest,
 }
 
 func (s *Service) UsersDelete(ctx context.Context, req *proto.UsersDeleteRequest) error {
+	if s.conf.StorageConfig.Users == nil {
+		return reply.NewRequestFailed("user storage not configured")
+	}
+	if s.conf.StorageConfig.RoleBindings == nil {
+		return reply.NewRequestFailed("role binding storage not configured")
+	}
+	if s.conf.StorageConfig.APIKeys == nil {
+		return reply.NewRequestFailed("api key storage not configured")
+	}
+
 	if err := s.authorize(ctx, auth.SystemNamespace, auth.UserDelete); err != nil {
 		return err
 	}
@@ -886,6 +932,13 @@ func (s *Service) UsersDelete(ctx context.Context, req *proto.UsersDeleteRequest
 
 func (s *Service) APIKeysCreate(ctx context.Context, req *proto.APIKeyCreateRequest,
 	resp *proto.APIKeyCreateResponse) error {
+	if s.conf.StorageConfig.Users == nil {
+		return reply.NewRequestFailed("user storage not configured")
+	}
+	if s.conf.StorageConfig.APIKeys == nil {
+		return reply.NewRequestFailed("api key storage not configured")
+	}
+
 	var key types.APIKey
 
 	if err := s.validateAPIKeyCreateProto(req, &key); err != nil {
@@ -903,7 +956,7 @@ func (s *Service) APIKeysCreate(ctx context.Context, req *proto.APIKeyCreateRequ
 	}
 
 	resolvedTag := req.KeyTag
-	if resolvedTag == "" && key.NamespaceScope != nil {
+	if resolvedTag == "" && key.NamespaceScope != nil && s.conf.StorageConfig.Namespaces != nil {
 		var ns types.Namespace
 		if err := s.conf.StorageConfig.Namespaces.Get(ctx, *key.NamespaceScope, &ns); err != nil {
 			var notFound *reply.ErrRequestFailed
@@ -941,6 +994,10 @@ func (s *Service) APIKeysCreate(ctx context.Context, req *proto.APIKeyCreateRequ
 
 func (s *Service) APIKeysList(ctx context.Context, req *proto.APIKeysListRequest,
 	resp *proto.APIKeysListResponse) error {
+	if s.conf.StorageConfig.APIKeys == nil {
+		return reply.NewRequestFailed("api key storage not configured")
+	}
+
 	if req.Limit == 0 {
 		req.Limit = DefaultListLimit
 	}
@@ -972,6 +1029,10 @@ func (s *Service) APIKeysList(ctx context.Context, req *proto.APIKeysListRequest
 }
 
 func (s *Service) APIKeysDelete(ctx context.Context, req *proto.APIKeysDeleteRequest) error {
+	if s.conf.StorageConfig.APIKeys == nil {
+		return reply.NewRequestFailed("api key storage not configured")
+	}
+
 	if err := s.authorize(ctx, auth.SystemNamespace, auth.APIKeyDelete); err != nil {
 		return err
 	}
@@ -996,6 +1057,13 @@ func (s *Service) APIKeysDelete(ctx context.Context, req *proto.APIKeysDeleteReq
 
 func (s *Service) RolesCreate(ctx context.Context, req *proto.RoleCreateRequest,
 	resp *proto.RoleCreateResponse) error {
+	if s.conf.StorageConfig.Namespaces == nil {
+		return reply.NewRequestFailed("namespace storage not configured")
+	}
+	if s.conf.StorageConfig.Roles == nil {
+		return reply.NewRequestFailed("role storage not configured")
+	}
+
 	var role types.Role
 
 	if err := s.validateRoleCreateProto(req, &role); err != nil {
@@ -1030,6 +1098,10 @@ func (s *Service) RolesCreate(ctx context.Context, req *proto.RoleCreateRequest,
 
 func (s *Service) RolesList(ctx context.Context, req *proto.RolesListRequest,
 	resp *proto.RolesListResponse) error {
+	if s.conf.StorageConfig.Roles == nil {
+		return reply.NewRequestFailed("role storage not configured")
+	}
+
 	if req.Limit == 0 {
 		req.Limit = DefaultListLimit
 	}
@@ -1054,6 +1126,10 @@ func (s *Service) RolesList(ctx context.Context, req *proto.RolesListRequest,
 }
 
 func (s *Service) RolesUpdate(ctx context.Context, req *proto.RoleUpdateRequest) error {
+	if s.conf.StorageConfig.Roles == nil {
+		return reply.NewRequestFailed("role storage not configured")
+	}
+
 	var role types.Role
 
 	if err := s.validateRoleUpdateProto(req, &role); err != nil {
@@ -1083,13 +1159,21 @@ func (s *Service) RolesUpdate(ctx context.Context, req *proto.RoleUpdateRequest)
 }
 
 func (s *Service) RolesDelete(ctx context.Context, req *proto.RolesDeleteRequest) error {
-	if err := s.authorize(ctx, req.Namespace, auth.RoleDelete); err != nil {
+	if s.conf.StorageConfig.Roles == nil {
+		return reply.NewRequestFailed("role storage not configured")
+	}
+	if s.conf.StorageConfig.RoleBindings == nil {
+		return reply.NewRequestFailed("role binding storage not configured")
+	}
+
+	ns := resolveNamespace(req.Namespace)
+	if err := s.authorize(ctx, ns, auth.RoleDelete); err != nil {
 		return err
 	}
 
 	// Get the role first to check standard role and get ID
 	var role types.Role
-	if err := s.conf.StorageConfig.Roles.Get(ctx, req.Namespace, req.Name, &role); err != nil {
+	if err := s.conf.StorageConfig.Roles.Get(ctx, ns, req.Name, &role); err != nil {
 		return err
 	}
 
@@ -1119,6 +1203,16 @@ func (s *Service) RolesDelete(ctx context.Context, req *proto.RolesDeleteRequest
 
 func (s *Service) RoleBindingsCreate(ctx context.Context, req *proto.RoleBindingCreateRequest,
 	resp *proto.RoleBindingCreateResponse) error {
+	if s.conf.StorageConfig.Roles == nil {
+		return reply.NewRequestFailed("role storage not configured")
+	}
+	if s.conf.StorageConfig.Users == nil {
+		return reply.NewRequestFailed("user storage not configured")
+	}
+	if s.conf.StorageConfig.RoleBindings == nil {
+		return reply.NewRequestFailed("role binding storage not configured")
+	}
+
 	var binding types.RoleBinding
 
 	if err := s.validateRoleBindingCreateProto(req, &binding); err != nil {
@@ -1155,6 +1249,9 @@ func (s *Service) RoleBindingsCreate(ctx context.Context, req *proto.RoleBinding
 
 func (s *Service) RoleBindingsList(ctx context.Context, req *proto.RoleBindingsListRequest,
 	resp *proto.RoleBindingsListResponse) error {
+	if s.conf.StorageConfig.RoleBindings == nil {
+		return reply.NewRequestFailed("role binding storage not configured")
+	}
 
 	if req.Limit == 0 {
 		req.Limit = DefaultListLimit
@@ -1180,6 +1277,13 @@ func (s *Service) RoleBindingsList(ctx context.Context, req *proto.RoleBindingsL
 }
 
 func (s *Service) RoleBindingsDelete(ctx context.Context, req *proto.RoleBindingDeleteRequest) error {
+	if s.conf.StorageConfig.Roles == nil {
+		return reply.NewRequestFailed("role storage not configured")
+	}
+	if s.conf.StorageConfig.RoleBindings == nil {
+		return reply.NewRequestFailed("role binding storage not configured")
+	}
+
 	ns := resolveNamespace(req.Namespace)
 	if err := s.authorize(ctx, ns, auth.RoleBindingDelete); err != nil {
 		return err

@@ -128,8 +128,8 @@ func (qm *QueuesManager) Get(ctx context.Context, name string) (*Queue, error) {
 	if qm.inShutdown.Load() {
 		return nil, ErrServiceShutdown
 	}
-	defer qm.mutex.RUnlock()
-	qm.mutex.RLock()
+	defer qm.mutex.Unlock()
+	qm.mutex.Lock()
 
 	return qm.get(ctx, name)
 }
@@ -318,14 +318,17 @@ func (qm *QueuesManager) LifeCycle(ctx context.Context, req *types.LifeCycleRequ
 // ProduceToQueue produces items to the specified queue by name.
 // Used for DLQ item movement during lifecycle processing.
 func (qm *QueuesManager) ProduceToQueue(ctx context.Context, queueName string, items []*types.Item) error {
-	qm.mutex.RLock()
+	qm.mutex.Lock()
 	q, err := qm.get(ctx, queueName)
-	qm.mutex.RUnlock()
+	qm.mutex.Unlock()
 	if err != nil {
 		return errors.Errorf("failed to get queue '%s': %w", queueName, err)
 	}
 
 	_, logical := q.GetNext()
+	if logical == nil {
+		return errors.Errorf("queue '%s' has no available partitions", queueName)
+	}
 	if err := logical.ProduceInternal(ctx, items); err != nil {
 		return errors.Errorf("failed to produce to queue '%s': %w", queueName, err)
 	}

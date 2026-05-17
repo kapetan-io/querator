@@ -61,21 +61,18 @@ to pass `EnvTag`. Operators have no namespace-level control over key prefixes.
 
 ## Open Door Mode is Enabled by Default When Auth Backends are Configured
 
-**Severity**: High  
+**Severity**: Intentional — Will Not Fix  
 **Component**: `service/service.go`, `internal/auth_backend.go`
 
 When `AuthBackend` is configured with storage backends (Users, Roles, RoleBindings),
 `Service.Bootstrap` automatically creates a role binding that grants the anonymous
 (unauthenticated) user full Admin privileges in the `_system` namespace. This means any
-unauthenticated request has full administrative access. A warning is logged at startup, but
-the system is insecure by default. To lock down the system, the anonymous → Admin role binding
-in `_system` must be explicitly deleted after bootstrap.
+unauthenticated request has full administrative access on a fresh deployment.
 
-**Impact**: A freshly bootstrapped deployment with auth backends configured is fully open to
-unauthenticated callers until an operator explicitly removes the anonymous Admin binding.
-
-**Workaround**: After bootstrap, delete the anonymous → Admin role binding in the `_system`
-namespace via the role bindings API.
+This is intentional. Open Door Mode allows operators to access and configure the system
+immediately after bootstrap without needing out-of-band credential distribution. A warning
+is logged at startup. To secure the system, delete the anonymous → Admin role binding in the
+`_system` namespace via the role bindings API after completing initial setup.
 
 ## No Negative Caching for Failed API Key Authentication
 
@@ -101,18 +98,18 @@ seconds) to bound the storage read rate per unique invalid key.
 **Severity**: Medium  
 **Component**: `internal/auth_backend.go`
 
-`AuthBackend.checkPermissionInNamespace` fetches all role bindings for a user via `ListByUser`
-(no limit applied), then fetches each referenced role individually from storage. A user with many
-role bindings triggers N storage round-trips per permission check. Each request performs up to
-two permission checks (target namespace and `_system`). Only principal identity is cached;
-permission results are not. Under sustained load this will become a performance bottleneck.
+`AuthBackend.checkPermissionInNamespace` fetches role bindings for a user via `ListByUser`
+(capped at `maxRoleBindingsPerCheck = 100`), then fetches each referenced role individually from
+storage. A user with many role bindings triggers N storage round-trips per permission check. Each
+request performs up to two permission checks (target namespace and `_system`). Only principal
+identity is cached; permission results are not. Under sustained load this will become a
+performance bottleneck.
 
 **Impact**: Latency per authenticated request scales linearly with the number of role bindings
-assigned to the requesting principal. High role-binding counts or high request rates will
+assigned to the requesting principal, up to the 100-binding cap. High request rates will
 increase storage load significantly.
 
 **Workaround**: Keep the number of role bindings per user small. Assign roles at the namespace
 level rather than creating many fine-grained bindings.
 
-**Future mitigation**: Cache resolved permission sets per principal with a TTL, and apply a
-reasonable limit to `ListByUser` to bound unbounded scans.
+**Future mitigation**: Cache resolved permission sets per principal with a TTL.

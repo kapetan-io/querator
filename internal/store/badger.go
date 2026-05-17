@@ -2826,7 +2826,7 @@ func (b *BadgerRoleBindings) List(_ context.Context, namespace string, bindings 
 	})
 }
 
-func (b *BadgerRoleBindings) ListByUser(_ context.Context, userID, namespace string, bindings *[]types.RoleBinding) error {
+func (b *BadgerRoleBindings) ListByUser(_ context.Context, userID, namespace string, bindings *[]types.RoleBinding, limit int) error {
 	db, err := b.getDB()
 	if err != nil {
 		return err
@@ -2839,6 +2839,9 @@ func (b *BadgerRoleBindings) ListByUser(_ context.Context, userID, namespace str
 		}
 
 		for _, id := range ids {
+			if len(*bindings) >= limit {
+				break
+			}
 			kvItem, err := txn.Get([]byte("rolebinding:" + id))
 			if err != nil {
 				continue

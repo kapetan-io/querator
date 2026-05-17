@@ -12,6 +12,10 @@ import (
 	"github.com/kapetan-io/tackle/set"
 )
 
+// maxRoleBindingsPerCheck bounds the number of role bindings fetched per permission check,
+// preventing unbounded storage scans for users with many bindings.
+const maxRoleBindingsPerCheck = 100
+
 // AuthBackendConfig configures the AuthBackend
 type AuthBackendConfig struct {
 	RoleBindings store.RoleBindings
@@ -94,7 +98,7 @@ func (a *AuthBackend) HasPermission(ctx context.Context, principal auth.Principa
 // checkPermissionInNamespace checks if a user has a specific permission in a namespace
 func (a *AuthBackend) checkPermissionInNamespace(ctx context.Context, userID, namespace, perm string) (bool, error) {
 	var bindings []types.RoleBinding
-	if err := a.roleBindings.ListByUser(ctx, userID, namespace, &bindings); err != nil {
+	if err := a.roleBindings.ListByUser(ctx, userID, namespace, &bindings, maxRoleBindingsPerCheck); err != nil {
 		return false, err
 	}
 

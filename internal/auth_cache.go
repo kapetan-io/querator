@@ -109,8 +109,13 @@ func (c *AuthCache) Authenticate(ctx context.Context, key string) (auth.Principa
 	}
 
 	v, err, _ := c.sf.Do(keyHash, func() (any, error) {
+		// Use a detached context with a bounded timeout so that a single caller's
+		// context cancellation does not propagate to all callers sharing this flight.
+		sfCtx, sfCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer sfCancel()
+
 		var apiKey types.APIKey
-		if err := c.apiKeys.GetByHash(ctx, keyHash, &apiKey); err != nil {
+		if err := c.apiKeys.GetByHash(sfCtx, keyHash, &apiKey); err != nil {
 			return nil, err
 		}
 
@@ -119,7 +124,7 @@ func (c *AuthCache) Authenticate(ctx context.Context, key string) (auth.Principa
 		}
 
 		var user types.User
-		if err := c.users.Get(ctx, apiKey.UserID, &user); err != nil {
+		if err := c.users.Get(sfCtx, apiKey.UserID, &user); err != nil {
 			c.log.Warn("storage error during api key user lookup; returning 401 to caller",
 				"user_id", apiKey.UserID, "error", err)
 			return nil, types.ErrAPIKeyInvalid

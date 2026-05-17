@@ -190,8 +190,8 @@ func (qm *QueuesManager) List(ctx context.Context, items *[]types.QueueInfo, opt
 	if qm.inShutdown.Load() {
 		return ErrServiceShutdown
 	}
-	defer qm.mutex.Unlock()
-	qm.mutex.Lock()
+	defer qm.mutex.RUnlock()
+	qm.mutex.RLock()
 
 	return qm.conf.StorageConfig.Queues.List(ctx, items, opts)
 }

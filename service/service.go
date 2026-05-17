@@ -691,6 +691,7 @@ func (s *Service) Health(ctx context.Context) (*transport.HealthResponse, error)
 
 func (s *Service) Shutdown(ctx context.Context) error {
 	// See 0015-shutdown-errors.md for a discussion of shutdown operation
+	s.conf.Auth.Close()
 	return s.queues.Shutdown(ctx)
 }
 

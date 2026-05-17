@@ -51,8 +51,9 @@ type RoleBindings interface {
 	// ListByUser returns role bindings for a user in a specific namespace, up to limit entries.
 	ListByUser(ctx context.Context, userID, namespace string, bindings *[]types.RoleBinding, limit int) error
 
-	// ListByRole returns all role bindings for a specific role.
-	ListByRole(ctx context.Context, roleID string, bindings *[]types.RoleBinding) error
+	// ListByRole returns role bindings for a specific role, up to limit entries.
+	// If limit is 0, all bindings are returned.
+	ListByRole(ctx context.Context, roleID string, bindings *[]types.RoleBinding, limit int) error
 
 	// DeleteByUserAndRole deletes the role binding identified by (namespace, userID, roleID).
 	// Returns ErrRoleBindingNotExist if no matching binding exists.

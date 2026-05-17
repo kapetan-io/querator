@@ -78,6 +78,14 @@ func (c *Config) SetDefaults() {
 			Affinity:       1,
 		},
 	})
+
+	// Default to NoOp auth (open access for internal deployments)
+	set.Default(&c.AuthBackend, auth.AuthBackend(&auth.NoOpAuthBackend{}))
+
+	// Bridge: ensure service layer uses the same auth backend as the transport
+	if c.Service.Auth == nil {
+		c.Service.Auth = c.AuthBackend
+	}
 }
 
 // YAML config file types
@@ -87,8 +95,13 @@ type File struct {
 	Logging          Logging            `yaml:"logging"`
 	PartitionStorage []PartitionStorage `yaml:"partition-storage"`
 	QueueStorage     QueueStorage       `yaml:"queue-storage"`
+	AuthBackend      AuthConfig         `yaml:"auth-backend"`
 	Queues           []Queue            `yaml:"queues"`
 	ConfigFile       string
+}
+
+type AuthConfig struct {
+	Driver string `yaml:"driver"`
 }
 
 type Logging struct {
@@ -136,6 +149,10 @@ func ApplyConfigFile(ctx context.Context, conf *Config, file File, w io.Writer) 
 	}
 
 	if err := setupQueueStorage(ctx, file, conf); err != nil {
+		return err
+	}
+
+	if err := setupAuthBackend(file, conf); err != nil {
 		return err
 	}
 
@@ -246,6 +263,25 @@ func setupQueueStorage(ctx context.Context, file File, conf *Config) error {
 			}
 			return err
 		}
+	}
+	return nil
+}
+
+func setupAuthBackend(file File, conf *Config) error {
+	switch strings.ToLower(file.AuthBackend.Driver) {
+	case "", "none":
+		// NoOp auth (open access) — applied in SetDefaults
+	case "internal":
+		conf.AuthBackend = internal.NewAuthBackend(internal.AuthBackendConfig{
+			RoleBindings: conf.Service.StorageConfig.RoleBindings,
+			APIKeys:      conf.Service.StorageConfig.APIKeys,
+			Users:        conf.Service.StorageConfig.Users,
+			Roles:        conf.Service.StorageConfig.Roles,
+			Log:          conf.Service.Log,
+		})
+	default:
+		return fmt.Errorf("invalid auth-backend driver; '%s' is not one of (none, internal)",
+			file.AuthBackend.Driver)
 	}
 	return nil
 }

@@ -1632,7 +1632,7 @@ func (m *MemoryRoleBindings) ListByUser(_ context.Context, userID, namespace str
 	return nil
 }
 
-func (m *MemoryRoleBindings) ListByRole(_ context.Context, roleID string, bindings *[]types.RoleBinding) error {
+func (m *MemoryRoleBindings) ListByRole(_ context.Context, roleID string, bindings *[]types.RoleBinding, limit int) error {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -1642,6 +1642,9 @@ func (m *MemoryRoleBindings) ListByRole(_ context.Context, roleID string, bindin
 	}
 
 	for _, id := range ids {
+		if limit > 0 && len(*bindings) >= limit {
+			break
+		}
 		if b, ok := m.bindings[id]; ok {
 			*bindings = append(*bindings, b)
 		}

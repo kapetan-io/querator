@@ -644,6 +644,14 @@ func (b *BadgerPartition) Clear(_ context.Context, req types.ClearRequest) error
 			}
 
 			if shouldDelete {
+				// Delete SourceID index if set
+				if item.SourceID != nil {
+					sourceKey := []byte("source:" + string(item.SourceID))
+					if err := txn.Delete(sourceKey); err != nil {
+						return errors.Errorf("deleting SourceID index: %w", err)
+					}
+				}
+
 				if err := txn.Delete(k); err != nil {
 					return errors.Errorf("during Delete(): %w", err)
 				}
@@ -965,11 +973,11 @@ func (b *BadgerPartition) LifeCycleInfo(_ context.Context, info *types.LifeCycle
 				continue
 			}
 
-			if item.LeaseDeadline.Before(nextLease) {
+			if item.IsLeased && !item.LeaseDeadline.IsZero() && item.LeaseDeadline.Before(nextLease) {
 				nextLease = item.LeaseDeadline
 			}
 
-			if item.ExpireDeadline.Before(nextExpire) {
+			if !item.ExpireDeadline.IsZero() && item.ExpireDeadline.Before(nextExpire) {
 				nextExpire = item.ExpireDeadline
 			}
 		}
@@ -2899,7 +2907,7 @@ func (b *BadgerRoleBindings) ListByUser(_ context.Context, userID, namespace str
 	})
 }
 
-func (b *BadgerRoleBindings) ListByRole(_ context.Context, roleID string, bindings *[]types.RoleBinding) error {
+func (b *BadgerRoleBindings) ListByRole(_ context.Context, roleID string, bindings *[]types.RoleBinding, limit int) error {
 	db, err := b.getDB()
 	if err != nil {
 		return err
@@ -2912,6 +2920,9 @@ func (b *BadgerRoleBindings) ListByRole(_ context.Context, roleID string, bindin
 		}
 
 		for _, id := range ids {
+			if limit > 0 && len(*bindings) >= limit {
+				break
+			}
 			kvItem, err := txn.Get([]byte("rolebinding:" + id))
 			if err != nil {
 				continue

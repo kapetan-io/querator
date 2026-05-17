@@ -359,6 +359,10 @@ func (s *Service) validateRoleBindingCreateProto(in *proto.RoleBindingCreateRequ
 		return reply.NewInvalidOption("user_id is invalid; cannot be empty")
 	}
 
+	if strings.Contains(in.UserId, ":") {
+		return reply.NewInvalidOption("user_id is invalid; '%s' cannot contain ':' character", in.UserId)
+	}
+
 	out.Namespace = in.Namespace
 	out.UserID = in.UserId
 	return nil

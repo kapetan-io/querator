@@ -104,10 +104,8 @@ func New(ctx context.Context, conf Config) (*Service, error) {
 		return nil, err
 	}
 
-	// Default to NoOp auth if not provided
-	if conf.Auth == nil {
-		conf.Auth = &auth.NoOpAuthBackend{}
-	}
+	// Default to NoOp auth if not provided (standalone service usage without daemon)
+	set.Default(&conf.Auth, auth.AuthBackend(&auth.NoOpAuthBackend{}))
 
 	s := &Service{
 		queues: qm,
@@ -1181,7 +1179,7 @@ func (s *Service) RolesDelete(ctx context.Context, req *proto.RolesDeleteRequest
 
 	// Check if role has bindings
 	var bindings []types.RoleBinding
-	if err := s.conf.StorageConfig.RoleBindings.ListByRole(ctx, role.ID, &bindings); err != nil {
+	if err := s.conf.StorageConfig.RoleBindings.ListByRole(ctx, role.ID, &bindings, 1); err != nil {
 		return err
 	}
 	if len(bindings) > 0 {
@@ -1279,6 +1277,10 @@ func (s *Service) RoleBindingsDelete(ctx context.Context, req *proto.RoleBinding
 	}
 	if s.conf.StorageConfig.RoleBindings == nil {
 		return reply.NewRequestFailed("role binding storage not configured")
+	}
+
+	if strings.Contains(req.UserId, ":") {
+		return reply.NewInvalidOption("user_id is invalid; '%s' cannot contain ':' character", req.UserId)
 	}
 
 	ns := resolveNamespace(req.Namespace)

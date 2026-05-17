@@ -2449,12 +2449,18 @@ func (b *BadgerRoles) Add(_ context.Context, role types.Role) error {
 		if err == nil {
 			return types.NewErrRoleAlreadyExists(role.Namespace, role.Name)
 		}
+		if !errors.Is(err, badger.ErrKeyNotFound) {
+			return errors.Errorf("during Get(): %w", err)
+		}
 
 		// Check if role already exists by namespace:name
 		indexKey := []byte("role-ns-name:" + role.Namespace + ":" + role.Name)
 		_, err = txn.Get(indexKey)
 		if err == nil {
 			return types.NewErrRoleAlreadyExists(role.Namespace, role.Name)
+		}
+		if !errors.Is(err, badger.ErrKeyNotFound) {
+			return errors.Errorf("during uniqueness check: %w", err)
 		}
 
 		// Encode role
@@ -2734,6 +2740,9 @@ func (b *BadgerRoleBindings) Add(_ context.Context, binding types.RoleBinding) e
 		_, err = txn.Get(uniqueKey)
 		if err == nil {
 			return types.NewErrRoleBindingAlreadyExists(binding.UserID, binding.RoleID, binding.Namespace)
+		}
+		if !errors.Is(err, badger.ErrKeyNotFound) {
+			return errors.Errorf("during uniqueness check: %w", err)
 		}
 
 		// Encode binding

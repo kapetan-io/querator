@@ -262,6 +262,63 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 			assert.Equal(t, duh.CodeForbidden, duhErr.Code())
 		})
 
+		t.Run("StorageItemsDeleteRequiresClearPermission", func(t *testing.T) {
+			d, adminKey := newDaemonWithAuth(t, setup)
+			defer d.Shutdown(t)
+
+			ctx := d.Context()
+			adminClient := newClientWithAPIKey(t, d, adminKey)
+
+			// Create a queue and produce an item
+			queueName := random.String("queue-", 10)
+			require.NoError(t, adminClient.QueuesCreate(ctx, &pb.QueueInfo{
+				QueueName:           queueName,
+				LeaseTimeout:        LeaseTimeout,
+				ExpireTimeout:       ExpireTimeout,
+				RequestedPartitions: 1,
+			}))
+
+			require.NoError(t, adminClient.QueueProduce(ctx, &pb.QueueProduceRequest{
+				QueueName:      queueName,
+				RequestTimeout: "5s",
+				Items:          []*pb.QueueProduceItem{{Bytes: []byte("test"), Reference: "ref-1"}},
+			}))
+
+			// List storage to get item IDs
+			var listRes pb.StorageItemsListResponse
+			require.NoError(t, adminClient.StorageItemsList(ctx, queueName, 0, &listRes, nil))
+			require.NotEmpty(t, listRes.Items)
+
+			// User with only queue.complete should NOT be able to delete storage items
+			completeKey := CreateUserWithLimitedPermissions(t, ctx, adminClient, []string{
+				auth.QueueComplete, auth.QueueList, auth.QueueStats,
+			})
+			completeClient := newClientWithAPIKey(t, d, completeKey)
+
+			err := completeClient.StorageItemsDelete(ctx, &pb.StorageItemsDeleteRequest{
+				QueueName: queueName,
+				Partition: 0,
+				Ids:       []string{listRes.Items[0].Id},
+			})
+			require.Error(t, err)
+			var duhErr duh.Error
+			require.ErrorAs(t, err, &duhErr)
+			assert.Equal(t, duh.CodeForbidden, duhErr.Code())
+
+			// User with queue.clear SHOULD be able to delete storage items
+			clearKey := CreateUserWithLimitedPermissions(t, ctx, adminClient, []string{
+				auth.QueueClear, auth.QueueList, auth.QueueStats,
+			})
+			clearClient := newClientWithAPIKey(t, d, clearKey)
+
+			err = clearClient.StorageItemsDelete(ctx, &pb.StorageItemsDeleteRequest{
+				QueueName: queueName,
+				Partition: 0,
+				Ids:       []string{listRes.Items[0].Id},
+			})
+			require.NoError(t, err)
+		})
+
 		t.Run("NamespaceScoping", func(t *testing.T) {
 			d, adminKey := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)

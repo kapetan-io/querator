@@ -585,7 +585,7 @@ func (s *Service) StorageItemsDelete(ctx context.Context, req *proto.StorageItem
 		return err
 	}
 
-	if err := s.authorize(ctx, queue.Info().Namespace, auth.QueueComplete); err != nil {
+	if err := s.authorize(ctx, queue.Info().Namespace, auth.QueueClear); err != nil {
 		return err
 	}
 

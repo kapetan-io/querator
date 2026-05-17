@@ -571,11 +571,20 @@ func (h *HTTPHandler) ReplyError(w http.ResponseWriter, r *http.Request, err err
 	}
 	// TODO: Extract error.Fields and add them to the log fields
 
+	safe := make(http.Header, len(r.Header))
+	for k, v := range r.Header {
+		if strings.EqualFold(k, "Authorization") || strings.EqualFold(k, "Cookie") {
+			safe[k] = []string{"[REDACTED]"}
+		} else {
+			safe[k] = v
+		}
+	}
+
 	h.log.Error(err.Error(),
 		"location", "HTTPHandler",
 		"http.request.status", duh.CodeInternalError,
 		"http.request.url", r.URL.String(),
-		"http.request.headers", r.Header,
+		"http.request.headers", safe,
 		"http.request.useragent", r.Header.Get("user-agent"),
 	)
 	duh.ReplyWithCode(w, r, duh.CodeInternalError, nil, "Internal Error")

@@ -377,7 +377,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					var duhErr duh.Error
 					require.True(t, errors.As(err, &duhErr))
 					assert.Equal(t, duh.CodeBadRequest, duhErr.Code())
-					assert.Contains(t, duhErr.Message(), "cannot reference itself")
+					assert.Contains(t, duhErr.Message(), "already has its own dead_queue configured")
 				})
 
 				t.Run("ValidDLQ", func(t *testing.T) {

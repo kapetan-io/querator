@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/kapetan-io/querator"
@@ -687,16 +688,6 @@ func (s *Service) Shutdown(ctx context.Context) error {
 	return s.queues.Shutdown(ctx)
 }
 
-// GetQueueNamespace returns the namespace for a given queue name.
-// Used by the HTTP layer for authorization checks.
-func (s *Service) GetQueueNamespace(ctx context.Context, queueName string) (string, error) {
-	queue, err := s.queues.Get(ctx, queueName)
-	if err != nil {
-		return "", err
-	}
-	return queue.Info().Namespace, nil
-}
-
 // -------------------------------------------------
 // Namespace Management API
 // -------------------------------------------------
@@ -776,7 +767,7 @@ func (s *Service) NamespacesDelete(ctx context.Context, req *proto.NamespacesDel
 		return err
 	}
 
-	if (&types.Namespace{Name: req.Name}).IsReserved() {
+	if strings.HasPrefix(req.Name, "_") {
 		return types.NewErrNamespaceReserved(req.Name)
 	}
 
@@ -1298,17 +1289,16 @@ func (s *Service) bootstrapStandardRoles(ctx context.Context) error {
 		},
 	}
 	for _, role := range roles {
-		role.ID = internal.NewUID()
-		err := s.conf.StorageConfig.Roles.Add(ctx, role)
-		if errors.Is(err, types.ErrRoleAlreadyExists) {
-			var existing types.Role
-			if err = s.conf.StorageConfig.Roles.Get(ctx, role.Namespace, role.Name, &existing); err != nil {
+		var existing types.Role
+		if err := s.conf.StorageConfig.Roles.Get(ctx, role.Namespace, role.Name, &existing); err != nil {
+			role.ID = internal.NewUID()
+			if err = s.conf.StorageConfig.Roles.Add(ctx, role); err != nil {
 				return err
 			}
-			role.ID = existing.ID
-			err = s.conf.StorageConfig.Roles.Update(ctx, role)
+			continue
 		}
-		if err != nil {
+		role.ID = existing.ID
+		if err := s.conf.StorageConfig.Roles.Update(ctx, role); err != nil {
 			return err
 		}
 	}
@@ -1334,7 +1324,9 @@ func (s *Service) bootstrapAnonymousAdminBinding(ctx context.Context) error {
 	if err != nil && !errors.Is(err, types.ErrRoleBindingAlreadyExists) {
 		return err
 	}
-	s.conf.Log.Warn("SYSTEM RUNNING IN OPEN DOOR MODE - anonymous user has admin privileges. " +
-		"Remove the anonymous admin binding to secure the system.")
+	if err == nil {
+		s.conf.Log.Warn("SYSTEM RUNNING IN OPEN DOOR MODE - anonymous user has admin privileges. " +
+			"Remove the anonymous admin binding to secure the system.")
+	}
 	return nil
 }

@@ -34,6 +34,8 @@ type AuthCacheConfig struct {
 type AuthCache struct {
 	cleanupInterval time.Duration
 	byKeyHash       map[string]authCacheEntry
+	byUserID        map[string]map[string]struct{}
+	lastUsedCh      chan lastUsedUpdate
 	users           store.Users
 	apiKeys         store.APIKeys
 	log             *slog.Logger
@@ -43,6 +45,11 @@ type AuthCache struct {
 	wg              sync.WaitGroup
 	once            sync.Once
 	ttl             time.Duration
+}
+
+type lastUsedUpdate struct {
+	keyID string
+	at    time.Time
 }
 
 type authCacheEntry struct {
@@ -60,6 +67,8 @@ func NewAuthCache(conf AuthCacheConfig) *AuthCache {
 	c := &AuthCache{
 		cleanupInterval: conf.CleanupInterval,
 		byKeyHash:       make(map[string]authCacheEntry),
+		byUserID:        make(map[string]map[string]struct{}),
+		lastUsedCh:      make(chan lastUsedUpdate, 64),
 		stopCleanup:     make(chan struct{}),
 		apiKeys:         conf.APIKeys,
 		users:           conf.Users,
@@ -67,8 +76,9 @@ func NewAuthCache(conf AuthCacheConfig) *AuthCache {
 		ttl:             conf.TTL,
 	}
 
-	c.wg.Add(1)
+	c.wg.Add(2)
 	go c.cleanupLoop()
+	go c.lastUsedLoop()
 
 	return c
 }
@@ -124,17 +134,15 @@ func (c *AuthCache) Authenticate(ctx context.Context, key string) (auth.Principa
 			expiresAt:    clock.Now().UTC().Add(c.ttl),
 			principal:    principal,
 		}
+		if c.byUserID[user.ID] == nil {
+			c.byUserID[user.ID] = make(map[string]struct{})
+		}
+		c.byUserID[user.ID][keyHash] = struct{}{}
 		c.mu.Unlock()
 
-		c.wg.Add(1)
 		select {
-		case <-c.stopCleanup:
-			c.wg.Done()
+		case c.lastUsedCh <- lastUsedUpdate{keyID: apiKey.ID, at: clock.Now().UTC()}:
 		default:
-			go func() {
-				defer c.wg.Done()
-				_ = c.apiKeys.UpdateLastUsed(context.Background(), apiKey.ID, clock.Now().UTC())
-			}()
 		}
 
 		return principal, nil
@@ -148,17 +156,26 @@ func (c *AuthCache) Authenticate(ctx context.Context, key string) (auth.Principa
 // Invalidate removes a cached entry by key hash
 func (c *AuthCache) Invalidate(keyHash string) {
 	c.mu.Lock()
-	delete(c.byKeyHash, keyHash)
+	if entry, ok := c.byKeyHash[keyHash]; ok {
+		delete(c.byKeyHash, keyHash)
+		if hashes, ok := c.byUserID[entry.principal.UserID]; ok {
+			delete(hashes, keyHash)
+			if len(hashes) == 0 {
+				delete(c.byUserID, entry.principal.UserID)
+			}
+		}
+	}
 	c.mu.Unlock()
 }
 
 // InvalidateUser removes all cached entries for a user
 func (c *AuthCache) InvalidateUser(userID string) {
 	c.mu.Lock()
-	for hash, entry := range c.byKeyHash {
-		if entry.principal.UserID == userID {
+	if hashes, ok := c.byUserID[userID]; ok {
+		for hash := range hashes {
 			delete(c.byKeyHash, hash)
 		}
+		delete(c.byUserID, userID)
 	}
 	c.mu.Unlock()
 }
@@ -192,7 +209,33 @@ func (c *AuthCache) cleanup() {
 	for hash, entry := range c.byKeyHash {
 		if now.After(entry.expiresAt) {
 			delete(c.byKeyHash, hash)
+			if hashes, ok := c.byUserID[entry.principal.UserID]; ok {
+				delete(hashes, hash)
+				if len(hashes) == 0 {
+					delete(c.byUserID, entry.principal.UserID)
+				}
+			}
 		}
 	}
 	c.mu.Unlock()
+}
+
+func (c *AuthCache) lastUsedLoop() {
+	defer c.wg.Done()
+	for {
+		select {
+		case update := <-c.lastUsedCh:
+			_ = c.apiKeys.UpdateLastUsed(context.Background(), update.keyID, update.at)
+		case <-c.stopCleanup:
+			// Drain remaining updates before exiting
+			for {
+				select {
+				case update := <-c.lastUsedCh:
+					_ = c.apiKeys.UpdateLastUsed(context.Background(), update.keyID, update.at)
+				default:
+					return
+				}
+			}
+		}
+	}
 }

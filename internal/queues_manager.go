@@ -361,8 +361,8 @@ func (qm *QueuesManager) validateDeadQueue(ctx context.Context, info types.Queue
 	// Fetch the DLQ to ensure it exists
 	dlq, err := qm.get(ctx, info.DeadQueue)
 	if err != nil {
-		if errors.Is(err, store.ErrQueueNotExist) ||
-		   (func() bool { var e *reply.ErrInvalidOption; return errors.As(err, &e) })() {
+		var invalidOpt *reply.ErrInvalidOption
+		if errors.Is(err, store.ErrQueueNotExist) || errors.As(err, &invalidOpt) {
 			return reply.NewInvalidOption("dead_queue does not exist; '%s' was not found, create it first", info.DeadQueue)
 		}
 		return err
@@ -371,7 +371,7 @@ func (qm *QueuesManager) validateDeadQueue(ctx context.Context, info types.Queue
 	// Enforce no DLQ chains: a DLQ cannot have its own DLQ
 	dlqInfo := dlq.Info()
 	if dlqInfo.DeadQueue != "" {
-		return reply.NewInvalidOption("dead_queue is invalid; '%s' cannot reference itself as a dead_queue", info.DeadQueue)
+		return reply.NewInvalidOption("dead_queue is invalid; '%s' already has its own dead_queue configured", info.DeadQueue)
 	}
 
 	return nil

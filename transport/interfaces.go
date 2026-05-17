@@ -82,7 +82,4 @@ type Service interface {
 	RolesAdmin
 	RoleBindingsAdmin
 	Health(context.Context) (*HealthResponse, error)
-	// GetQueueNamespace returns the namespace for a given queue name.
-	// Used by the HTTP layer for authorization checks.
-	GetQueueNamespace(ctx context.Context, queueName string) (string, error)
 }

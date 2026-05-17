@@ -98,7 +98,10 @@ func (c *AuthCache) Authenticate(ctx context.Context, key string) (auth.Principa
 	if ok && clock.Now().UTC().Before(entry.expiresAt) {
 		if entry.keyExpiresAt != nil && clock.Now().UTC().After(*entry.keyExpiresAt) {
 			c.mu.Lock()
-			delete(c.byKeyHash, keyHash)
+			if current, exists := c.byKeyHash[keyHash]; exists && current.keyExpiresAt != nil &&
+				clock.Now().UTC().After(*current.keyExpiresAt) {
+				delete(c.byKeyHash, keyHash)
+			}
 			c.mu.Unlock()
 			return auth.Principal{}, types.ErrAPIKeyExpired
 		}

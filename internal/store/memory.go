@@ -626,6 +626,7 @@ func (m *MemoryPartition) findID(id []byte) (int, bool) {
 
 type MemoryQueues struct {
 	QueuesValidation
+	mu  sync.RWMutex
 	mem []types.QueueInfo
 	log *slog.Logger
 }
@@ -645,6 +646,9 @@ func (s *MemoryQueues) Get(_ context.Context, name string, queue *types.QueueInf
 		return err
 	}
 
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	idx, ok := s.findQueue(name)
 	if !ok {
 		return ErrQueueNotExist
@@ -657,6 +661,9 @@ func (s *MemoryQueues) Add(_ context.Context, info types.QueueInfo) error {
 	if err := s.validateAdd(info); err != nil {
 		return err
 	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	_, ok := s.findQueue(info.Name)
 	if ok {
@@ -671,6 +678,9 @@ func (s *MemoryQueues) Update(_ context.Context, info types.QueueInfo) error {
 	if err := s.validateQueueName(info); err != nil {
 		return err
 	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	idx, ok := s.findQueue(info.Name)
 	if !ok {
@@ -705,6 +715,9 @@ func (s *MemoryQueues) List(_ context.Context, queues *[]types.QueueInfo, opts t
 		return err
 	}
 
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	var count, idx int
 	if opts.Pivot != nil {
 		idx, _ = s.findQueue(string(opts.Pivot))
@@ -728,6 +741,9 @@ func (s *MemoryQueues) Delete(_ context.Context, name string) error {
 		return err
 	}
 
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	idx, ok := s.findQueue(name)
 	if !ok {
 		return nil
@@ -737,22 +753,24 @@ func (s *MemoryQueues) Delete(_ context.Context, name string) error {
 }
 
 func (s *MemoryQueues) Close(_ context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	s.mem = nil
 	return nil
 }
 
 // findQueue attempts to find the provided queue in s.mem. If found returns the index and true.
-// If not found returns the next nearest item in the list.
+// If not found returns the index of the first item that sorts after the target.
 func (s *MemoryQueues) findQueue(name string) (int, bool) {
-	var nearest, nearestIdx int
+	nearestIdx := len(s.mem)
 	for i, queue := range s.mem {
 		lex := strings.Compare(queue.Name, name)
 		if lex == 0 {
 			return i, true
 		}
-		if lex > nearest {
+		if lex > 0 && i < nearestIdx {
 			nearestIdx = i
-			nearest = lex
 		}
 	}
 	return nearestIdx, false
@@ -905,17 +923,16 @@ func (s *MemoryNamespaces) Close(_ context.Context) error {
 }
 
 // findNamespace attempts to find the provided namespace in s.mem. If found returns the index and true.
-// If not found returns the next nearest item in the list.
+// If not found returns the index of the first item that sorts after the target.
 func (s *MemoryNamespaces) findNamespace(name string) (int, bool) {
-	var nearest, nearestIdx int
+	nearestIdx := len(s.mem)
 	for i, ns := range s.mem {
 		lex := strings.Compare(ns.Name, name)
 		if lex == 0 {
 			return i, true
 		}
-		if lex > nearest {
+		if lex > 0 && i < nearestIdx {
 			nearestIdx = i
-			nearest = lex
 		}
 	}
 	return nearestIdx, false

@@ -158,6 +158,15 @@ func testNamespaces(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			require.Equal(t, 2, len(pivoted.Items))
 			assert.Equal(t, pivot, pivoted.Items[0].Name)
 		})
+
+		// Issue #9: When the pivot sorts after all existing namespaces, the
+		// result should be empty — not wrap around to the beginning.
+		t.Run("PivotPastEnd", func(t *testing.T) {
+			var page pb.NamespacesListResponse
+			require.NoError(t, c.NamespacesList(ctx, &page,
+				&querator.ListOptions{Pivot: "zzzzz-99999", Limit: 10}))
+			assert.Empty(t, page.Items)
+		})
 	})
 
 	t.Run("Errors", func(t *testing.T) {
@@ -382,6 +391,44 @@ func testNamespaces(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			require.NoError(t, c.QueuesList(ctx, &ns2List, &querator.ListOptions{Namespace: ns2}))
 			require.Len(t, ns2List.Items, 1)
 			assert.Equal(t, ns2, ns2List.Items[0].Namespace)
+		})
+
+		// Issue #5: Listing queues with a namespace filter returns only queues
+		// in that namespace, not queues from other namespaces.
+		t.Run("QueuesListNamespaceIsolation", func(t *testing.T) {
+			d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+			defer func() {
+				d.Shutdown(t)
+				tearDown()
+			}()
+
+			ns1 := random.String("iso-a-", 10)
+			ns2 := random.String("iso-b-", 10)
+			require.NoError(t, c.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: ns1}))
+			require.NoError(t, c.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: ns2}))
+
+			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+				QueueName:           random.String("q-a-", 10),
+				Namespace:           ns1,
+				LeaseTimeout:        "1m",
+				ExpireTimeout:       "10m",
+				RequestedPartitions: 1,
+			}))
+			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+				QueueName:           random.String("q-b-", 10),
+				Namespace:           ns2,
+				LeaseTimeout:        "1m",
+				ExpireTimeout:       "10m",
+				RequestedPartitions: 1,
+			}))
+
+			// List filtered to ns1 — should not contain ns2 queues
+			var list pb.QueuesListResponse
+			require.NoError(t, c.QueuesList(ctx, &list, &querator.ListOptions{Namespace: ns1}))
+			require.NotEmpty(t, list.Items)
+			for _, item := range list.Items {
+				assert.Equal(t, ns1, item.Namespace)
+			}
 		})
 
 		t.Run("Errors", func(t *testing.T) {

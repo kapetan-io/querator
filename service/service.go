@@ -735,7 +735,6 @@ func (s *Service) NamespacesUpdate(ctx context.Context, req *proto.NamespaceInfo
 
 func (s *Service) NamespacesList(ctx context.Context, req *proto.NamespacesListRequest,
 	resp *proto.NamespacesListResponse) error {
-
 	if req.Limit == 0 {
 		req.Limit = DefaultListLimit
 	}
@@ -833,7 +832,6 @@ func (s *Service) UsersCreate(ctx context.Context, req *proto.UserCreateRequest,
 
 func (s *Service) UsersList(ctx context.Context, req *proto.UsersListRequest,
 	resp *proto.UsersListResponse) error {
-
 	if req.Limit == 0 {
 		req.Limit = DefaultListLimit
 	}
@@ -943,7 +941,6 @@ func (s *Service) APIKeysCreate(ctx context.Context, req *proto.APIKeyCreateRequ
 
 func (s *Service) APIKeysList(ctx context.Context, req *proto.APIKeysListRequest,
 	resp *proto.APIKeysListResponse) error {
-
 	if req.Limit == 0 {
 		req.Limit = DefaultListLimit
 	}
@@ -1033,7 +1030,6 @@ func (s *Service) RolesCreate(ctx context.Context, req *proto.RoleCreateRequest,
 
 func (s *Service) RolesList(ctx context.Context, req *proto.RolesListRequest,
 	resp *proto.RolesListResponse) error {
-
 	if req.Limit == 0 {
 		req.Limit = DefaultListLimit
 	}

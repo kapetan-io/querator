@@ -588,15 +588,14 @@ func (b *BadgerPartition) Clear(_ context.Context, req types.ClearRequest) error
 		return err
 	}
 
-	return db.Update(func(txn *badger.Txn) error {
-		if req.Destructive && req.Queue {
-			err := db.DropAll()
-			if err != nil {
-				return errors.Errorf("during destructive DropAll(): %w", err)
-			}
-			return nil
+	if req.Destructive && req.Queue {
+		if err := db.DropAll(); err != nil {
+			return errors.Errorf("during destructive DropAll(): %w", err)
 		}
+		return nil
+	}
 
+	return db.Update(func(txn *badger.Txn) error {
 		iter := txn.NewIterator(badger.DefaultIteratorOptions)
 		defer iter.Close()
 
@@ -2414,9 +2413,15 @@ func (b *BadgerRoles) Add(_ context.Context, role types.Role) error {
 	}
 
 	return db.Update(func(txn *badger.Txn) error {
+		// Check if role ID already exists
+		_, err := txn.Get([]byte("role:" + role.ID))
+		if err == nil {
+			return types.NewErrRoleAlreadyExists(role.Namespace, role.Name)
+		}
+
 		// Check if role already exists by namespace:name
 		indexKey := []byte("role-ns-name:" + role.Namespace + ":" + role.Name)
-		_, err := txn.Get(indexKey)
+		_, err = txn.Get(indexKey)
 		if err == nil {
 			return types.NewErrRoleAlreadyExists(role.Namespace, role.Name)
 		}

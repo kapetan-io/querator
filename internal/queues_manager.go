@@ -318,7 +318,9 @@ func (qm *QueuesManager) LifeCycle(ctx context.Context, req *types.LifeCycleRequ
 // ProduceToQueue produces items to the specified queue by name.
 // Used for DLQ item movement during lifecycle processing.
 func (qm *QueuesManager) ProduceToQueue(ctx context.Context, queueName string, items []*types.Item) error {
+	qm.mutex.RLock()
 	q, err := qm.get(ctx, queueName)
+	qm.mutex.RUnlock()
 	if err != nil {
 		return errors.Errorf("failed to get queue '%s': %w", queueName, err)
 	}

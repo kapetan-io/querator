@@ -497,6 +497,15 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 			assert.Equal(t, queues[0].QueueName, page.Items[0].QueueName)
 		})
+
+		// Issue #9: When the pivot sorts after all existing items, the result
+		// should be empty — not wrap around to the beginning of the list.
+		t.Run("PivotPastEnd", func(t *testing.T) {
+			var page pb.QueuesListResponse
+			require.NoError(t, c.QueuesList(ctx, &page,
+				&querator.ListOptions{Pivot: "zzzzz-99999", Limit: 10}))
+			assert.Empty(t, page.Items)
+		})
 	})
 
 	t.Run("Errors", func(t *testing.T) {

@@ -11,6 +11,7 @@ import (
 	"github.com/kapetan-io/querator/transport/auth"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/set"
+	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -37,6 +38,7 @@ type AuthCache struct {
 	apiKeys         store.APIKeys
 	log             *slog.Logger
 	stopCleanup     chan struct{}
+	sf              singleflight.Group
 	mu              sync.RWMutex
 	wg              sync.WaitGroup
 	once            sync.Once
@@ -93,48 +95,54 @@ func (c *AuthCache) Authenticate(ctx context.Context, key string) (auth.Principa
 		return entry.principal, nil
 	}
 
-	var apiKey types.APIKey
-	if err := c.apiKeys.GetByHash(ctx, keyHash, &apiKey); err != nil {
+	v, err, _ := c.sf.Do(keyHash, func() (any, error) {
+		var apiKey types.APIKey
+		if err := c.apiKeys.GetByHash(ctx, keyHash, &apiKey); err != nil {
+			return nil, err
+		}
+
+		if apiKey.ExpiresAt != nil && clock.Now().UTC().After(*apiKey.ExpiresAt) {
+			return nil, types.ErrAPIKeyExpired
+		}
+
+		var user types.User
+		if err := c.users.Get(ctx, apiKey.UserID, &user); err != nil {
+			c.log.Warn("storage error during api key user lookup; returning 401 to caller",
+				"user_id", apiKey.UserID, "error", err)
+			return nil, types.ErrAPIKeyInvalid
+		}
+
+		principal := auth.Principal{
+			NamespaceScope: apiKey.NamespaceScope,
+			UserID:         user.ID,
+			Username:       user.Username,
+		}
+
+		c.mu.Lock()
+		c.byKeyHash[keyHash] = authCacheEntry{
+			keyExpiresAt: apiKey.ExpiresAt,
+			expiresAt:    clock.Now().UTC().Add(c.ttl),
+			principal:    principal,
+		}
+		c.mu.Unlock()
+
+		c.wg.Add(1)
+		select {
+		case <-c.stopCleanup:
+			c.wg.Done()
+		default:
+			go func() {
+				defer c.wg.Done()
+				_ = c.apiKeys.UpdateLastUsed(context.Background(), apiKey.ID, clock.Now().UTC())
+			}()
+		}
+
+		return principal, nil
+	})
+	if err != nil {
 		return auth.Principal{}, err
 	}
-
-	if apiKey.ExpiresAt != nil && clock.Now().UTC().After(*apiKey.ExpiresAt) {
-		return auth.Principal{}, types.ErrAPIKeyExpired
-	}
-
-	var user types.User
-	if err := c.users.Get(ctx, apiKey.UserID, &user); err != nil {
-		c.log.Warn("storage error during api key user lookup; returning 401 to caller",
-			"user_id", apiKey.UserID, "error", err)
-		return auth.Principal{}, types.ErrAPIKeyInvalid
-	}
-
-	principal := auth.Principal{
-		NamespaceScope: apiKey.NamespaceScope,
-		UserID:         user.ID,
-		Username:       user.Username,
-	}
-
-	c.mu.Lock()
-	c.byKeyHash[keyHash] = authCacheEntry{
-		keyExpiresAt: apiKey.ExpiresAt,
-		expiresAt:    clock.Now().UTC().Add(c.ttl),
-		principal:    principal,
-	}
-	c.mu.Unlock()
-
-	c.wg.Add(1)
-	select {
-	case <-c.stopCleanup:
-		c.wg.Done()
-	default:
-		go func() {
-			defer c.wg.Done()
-			_ = c.apiKeys.UpdateLastUsed(context.Background(), apiKey.ID, clock.Now().UTC())
-		}()
-	}
-
-	return principal, nil
+	return v.(auth.Principal), nil
 }
 
 // Invalidate removes a cached entry by key hash

@@ -1593,7 +1593,7 @@ func (m *MemoryRoleBindings) List(_ context.Context, namespace string, bindings 
 	return nil
 }
 
-func (m *MemoryRoleBindings) ListByUser(_ context.Context, userID string, bindings *[]types.RoleBinding) error {
+func (m *MemoryRoleBindings) ListByUser(_ context.Context, userID, namespace string, bindings *[]types.RoleBinding) error {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -1603,7 +1603,7 @@ func (m *MemoryRoleBindings) ListByUser(_ context.Context, userID string, bindin
 	}
 
 	for _, id := range ids {
-		if b, ok := m.bindings[id]; ok {
+		if b, ok := m.bindings[id]; ok && b.Namespace == namespace {
 			*bindings = append(*bindings, b)
 		}
 	}

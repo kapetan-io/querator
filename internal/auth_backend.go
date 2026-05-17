@@ -2,11 +2,13 @@ package internal
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/transport/auth"
+	"github.com/kapetan-io/querator/transport/reply"
 	"github.com/kapetan-io/tackle/set"
 )
 
@@ -92,17 +94,18 @@ func (a *AuthBackend) HasPermission(ctx context.Context, principal auth.Principa
 // checkPermissionInNamespace checks if a user has a specific permission in a namespace
 func (a *AuthBackend) checkPermissionInNamespace(ctx context.Context, userID, namespace, perm string) (bool, error) {
 	var bindings []types.RoleBinding
-	if err := a.roleBindings.ListByUser(ctx, userID, &bindings); err != nil {
+	if err := a.roleBindings.ListByUser(ctx, userID, namespace, &bindings); err != nil {
 		return false, err
 	}
 
 	for _, binding := range bindings {
-		if binding.Namespace != namespace {
-			continue
-		}
 
 		var role types.Role
 		if err := a.roles.GetByID(ctx, binding.RoleID, &role); err != nil {
+			var notFound *reply.ErrRequestFailed
+			if !errors.As(err, &notFound) {
+				return false, err
+			}
 			a.log.Warn("role binding references non-existent role",
 				"binding_id", binding.ID,
 				"role_id", binding.RoleID)

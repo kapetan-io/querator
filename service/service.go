@@ -669,8 +669,9 @@ func (s *Service) Health(ctx context.Context) (*transport.HealthResponse, error)
 	}
 
 	if err != nil {
+		s.conf.Log.Error("health check storage probe failed", "error", err)
 		check.Status = transport.HealthStatusFail
-		check.Output = err.Error()
+		check.Output = "storage check failed"
 		response.Status = transport.HealthStatusFail
 	} else {
 		check.Status = transport.HealthStatusPass
@@ -1301,7 +1302,10 @@ func (s *Service) bootstrapStandardRoles(ctx context.Context) error {
 	}
 	for _, role := range roles {
 		err := s.conf.StorageConfig.Roles.Add(ctx, role)
-		if err != nil && !errors.Is(err, types.ErrRoleAlreadyExists) {
+		if errors.Is(err, types.ErrRoleAlreadyExists) {
+			err = s.conf.StorageConfig.Roles.Update(ctx, role)
+		}
+		if err != nil {
 			return err
 		}
 	}

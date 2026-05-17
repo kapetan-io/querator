@@ -2826,7 +2826,7 @@ func (b *BadgerRoleBindings) List(_ context.Context, namespace string, bindings 
 	})
 }
 
-func (b *BadgerRoleBindings) ListByUser(_ context.Context, userID string, bindings *[]types.RoleBinding) error {
+func (b *BadgerRoleBindings) ListByUser(_ context.Context, userID, namespace string, bindings *[]types.RoleBinding) error {
 	db, err := b.getDB()
 	if err != nil {
 		return err
@@ -2852,6 +2852,9 @@ func (b *BadgerRoleBindings) ListByUser(_ context.Context, userID string, bindin
 
 			var binding types.RoleBinding
 			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(&binding); err != nil {
+				continue
+			}
+			if binding.Namespace != namespace {
 				continue
 			}
 			*bindings = append(*bindings, binding)

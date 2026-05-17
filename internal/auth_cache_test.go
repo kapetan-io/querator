@@ -3,6 +3,7 @@ package internal_test
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -10,8 +11,28 @@ import (
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/transport/auth"
+	"github.com/kapetan-io/tackle/clock"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// slowAPIKeys wraps store.APIKeys adding a configurable delay to GetByHash and
+// counting calls to UpdateLastUsed. Used to demonstrate the cache-miss fan-out race.
+type slowAPIKeys struct {
+	store.APIKeys
+	getByHashDelay  time.Duration
+	updateLastUsed  atomic.Int64
+}
+
+func (s *slowAPIKeys) GetByHash(ctx context.Context, hash string, key *types.APIKey) error {
+	time.Sleep(s.getByHashDelay)
+	return s.APIKeys.GetByHash(ctx, hash, key)
+}
+
+func (s *slowAPIKeys) UpdateLastUsed(ctx context.Context, id string, t clock.Time) error {
+	s.updateLastUsed.Add(1)
+	return s.APIKeys.UpdateLastUsed(ctx, id, t)
+}
 
 // TestAuthCacheCloseRace exercises both goroutine-lifecycle race conditions in AuthCache.
 //
@@ -111,4 +132,52 @@ func TestAuthCacheCleanupLoopTracked(t *testing.T) {
 		// could continue running (and accessing shared state) after Close returned.
 		cache.Close()
 	}
+}
+
+// TestAuthCacheMissUpdateLastUsedFanOut demonstrates that concurrent goroutines racing
+// through a cache miss each independently call UpdateLastUsed, resulting in N calls
+// instead of 1. The slow GetByHash ensures all goroutines pile up at the miss.
+func TestAuthCacheMissUpdateLastUsedFanOut(t *testing.T) {
+	const numGoroutines = 20
+
+	memKeys := store.NewMemoryAPIKeys(nil)
+	users := store.NewMemoryUsers(nil)
+
+	user := types.User{ID: "user-1", Username: "test-user"}
+	require.NoError(t, users.Add(context.Background(), user))
+
+	generated, err := auth.GenerateAPIKey("live")
+	require.NoError(t, err)
+
+	require.NoError(t, memKeys.Add(context.Background(), types.APIKey{
+		ID:      "key-1",
+		UserID:  user.ID,
+		KeyHash: generated.KeyHash,
+	}))
+
+	slow := &slowAPIKeys{APIKeys: memKeys, getByHashDelay: 20 * time.Millisecond}
+	cache := internal.NewAuthCache(internal.AuthCacheConfig{
+		APIKeys:         slow,
+		Users:           users,
+		TTL:             time.Minute,
+		CleanupInterval: time.Hour,
+	})
+
+	var ready, done sync.WaitGroup
+	ready.Add(numGoroutines)
+	done.Add(numGoroutines)
+	for range numGoroutines {
+		go func() {
+			ready.Done()
+			ready.Wait()
+			defer done.Done()
+			_, _ = cache.Authenticate(context.Background(), generated.Key)
+		}()
+	}
+	done.Wait()
+	cache.Close()
+
+	// Singleflight collapses all concurrent misses into one storage fetch,
+	// so UpdateLastUsed must be called exactly once regardless of goroutine count.
+	assert.Equal(t, int64(1), slow.updateLastUsed.Load())
 }

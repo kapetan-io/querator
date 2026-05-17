@@ -48,8 +48,8 @@ type RoleBindings interface {
 	// List returns a list of role bindings for a namespace with pagination support.
 	List(ctx context.Context, namespace string, bindings *[]types.RoleBinding, opts types.ListOptions) error
 
-	// ListByUser returns all role bindings for a user across all namespaces.
-	ListByUser(ctx context.Context, userID string, bindings *[]types.RoleBinding) error
+	// ListByUser returns all role bindings for a user in a specific namespace.
+	ListByUser(ctx context.Context, userID, namespace string, bindings *[]types.RoleBinding) error
 
 	// ListByRole returns all role bindings for a specific role.
 	ListByRole(ctx context.Context, roleID string, bindings *[]types.RoleBinding) error

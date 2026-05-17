@@ -186,8 +186,9 @@ nextBatch:
 			m.mem[idx].LeaseDeadline = clock.Time{}
 
 			if retryItem.Dead {
-				// TODO: Move to dead letter queue when implemented
-				// For now, just remove the item
+				if m.mem[idx].SourceID != nil {
+					delete(m.bySourceID, string(m.mem[idx].SourceID))
+				}
 				m.mem = append(m.mem[:idx], m.mem[idx+1:]...)
 			} else if !retryItem.RetryAt.IsZero() {
 				// If RetryAt is in the past or less than 100ms from now, treat as immediate retry
@@ -550,11 +551,11 @@ func (m *MemoryPartition) LifeCycleInfo(ctx context.Context, info *types.LifeCyc
 			continue
 		}
 
-		if item.LeaseDeadline.Before(nextLease) {
+		if item.IsLeased && !item.LeaseDeadline.IsZero() && item.LeaseDeadline.Before(nextLease) {
 			nextLease = item.LeaseDeadline
 		}
 
-		if item.ExpireDeadline.Before(nextExpire) {
+		if !item.ExpireDeadline.IsZero() && item.ExpireDeadline.Before(nextExpire) {
 			nextExpire = item.ExpireDeadline
 		}
 	}
@@ -605,20 +606,18 @@ func (m *MemoryPartition) Close(_ context.Context) error {
 }
 
 // findID attempts to find the provided id in q.mem. If found returns the index and true.
-// If not found returns the next nearest item in the list.
+// If not found returns the index of the first item that sorts after the target.
 func (m *MemoryPartition) findID(id []byte) (int, bool) {
-	var nearest, nearestIdx int
 	for i, item := range m.mem {
 		lex := bytes.Compare(item.ID, id)
 		if lex == 0 {
 			return i, true
 		}
-		if lex > nearest {
-			nearestIdx = i
-			nearest = lex
+		if lex > 0 {
+			return i, false
 		}
 	}
-	return nearestIdx, false
+	return len(m.mem), false
 }
 
 // ---------------------------------------------
@@ -742,7 +741,7 @@ func (s *MemoryQueues) Close(_ context.Context) error {
 	return nil
 }
 
-// findID attempts to find the provided queue in q.mem. If found returns the index and true.
+// findQueue attempts to find the provided queue in s.mem. If found returns the index and true.
 // If not found returns the next nearest item in the list.
 func (s *MemoryQueues) findQueue(name string) (int, bool) {
 	var nearest, nearestIdx int

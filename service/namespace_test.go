@@ -431,6 +431,60 @@ func testNamespaces(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			}
 		})
 
+		// Confirm that namespace-filtered listing finds matching items even when many
+		// non-matching items precede them. A buggy implementation that stops iteration
+		// when the examined-item count reaches the limit would return an empty page,
+		// silently dropping matching items that appear later in the keyspace.
+		t.Run("QueuesListNamespaceFilterWithDominantOtherNamespace", func(t *testing.T) {
+			d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+			defer func() {
+				d.Shutdown(t)
+				tearDown()
+			}()
+
+			// Use names that sort before "z-target" so ns2 queues appear first in key order
+			ns1 := "a-source-" + random.String("", 6)
+			ns2 := "z-target-" + random.String("", 6)
+			require.NoError(t, c.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: ns1}))
+			require.NoError(t, c.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: ns2}))
+
+			// Create 5 queues in ns1 (names sort before ns2 queues)
+			const numNs1Queues = 5
+			for i := range numNs1Queues {
+				require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+					QueueName:           fmt.Sprintf("a-queue-%02d-%s", i, random.String("", 4)),
+					Namespace:           ns1,
+					LeaseTimeout:        "1m",
+					ExpireTimeout:       "10m",
+					RequestedPartitions: 1,
+				}))
+			}
+
+			// Create 5 queues in ns2 (names sort after ns1 queues)
+			const numNs2Queues = 5
+			for i := range numNs2Queues {
+				require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+					QueueName:           fmt.Sprintf("z-queue-%02d-%s", i, random.String("", 4)),
+					Namespace:           ns2,
+					LeaseTimeout:        "1m",
+					ExpireTimeout:       "10m",
+					RequestedPartitions: 1,
+				}))
+			}
+
+			// List filtered to ns2 with a small limit — ns2 queues sort after all ns1 queues.
+			// A correct implementation must iterate past the ns1 queues to find ns2 items.
+			var list pb.QueuesListResponse
+			require.NoError(t, c.QueuesList(ctx, &list, &querator.ListOptions{
+				Namespace: ns2,
+				Limit:     3,
+			}))
+			require.Len(t, list.Items, 3)
+			for _, item := range list.Items {
+				assert.Equal(t, ns2, item.Namespace)
+			}
+		})
+
 		t.Run("Errors", func(t *testing.T) {
 			t.Run("QueuesCreate", func(t *testing.T) {
 				d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})

@@ -411,7 +411,7 @@ func (s *Service) QueuesList(ctx context.Context, req *proto.QueuesListRequest,
 	if err := s.queues.List(ctx, &items, types.ListOptions{
 		Pivot:     types.ToItemID(req.Pivot),
 		Limit:     int(req.Limit),
-		Namespace: req.Namespace,
+		Namespace: ns,
 	}); err != nil {
 		return err
 	}
@@ -906,8 +906,13 @@ func (s *Service) UsersDelete(ctx context.Context, req *proto.UsersDeleteRequest
 		return err
 	}
 
-	// Delete dependents before the user record to minimize the window where
-	// API keys exist in storage but the user record does not.
+	// Delete the user record first so authentication fails immediately regardless
+	// of orphaned dependents. Then clean up dependents as best-effort.
+	if err := s.conf.StorageConfig.Users.Delete(ctx, req.Id); err != nil {
+		return err
+	}
+	s.conf.Auth.InvalidateUser(req.Id)
+
 	var errs []error
 	if err := s.conf.StorageConfig.RoleBindings.DeleteByUser(ctx, req.Id); err != nil {
 		errs = append(errs, fmt.Errorf("cascade delete role bindings: %w", err))
@@ -915,16 +920,7 @@ func (s *Service) UsersDelete(ctx context.Context, req *proto.UsersDeleteRequest
 	if err := s.conf.StorageConfig.APIKeys.DeleteByUser(ctx, req.Id); err != nil {
 		errs = append(errs, fmt.Errorf("cascade delete api keys: %w", err))
 	}
-	if len(errs) > 0 {
-		return errors.Join(errs...)
-	}
-
-	if err := s.conf.StorageConfig.Users.Delete(ctx, req.Id); err != nil {
-		return err
-	}
-
-	s.conf.Auth.InvalidateUser(req.Id)
-	return nil
+	return errors.Join(errs...)
 }
 
 // -------------------------------------------------

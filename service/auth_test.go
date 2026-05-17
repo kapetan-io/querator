@@ -452,12 +452,14 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 			tenantAKey := CreateUserWithNamespacePermissions(t, ctx, adminClient, tenantA, auth.NamespaceOwnerPermissions())
 			tenantAClient := newClientWithAPIKey(t, d, tenantAKey)
 
-			t.Run("SystemAdminNoFilterSeesAllNamespaces", func(t *testing.T) {
-				// System admin with no namespace filter can list across all namespaces
+			t.Run("SystemAdminNoFilterDefaultsToSystemNamespace", func(t *testing.T) {
+				// No namespace filter resolves to _system — does not cross namespaces
 				var res pb.QueuesListResponse
 				err := adminClient.QueuesList(ctx, &res, nil)
 				require.NoError(t, err)
-				assert.GreaterOrEqual(t, len(res.Items), 2)
+				for _, item := range res.Items {
+					assert.Equal(t, auth.SystemNamespace, item.Namespace)
+				}
 			})
 
 			t.Run("SystemAdminWithNamespaceFilterSeesOnlyThatNamespace", func(t *testing.T) {

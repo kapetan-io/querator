@@ -415,16 +415,24 @@ func (qm *QueuesManager) Shutdown(ctx context.Context) error {
 		return nil
 	}
 
+	// Lock the mutex to safely copy the queue references, then release it
+	// before waiting for logical queues to shut down. This avoids a deadlock
+	// where requestLoop (in runLifecycle -> ProduceToQueue) waits to acquire
+	// the mutex while Shutdown holds it waiting for requestLoop to exit.
 	qm.inShutdown.Store(true)
-	defer qm.mutex.Unlock()
 	qm.mutex.Lock()
+	queues := make([]*Queue, 0, len(qm.queues))
+	for _, q := range qm.queues {
+		queues = append(queues, q)
+	}
+	qm.mutex.Unlock()
 
 	wait := make(chan error, 1)
 	go func() {
 		var errs []error
-		for _, q := range qm.queues {
+		for _, q := range queues {
 			qm.log.LogAttrs(ctx, LevelDebugAll, "shutdown logical",
-				slog.Int("num_queues", len(qm.queues)),
+				slog.Int("num_queues", len(queues)),
 				slog.String("queue", q.Info().Name))
 			for _, l := range q.GetAll() {
 				if err := l.Shutdown(ctx); err != nil {

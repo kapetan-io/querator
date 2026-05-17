@@ -1275,12 +1275,11 @@ func (b *BadgerQueues) List(_ context.Context, queues *[]types.QueueInfo, opts t
 			if opts.Namespace != "" && info.Namespace != opts.Namespace {
 				continue
 			}
-			*queues = append(*queues, info)
-			count++
-
 			if count >= opts.Limit {
 				return nil
 			}
+			*queues = append(*queues, info)
+			count++
 		}
 		return nil
 	})
@@ -2551,13 +2550,11 @@ func (b *BadgerRoles) List(_ context.Context, namespace string, roles *[]types.R
 			if namespace != "" && role.Namespace != namespace {
 				continue
 			}
-
-			*roles = append(*roles, role)
-			count++
-
 			if count >= opts.Limit {
 				return nil
 			}
+			*roles = append(*roles, role)
+			count++
 		}
 		return nil
 	})
@@ -2852,13 +2849,11 @@ func (b *BadgerRoleBindings) List(_ context.Context, namespace string, bindings 
 			if namespace != "" && binding.Namespace != namespace {
 				continue
 			}
-
-			*bindings = append(*bindings, binding)
-			count++
-
 			if count >= opts.Limit {
 				return nil
 			}
+			*bindings = append(*bindings, binding)
+			count++
 		}
 		return nil
 	})

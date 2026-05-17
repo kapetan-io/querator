@@ -727,11 +727,11 @@ func (s *MemoryQueues) List(_ context.Context, queues *[]types.QueueInfo, opts t
 	}
 
 	for _, info := range s.mem[idx:] {
-		if count >= opts.Limit {
-			return nil
-		}
 		if opts.Namespace != "" && info.Namespace != opts.Namespace {
 			continue
+		}
+		if count >= opts.Limit {
+			return nil
 		}
 		*queues = append(*queues, info)
 		count++

@@ -187,6 +187,7 @@ func (p *PostgresQueues) ensureTable(_ context.Context, pool *pgxpool.Pool) erro
 	query := `
 		CREATE TABLE IF NOT EXISTS queues (
 			name TEXT PRIMARY KEY,
+			namespace TEXT NOT NULL DEFAULT '',
 			lease_timeout_ns BIGINT NOT NULL,
 			expire_timeout_ns BIGINT NOT NULL,
 			dead_queue TEXT NOT NULL DEFAULT '',
@@ -219,7 +220,7 @@ func (p *PostgresQueues) Get(ctx context.Context, name string, queue *types.Queu
 		return err
 	}
 
-	query := `SELECT name, lease_timeout_ns, expire_timeout_ns, dead_queue, max_attempts,
+	query := `SELECT name, namespace, lease_timeout_ns, expire_timeout_ns, dead_queue, max_attempts,
 	                 reference, requested_partitions, partition_info, created_at, updated_at
 	          FROM queues WHERE name = $1`
 
@@ -227,6 +228,7 @@ func (p *PostgresQueues) Get(ctx context.Context, name string, queue *types.Queu
 	var partitionInfoJSON []byte
 	err = pool.QueryRow(ctx, query, name).Scan(
 		&queue.Name,
+		&queue.Namespace,
 		&leaseNs,
 		&expireNs,
 		&queue.DeadQueue,
@@ -276,12 +278,13 @@ func (p *PostgresQueues) Add(ctx context.Context, info types.QueueInfo) error {
 		return errors.Errorf("marshal partition_info: %w", err)
 	}
 
-	query := `INSERT INTO queues (name, lease_timeout_ns, expire_timeout_ns, dead_queue, max_attempts,
+	query := `INSERT INTO queues (name, namespace, lease_timeout_ns, expire_timeout_ns, dead_queue, max_attempts,
 	                              reference, requested_partitions, partition_info, created_at, updated_at)
-	          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`
+	          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`
 
 	_, err = pool.Exec(ctx, query,
 		info.Name,
+		info.Namespace,
 		info.LeaseTimeout.Nanoseconds(),
 		info.ExpireTimeout.Nanoseconds(),
 		info.DeadQueue,
@@ -379,7 +382,7 @@ func (p *PostgresQueues) List(ctx context.Context, queues *[]types.QueueInfo, op
 		pivot = string(opts.Pivot)
 	}
 
-	query := `SELECT name, lease_timeout_ns, expire_timeout_ns, dead_queue, max_attempts,
+	query := `SELECT name, namespace, lease_timeout_ns, expire_timeout_ns, dead_queue, max_attempts,
 	                 reference, requested_partitions, partition_info, created_at, updated_at
 	          FROM queues WHERE name >= $1 ORDER BY name LIMIT $2`
 
@@ -396,6 +399,7 @@ func (p *PostgresQueues) List(ctx context.Context, queues *[]types.QueueInfo, op
 
 		err := rows.Scan(
 			&info.Name,
+			&info.Namespace,
 			&leaseNs,
 			&expireNs,
 			&info.DeadQueue,

@@ -2,6 +2,7 @@ package internal
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
@@ -116,6 +117,11 @@ func (c *AuthCache) Authenticate(ctx context.Context, key string) (auth.Principa
 
 		var apiKey types.APIKey
 		if err := c.apiKeys.GetByHash(sfCtx, keyHash, &apiKey); err != nil {
+			if !errors.Is(err, types.ErrAPIKeyNotExist) {
+				c.log.Warn("storage error during api key lookup; returning 401 to caller",
+					"error", err)
+				return nil, types.ErrAPIKeyInvalid
+			}
 			return nil, err
 		}
 

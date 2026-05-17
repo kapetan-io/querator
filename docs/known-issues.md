@@ -113,3 +113,29 @@ increase storage load significantly.
 level rather than creating many fine-grained bindings.
 
 **Future mitigation**: Cache resolved permission sets per principal with a TTL.
+
+## Metrics and Health Endpoints Should Listen on a Separate Port
+
+**Severity**: Low  
+**Component**: `transport/http.go`
+
+`/health` and `/metrics` are served on the same listener as the authenticated API. Both
+endpoints bypass authentication by design — health checks must be accessible to load balancers
+and orchestrators, and Prometheus scraping breaks if metrics require auth tokens.
+
+In a multi-tenant deployment this means any client with network access to the API port can read
+Prometheus metrics, which include queue depths, request rates, and timing histograms across all
+tenants.
+
+**Impact**: Operational telemetry is visible to any network-reachable client, regardless of
+tenant isolation. No queue data or payloads are exposed, but traffic patterns and queue names
+are observable.
+
+**Proposed fix**: Add a separate `AdminListenAddress` to `daemon.Config` that binds `/health`,
+`/metrics`, and `/debug/pprof` to an internal-only port (e.g. `:9090`). The main API listener
+continues to serve only authenticated endpoints. This matches the standard pattern used by
+Kubernetes, Prometheus exporters, and most production Go services.
+
+**Workaround**: Restrict network access to the API port at the infrastructure level (firewall
+rules, service mesh policy, or Kubernetes NetworkPolicy) so that only trusted scrapers and
+probes can reach `/metrics` and `/health`.

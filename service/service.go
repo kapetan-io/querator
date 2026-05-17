@@ -372,8 +372,8 @@ func (s *Service) QueuesCreate(ctx context.Context, req *proto.QueueInfo) error 
 		return err
 	}
 
-	ns := resolveNamespace(info.Namespace)
-	if err := s.authorize(ctx, ns, auth.QueueCreate); err != nil {
+	info.Namespace = resolveNamespace(info.Namespace)
+	if err := s.authorize(ctx, info.Namespace, auth.QueueCreate); err != nil {
 		return err
 	}
 
@@ -382,7 +382,7 @@ func (s *Service) QueuesCreate(ctx context.Context, req *proto.QueueInfo) error 
 	// that omit it skip namespace validation by design.
 	if s.conf.StorageConfig.Namespaces != nil {
 		var namespace types.Namespace
-		if err := s.conf.StorageConfig.Namespaces.Get(ctx, ns, &namespace); err != nil {
+		if err := s.conf.StorageConfig.Namespaces.Get(ctx, info.Namespace, &namespace); err != nil {
 			return err
 		}
 	}

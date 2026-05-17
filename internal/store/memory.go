@@ -141,6 +141,9 @@ nextBatch:
 					"marked as leased", id)
 				continue nextBatch
 			}
+			if m.mem[idx].SourceID != nil {
+				delete(m.bySourceID, string(m.mem[idx].SourceID))
+			}
 			// Remove the item from the array
 			m.mem = append(m.mem[:idx], m.mem[idx+1:]...)
 		}

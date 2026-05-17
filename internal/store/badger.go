@@ -257,6 +257,13 @@ nextBatch:
 				continue nextBatch
 			}
 
+			if item.SourceID != nil {
+				sourceKey := []byte("source:" + string(item.SourceID))
+				if err = txn.Delete(sourceKey); err != nil {
+					return errors.Errorf("during Delete(source:%s): %w", item.SourceID, err)
+				}
+			}
+
 			if err = txn.Delete(id); err != nil {
 				return errors.Errorf("during Delete(%s): %w", id, err)
 			}
@@ -325,8 +332,12 @@ nextBatch:
 			item.LeaseDeadline = clock.Time{}
 
 			if retryItem.Dead {
-				// TODO: Move to dead letter queue when implemented
-				// For now, just delete the item
+				if item.SourceID != nil {
+					sourceKey := []byte("source:" + string(item.SourceID))
+					if err = txn.Delete(sourceKey); err != nil {
+						return errors.Errorf("during Delete(source:%s): %w", item.SourceID, err)
+					}
+				}
 				if err = txn.Delete(retryItem.ID); err != nil {
 					return errors.Errorf("during Delete(%s): %w", retryItem.ID, err)
 				}

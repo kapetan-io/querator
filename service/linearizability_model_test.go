@@ -11,10 +11,11 @@ import (
 // --- Operation types for Porcupine ---
 
 const (
-	opProduce  = "produce"
-	opLease    = "lease"
-	opComplete = "complete"
-	opRetry    = "retry"
+	opProduce     = "produce"
+	opLease       = "lease"
+	opComplete    = "complete"
+	opRetry       = "retry"
+	opLeaseExpiry = "lease-expiry"
 )
 
 type linInput struct {
@@ -96,7 +97,7 @@ var linearizabilityModel = porcupine.Model{
 			}
 			return true, next
 
-		case opRetry:
+		case opRetry, opLeaseExpiry:
 			for _, id := range inp.ids {
 				if !s.leased[id] {
 					return false, s
@@ -106,7 +107,7 @@ var linearizabilityModel = porcupine.Model{
 			for _, id := range inp.ids {
 				delete(next.leased, id)
 			}
-			// Per ADR 0022: retried items go to the head of the queue.
+			// Per ADR 0022: retried and lease-expired items go to the head of the queue.
 			// Prepend in reverse so first item in the request ends up at position 0.
 			for i := len(inp.ids) - 1; i >= 0; i-- {
 				next.queue = append([]string{inp.ids[i]}, next.queue...)
@@ -148,6 +149,8 @@ var linearizabilityModel = porcupine.Model{
 			return fmt.Sprintf("complete(%s)", strings.Join(inp.ids, ","))
 		case opRetry:
 			return fmt.Sprintf("retry(%s)", strings.Join(inp.ids, ","))
+		case opLeaseExpiry:
+			return fmt.Sprintf("expiry(%s)", strings.Join(inp.ids, ","))
 		}
 		return "<unknown>"
 	},

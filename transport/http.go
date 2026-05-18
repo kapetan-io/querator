@@ -21,13 +21,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"net/http"
+	"strings"
+
 	"github.com/duh-rpc/duh-go"
 	v1 "github.com/duh-rpc/duh-go/proto/v1"
 	pb "github.com/kapetan-io/querator/proto"
+	"github.com/kapetan-io/querator/transport/auth"
+	"github.com/kapetan-io/querator/transport/reply"
 	"github.com/kapetan-io/tackle/set"
 	"github.com/prometheus/client_golang/prometheus"
-	"log/slog"
-	"net/http"
 )
 
 // TODO: Document pause in OpenAPI, "Pauses queue processing such that requests to produce, lease,
@@ -73,18 +77,51 @@ const (
 	RPCStorageScheduledList     = "/v1/storage/scheduled.list"
 	RPCStorageScheduledQueueAdd = "/v1/storage/scheduled.add"
 	RPCStorageScheduledDelete   = "/v1/storage/scheduled.delete"
+
+	RPCNamespacesCreate = "/v1/namespaces.create"
+	RPCNamespacesUpdate = "/v1/namespaces.update"
+	RPCNamespacesList   = "/v1/namespaces.list"
+	RPCNamespacesDelete = "/v1/namespaces.delete"
+
+	RPCUsersCreate = "/v1/users.create"
+	RPCUsersList   = "/v1/users.list"
+	RPCUsersDelete = "/v1/users.delete"
+
+	RPCAPIKeysCreate = "/v1/apikeys.create"
+	RPCAPIKeysList   = "/v1/apikeys.list"
+	RPCAPIKeysDelete = "/v1/apikeys.delete"
+
+	RPCRolesCreate = "/v1/roles.create"
+	RPCRolesList   = "/v1/roles.list"
+	RPCRolesUpdate = "/v1/roles.update"
+	RPCRolesDelete = "/v1/roles.delete"
+
+	RPCRoleBindingsCreate = "/v1/rolebindings.create"
+	RPCRoleBindingsList   = "/v1/rolebindings.list"
+	RPCRoleBindingsDelete = "/v1/rolebindings.delete"
 )
 
 type HTTPHandler struct {
 	duration       *prometheus.SummaryVec
-	log            *slog.Logger
+	maxProduceSize int64
 	metrics        http.Handler
 	service        Service
-	maxProduceSize int64
+	auth           auth.AuthBackend
+	log            *slog.Logger
 }
 
-func NewHTTPHandler(s Service, metrics http.Handler, maxProduceSize int64, log *slog.Logger) *HTTPHandler {
-	set.Default(&maxProduceSize, int64(5*duh.MegaByte))
+// HTTPHandlerConfig configures the HTTPHandler
+type HTTPHandlerConfig struct {
+	MaxProduceSize int64
+	AuthBackend    auth.AuthBackend
+	Metrics        http.Handler
+	Service        Service
+	Log            *slog.Logger
+}
+
+func NewHTTPHandler(conf HTTPHandlerConfig) *HTTPHandler {
+	set.Default(&conf.MaxProduceSize, int64(5*duh.MegaByte))
+	set.Default(&conf.AuthBackend, &auth.NoOpAuthBackend{})
 
 	return &HTTPHandler{
 		duration: prometheus.NewSummaryVec(prometheus.SummaryOpts{
@@ -95,11 +132,36 @@ func NewHTTPHandler(s Service, metrics http.Handler, maxProduceSize int64, log *
 				0.99: 0.001,
 			},
 		}, []string{"path"}),
-		maxProduceSize: maxProduceSize,
-		metrics:        metrics,
-		log:            log,
-		service:        s,
+		maxProduceSize: conf.MaxProduceSize,
+		metrics:        conf.Metrics,
+		service:        conf.Service,
+		auth:           conf.AuthBackend,
+		log:            conf.Log,
 	}
+}
+
+// authenticate extracts and validates credentials from the request
+func (h *HTTPHandler) authenticate(ctx context.Context, r *http.Request) (context.Context, error) {
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		principal, err := h.auth.Authenticate(ctx, "")
+		if err != nil {
+			return ctx, reply.NewUnauthorized("authentication required")
+		}
+		return auth.ContextWithPrincipal(ctx, principal), nil
+	}
+
+	const bearerPrefix = "Bearer "
+	if !strings.HasPrefix(authHeader, bearerPrefix) {
+		return ctx, reply.NewUnauthorized("invalid authorization header format")
+	}
+	token := strings.TrimPrefix(authHeader, bearerPrefix)
+
+	principal, err := h.auth.Authenticate(ctx, token)
+	if err != nil {
+		return ctx, err
+	}
+	return auth.ContextWithPrincipal(ctx, principal), nil
 }
 
 func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -119,6 +181,12 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		duh.ReplyWithCode(w, r, duh.CodeBadRequest, nil,
 			fmt.Sprintf("http method '%s' not allowed; only POST", r.Method))
+		return
+	}
+
+	ctx, err := h.authenticate(ctx, r)
+	if err != nil {
+		h.ReplyError(w, r, err)
 		return
 	}
 
@@ -173,6 +241,57 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	case RPCStorageScheduledList:
 		h.StorageScheduledList(ctx, w, r)
+		return
+	case RPCNamespacesCreate:
+		h.NamespacesCreate(ctx, w, r)
+		return
+	case RPCNamespacesUpdate:
+		h.NamespacesUpdate(ctx, w, r)
+		return
+	case RPCNamespacesList:
+		h.NamespacesList(ctx, w, r)
+		return
+	case RPCNamespacesDelete:
+		h.NamespacesDelete(ctx, w, r)
+		return
+	case RPCUsersCreate:
+		h.UsersCreate(ctx, w, r)
+		return
+	case RPCUsersList:
+		h.UsersList(ctx, w, r)
+		return
+	case RPCUsersDelete:
+		h.UsersDelete(ctx, w, r)
+		return
+	case RPCAPIKeysCreate:
+		h.APIKeysCreate(ctx, w, r)
+		return
+	case RPCAPIKeysList:
+		h.APIKeysList(ctx, w, r)
+		return
+	case RPCAPIKeysDelete:
+		h.APIKeysDelete(ctx, w, r)
+		return
+	case RPCRolesCreate:
+		h.RolesCreate(ctx, w, r)
+		return
+	case RPCRolesList:
+		h.RolesList(ctx, w, r)
+		return
+	case RPCRolesUpdate:
+		h.RolesUpdate(ctx, w, r)
+		return
+	case RPCRolesDelete:
+		h.RolesDelete(ctx, w, r)
+		return
+	case RPCRoleBindingsCreate:
+		h.RoleBindingsCreate(ctx, w, r)
+		return
+	case RPCRoleBindingsList:
+		h.RoleBindingsList(ctx, w, r)
+		return
+	case RPCRoleBindingsDelete:
+		h.RoleBindingsDelete(ctx, w, r)
 		return
 	}
 	duh.ReplyWithCode(w, r, duh.CodeNotImplemented, nil, "no such method; "+r.URL.Path)
@@ -452,12 +571,288 @@ func (h *HTTPHandler) ReplyError(w http.ResponseWriter, r *http.Request, err err
 	}
 	// TODO: Extract error.Fields and add them to the log fields
 
+	safe := make(http.Header, len(r.Header))
+	for k, v := range r.Header {
+		if strings.EqualFold(k, "Authorization") || strings.EqualFold(k, "Cookie") {
+			safe[k] = []string{"[REDACTED]"}
+		} else {
+			safe[k] = v
+		}
+	}
+
 	h.log.Error(err.Error(),
 		"location", "HTTPHandler",
 		"http.request.status", duh.CodeInternalError,
 		"http.request.url", r.URL.String(),
-		"http.request.headers", r.Header,
+		"http.request.headers", safe,
 		"http.request.useragent", r.Header.Get("user-agent"),
 	)
 	duh.ReplyWithCode(w, r, duh.CodeInternalError, nil, "Internal Error")
+}
+
+// -------------------------------------------------
+// Namespace Management API
+// -------------------------------------------------
+
+func (h *HTTPHandler) NamespacesCreate(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.NamespaceInfo
+	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	if err := h.service.NamespacesCreate(ctx, &req); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
+}
+
+func (h *HTTPHandler) NamespacesUpdate(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.NamespaceInfo
+	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	if err := h.service.NamespacesUpdate(ctx, &req); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
+}
+
+func (h *HTTPHandler) NamespacesList(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.NamespacesListRequest
+	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	var resp pb.NamespacesListResponse
+	if err := h.service.NamespacesList(ctx, &req, &resp); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &resp)
+}
+
+func (h *HTTPHandler) NamespacesDelete(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.NamespacesDeleteRequest
+	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	if err := h.service.NamespacesDelete(ctx, &req); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
+}
+
+// -------------------------------------------------
+// User Management API
+// -------------------------------------------------
+
+func (h *HTTPHandler) UsersCreate(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.UserCreateRequest
+	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	var resp pb.UserCreateResponse
+	if err := h.service.UsersCreate(ctx, &req, &resp); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &resp)
+}
+
+func (h *HTTPHandler) UsersList(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.UsersListRequest
+	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	var resp pb.UsersListResponse
+	if err := h.service.UsersList(ctx, &req, &resp); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &resp)
+}
+
+func (h *HTTPHandler) UsersDelete(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.UsersDeleteRequest
+	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	if err := h.service.UsersDelete(ctx, &req); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
+}
+
+// -------------------------------------------------
+// API Key Management API
+// -------------------------------------------------
+
+func (h *HTTPHandler) APIKeysCreate(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.APIKeyCreateRequest
+	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	var resp pb.APIKeyCreateResponse
+	if err := h.service.APIKeysCreate(ctx, &req, &resp); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &resp)
+}
+
+func (h *HTTPHandler) APIKeysList(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.APIKeysListRequest
+	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	var resp pb.APIKeysListResponse
+	if err := h.service.APIKeysList(ctx, &req, &resp); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &resp)
+}
+
+func (h *HTTPHandler) APIKeysDelete(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.APIKeysDeleteRequest
+	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	if err := h.service.APIKeysDelete(ctx, &req); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
+}
+
+// -------------------------------------------------
+// Role Management API
+// -------------------------------------------------
+
+func (h *HTTPHandler) RolesCreate(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.RoleCreateRequest
+	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	var resp pb.RoleCreateResponse
+	if err := h.service.RolesCreate(ctx, &req, &resp); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &resp)
+}
+
+func (h *HTTPHandler) RolesList(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.RolesListRequest
+	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	var resp pb.RolesListResponse
+	if err := h.service.RolesList(ctx, &req, &resp); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &resp)
+}
+
+func (h *HTTPHandler) RolesUpdate(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.RoleUpdateRequest
+	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	if err := h.service.RolesUpdate(ctx, &req); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
+}
+
+func (h *HTTPHandler) RolesDelete(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.RolesDeleteRequest
+	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	if err := h.service.RolesDelete(ctx, &req); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
+}
+
+// -------------------------------------------------
+// Role Binding Management API
+// -------------------------------------------------
+
+func (h *HTTPHandler) RoleBindingsCreate(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.RoleBindingCreateRequest
+	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	var resp pb.RoleBindingCreateResponse
+	if err := h.service.RoleBindingsCreate(ctx, &req, &resp); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &resp)
+}
+
+func (h *HTTPHandler) RoleBindingsList(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.RoleBindingsListRequest
+	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	var resp pb.RoleBindingsListResponse
+	if err := h.service.RoleBindingsList(ctx, &req, &resp); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &resp)
+}
+
+func (h *HTTPHandler) RoleBindingsDelete(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.RoleBindingDeleteRequest
+	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	if err := h.service.RoleBindingsDelete(ctx, &req); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/service"
+	"github.com/kapetan-io/querator/transport/auth"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/color"
 	"github.com/kapetan-io/tackle/set"
@@ -40,6 +41,10 @@ type Config struct {
 	// a new instance of the client bound to the client portion of a net.Pipe. This is useful for testing
 	// querator where access to the loop back is not allowed, or when using testing/synctest
 	InMemoryListener bool
+
+	// AuthBackend is the authentication and authorization backend.
+	// If nil, defaults to NoOpAuthBackend which allows all requests (open access).
+	AuthBackend auth.AuthBackend
 }
 
 func (c *Config) ClientTLS() *tls.Config {
@@ -73,6 +78,14 @@ func (c *Config) SetDefaults() {
 			Affinity:       1,
 		},
 	})
+
+	// Default to NoOp auth (open access for internal deployments)
+	set.Default(&c.AuthBackend, auth.AuthBackend(&auth.NoOpAuthBackend{}))
+
+	// Bridge: ensure service layer uses the same auth backend as the transport
+	if c.Service.Auth == nil {
+		c.Service.Auth = c.AuthBackend
+	}
 }
 
 // YAML config file types
@@ -82,8 +95,13 @@ type File struct {
 	Logging          Logging            `yaml:"logging"`
 	PartitionStorage []PartitionStorage `yaml:"partition-storage"`
 	QueueStorage     QueueStorage       `yaml:"queue-storage"`
+	AuthBackend      AuthConfig         `yaml:"auth-backend"`
 	Queues           []Queue            `yaml:"queues"`
 	ConfigFile       string
+}
+
+type AuthConfig struct {
+	Driver string `yaml:"driver"`
 }
 
 type Logging struct {
@@ -131,6 +149,10 @@ func ApplyConfigFile(ctx context.Context, conf *Config, file File, w io.Writer) 
 	}
 
 	if err := setupQueueStorage(ctx, file, conf); err != nil {
+		return err
+	}
+
+	if err := setupAuthBackend(file, conf); err != nil {
 		return err
 	}
 
@@ -241,6 +263,25 @@ func setupQueueStorage(ctx context.Context, file File, conf *Config) error {
 			}
 			return err
 		}
+	}
+	return nil
+}
+
+func setupAuthBackend(file File, conf *Config) error {
+	switch strings.ToLower(file.AuthBackend.Driver) {
+	case "", "none":
+		// NoOp auth (open access) — applied in SetDefaults
+	case "internal":
+		conf.AuthBackend = internal.NewAuthBackend(internal.AuthBackendConfig{
+			RoleBindings: conf.Service.StorageConfig.RoleBindings,
+			APIKeys:      conf.Service.StorageConfig.APIKeys,
+			Users:        conf.Service.StorageConfig.Users,
+			Roles:        conf.Service.StorageConfig.Roles,
+			Log:          conf.Service.Log,
+		})
+	default:
+		return fmt.Errorf("invalid auth-backend driver; '%s' is not one of (none, internal)",
+			file.AuthBackend.Driver)
 	}
 	return nil
 }

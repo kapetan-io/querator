@@ -17,7 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/kapetan-io/errors"
 	"github.com/kapetan-io/querator/internal/types"
-	"github.com/kapetan-io/querator/transport"
+	"github.com/kapetan-io/querator/transport/reply"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/set"
 	"github.com/segmentio/ksuid"
@@ -187,6 +187,7 @@ func (p *PostgresQueues) ensureTable(_ context.Context, pool *pgxpool.Pool) erro
 	query := `
 		CREATE TABLE IF NOT EXISTS queues (
 			name TEXT PRIMARY KEY,
+			namespace TEXT NOT NULL DEFAULT '',
 			lease_timeout_ns BIGINT NOT NULL,
 			expire_timeout_ns BIGINT NOT NULL,
 			dead_queue TEXT NOT NULL DEFAULT '',
@@ -219,7 +220,7 @@ func (p *PostgresQueues) Get(ctx context.Context, name string, queue *types.Queu
 		return err
 	}
 
-	query := `SELECT name, lease_timeout_ns, expire_timeout_ns, dead_queue, max_attempts,
+	query := `SELECT name, namespace, lease_timeout_ns, expire_timeout_ns, dead_queue, max_attempts,
 	                 reference, requested_partitions, partition_info, created_at, updated_at
 	          FROM queues WHERE name = $1`
 
@@ -227,6 +228,7 @@ func (p *PostgresQueues) Get(ctx context.Context, name string, queue *types.Queu
 	var partitionInfoJSON []byte
 	err = pool.QueryRow(ctx, query, name).Scan(
 		&queue.Name,
+		&queue.Namespace,
 		&leaseNs,
 		&expireNs,
 		&queue.DeadQueue,
@@ -276,12 +278,13 @@ func (p *PostgresQueues) Add(ctx context.Context, info types.QueueInfo) error {
 		return errors.Errorf("marshal partition_info: %w", err)
 	}
 
-	query := `INSERT INTO queues (name, lease_timeout_ns, expire_timeout_ns, dead_queue, max_attempts,
+	query := `INSERT INTO queues (name, namespace, lease_timeout_ns, expire_timeout_ns, dead_queue, max_attempts,
 	                              reference, requested_partitions, partition_info, created_at, updated_at)
-	          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`
+	          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`
 
 	_, err = pool.Exec(ctx, query,
 		info.Name,
+		info.Namespace,
 		info.LeaseTimeout.Nanoseconds(),
 		info.ExpireTimeout.Nanoseconds(),
 		info.DeadQueue,
@@ -295,7 +298,7 @@ func (p *PostgresQueues) Add(ctx context.Context, info types.QueueInfo) error {
 
 	if err != nil {
 		if pgErr, ok := err.(*pgconn.PgError); ok && pgErr.Code == "23505" {
-			return transport.NewInvalidOption("queue '%s' already exists", info.Name)
+			return reply.NewInvalidOption("queue '%s' already exists", info.Name)
 		}
 		return errors.Errorf("insert queue: %w", err)
 	}
@@ -329,7 +332,7 @@ func (p *PostgresQueues) Update(ctx context.Context, info types.QueueInfo) error
 	}
 
 	if found.LeaseTimeout > found.ExpireTimeout {
-		return transport.NewInvalidOption("lease timeout is too long; %s cannot be greater than the "+
+		return reply.NewInvalidOption("lease timeout is too long; %s cannot be greater than the "+
 			"expire timeout %s", found.LeaseTimeout.String(), found.ExpireTimeout.String())
 	}
 
@@ -379,7 +382,7 @@ func (p *PostgresQueues) List(ctx context.Context, queues *[]types.QueueInfo, op
 		pivot = string(opts.Pivot)
 	}
 
-	query := `SELECT name, lease_timeout_ns, expire_timeout_ns, dead_queue, max_attempts,
+	query := `SELECT name, namespace, lease_timeout_ns, expire_timeout_ns, dead_queue, max_attempts,
 	                 reference, requested_partitions, partition_info, created_at, updated_at
 	          FROM queues WHERE name >= $1 ORDER BY name LIMIT $2`
 
@@ -396,6 +399,7 @@ func (p *PostgresQueues) List(ctx context.Context, queues *[]types.QueueInfo, op
 
 		err := rows.Scan(
 			&info.Name,
+			&info.Namespace,
 			&leaseNs,
 			&expireNs,
 			&info.DeadQueue,
@@ -420,6 +424,9 @@ func (p *PostgresQueues) List(ctx context.Context, queues *[]types.QueueInfo, op
 			}
 		}
 
+		if opts.Namespace != "" && info.Namespace != opts.Namespace {
+			continue
+		}
 		*queues = append(*queues, info)
 	}
 
@@ -858,7 +865,7 @@ nextBatch:
 	for i := range batch.Requests {
 		for _, id := range batch.Requests[i].Ids {
 			if err := p.validateID(id); err != nil {
-				batch.Requests[i].Err = transport.NewInvalidOption("invalid storage id; '%s': %s", id, err)
+				batch.Requests[i].Err = reply.NewInvalidOption("invalid storage id; '%s': %s", id, err)
 				continue nextBatch
 			}
 
@@ -868,7 +875,7 @@ nextBatch:
 				string(id)).Scan(&isLeased)
 
 			if err == pgx.ErrNoRows {
-				batch.Requests[i].Err = transport.NewInvalidOption("invalid storage id; '%s' does not exist", id)
+				batch.Requests[i].Err = reply.NewInvalidOption("invalid storage id; '%s' does not exist", id)
 				continue nextBatch
 			}
 			if err != nil {
@@ -877,7 +884,7 @@ nextBatch:
 			}
 
 			if !isLeased {
-				batch.Requests[i].Err = transport.NewConflict("item(s) cannot be completed; '%s' is not marked as leased", id)
+				batch.Requests[i].Err = reply.NewConflict("item(s) cannot be completed; '%s' is not marked as leased", id)
 				continue nextBatch
 			}
 
@@ -917,7 +924,7 @@ nextBatch:
 	for i := range batch.Requests {
 		for _, retryItem := range batch.Requests[i].Items {
 			if err := p.validateID(retryItem.ID); err != nil {
-				batch.Requests[i].Err = transport.NewInvalidOption("invalid storage id; '%s': %s", retryItem.ID, err)
+				batch.Requests[i].Err = reply.NewInvalidOption("invalid storage id; '%s': %s", retryItem.ID, err)
 				continue nextBatch
 			}
 
@@ -928,7 +935,7 @@ nextBatch:
 				retryItem.ID).Scan(&isLeased, &enqueueAt)
 
 			if err == pgx.ErrNoRows {
-				batch.Requests[i].Err = transport.NewInvalidOption("id does not exist")
+				batch.Requests[i].Err = reply.NewInvalidOption("invalid storage id; '%s' does not exist", retryItem.ID)
 				continue nextBatch
 			}
 			if err != nil {
@@ -940,12 +947,12 @@ nextBatch:
 					p.conf.Log.LogAttrs(ctx, slog.LevelWarn, "attempted to retry a scheduled item; reported does not exist",
 						slog.String("id", string(retryItem.ID)))
 				}
-				batch.Requests[i].Err = transport.NewInvalidOption("invalid storage id; '%s' does not exist", retryItem.ID)
+				batch.Requests[i].Err = reply.NewInvalidOption("invalid storage id; '%s' does not exist", retryItem.ID)
 				continue nextBatch
 			}
 
 			if !isLeased {
-				batch.Requests[i].Err = transport.NewConflict("item not leased")
+				batch.Requests[i].Err = reply.NewConflict("item(s) cannot be retried; '%s' is not marked as leased", retryItem.ID)
 				continue nextBatch
 			}
 
@@ -984,8 +991,7 @@ nextBatch:
 			}
 
 			if err != nil {
-				batch.Requests[i].Err = transport.NewInvalidOption("failed to retry item: %s", err)
-				continue nextBatch
+				return errors.Errorf("during Retry(): %w", err)
 			}
 		}
 	}
@@ -1010,7 +1016,7 @@ func (p *PostgresPartition) List(ctx context.Context, items *[]*types.Item, opts
 	pivot := ""
 	if opts.Pivot != nil {
 		if err := p.validateID(opts.Pivot); err != nil {
-			return transport.NewInvalidOption("invalid storage id; '%s': %s", opts.Pivot, err)
+			return reply.NewInvalidOption("invalid storage id; '%s': %s", opts.Pivot, err)
 		}
 		pivot = string(opts.Pivot)
 	}
@@ -1082,7 +1088,7 @@ func (p *PostgresPartition) ListScheduled(ctx context.Context, items *[]*types.I
 	pivot := ""
 	if opts.Pivot != nil {
 		if err := p.validateID(opts.Pivot); err != nil {
-			return transport.NewInvalidOption("invalid storage id; '%s': %s", opts.Pivot, err)
+			return reply.NewInvalidOption("invalid storage id; '%s': %s", opts.Pivot, err)
 		}
 		pivot = string(opts.Pivot)
 	}
@@ -1143,7 +1149,7 @@ func (p *PostgresPartition) ListScheduled(ctx context.Context, items *[]*types.I
 
 func (p *PostgresPartition) Add(ctx context.Context, items []*types.Item, now clock.Time) error {
 	if len(items) == 0 {
-		return transport.NewInvalidOption("items is invalid; cannot be empty")
+		return reply.NewInvalidOption("items is invalid; cannot be empty")
 	}
 
 	pool, err := p.conf.getOrCreatePool(ctx)
@@ -1227,7 +1233,7 @@ func (p *PostgresPartition) Add(ctx context.Context, items []*types.Item, now cl
 
 func (p *PostgresPartition) Delete(ctx context.Context, ids []types.ItemID) error {
 	if len(ids) == 0 {
-		return transport.NewInvalidOption("ids is invalid; cannot be empty")
+		return reply.NewInvalidOption("ids is invalid; cannot be empty")
 	}
 
 	pool, err := p.conf.getOrCreatePool(ctx)
@@ -1243,7 +1249,7 @@ func (p *PostgresPartition) Delete(ctx context.Context, ids []types.ItemID) erro
 
 	for _, id := range ids {
 		if err := p.validateID(id); err != nil {
-			return transport.NewInvalidOption("invalid storage id; '%s': %s", id, err)
+			return reply.NewInvalidOption("invalid storage id; '%s': %s", id, err)
 		}
 
 		pgxBatch.Queue(`DELETE FROM `+p.tableName()+` WHERE id = $1`, string(id))

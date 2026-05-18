@@ -54,6 +54,15 @@ partition-storage:
 #      client-cert: /path/to/client/cert
 #      client-key: /path/to/client/key
 
+# Auth Backend defines the authentication and authorization backend.
+# Options:
+#   "none" (default) - No authentication; all requests are allowed (open access).
+#                      Suitable for internal deployments behind a trusted network.
+#   "internal"       - Uses the configured storage backends (users, api-keys, roles,
+#                      role-bindings) for authentication and RBAC authorization.
+#auth-backend:
+#  driver: internal
+
 # Queues is a convenience that allows users to define queues without needing
 # to call the /v1/queues.create after querator starts.
 #queues:

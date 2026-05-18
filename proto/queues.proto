@@ -27,6 +27,9 @@ message QueuesListRequest {
   string pivot  = 2;
   // Limit is the maximum number of items to return in a single list response
   int32 limit = 3;
+  // Namespace filters the list to only include queues in the specified namespace.
+  // If empty, lists queues in the default namespace.
+  string namespace = 4;
 }
 
 message QueuesListResponse {

@@ -2,24 +2,25 @@ package internal
 
 import (
 	"context"
-	"github.com/kapetan-io/errors"
-	"github.com/kapetan-io/querator/internal/store"
-	"github.com/kapetan-io/querator/internal/types"
-	"github.com/kapetan-io/querator/proto"
-	"github.com/kapetan-io/querator/transport"
-	"github.com/kapetan-io/tackle/clock"
-	"github.com/kapetan-io/tackle/set"
 	"log/slog"
 	"math"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"unicode"
+
+	"github.com/kapetan-io/errors"
+	"github.com/kapetan-io/querator/internal/store"
+	"github.com/kapetan-io/querator/internal/types"
+	"github.com/kapetan-io/querator/proto"
+	"github.com/kapetan-io/querator/transport/reply"
+	"github.com/kapetan-io/tackle/clock"
+	"github.com/kapetan-io/tackle/set"
 )
 
 const MsgServiceInShutdown = "service is shutting down"
 
-var ErrServiceShutdown = transport.NewRequestFailed(MsgServiceInShutdown)
+var ErrServiceShutdown = reply.NewRequestFailed(MsgServiceInShutdown)
 
 type QueuesManagerConfig struct {
 	StorageConfig store.Config
@@ -82,7 +83,7 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Que
 
 	q, ok := qm.queues[info.Name]
 	if ok {
-		return q, transport.NewInvalidOption("invalid queue; '%s' already exists", info.Name)
+		return q, reply.NewInvalidOption("invalid queue; '%s' already exists", info.Name)
 	}
 
 	// Validate DLQ configuration before creating queue
@@ -127,8 +128,8 @@ func (qm *QueuesManager) Get(ctx context.Context, name string) (*Queue, error) {
 	if qm.inShutdown.Load() {
 		return nil, ErrServiceShutdown
 	}
-	defer qm.mutex.RUnlock()
-	qm.mutex.RLock()
+	defer qm.mutex.Unlock()
+	qm.mutex.Lock()
 
 	return qm.get(ctx, name)
 }
@@ -144,7 +145,7 @@ func (qm *QueuesManager) get(ctx context.Context, name string) (*Queue, error) {
 	var queue types.QueueInfo
 	if err := qm.conf.StorageConfig.Queues.Get(ctx, name, &queue); err != nil {
 		if errors.Is(err, store.ErrQueueNotExist) {
-			return nil, transport.NewInvalidOption("queue does not exist; no such queue named '%s'", name)
+			return nil, reply.NewInvalidOption("queue does not exist; no such queue named '%s'", name)
 		}
 		return nil, err
 	}
@@ -189,8 +190,8 @@ func (qm *QueuesManager) List(ctx context.Context, items *[]types.QueueInfo, opt
 	if qm.inShutdown.Load() {
 		return ErrServiceShutdown
 	}
-	defer qm.mutex.Unlock()
-	qm.mutex.Lock()
+	defer qm.mutex.RUnlock()
+	qm.mutex.RLock()
 
 	return qm.conf.StorageConfig.Queues.List(ctx, items, opts)
 }
@@ -317,12 +318,17 @@ func (qm *QueuesManager) LifeCycle(ctx context.Context, req *types.LifeCycleRequ
 // ProduceToQueue produces items to the specified queue by name.
 // Used for DLQ item movement during lifecycle processing.
 func (qm *QueuesManager) ProduceToQueue(ctx context.Context, queueName string, items []*types.Item) error {
+	qm.mutex.Lock()
 	q, err := qm.get(ctx, queueName)
+	qm.mutex.Unlock()
 	if err != nil {
 		return errors.Errorf("failed to get queue '%s': %w", queueName, err)
 	}
 
 	_, logical := q.GetNext()
+	if logical == nil {
+		return errors.Errorf("queue '%s' has no available partitions", queueName)
+	}
 	if err := logical.ProduceInternal(ctx, items); err != nil {
 		return errors.Errorf("failed to produce to queue '%s': %w", queueName, err)
 	}
@@ -341,28 +347,28 @@ func (qm *QueuesManager) validateDeadQueue(ctx context.Context, info types.Queue
 	// Validate DeadQueue format first (before checking existence)
 	const maxQueueNameLength = 500
 	if len(info.DeadQueue) > maxQueueNameLength {
-		return transport.NewInvalidOption("dead queue is invalid; cannot be greater than '%d' characters", maxQueueNameLength)
+		return reply.NewInvalidOption("dead queue is invalid; cannot be greater than '%d' characters", maxQueueNameLength)
 	}
 
 	if strings.ContainsFunc(info.DeadQueue, unicode.IsSpace) {
-		return transport.NewInvalidOption("dead queue is invalid; '%s' cannot contain whitespace", info.DeadQueue)
+		return reply.NewInvalidOption("dead queue is invalid; '%s' cannot contain whitespace", info.DeadQueue)
 	}
 
 	if strings.Contains(info.DeadQueue, "~") {
-		return transport.NewInvalidOption("dead queue is invalid; '%s' cannot contain '~' character", info.DeadQueue)
+		return reply.NewInvalidOption("dead queue is invalid; '%s' cannot contain '~' character", info.DeadQueue)
 	}
 
 	// Prevent self-reference
 	if info.DeadQueue == info.Name {
-		return transport.NewInvalidOption("dead_queue cannot reference itself")
+		return reply.NewInvalidOption("dead_queue cannot reference itself")
 	}
 
 	// Fetch the DLQ to ensure it exists
 	dlq, err := qm.get(ctx, info.DeadQueue)
 	if err != nil {
-		if errors.Is(err, store.ErrQueueNotExist) ||
-		   (func() bool { var e *transport.ErrInvalidOption; return errors.As(err, &e) })() {
-			return transport.NewInvalidOption("dead_queue '%s' does not exist; create it first", info.DeadQueue)
+		var invalidOpt *reply.ErrInvalidOption
+		if errors.Is(err, store.ErrQueueNotExist) || errors.As(err, &invalidOpt) {
+			return reply.NewInvalidOption("dead_queue does not exist; '%s' was not found, create it first", info.DeadQueue)
 		}
 		return err
 	}
@@ -370,7 +376,7 @@ func (qm *QueuesManager) validateDeadQueue(ctx context.Context, info types.Queue
 	// Enforce no DLQ chains: a DLQ cannot have its own DLQ
 	dlqInfo := dlq.Info()
 	if dlqInfo.DeadQueue != "" {
-		return transport.NewInvalidOption("dead_queue '%s' cannot have its own dead_queue", info.DeadQueue)
+		return reply.NewInvalidOption("dead_queue is invalid; '%s' already has its own dead_queue configured", info.DeadQueue)
 	}
 
 	return nil
@@ -383,7 +389,7 @@ func (qm *QueuesManager) Delete(ctx context.Context, name string) error {
 	defer qm.mutex.Unlock()
 	qm.mutex.Lock()
 
-	// TODO: Delete should return transport.NewInvalidOption("queue does not exist; no such queue named '%s'", name)
+	// TODO: Delete should return reply.NewInvalidOption("queue does not exist; no such queue named '%s'", name)
 	if err := qm.conf.StorageConfig.Queues.Delete(ctx, name); err != nil {
 		return errors.Errorf("Queues.Delete(): %w", err)
 	}
@@ -409,25 +415,67 @@ func (qm *QueuesManager) Shutdown(ctx context.Context) error {
 		return nil
 	}
 
+	// Lock the mutex to safely copy the queue references, then release it
+	// before waiting for logical queues to shut down. This avoids a deadlock
+	// where requestLoop (in runLifecycle -> ProduceToQueue) waits to acquire
+	// the mutex while Shutdown holds it waiting for requestLoop to exit.
 	qm.inShutdown.Store(true)
-	defer qm.mutex.Unlock()
 	qm.mutex.Lock()
+	queues := make([]*Queue, 0, len(qm.queues))
+	for _, q := range qm.queues {
+		queues = append(queues, q)
+	}
+	qm.mutex.Unlock()
 
-	wait := make(chan error)
+	wait := make(chan error, 1)
 	go func() {
-		for _, q := range qm.queues {
+		var errs []error
+		for _, q := range queues {
 			qm.log.LogAttrs(ctx, LevelDebugAll, "shutdown logical",
-				slog.Int("num_queues", len(qm.queues)),
+				slog.Int("num_queues", len(queues)),
 				slog.String("queue", q.Info().Name))
 			for _, l := range q.GetAll() {
 				if err := l.Shutdown(ctx); err != nil {
-					wait <- err
+					errs = append(errs, err)
 				}
 			}
 		}
 		qm.log.LogAttrs(ctx, LevelDebugAll, "close queue store")
 		if err := qm.conf.StorageConfig.Queues.Close(ctx); err != nil {
-			wait <- err
+			errs = append(errs, err)
+		}
+		if qm.conf.StorageConfig.Namespaces != nil {
+			qm.log.LogAttrs(ctx, LevelDebugAll, "close namespace store")
+			if err := qm.conf.StorageConfig.Namespaces.Close(ctx); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		if qm.conf.StorageConfig.Users != nil {
+			qm.log.LogAttrs(ctx, LevelDebugAll, "close users store")
+			if err := qm.conf.StorageConfig.Users.Close(ctx); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		if qm.conf.StorageConfig.APIKeys != nil {
+			qm.log.LogAttrs(ctx, LevelDebugAll, "close apikeys store")
+			if err := qm.conf.StorageConfig.APIKeys.Close(ctx); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		if qm.conf.StorageConfig.Roles != nil {
+			qm.log.LogAttrs(ctx, LevelDebugAll, "close roles store")
+			if err := qm.conf.StorageConfig.Roles.Close(ctx); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		if qm.conf.StorageConfig.RoleBindings != nil {
+			qm.log.LogAttrs(ctx, LevelDebugAll, "close rolebindings store")
+			if err := qm.conf.StorageConfig.RoleBindings.Close(ctx); err != nil {
+				errs = append(errs, err)
+			}
+		}
+		if len(errs) > 0 {
+			wait <- errs[0]
 			return
 		}
 		close(wait)

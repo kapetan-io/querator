@@ -20,3 +20,15 @@ func TestNewErrInvalid(t *testing.T) {
 	assert.Equal(t, "invalid key", d.Error())
 	assert.Equal(t, "invalid key", d.Message())
 }
+
+func TestErrConflict(t *testing.T) {
+	e := NewConflict("item already exists")
+	assert.Equal(t, duh.CodeConflict, e.Code())
+	assert.Equal(t, "item already exists", e.Error())
+	err := fmt.Errorf("wrap: %w", e)
+	assert.Equal(t, "wrap: item already exists", err.Error())
+
+	var d duh.Error
+	require.True(t, errors.As(err, &d))
+	assert.Equal(t, duh.CodeConflict, d.Code())
+}

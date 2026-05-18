@@ -1,9 +1,10 @@
 package internal
 
 import (
-	"github.com/kapetan-io/querator/internal/types"
-	"github.com/kapetan-io/querator/transport"
 	"sync"
+
+	"github.com/kapetan-io/querator/internal/types"
+	"github.com/kapetan-io/querator/transport/reply"
 )
 
 // TODO: When migrating from one data store to another, some partitions may be
@@ -50,7 +51,7 @@ skip:
 		for _, l := range q.ordered {
 			// If this logical already exists, skip
 			if l == add {
-				break skip
+				continue skip
 			}
 		}
 		q.ordered = append(q.ordered, add)
@@ -75,6 +76,9 @@ func (q *Queue) GetNext() (Remote, *Logical) {
 	defer q.mutex.Unlock()
 	q.mutex.Lock()
 
+	if len(q.ordered) == 0 {
+		return nil, nil
+	}
 	l := q.ordered[q.idx]
 	q.idx++
 	if q.idx >= len(q.ordered) {
@@ -88,13 +92,13 @@ func (q *Queue) GetByPartition(partition int) (Remote, *Logical, error) {
 	q.mutex.RLock()
 
 	if partition < 0 || partition >= len(q.logical) {
-		return nil, nil, transport.NewInvalidOption("partition is invalid; '%d' is not a valid partition", partition)
+		return nil, nil, reply.NewInvalidOption("partition is invalid; '%d' is not a valid partition", partition)
 	}
 
 	if q.logical[partition] == nil {
 		// TODO: This is likely to not happen until we support the concept of 'remote'. We may need to remove this
 		//  check later.
-		return nil, nil, transport.NewInvalidOption("partition is invalid; '%d' has no valid logical queue", partition)
+		return nil, nil, reply.NewInvalidOption("partition is invalid; '%d' has no valid logical queue", partition)
 	}
 
 	return nil, q.logical[partition], nil

@@ -4,6 +4,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+
+	"io"
+	"log/slog"
+	"math/rand"
+	"os"
+	"path/filepath"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
 	"github.com/duh-rpc/duh-go"
 	"github.com/duh-rpc/duh-go/retry"
 	"github.com/jackc/pgx/v5"
@@ -23,15 +35,6 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 	"go.uber.org/goleak"
 	"google.golang.org/protobuf/types/known/timestamppb"
-	"io"
-	"log/slog"
-	"math/rand"
-	"os"
-	"path/filepath"
-	"sync"
-	"sync/atomic"
-	"testing"
-	"time"
 )
 
 const (
@@ -74,7 +77,19 @@ func getSharedPostgresContainer() (*sharedPostgresContainer, error) {
 	return sharedPostgres, sharedPostgresErr
 }
 
-func (s *sharedPostgresContainer) Start(ctx context.Context) error {
+func (s *sharedPostgresContainer) Start(ctx context.Context) (err error) {
+	// Recover from panic when Docker is not available and convert to clear error
+	defer func() {
+		if r := recover(); r != nil {
+			msg := fmt.Sprintf("%v", r)
+			if strings.Contains(msg, "rootless Docker not found") {
+				err = fmt.Errorf("Docker is not available: %s", msg)
+			} else {
+				panic(r)
+			}
+		}
+	}()
+
 	container, err := postgres.Run(ctx,
 		"postgres:16-alpine",
 		postgres.WithDatabase("postgres"),
@@ -225,7 +240,8 @@ func newDaemon(t *testing.T, duration clock.Duration, conf svc.Config) (*testDae
 
 	td.ctx, td.cancel = context.WithTimeout(context.Background(), duration)
 	td.d, err = daemon.NewDaemon(td.ctx, daemon.Config{
-		Service: conf,
+		Service:       conf,
+		ListenAddress: "localhost:0",
 	})
 	require.NoError(t, err)
 	return td, td.d.MustClient(), td.ctx
@@ -253,7 +269,12 @@ func (b *badgerTestSetup) Setup(bc store.BadgerConfig) store.Config {
 	bc.Log = log
 
 	var conf store.Config
+	conf.Namespaces = store.NewBadgerNamespaces(bc)
 	conf.Queues = store.NewBadgerQueues(bc)
+	conf.Users = store.NewBadgerUsers(bc)
+	conf.APIKeys = store.NewBadgerAPIKeys(bc)
+	conf.Roles = store.NewBadgerRoles(bc)
+	conf.RoleBindings = store.NewBadgerRoleBindings(bc)
 	conf.PartitionStorage = []store.PartitionStorage{
 		{
 			PartitionStore: store.NewBadgerPartitionStore(bc),
@@ -358,7 +379,12 @@ func compareStorageItem(t *testing.T, l *pb.StorageItem, r *pb.StorageItem) {
 
 //nolint:unparam // conf param kept for consistency with other setup functions
 func setupMemoryStorage(conf store.Config) store.Config {
+	conf.Namespaces = store.NewMemoryNamespaces(log)
 	conf.Queues = store.NewMemoryQueues(log)
+	conf.Users = store.NewMemoryUsers(log)
+	conf.APIKeys = store.NewMemoryAPIKeys(log)
+	conf.Roles = store.NewMemoryRoles(log)
+	conf.RoleBindings = store.NewMemoryRoleBindings(log)
 	conf.PartitionStorage = []store.PartitionStorage{
 		{
 			PartitionStore: store.NewMemoryPartitionStore(conf, log),

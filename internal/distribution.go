@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/kapetan-io/querator/internal/store"
-	"github.com/kapetan-io/querator/transport"
+	"github.com/kapetan-io/querator/transport/reply"
 )
 
 // assignToPartitions assigns requests to appropriate partitions
@@ -191,7 +191,7 @@ nextRequest:
 			// Assign the complete request to the partition if found
 			if req.Partition == p.Info.PartitionNum {
 				if p.State.Failures != 0 {
-					req.Err = transport.NewRetryRequest("partition not available;"+
+					req.Err = reply.NewRetryRequest("partition not available;"+
 						" partition '%d' is failing, retry again", req.Partition)
 					continue nextRequest
 				}
@@ -200,7 +200,7 @@ nextRequest:
 			}
 		}
 		if !found {
-			req.Err = transport.NewRetryRequest("partition not found;"+
+			req.Err = reply.NewRetryRequest("partition not found;"+
 				" partition '%d' may have moved, retry again", req.Partition)
 		}
 	}
@@ -217,7 +217,7 @@ nextRequest:
 			// Assign the retry request to the partition if found
 			if req.Partition == p.Info.PartitionNum {
 				if p.State.Failures != 0 {
-					req.Err = transport.NewRetryRequest("partition not available;"+
+					req.Err = reply.NewRetryRequest("partition not available;"+
 						" partition '%d' is failing, retry again", req.Partition)
 					continue nextRequest
 				}
@@ -226,7 +226,7 @@ nextRequest:
 			}
 		}
 		if !found {
-			req.Err = transport.NewRetryRequest("partition not found;"+
+			req.Err = reply.NewRetryRequest("partition not found;"+
 				" partition '%d' may have moved, retry again", req.Partition)
 		}
 	}
@@ -239,6 +239,9 @@ func sortPartitionsByLoad(partitions []*Partition) {
 		// Ensure failed Partitions are sorted last
 		if a.State.Failures < b.State.Failures {
 			return -1
+		}
+		if a.State.Failures > b.State.Failures {
+			return +1
 		}
 		if a.State.UnLeased < b.State.UnLeased {
 			return -1

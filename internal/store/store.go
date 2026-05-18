@@ -2,12 +2,13 @@ package store
 
 import (
 	"context"
-	"github.com/kapetan-io/querator/internal/types"
-	"github.com/kapetan-io/querator/transport"
-	"github.com/kapetan-io/tackle/clock"
 	"iter"
 	"log/slog"
 	"time"
+
+	"github.com/kapetan-io/querator/internal/types"
+	"github.com/kapetan-io/querator/transport/reply"
+	"github.com/kapetan-io/tackle/clock"
 )
 
 const (
@@ -16,9 +17,14 @@ const (
 )
 
 var (
-	ErrQueueAlreadyExists = transport.NewInvalidOption("queue already exists")
-	ErrQueueNotExist      = transport.NewRequestFailed("queue does not exist")
-	theFuture             = time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.UTC)
+	ErrQueueAlreadyExists = reply.NewInvalidOption("queue already exists")
+	ErrQueueNotExist      = reply.NewRequestFailed("queue does not exist")
+	// theFuture is a sentinel timestamp used to represent "no lease" or "no deadline set".
+	// Storage implementations store this value in the lease deadline column/field for items
+	// that are not currently leased. When scanning for expired leases, items with a lease
+	// deadline equal to theFuture are skipped. New storage backend implementors must use
+	// this sentinel (or an equivalent far-future value) rather than a zero/null time.
+	theFuture = time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.UTC)
 )
 
 type LeaseOptions struct {
@@ -143,6 +149,16 @@ func Find(needle string, haystack []PartitionStorage) PartitionStorage {
 type Config struct {
 	// Queues where metadata about the queues is stored
 	Queues Queues
+	// Namespaces where metadata about the namespaces is stored
+	Namespaces Namespaces
+	// Users where user data is stored
+	Users Users
+	// APIKeys where API key data is stored
+	APIKeys APIKeys
+	// Roles where role data is stored
+	Roles Roles
+	// RoleBindings where role binding data is stored
+	RoleBindings RoleBindings
 	// The PartitionStorage configured for partitions to utilize
 	PartitionStorage []PartitionStorage
 }

@@ -34,10 +34,52 @@ type StorageInspector interface {
 	StorageScheduledList(context.Context, *pb.StorageItemsListRequest, *pb.StorageItemsListResponse) error
 }
 
+// NamespaceAdmin handles namespace lifecycle management
+type NamespaceAdmin interface {
+	NamespacesCreate(context.Context, *pb.NamespaceInfo) error
+	NamespacesUpdate(context.Context, *pb.NamespaceInfo) error
+	NamespacesList(context.Context, *pb.NamespacesListRequest, *pb.NamespacesListResponse) error
+	NamespacesDelete(context.Context, *pb.NamespacesDeleteRequest) error
+}
+
+// UsersAdmin handles user lifecycle management
+type UsersAdmin interface {
+	UsersCreate(context.Context, *pb.UserCreateRequest, *pb.UserCreateResponse) error
+	UsersList(context.Context, *pb.UsersListRequest, *pb.UsersListResponse) error
+	UsersDelete(context.Context, *pb.UsersDeleteRequest) error
+}
+
+// APIKeysAdmin handles API key lifecycle management
+type APIKeysAdmin interface {
+	APIKeysCreate(context.Context, *pb.APIKeyCreateRequest, *pb.APIKeyCreateResponse) error
+	APIKeysList(context.Context, *pb.APIKeysListRequest, *pb.APIKeysListResponse) error
+	APIKeysDelete(context.Context, *pb.APIKeysDeleteRequest) error
+}
+
+// RolesAdmin handles role lifecycle management
+type RolesAdmin interface {
+	RolesCreate(context.Context, *pb.RoleCreateRequest, *pb.RoleCreateResponse) error
+	RolesList(context.Context, *pb.RolesListRequest, *pb.RolesListResponse) error
+	RolesUpdate(context.Context, *pb.RoleUpdateRequest) error
+	RolesDelete(context.Context, *pb.RolesDeleteRequest) error
+}
+
+// RoleBindingsAdmin handles role binding lifecycle management
+type RoleBindingsAdmin interface {
+	RoleBindingsCreate(context.Context, *pb.RoleBindingCreateRequest, *pb.RoleBindingCreateResponse) error
+	RoleBindingsList(context.Context, *pb.RoleBindingsListRequest, *pb.RoleBindingsListResponse) error
+	RoleBindingsDelete(context.Context, *pb.RoleBindingDeleteRequest) error
+}
+
 // Service combines all interfaces for backward compatibility
 type Service interface {
 	QueueOps
 	QueueAdmin
 	StorageInspector
+	NamespaceAdmin
+	UsersAdmin
+	APIKeysAdmin
+	RolesAdmin
+	RoleBindingsAdmin
 	Health(context.Context) (*HealthResponse, error)
 }

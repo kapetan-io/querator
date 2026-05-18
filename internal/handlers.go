@@ -135,8 +135,11 @@ func (l *Logical) handleClear(_ *QueueState, req *Request) {
 	cr := req.Request.(*types.ClearRequest)
 
 	if cr.Queue || cr.Scheduled {
-		if err := l.conf.StoragePartitions[0].Clear(req.Context, *cr); err != nil {
-			req.Err = err
+		for _, p := range l.conf.StoragePartitions {
+			if err := p.Clear(req.Context, *cr); err != nil {
+				req.Err = err
+				return
+			}
 		}
 	}
 	close(req.ReadyCh)

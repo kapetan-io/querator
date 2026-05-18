@@ -161,14 +161,14 @@ func (e *ErrConflict) Is(target error) bool {
 }
 
 func (e *ErrConflict) Code() int {
-	return duh.CodeBadRequest
+	return duh.CodeConflict
 }
 
 func (e *ErrConflict) ProtoMessage() proto.Message {
 	return &v1.Reply{
 		Message:  e.msg,
-		CodeText: duh.CodeText(duh.CodeBadRequest),
-		Code:     int32(duh.CodeBadRequest),
+		CodeText: duh.CodeText(duh.CodeConflict),
+		Code:     int32(duh.CodeConflict),
 		Details:  nil,
 	}
 }

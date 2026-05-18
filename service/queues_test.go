@@ -377,7 +377,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					var duhErr duh.Error
 					require.True(t, errors.As(err, &duhErr))
 					assert.Equal(t, duh.CodeBadRequest, duhErr.Code())
-					assert.Contains(t, duhErr.Message(), "cannot have its own dead_queue")
+					assert.Contains(t, duhErr.Message(), "already has its own dead_queue configured")
 				})
 
 				t.Run("ValidDLQ", func(t *testing.T) {
@@ -497,6 +497,15 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 			assert.Equal(t, queues[0].QueueName, page.Items[0].QueueName)
 		})
+
+		// Issue #9: When the pivot sorts after all existing items, the result
+		// should be empty — not wrap around to the beginning of the list.
+		t.Run("PivotPastEnd", func(t *testing.T) {
+			var page pb.QueuesListResponse
+			require.NoError(t, c.QueuesList(ctx, &page,
+				&querator.ListOptions{Pivot: "zzzzz-99999", Limit: 10}))
+			assert.Empty(t, page.Items)
+		})
 	})
 
 	t.Run("Errors", func(t *testing.T) {
@@ -535,6 +544,14 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 						QueueName: "invalid~queue",
 					},
 					Msg:  "queue name is invalid; 'invalid~queue' cannot contain '~' character",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "InvalidQueueName",
+					Req: &pb.QueueInfo{
+						QueueName: "invalid queue~name",
+					},
+					Msg:  "queue name is invalid; 'invalid queue~name' cannot contain whitespace",
 					Code: duh.CodeBadRequest,
 				},
 				{
@@ -622,7 +639,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 						QueueName:    "InvalidLeaseTimeout",
 						LeaseTimeout: "foo",
 					},
-					Msg:  "lease timeout is invalid; time: invalid duration \"foo\" -  expected format: 8m, 15m or 1h",
+					Msg:  "lease timeout is invalid; time: invalid duration \"foo\" - expected format: 8m, 15m or 1h",
 					Code: duh.CodeBadRequest,
 				},
 				{
@@ -677,6 +694,42 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 						MaxAttempts: math.MaxInt32,
 					},
 					Msg:  "max attempts is invalid; cannot be greater than 65536",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "NamespaceContainsTilde",
+					Req: &pb.QueueInfo{
+						QueueName: random.String("queue-", 10),
+						Namespace: "invalid~namespace",
+					},
+					Msg:  "namespace name is invalid; 'invalid~namespace' cannot contain '~' character",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "NamespaceContainsColon",
+					Req: &pb.QueueInfo{
+						QueueName: random.String("queue-", 10),
+						Namespace: "invalid:namespace",
+					},
+					Msg:  "namespace name is invalid; 'invalid:namespace' cannot contain ':' character",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "NamespaceContainsWhitespace",
+					Req: &pb.QueueInfo{
+						QueueName: random.String("queue-", 10),
+						Namespace: "invalid namespace",
+					},
+					Msg:  "namespace name is invalid; 'invalid namespace' cannot contain whitespace",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "NamespaceExceedsMaxLength",
+					Req: &pb.QueueInfo{
+						QueueName: random.String("queue-", 10),
+						Namespace: random.String("ns-", 300),
+					},
+					Msg:  "namespace name is invalid; cannot be greater than '256' characters",
 					Code: duh.CodeBadRequest,
 				},
 			} {
@@ -763,8 +816,8 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					Req: &pb.QueueInfo{
 						QueueName: "noSuchQueue",
 					},
-					Msg:  "queue does not exist",
-					Code: duh.CodeRequestFailed,
+					Msg:  "queue does not exist; no such queue named 'noSuchQueue'",
+					Code: duh.CodeBadRequest,
 				},
 				{
 					Name: "QueueNameMaxLength",
@@ -810,7 +863,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 						QueueName:    queueName,
 						LeaseTimeout: "foo",
 					},
-					Msg:  "lease timeout is invalid; time: invalid duration \"foo\" -  expected format: 8m, 15m or 1h",
+					Msg:  "lease timeout is invalid; time: invalid duration \"foo\" - expected format: 8m, 15m or 1h",
 					Code: duh.CodeBadRequest,
 				},
 				{
@@ -943,7 +996,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				assert.Equal(t, "1m0s", resp.LeaseTimeout)
 				assert.Equal(t, "10m0s", resp.ExpireTimeout)
 				assert.Equal(t, int32(10), resp.MaxAttempts)
-				assert.Equal(t, int32(0), resp.RequestedPartitions) // partitions start at 0
+				assert.Equal(t, int32(1), resp.RequestedPartitions)
 				assert.NotNil(t, resp.CreatedAt)
 				assert.NotNil(t, resp.UpdatedAt)
 			})

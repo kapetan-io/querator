@@ -326,11 +326,6 @@ nextBatch:
 				continue nextBatch
 			}
 
-			// Clear lease status (attempts incremented on next lease)
-			
-			item.IsLeased = false
-			item.LeaseDeadline = clock.Time{}
-
 			switch {
 			case retryItem.Dead:
 				if item.SourceID != nil {

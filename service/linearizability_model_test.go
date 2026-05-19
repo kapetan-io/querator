@@ -107,11 +107,8 @@ var linearizabilityModel = porcupine.Model{
 			for _, id := range inp.ids {
 				delete(next.leased, id)
 			}
-			// Per ADR 0022: retried and lease-expired items go to the head of the queue.
-			// Prepend in reverse so first item in the request ends up at position 0.
-			for i := len(inp.ids) - 1; i >= 0; i-- {
-				next.queue = append([]string{inp.ids[i]}, next.queue...)
-			}
+			// Per ADR 0022: retried and lease-expired items go to the tail of the queue.
+			next.queue = append(next.queue, inp.ids...)
 			return true, next
 		}
 		return false, s

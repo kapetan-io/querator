@@ -387,6 +387,172 @@ func testRetry(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		assert.Equal(t, int32(2), retriedItem.Attempts)
 	})
 
+	t.Run("RetryMovesToTail", func(t *testing.T) {
+		var queueName = random.String("queue-", 10)
+		d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			LeaseTimeout:        LeaseTimeout,
+			ExpireTimeout:       ExpireTimeout,
+			QueueName:           queueName,
+			RequestedPartitions: 1,
+		})
+
+		// Produce three items A, B, C in FIFO order
+		refA := random.String("ref-A-", 10)
+		refB := random.String("ref-B-", 10)
+		refC := random.String("ref-C-", 10)
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			QueueName:      queueName,
+			RequestTimeout: "1m",
+			Items: []*pb.QueueProduceItem{
+				{Reference: refA, Encoding: "utf8", Kind: "tail-test", Bytes: []byte("item-a")},
+				{Reference: refB, Encoding: "utf8", Kind: "tail-test", Bytes: []byte("item-b")},
+				{Reference: refC, Encoding: "utf8", Kind: "tail-test", Bytes: []byte("item-c")},
+			},
+		}))
+
+		// Lease batch of 1 — receive A (first item in FIFO order)
+		var firstLease pb.QueueLeaseResponse
+		require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+			ClientId:       random.String("client-", 10),
+			RequestTimeout: "5s",
+			QueueName:      queueName,
+			BatchSize:      1,
+		}, &firstLease))
+
+		require.Len(t, firstLease.Items, 1)
+		itemA := firstLease.Items[0]
+		assert.Equal(t, refA, itemA.Reference)
+		originalIDofA := itemA.Id
+
+		// Retry A immediately (no RetryAt)
+		require.NoError(t, c.QueueRetry(ctx, &pb.QueueRetryRequest{
+			QueueName: queueName,
+			Partition: firstLease.Partition,
+			Items: []*pb.QueueRetryItem{
+				{
+					Id:   itemA.Id,
+					Dead: false,
+				},
+			},
+		}))
+
+		// Lease batch of 3 — order must be B, C, A (A moved to tail)
+		var secondLease pb.QueueLeaseResponse
+		require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+			ClientId:       random.String("client-", 10),
+			RequestTimeout: "5s",
+			QueueName:      queueName,
+			BatchSize:      3,
+		}, &secondLease))
+
+		require.Len(t, secondLease.Items, 3)
+		assert.Equal(t, refB, secondLease.Items[0].Reference)
+		assert.Equal(t, refC, secondLease.Items[1].Reference)
+		assert.Equal(t, refA, secondLease.Items[2].Reference)
+
+		// Verify A has a new ID and Attempts == 2
+		retriedA := secondLease.Items[2]
+		assert.NotEqual(t, originalIDofA, retriedA.Id)
+		assert.Equal(t, int32(2), retriedA.Attempts)
+	})
+
+	t.Run("LeaseExpiryMovesToTail", func(t *testing.T) {
+		now := clock.NewProvider()
+		now.Freeze(clock.Now())
+		defer now.UnFreeze()
+
+		var queueName = random.String("queue-", 10)
+		d, c, ctx := newDaemon(t, 60*clock.Second, svc.Config{
+			StorageConfig: setup(),
+			Clock:         now,
+		})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			LeaseTimeout:        "300ms",
+			ExpireTimeout:       ExpireTimeout,
+			QueueName:           queueName,
+			RequestedPartitions: 1,
+		})
+
+		// Produce three items A, B, C in FIFO order
+		refA := random.String("ref-A-", 10)
+		refB := random.String("ref-B-", 10)
+		refC := random.String("ref-C-", 10)
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			QueueName:      queueName,
+			RequestTimeout: "1m",
+			Items: []*pb.QueueProduceItem{
+				{Reference: refA, Encoding: "utf8", Kind: "expiry-test", Bytes: []byte("item-a")},
+				{Reference: refB, Encoding: "utf8", Kind: "expiry-test", Bytes: []byte("item-b")},
+				{Reference: refC, Encoding: "utf8", Kind: "expiry-test", Bytes: []byte("item-c")},
+			},
+		}))
+
+		// Lease batch of 1 — receive A, store original ID
+		var firstLease pb.QueueLeaseResponse
+		require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+			ClientId:       random.String("client-", 10),
+			RequestTimeout: "5s",
+			QueueName:      queueName,
+			BatchSize:      1,
+		}, &firstLease))
+
+		require.Len(t, firstLease.Items, 1)
+		assert.Equal(t, refA, firstLease.Items[0].Reference)
+		originalIDofA := firstLease.Items[0].Id
+
+		// Advance the clock past the lease timeout to trigger lease expiry
+		now.Advance(2 * clock.Second)
+
+		// Poll until A is no longer leased AND has a new ID (lifecycle has processed the expiry)
+		err := retry.On(ctx, RetryTenTimes, func(ctx context.Context, i int) error {
+			var resp pb.StorageItemsListResponse
+			if err := c.StorageItemsList(ctx, queueName, 0, &resp, &querator.ListOptions{Limit: 100}); err != nil {
+				return err
+			}
+			item := findInStorageList(refA, &resp)
+			if item == nil {
+				return fmt.Errorf("item A not found in storage")
+			}
+			if item.IsLeased {
+				return fmt.Errorf("item A still leased")
+			}
+			if item.Id == originalIDofA {
+				return fmt.Errorf("item A still has original ID, lifecycle not yet processed")
+			}
+			return nil
+		})
+		require.NoError(t, err)
+
+		// Lease batch of 3 — order must be B, C, A (A moved to tail after expiry)
+		var secondLease pb.QueueLeaseResponse
+		require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+			ClientId:       random.String("client-", 10),
+			RequestTimeout: "5s",
+			QueueName:      queueName,
+			BatchSize:      3,
+		}, &secondLease))
+
+		require.Len(t, secondLease.Items, 3)
+		assert.Equal(t, refB, secondLease.Items[0].Reference)
+		assert.Equal(t, refC, secondLease.Items[1].Reference)
+		assert.Equal(t, refA, secondLease.Items[2].Reference)
+
+		// Verify A has a new ID
+		retriedA := secondLease.Items[2]
+		assert.NotEqual(t, originalIDofA, retriedA.Id)
+	})
+
 	t.Run("Errors", func(t *testing.T) {
 		storage := setup()
 		defer tearDown()

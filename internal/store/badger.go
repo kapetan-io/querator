@@ -331,7 +331,8 @@ nextBatch:
 			item.IsLeased = false
 			item.LeaseDeadline = clock.Time{}
 
-			if retryItem.Dead {
+			switch {
+			case retryItem.Dead:
 				if item.SourceID != nil {
 					sourceKey := []byte("source:" + string(item.SourceID))
 					if err = txn.Delete(sourceKey); err != nil {
@@ -341,7 +342,7 @@ nextBatch:
 				if err = txn.Delete(retryItem.ID); err != nil {
 					return errors.Errorf("during Delete(%s): %w", retryItem.ID, err)
 				}
-			} else if !retryItem.RetryAt.IsZero() {
+			case !retryItem.RetryAt.IsZero():
 				now := clock.Now().UTC()
 				if retryItem.RetryAt.Before(now.Add(time.Millisecond * 100)) {
 					// Immediate retry: assign new KSUID and place at tail (ADR 0022)
@@ -373,7 +374,7 @@ nextBatch:
 						return errors.Errorf("during Set(%s): %w", retryItem.ID, err)
 					}
 				}
-			} else {
+			default:
 				// Immediate retry (no RetryAt): assign new KSUID and place at tail (ADR 0022)
 				item.IsLeased = false
 				item.LeaseDeadline = clock.Time{}
@@ -877,7 +878,9 @@ func (b *BadgerPartition) TakeAction(_ context.Context, batch types.LifeCycleBat
 					item.LeaseDeadline = clock.Time{}
 					item.IsLeased = false
 
-					// Assign a new ID to the item, as it is placed at the start of the queue
+					// Assign a new ID to the item so it sorts after all existing items,
+					// placing it at the tail of the queue to avoid head-of-line blocking.
+					// See docs/adr/0022-managing-item-lifecycles.md for an explanation.
 					b.uid = b.uid.Next()
 					item.ID = []byte(b.uid.String())
 

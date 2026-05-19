@@ -183,12 +183,13 @@ nextBatch:
 				continue nextBatch
 			}
 
-			if retryItem.Dead {
+			switch {
+			case retryItem.Dead:
 				if m.mem[idx].SourceID != nil {
 					delete(m.bySourceID, string(m.mem[idx].SourceID))
 				}
 				m.mem = append(m.mem[:idx], m.mem[idx+1:]...)
-			} else if !retryItem.RetryAt.IsZero() {
+			case !retryItem.RetryAt.IsZero():
 				// If RetryAt is in the past or less than 100ms from now, treat as immediate retry
 				now := clock.Now().UTC()
 				if retryItem.RetryAt.Before(now.Add(time.Millisecond * 100)) {
@@ -207,7 +208,7 @@ nextBatch:
 					m.mem[idx].LeaseDeadline = clock.Time{}
 					m.mem[idx].EnqueueAt = retryItem.RetryAt
 				}
-			} else {
+			default:
 				// Immediate retry (no RetryAt): assign new KSUID and place at tail (ADR 0022)
 				item := m.mem[idx]
 				item.IsLeased = false
@@ -501,14 +502,15 @@ func (m *MemoryPartition) TakeAction(_ context.Context, batch types.LifeCycleBat
 				item.LeaseDeadline = clock.Time{}
 				item.IsLeased = false
 
-				// Assign a new ID to the item, as it is placed at the start of the queue
+				// Assign a new ID to the item so it sorts after all existing items,
+				// placing it at the tail of the queue to avoid head-of-line blocking.
+				// See docs/adr/0022-managing-item-lifecycles.md for an explanation.
 				m.uid = m.uid.Next()
 				item.ID = []byte(m.uid.String())
 
 				// Remove the item from the array
 				m.mem = append(m.mem[:idx], m.mem[idx+1:]...)
 				// Add the item to the tail of the array
-				// See docs/adr/0022-managing-item-lifecycles.md for and explanation
 				m.mem = append(m.mem, item)
 			case types.ActionDeleteItem:
 				idx, ok := m.findID(a.Item.ID)

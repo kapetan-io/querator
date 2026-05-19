@@ -108,9 +108,7 @@ var linearizabilityModel = porcupine.Model{
 				delete(next.leased, id)
 			}
 			// Per ADR 0022: retried and lease-expired items go to the tail of the queue.
-			for _, id := range inp.ids {
-				next.queue = append(next.queue, id)
-			}
+			next.queue = append(next.queue, inp.ids...)
 			return true, next
 		}
 		return false, s

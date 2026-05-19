@@ -928,11 +928,28 @@ nextBatch:
 				continue nextBatch
 			}
 
-			var isLeased bool
-			var enqueueAt sql.NullTime
+			item := new(types.Item)
+			var enqueueAt, leaseDeadline sql.NullTime
+			var sourceID sql.NullString
 			err := tx.QueryRow(ctx,
-				`SELECT is_leased, enqueue_at FROM `+p.tableName()+` WHERE id = $1 FOR UPDATE`,
-				retryItem.ID).Scan(&isLeased, &enqueueAt)
+				`SELECT id, source_id, is_leased, lease_deadline, enqueue_at, created_at,
+				        expire_deadline, attempts, max_attempts, reference, encoding, kind, payload
+				 FROM `+p.tableName()+` WHERE id = $1 FOR UPDATE`,
+				retryItem.ID).Scan(
+				&item.ID,
+				&sourceID,
+				&item.IsLeased,
+				&leaseDeadline,
+				&enqueueAt,
+				&item.CreatedAt,
+				&item.ExpireDeadline,
+				&item.Attempts,
+				&item.MaxAttempts,
+				&item.Reference,
+				&item.Encoding,
+				&item.Kind,
+				&item.Payload,
+			)
 
 			if err == pgx.ErrNoRows {
 				batch.Requests[i].Err = reply.NewInvalidOption("invalid storage id; '%s' does not exist", retryItem.ID)
@@ -942,7 +959,17 @@ nextBatch:
 				return errors.Errorf("failed to check lease status: %w", err)
 			}
 
-			if enqueueAt.Valid && !enqueueAt.Time.IsZero() {
+			if sourceID.Valid {
+				item.SourceID = []byte(sourceID.String)
+			}
+			if leaseDeadline.Valid {
+				item.LeaseDeadline = leaseDeadline.Time
+			}
+			if enqueueAt.Valid {
+				item.EnqueueAt = enqueueAt.Time
+			}
+
+			if !item.EnqueueAt.IsZero() {
 				if p.conf.Log != nil {
 					p.conf.Log.LogAttrs(ctx, slog.LevelWarn, "attempted to retry a scheduled item; reported does not exist",
 						slog.String("id", string(retryItem.ID)))
@@ -951,47 +978,61 @@ nextBatch:
 				continue nextBatch
 			}
 
-			if !isLeased {
+			if !item.IsLeased {
 				batch.Requests[i].Err = reply.NewConflict("item(s) cannot be retried; '%s' is not marked as leased", retryItem.ID)
 				continue nextBatch
+			}
+
+			var srcID interface{}
+			if item.SourceID != nil {
+				srcID = string(item.SourceID)
 			}
 
 			switch {
 			case retryItem.Dead:
 				_, err = tx.Exec(ctx, `DELETE FROM `+p.tableName()+` WHERE id = $1`, retryItem.ID)
-			case !retryItem.RetryAt.IsZero():
-				// If RetryAt is in the past or less than 100ms from now, treat as immediate retry
-				now := clock.Now().UTC()
-				if retryItem.RetryAt.Before(now.Add(time.Millisecond * 100)) {
-					// Immediate retry - enqueue_at stays NULL
-					_, err = tx.Exec(ctx, `
-						UPDATE `+p.tableName()+`
-						SET is_leased = false,
-							lease_deadline = NULL,
-							enqueue_at = NULL
-						WHERE id = $1`,
-						retryItem.ID)
-				} else {
-					// Schedule for future retry
-					_, err = tx.Exec(ctx, `
-						UPDATE `+p.tableName()+`
-						SET is_leased = false,
-							lease_deadline = NULL,
-							enqueue_at = $1
-						WHERE id = $2`,
-						timeToMicroseconds(retryItem.RetryAt), retryItem.ID)
+				if err != nil {
+					return errors.Errorf("during Retry() delete dead: %w", err)
 				}
-			default:
+			case !retryItem.RetryAt.IsZero() && !retryItem.RetryAt.Before(clock.Now().UTC().Add(time.Millisecond*100)):
+				// Schedule for future retry — position is irrelevant while scheduled
 				_, err = tx.Exec(ctx, `
 					UPDATE `+p.tableName()+`
 					SET is_leased = false,
-						lease_deadline = NULL
-					WHERE id = $1`,
-					retryItem.ID)
-			}
-
-			if err != nil {
-				return errors.Errorf("during Retry(): %w", err)
+						lease_deadline = NULL,
+						enqueue_at = $1
+					WHERE id = $2`,
+					timeToMicroseconds(retryItem.RetryAt), retryItem.ID)
+				if err != nil {
+					return errors.Errorf("during Retry() schedule: %w", err)
+				}
+			default:
+				// Immediate retry (no RetryAt, or RetryAt within 100ms): assign new KSUID and place at tail (ADR 0022)
+				p.uid = p.uid.Next()
+				newID := p.uid.String()
+				_, err = tx.Exec(ctx, `DELETE FROM `+p.tableName()+` WHERE id = $1`, retryItem.ID)
+				if err != nil {
+					return errors.Errorf("during Retry() delete for tail placement: %w", err)
+				}
+				_, err = tx.Exec(ctx, `
+					INSERT INTO `+p.tableName()+` (
+						id, source_id, is_leased, lease_deadline, enqueue_at,
+						created_at, expire_deadline, attempts, max_attempts,
+						reference, encoding, kind, payload
+					) VALUES ($1, $2, false, NULL, NULL, $3, $4, $5, $6, $7, $8, $9, $10)`,
+					newID,
+					srcID,
+					timeToMicroseconds(item.CreatedAt),
+					timeToMicroseconds(item.ExpireDeadline),
+					item.Attempts,
+					item.MaxAttempts,
+					item.Reference,
+					item.Encoding,
+					item.Kind,
+					item.Payload)
+				if err != nil {
+					return errors.Errorf("during Retry() insert at tail: %w", err)
+				}
 			}
 		}
 	}

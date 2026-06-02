@@ -2,8 +2,6 @@
 <img src="docs/querator-logo.png" alt="Querator" width="800" /><br />
 </h2>
 
-> NOTE: Querator is currently still in early development
-
 [![Build Status](https://github.com/kapetan-io/querator/actions/workflows/release.yml/badge.svg)](https://github.com/kapetan-io/querator/actions)
 [![Go Report Card](https://goreportcard.com/badge/github.com/kapetan-io/querator)](https://goreportcard.com/report/github.com/kapetan-io/querator)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
@@ -77,25 +75,76 @@ cd querator
 docker compose up -d
 ```
 
-### Verify Health
 Check that Querator is running and healthy:
 ```bash
 curl -s http://localhost:2319/health | jq .
 ```
 
-Expected output:
-```json
-{
-  "status": "pass",
-  "version": "1.0.0",
-  "checks": {
-    "queues:storage": [{"status": "pass", "componentType": "datastore"}]
-  }
-}
+### Producing & Consuming Events
+Each method is reachable over HTTP using either binary protobuf (`Content-Type: application/protobuf`,
+the default for the Go client) or JSON (`Content-Type: application/json`); the same message shape
+on the wire either way. The structures below show that shape.
+
+#### Producing (creating) an event
+An item is produced to a queue with `QueueProduceRequest`. A single request can carry a batch of
+items. An example produce request sent over the wire might look like the following.
+
+```yaml
+# QueueProduceRequest
+queue_name: events
+request_timeout: 30s
+items:
+    kind: user.signup
+    bytes: '{"user_id":"u-1234"}'
 ```
 
+#### Consuming (leasing) an event
+A consumer leases a batch of items with `QueueLeaseRequest`. The lease grants exclusive ownership
+of those items until they are completed, retried, or the lease expires. An example lease request
+might look like the following.
 
-##### Disaggregated Storage Backends
+```yaml
+# QueueLeaseRequest
+queue_name: events
+batch_size: 10
+client_id: consumer-1
+request_timeout: 30s
+```
+
+The server replies with a `QueueLeaseResponse`, which might look like the following.
+
+```yaml
+# QueueLeaseResponse
+queue_name: events
+partition: 0
+items:
+    id: 0194a3c2-d1f0-7a6b-9c0e-3f2b1a0d4e5f
+    kind: user.signup
+    attempts: 0
+    lease_deadline: 2026-06-01T12:01:00Z
+    bytes: <payload>
+```
+
+#### Completing an event
+After processing, mark the item complete with `QueueCompleteRequest` so it is removed from the
+queue. An example complete request might look like the following.
+
+```yaml
+# QueueCompleteRequest
+queue_name: events
+partition: 0
+request_timeout: 30s
+ids:
+    0194a3c2-d1f0-7a6b-9c0e-3f2b1a0d4e5f
+```
+
+If processing fails, send a `QueueRetryRequest` instead to release the lease and return the item to
+the queue (optionally at a future `retry_at` time, or with `dead: true` to move it straight to the
+dead letter queue). Doing nothing also works; the item is re-offered to another consumer once the
+`lease_deadline` passes.
+
+
+## Storage Backends
 Each partition is supported by a user-selected data store backend. This separation of storage from processing gives
 operators the flexibility to choose the desired level of fault tolerance for their specific deployment, and allows
 them to use a data store they are already familiar with in terms of operation and scaling. Each partition is backed
@@ -171,8 +220,8 @@ of consumers exceeds the total number of partitions. This is achieved through "L
 grow and shrink based on the number of consumers and available partitions.
 See [ADR 0016 Queue Partitions](docs/adr/0016-queue-partitions.md) for details
 
+> NOTE: Logical queues distributed across multiple Querator instances are not yet supported.
 ![](docs/Querator%20Logical%20Queue%20Diagram.png)
-
 
 ### Embedded Querator
 Querator is designed as a library which exposes all API functionality via `Service` method calls. Users can use
@@ -185,11 +234,8 @@ See [Querator API Reference](https://querator.io/api) for API documentation
 See our [Architecture Decision Docs](docs/adr) for details on our current implementation design.
 
 ### Contributing 
-- See the [Querator Trello Board](https://trello.com/b/cey2cB3i/querator) for work status and progress and things to do
 - Join our [Discord](https://discord.gg/XwfBdN9wdg)
 - Checkout [querator.io](https://querator.io/api) for the HTML OpenAPI docs
 
 ### Similar Projects
 * https://engineering.fb.com/2021/02/22/production-engineering/foqs-scaling-a-distributed-priority-queue/
-* https://temporal.io/
-* https://www.resonatehq.io/

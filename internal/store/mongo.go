@@ -1435,6 +1435,7 @@ func (p *MongoPartition) TakeAction(ctx context.Context, batch types.LifeCycleBa
 					Encoding:       action.Item.Encoding,
 					Kind:           action.Item.Kind,
 					Payload:        action.Item.Payload,
+					SourceID:       action.Item.SourceID,
 				}
 				newID := p.nextID()
 				if _, err := coll.InsertOne(ctx, itemToDoc(newID, requeued)); err != nil {

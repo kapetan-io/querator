@@ -2491,6 +2491,80 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			assert.True(t, dlqItem.LeaseDeadline.AsTime().Before(now.Now()))
 		})
 
+		t.Run("SourceIDPreservedOnLeaseExpiry", func(t *testing.T) {
+			queueName := random.String("queue-", 10)
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				QueueName:           queueName,
+				LeaseTimeout:        "1m0s",
+				ExpireTimeout:       ExpireTimeout,
+				RequestedPartitions: 1,
+				MaxAttempts:         10,
+			})
+
+			// Import an item carrying a SourceID (the provenance a dead-letter move records).
+			sourceID := random.String("source-", 10)
+			ref := random.String("ref-", 10)
+			var importResp pb.StorageItemsImportResponse
+			require.NoError(t, c.StorageItemsImport(ctx, &pb.StorageItemsImportRequest{
+				QueueName: queueName,
+				Partition: 0,
+				Items: []*pb.StorageItem{
+					{
+						SourceId:       sourceID,
+						Reference:      ref,
+						Encoding:       "test-encoding",
+						Kind:           "test-kind",
+						Payload:        []byte("test payload"),
+						ExpireDeadline: timestamppb.New(now.Now().Add(1 * clock.Hour)),
+						MaxAttempts:    10,
+					},
+				},
+			}, &importResp))
+			require.Len(t, importResp.Items, 1)
+
+			// SourceID is visible on the imported item before it is leased.
+			var resp pb.StorageItemsListResponse
+			require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &resp, nil))
+			item := findInStorageList(ref, &resp)
+			require.NotNil(t, item)
+			assert.Equal(t, sourceID, item.SourceId)
+
+			// Lease the item, then let the lease expire so the lifecycle re-queues it to the tail.
+			var lease pb.QueueLeaseResponse
+			require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+				ClientId:       random.String("client-", 10),
+				RequestTimeout: "5s",
+				QueueName:      queueName,
+				BatchSize:      1,
+			}, &lease))
+			require.Len(t, lease.Items, 1)
+
+			now.Advance(2 * clock.Minute)
+
+			// Wait for the item to be re-queued after the lease expires (still under MaxAttempts).
+			require.NoError(t, retry.On(ctx, RetryTenTimes, func(ctx context.Context, i int) error {
+				var resp pb.StorageItemsListResponse
+				if err := c.StorageItemsList(ctx, queueName, 0, &resp, nil); err != nil {
+					return err
+				}
+				item := findInStorageList(ref, &resp)
+				if item == nil {
+					return fmt.Errorf("item not found in storage")
+				}
+				if item.IsLeased {
+					return fmt.Errorf("expected item to be re-queued (IsLeased=false)")
+				}
+				return nil
+			}))
+
+			// SourceID must survive the lease-expiry re-queue (insert-before-delete tail move).
+			require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &resp, nil))
+			item = findInStorageList(ref, &resp)
+			require.NotNil(t, item)
+			assert.False(t, item.IsLeased)
+			assert.Equal(t, sourceID, item.SourceId)
+		})
+
 		t.Run("UnlimitedAttempts", func(t *testing.T) {
 			queueName := random.String("queue-", 10)
 			createQueueAndWait(t, ctx, c, &pb.QueueInfo{

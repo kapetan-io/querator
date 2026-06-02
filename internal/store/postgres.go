@@ -1502,7 +1502,7 @@ func (p *PostgresPartition) ScanForActions(ctx context.Context, now clock.Time) 
 			}
 
 			query := `
-				SELECT id, is_leased, attempts, lease_deadline, expire_deadline,
+				SELECT id, source_id, is_leased, attempts, lease_deadline, expire_deadline,
 				       enqueue_at, created_at, max_attempts, reference, encoding, kind, payload
 				FROM ` + p.tableName() + `
 				WHERE (enqueue_at IS NULL OR enqueue_at <= $1)
@@ -1520,9 +1520,11 @@ func (p *PostgresPartition) ScanForActions(ctx context.Context, now clock.Time) 
 			for rows.Next() {
 				var item types.Item
 				var leaseDeadline, expireDeadline, enqueueAt, createdAt sql.NullTime
+				var sourceID sql.NullString
 
 				err := rows.Scan(
 					&item.ID,
+					&sourceID,
 					&item.IsLeased,
 					&item.Attempts,
 					&leaseDeadline,
@@ -1541,6 +1543,9 @@ func (p *PostgresPartition) ScanForActions(ctx context.Context, now clock.Time) 
 					return
 				}
 
+				if sourceID.Valid {
+					item.SourceID = []byte(sourceID.String)
+				}
 				if leaseDeadline.Valid {
 					item.LeaseDeadline = leaseDeadline.Time
 				}
@@ -1662,6 +1667,11 @@ func (p *PostgresPartition) TakeAction(ctx context.Context, batch types.LifeCycl
 					enqueueAt = timeToMicroseconds(enqueueAt)
 				}
 
+				var sourceID interface{}
+				if action.Item.SourceID != nil {
+					sourceID = string(action.Item.SourceID)
+				}
+
 				// Delete the old row
 				_, err = tx.Exec(ctx, `DELETE FROM `+p.tableName()+` WHERE id = $1`, action.Item.ID)
 				if err != nil {
@@ -1672,12 +1682,13 @@ func (p *PostgresPartition) TakeAction(ctx context.Context, batch types.LifeCycl
 				// Insert new row with new ID and reset lease fields
 				_, err = tx.Exec(ctx, `
 					INSERT INTO `+p.tableName()+` (
-						id, is_leased, lease_deadline, enqueue_at,
+						id, source_id, is_leased, lease_deadline, enqueue_at,
 						created_at, expire_deadline, attempts, max_attempts,
 						reference, encoding, kind, payload
 					)
-					VALUES ($1, false, NULL, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+					VALUES ($1, $2, false, NULL, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 					newID,
+					sourceID,
 					timeToNullable(enqueueAt),
 					createdAt,
 					expireDeadline,

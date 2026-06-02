@@ -23,6 +23,7 @@ import (
 func TestQueuesStorage(t *testing.T) {
 	badger := badgerTestSetup{Dir: t.TempDir()}
 	postgres := postgresTestSetup{}
+	mongo := mongoTestSetup{}
 
 	for _, tc := range []struct {
 		Setup    NewStorageFunc
@@ -52,6 +53,15 @@ func TestQueuesStorage(t *testing.T) {
 			},
 			TearDown: func() {
 				postgres.Teardown()
+			},
+		},
+		{
+			Name: "MongoDB",
+			Setup: func() store.Config {
+				return mongo.Setup(store.MongoConfig{})
+			},
+			TearDown: func() {
+				mongo.Teardown()
 			},
 		},
 		// {

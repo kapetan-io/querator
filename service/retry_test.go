@@ -7,9 +7,9 @@ import (
 	"github.com/duh-rpc/duh-go"
 	"github.com/duh-rpc/duh-go/retry"
 	"github.com/kapetan-io/querator"
-	svc "github.com/kapetan-io/querator/service"
 	"github.com/kapetan-io/querator/internal/store"
 	pb "github.com/kapetan-io/querator/proto"
+	svc "github.com/kapetan-io/querator/service"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/random"
 	"github.com/segmentio/ksuid"
@@ -23,6 +23,7 @@ import (
 func TestRetry(t *testing.T) {
 	badgerdb := badgerTestSetup{Dir: t.TempDir()}
 	postgres := postgresTestSetup{}
+	mongo := mongoTestSetup{}
 
 	for _, tc := range []struct {
 		Setup    NewStorageFunc
@@ -52,6 +53,15 @@ func TestRetry(t *testing.T) {
 			},
 			TearDown: func() {
 				postgres.Teardown()
+			},
+		},
+		{
+			Name: "MongoDB",
+			Setup: func() store.Config {
+				return mongo.Setup(store.MongoConfig{})
+			},
+			TearDown: func() {
+				mongo.Teardown()
 			},
 		},
 		// {

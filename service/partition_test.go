@@ -20,6 +20,7 @@ import (
 func TestPartitions(t *testing.T) {
 	badger := badgerTestSetup{Dir: t.TempDir()}
 	postgres := postgresTestSetup{}
+	mongo := mongoTestSetup{}
 
 	for _, tc := range []struct {
 		Setup    NewStorageFunc
@@ -49,6 +50,15 @@ func TestPartitions(t *testing.T) {
 			},
 			TearDown: func() {
 				postgres.Teardown()
+			},
+		},
+		{
+			Name: "MongoDB",
+			Setup: func() store.Config {
+				return mongo.Setup(store.MongoConfig{})
+			},
+			TearDown: func() {
+				mongo.Teardown()
 			},
 		},
 		// {
@@ -457,4 +467,3 @@ func assertPartition(t *testing.T, ctx context.Context, c *querator.Client, name
 	assert.Equal(t, expected.Leased, leased)
 	assert.Equal(t, expected.NotLeased, notLeased)
 }
-

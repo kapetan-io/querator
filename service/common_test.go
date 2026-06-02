@@ -31,8 +31,11 @@ import (
 	"github.com/kapetan-io/tackle/set"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
+	"github.com/testcontainers/testcontainers-go/modules/mongodb"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
+	"go.mongodb.org/mongo-driver/mongo"
+	mongoopts "go.mongodb.org/mongo-driver/mongo/options"
 	"go.uber.org/goleak"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -197,6 +200,11 @@ func TestMain(m *testing.M) {
 				fmt.Fprintf(os.Stderr, "failed to stop shared postgres container: %v\n", err)
 			}
 		}
+		if sharedMongo != nil {
+			if err := sharedMongo.Stop(context.Background()); err != nil {
+				fmt.Fprintf(os.Stderr, "failed to stop shared mongo container: %v\n", err)
+			}
+		}
 	}()
 
 	goleak.VerifyTestMain(m, goleakOptions...)
@@ -343,6 +351,137 @@ func (p *postgresTestSetup) Teardown() {
 
 	if err := container.DropDatabase(context.Background(), p.dbName); err != nil {
 		log.Warn("failed to drop test database", "database", p.dbName, "error", err)
+	}
+}
+
+// ---------------------------------------------------------------------
+// Shared MongoDB Container
+// ---------------------------------------------------------------------
+
+type sharedMongoContainer struct {
+	container *mongodb.MongoDBContainer
+	uri       string
+	dbCounter atomic.Int64
+}
+
+var (
+	sharedMongo     *sharedMongoContainer
+	sharedMongoOnce sync.Once
+	sharedMongoErr  error
+)
+
+func getSharedMongoContainer() (*sharedMongoContainer, error) {
+	sharedMongoOnce.Do(func() {
+		sharedMongo = &sharedMongoContainer{}
+		sharedMongoErr = sharedMongo.Start(context.Background())
+	})
+	return sharedMongo, sharedMongoErr
+}
+
+func (s *sharedMongoContainer) Start(ctx context.Context) (err error) {
+	// Recover from panic when Docker is not available and convert to clear error
+	defer func() {
+		if r := recover(); r != nil {
+			msg := fmt.Sprintf("%v", r)
+			if strings.Contains(msg, "rootless Docker not found") {
+				err = fmt.Errorf("Docker is not available: %s", msg)
+			} else {
+				panic(r)
+			}
+		}
+	}()
+
+	// A standalone mongod (no replica set) is used deliberately: it is the practical proof that the
+	// non-transactional MongoDB backend design holds (see ADR-0026).
+	container, err := mongodb.Run(ctx, "mongo:7")
+	if err != nil {
+		return fmt.Errorf("failed to start mongo container: %w", err)
+	}
+
+	uri, err := container.ConnectionString(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get mongo connection string: %w", err)
+	}
+
+	s.container = container
+	s.uri = uri
+	return nil
+}
+
+func (s *sharedMongoContainer) Stop(ctx context.Context) error {
+	if s.container == nil {
+		return nil
+	}
+
+	if err := s.container.Terminate(ctx); err != nil {
+		log.Warn("failed to terminate mongo container", "error", err)
+		return err
+	}
+	return nil
+}
+
+func (s *sharedMongoContainer) DatabaseName() string {
+	return fmt.Sprintf("querator_test_%d", s.dbCounter.Add(1))
+}
+
+func (s *sharedMongoContainer) DropDatabase(ctx context.Context, dbName string) error {
+	client, err := mongo.Connect(ctx, mongoopts.Client().ApplyURI(s.uri))
+	if err != nil {
+		return fmt.Errorf("connect to mongo: %w", err)
+	}
+	defer func() { _ = client.Disconnect(ctx) }()
+
+	if err := client.Database(dbName).Drop(ctx); err != nil {
+		return fmt.Errorf("drop database %s: %w", dbName, err)
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------
+// MongoDB test setup
+// ---------------------------------------------------------------------
+
+type mongoTestSetup struct {
+	dbName string
+}
+
+func (m *mongoTestSetup) Setup(conf store.MongoConfig) store.Config {
+	container, err := getSharedMongoContainer()
+	if err != nil {
+		panic(fmt.Sprintf("failed to get shared mongo container: %v", err))
+	}
+
+	m.dbName = container.DatabaseName()
+
+	conf.ConnectionString = container.uri
+	conf.Database = m.dbName
+	conf.Log = log
+
+	var storageConf store.Config
+	storageConf.Queues = store.NewMongoQueues(conf)
+	storageConf.PartitionStorage = []store.PartitionStorage{
+		{
+			PartitionStore: store.NewMongoPartitionStore(conf),
+			Name:           "mongo-0",
+			Affinity:       1,
+		},
+	}
+	return storageConf
+}
+
+func (m *mongoTestSetup) Teardown() {
+	if m.dbName == "" {
+		return
+	}
+
+	container, err := getSharedMongoContainer()
+	if err != nil {
+		log.Warn("failed to get shared mongo container for cleanup", "error", err)
+		return
+	}
+
+	if err := container.DropDatabase(context.Background(), m.dbName); err != nil {
+		log.Warn("failed to drop test database", "database", m.dbName, "error", err)
 	}
 }
 

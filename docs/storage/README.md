@@ -4,24 +4,26 @@ Querator supports multiple storage backends for both queue metadata and partitio
 
 ## Available Backends
 
-Querator currently supports three storage backends:
+Querator currently supports four storage backends:
 
 - **[InMemory](memory.md)** - RAM-only storage for testing and development
 - **[BadgerDB](badger.md)** - Embedded key-value store for single-node deployments
 - **[PostgreSQL](postgres.md)** - Full-featured database for production deployments
+- **[MongoDB](mongodb.md)** - Document database; non-transactional, standalone-compatible
 
 ## Quick Comparison
 
-| Feature | InMemory | BadgerDB | PostgreSQL |
-|---------|----------|----------|------------|
-| Persistence | No | Yes | Yes |
-| Distributed | No | No | Yes |
-| Transactions | No | Yes | Yes |
-| High Availability | No | No | Yes (with replication) |
-| Suitable for Production | No | Single-node only | Yes |
-| Resource Usage | Low | Medium | Medium-High |
-| Setup Complexity | None | Low | Medium |
-| Use Case | Testing, Development | Embedded, Edge | Production, Cloud |
+| Feature | InMemory | BadgerDB | PostgreSQL | MongoDB |
+|---------|----------|----------|------------|---------|
+| Persistence | No | Yes | Yes | Yes |
+| Distributed | No | No | Yes | Yes |
+| Transactions | No | Yes | Yes | No (not required — see ADR-0026) |
+| Replica set required | n/a | n/a | n/a | No (standalone works) |
+| High Availability | No | No | Yes (with replication) | Yes (managed/replica set) |
+| Suitable for Production | No | Single-node only | Yes | Yes |
+| Resource Usage | Low | Medium | Medium-High | Medium-High |
+| Setup Complexity | None | Low | Medium | Medium |
+| Use Case | Testing, Development | Embedded, Edge | Production, Cloud | Production, Document store |
 
 ## Choosing a Storage Backend
 
@@ -52,6 +54,21 @@ Use PostgreSQL when:
 - You need advanced database features (replication, backups, monitoring)
 
 **Not recommended for:** Single-node embedded deployments, edge devices.
+
+### MongoDB
+Use MongoDB when:
+- You already operate MongoDB and want to reuse it
+- You want a document store without a relational schema
+- You need to run against a standalone `mongod` (no replica set) — at the edge, in development, or in
+  simple single-node deployments
+- You deploy to a managed MongoDB cluster (Atlas)
+
+The MongoDB backend is non-transactional by design and requires no replica set (see
+[ADR-0026](../adr/0026-mongodb-backend-consistency-model.md)). Auth stores are not yet implemented on
+MongoDB — pair it with memory or badger for those.
+
+**Not recommended for:** Workloads that require a database-enforced unique constraint on `source_id`
+(deduplication is application-level on this backend).
 
 ## Configuration Patterns
 

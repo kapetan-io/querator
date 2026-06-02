@@ -40,7 +40,7 @@ func TestApplyConfigFileErrs(t *testing.T) {
 					},
 				},
 			},
-			expectedErr: "invalid driver; 'invalid' is not one of (Memory, Badger)",
+			expectedErr: "invalid driver; 'invalid' is not one of (Memory, Badger, Mongo)",
 		},
 		{
 			name: "InvalidQueueStorageDriver",
@@ -49,7 +49,7 @@ func TestApplyConfigFileErrs(t *testing.T) {
 					Driver: "invalid",
 				},
 			},
-			expectedErr: "invalid driver; 'invalid' is not one of (Memory, Badger)",
+			expectedErr: "invalid driver; 'invalid' is not one of (Memory, Badger, Mongo)",
 		},
 		{
 			name: "InvalidPartitionStorageReference",
@@ -222,4 +222,39 @@ queue-storage:
 		conf.Service.StorageConfig.PartitionStorage[0].PartitionStore.(*store.BadgerPartitionStore).Config().StorageDir)
 	assert.Equal(t, "/tmp/queue-storage",
 		conf.Service.StorageConfig.Queues.(*store.BadgerQueues).Config().StorageDir)
+}
+
+func TestMongoConfig(t *testing.T) {
+	mongoConfig := `
+partition-storage:
+  - name: mongo-00
+    driver: mongo
+    affinity: 1
+    config:
+      connection-string: "mongodb://localhost:27017"
+      database: querator
+      max-pool-size: "50"
+queue-storage:
+  driver: Mongo
+  config:
+    connection-string: "mongodb://localhost:27017"
+    database: querator
+`
+	var file daemon.File
+	err := yaml.Unmarshal([]byte(mongoConfig), &file)
+	require.NoError(t, err)
+
+	var conf daemon.Config
+	ctx := context.Background()
+	err = daemon.ApplyConfigFile(ctx, &conf, file, io.Discard)
+	require.NoError(t, err)
+
+	partitionConfig := conf.Service.StorageConfig.PartitionStorage[0].PartitionStore.(*store.MongoPartitionStore).Config()
+	assert.Equal(t, "mongodb://localhost:27017", partitionConfig.ConnectionString)
+	assert.Equal(t, "querator", partitionConfig.Database)
+	assert.Equal(t, uint64(50), partitionConfig.MaxPoolSize)
+
+	queueConfig := conf.Service.StorageConfig.Queues.(*store.MongoQueues).Config()
+	assert.Equal(t, "mongodb://localhost:27017", queueConfig.ConnectionString)
+	assert.Equal(t, "querator", queueConfig.Database)
 }

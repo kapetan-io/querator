@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
@@ -221,8 +222,19 @@ func setupPartitionStorage(file File, d *Config) error {
 				StorageDir: ps.Config["storage-dir"],
 				Log:        d.Service.Log,
 			})
+		case "mongo":
+			maxPool, err := parseMaxPoolSize(ps.Config["max-pool-size"])
+			if err != nil {
+				return err
+			}
+			s = store.NewMongoPartitionStore(store.MongoConfig{
+				ConnectionString: ps.Config["connection-string"],
+				Database:         ps.Config["database"],
+				MaxPoolSize:      maxPool,
+				Log:              d.Service.Log,
+			})
 		default:
-			return fmt.Errorf("invalid driver; '%s' is not one of (Memory, Badger)", ps.Driver)
+			return fmt.Errorf("invalid driver; '%s' is not one of (Memory, Badger, Mongo)", ps.Driver)
 		}
 
 		d.Service.StorageConfig.PartitionStorage = append(d.Service.StorageConfig.PartitionStorage, store.PartitionStorage{
@@ -234,6 +246,19 @@ func setupPartitionStorage(file File, d *Config) error {
 	return nil
 }
 
+// parseMaxPoolSize parses the optional Mongo max-pool-size config value. An empty value means "use
+// the driver default" (0).
+func parseMaxPoolSize(v string) (uint64, error) {
+	if v == "" {
+		return 0, nil
+	}
+	n, err := strconv.ParseUint(v, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid max-pool-size; '%s' is not a valid number: %w", v, err)
+	}
+	return n, nil
+}
+
 func setupQueueStorage(ctx context.Context, file File, conf *Config) error {
 	switch strings.ToLower(file.QueueStorage.Driver) {
 	case "memory", "":
@@ -243,8 +268,14 @@ func setupQueueStorage(ctx context.Context, file File, conf *Config) error {
 			StorageDir: file.QueueStorage.Config["storage-dir"],
 			Log:        conf.Service.Log,
 		})
+	case "mongo":
+		conf.Service.StorageConfig.Queues = store.NewMongoQueues(store.MongoConfig{
+			ConnectionString: file.QueueStorage.Config["connection-string"],
+			Database:         file.QueueStorage.Config["database"],
+			Log:              conf.Service.Log,
+		})
 	default:
-		return fmt.Errorf("invalid driver; '%s' is not one of (Memory, Badger)", file.QueueStorage.Driver)
+		return fmt.Errorf("invalid driver; '%s' is not one of (Memory, Badger, Mongo)", file.QueueStorage.Driver)
 	}
 
 	for _, queue := range file.Queues {

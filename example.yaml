@@ -1,6 +1,6 @@
 # This is an example config file
 
-# Querator currently supports "badger" and "memory" storage drivers
+# Querator currently supports "memory", "badger", "postgres", and "mongo" storage drivers
 # TODO: Need to document all options for each storage driver
 
 # HTTP server listen address (use 0.0.0.0 for Docker)
@@ -40,19 +40,24 @@ partition-storage:
 #      client-cert: /path/to/client/cert
 #      client-key: /path/to/client/key
 
-#  - name: mongodb-01
-#    driver: mongoDB
+# MongoDB partition storage. Non-transactional and standalone-compatible: a single mongod (no replica
+# set) is sufficient. See docs/storage/mongodb.md and docs/adr/0026-mongodb-backend-consistency-model.md
+#  - name: mongo-01
+#    driver: mongo
 #    affinity: 1
 #
 #    config:
-#      host: localhost
-#      port: 27017
-#      user: foo
-#      pass: bar
+#      connection-string: "mongodb://user:pass@localhost:27017"
 #      database: querator
-#      ca-file: /path/to/ca
-#      client-cert: /path/to/client/cert
-#      client-key: /path/to/client/key
+#      # Caps the driver connection pool per client; omit for the driver default.
+#      max-pool-size: "50"
+
+# MongoDB may also back queue metadata:
+# queue-storage:
+#   driver: mongo
+#   config:
+#     connection-string: "mongodb://user:pass@localhost:27017"
+#     database: querator
 
 # Auth Backend defines the authentication and authorization backend.
 # Options:

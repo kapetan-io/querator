@@ -1423,22 +1423,14 @@ func (p *MongoPartition) TakeAction(ctx context.Context, batch types.LifeCycleBa
 					return errors.Errorf("check item existence: %w", err)
 				}
 
-				// Insert the requeued tail document first, then delete the old (ADR-0026).
-				requeued := &types.Item{
-					IsLeased:       false,
-					EnqueueAt:      action.Item.EnqueueAt,
-					CreatedAt:      action.Item.CreatedAt,
-					ExpireDeadline: action.Item.ExpireDeadline,
-					Attempts:       action.Item.Attempts,
-					MaxAttempts:    action.Item.MaxAttempts,
-					Reference:      action.Item.Reference,
-					Encoding:       action.Item.Encoding,
-					Kind:           action.Item.Kind,
-					Payload:        action.Item.Payload,
-					SourceID:       action.Item.SourceID,
-				}
+				// Insert the requeued tail document first, then delete the old (ADR-0026). Copy the
+				// whole item and reset only the lease state so every payload/provenance field
+				// (including SourceID) is carried forward without per-field enumeration.
+				requeued := action.Item
+				requeued.IsLeased = false
+				requeued.LeaseDeadline = clock.Time{}
 				newID := p.nextID()
-				if _, err := coll.InsertOne(ctx, itemToDoc(newID, requeued)); err != nil {
+				if _, err := coll.InsertOne(ctx, itemToDoc(newID, &requeued)); err != nil {
 					return errors.Errorf("insert requeued item: %w", err)
 				}
 				if _, err := coll.DeleteOne(ctx, bson.M{"_id": string(action.Item.ID)}); err != nil {

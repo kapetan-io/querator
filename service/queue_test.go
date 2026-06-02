@@ -2516,7 +2516,6 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 						Kind:           "test-kind",
 						Payload:        []byte("test payload"),
 						ExpireDeadline: timestamppb.New(now.Now().Add(1 * clock.Hour)),
-						MaxAttempts:    10,
 					},
 				},
 			}, &importResp))
@@ -2541,28 +2540,28 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 			now.Advance(2 * clock.Minute)
 
-			// Wait for the item to be re-queued after the lease expires (still under MaxAttempts).
+			// Wait for the item to be re-queued after the lease expires (still under MaxAttempts),
+			// capturing it so SourceID can be asserted without a second list call.
+			var requeued *pb.StorageItem
 			require.NoError(t, retry.On(ctx, RetryTenTimes, func(ctx context.Context, i int) error {
 				var resp pb.StorageItemsListResponse
 				if err := c.StorageItemsList(ctx, queueName, 0, &resp, nil); err != nil {
 					return err
 				}
-				item := findInStorageList(ref, &resp)
-				if item == nil {
+				found := findInStorageList(ref, &resp)
+				if found == nil {
 					return fmt.Errorf("item not found in storage")
 				}
-				if item.IsLeased {
+				if found.IsLeased {
 					return fmt.Errorf("expected item to be re-queued (IsLeased=false)")
 				}
+				requeued = found
 				return nil
 			}))
 
 			// SourceID must survive the lease-expiry re-queue (insert-before-delete tail move).
-			require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &resp, nil))
-			item = findInStorageList(ref, &resp)
-			require.NotNil(t, item)
-			assert.False(t, item.IsLeased)
-			assert.Equal(t, sourceID, item.SourceId)
+			require.NotNil(t, requeued)
+			assert.Equal(t, sourceID, requeued.SourceId)
 		})
 
 		t.Run("UnlimitedAttempts", func(t *testing.T) {

@@ -99,14 +99,6 @@ func acquireClientLocked(uri string, maxPool uint64, log *slog.Logger) (*mongo.C
 	return client, nil
 }
 
-// acquireClient is a convenience wrapper that takes globalMongoMu before delegating to
-// acquireClientLocked. External callers and tests that do not already hold the lock should use this.
-func acquireClient(uri string, maxPool uint64, log *slog.Logger) (*mongo.Client, error) {
-	globalMongoMu.Lock()
-	defer globalMongoMu.Unlock()
-	return acquireClientLocked(uri, maxPool, log)
-}
-
 func releaseClient(uri string) {
 	globalMongoMu.Lock()
 	defer globalMongoMu.Unlock()
@@ -889,6 +881,12 @@ nextBatch:
 				continue nextBatch
 			}
 
+			// Full-document read is intentional here. The three error cases (missing, scheduled,
+			// not-leased) produce distinct error messages that callers assert, and the immediate-retry
+			// path (default branch below) rebuilds the item at a new tail id using every field of the
+			// document. Collapsing the read into a FindOneAndDelete would lose the ability to
+			// distinguish "missing" from "not-leased" and would sacrifice the data needed to
+			// reconstruct the tail item, so the read-then-write shape is correct and should remain.
 			var doc mongoItem
 			err := coll.FindOne(ctx, bson.M{"_id": string(retryItem.ID)}).Decode(&doc)
 			if errors.Is(err, mongo.ErrNoDocuments) {
@@ -1421,7 +1419,13 @@ func (p *MongoPartition) TakeAction(ctx context.Context, batch types.LifeCycleBa
 		for _, action := range batch.Requests[i].Actions {
 			switch action.Action {
 			case types.ActionLeaseExpired:
-				// Confirm the item still exists; the next scan re-finds it if we crash mid-move.
+				// Existence check before the tail move is intentional and must stay separate. ADR-0026
+				// mandates insert-before-delete: the new tail document is written first so that a crash
+				// between the two operations degrades to a duplicate rather than a loss. Folding the
+				// check into the delete (e.g., FindOneAndDelete) would invert that order — delete first,
+				// insert second — violating the durability guarantee. The check guards against the
+				// scan→action race: if the item was already moved by a concurrent path, we skip rather
+				// than inserting a phantom tail entry.
 				err := coll.FindOne(ctx, bson.M{"_id": string(action.Item.ID)},
 					options.FindOne().SetProjection(bson.M{"_id": 1})).Err()
 				if errors.Is(err, mongo.ErrNoDocuments) {

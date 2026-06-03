@@ -50,10 +50,10 @@ var (
 	globalMongoClients = make(map[string]*mongoClientManager) // keyed by ConnectionString
 )
 
-func acquireClient(uri string, maxPool uint64, log *slog.Logger) (*mongo.Client, error) {
-	globalMongoMu.Lock()
-	defer globalMongoMu.Unlock()
-
+// acquireClientLocked registers or reuses a mongo.Client for uri. It must be called with
+// globalMongoMu already held. mongo.Connect is lazy (ADR-0021), so the retry loop performs no
+// network I/O and holding the lock across it is acceptable.
+func acquireClientLocked(uri string, maxPool uint64, log *slog.Logger) (*mongo.Client, error) {
 	if manager, exists := globalMongoClients[uri]; exists {
 		manager.refCount.Add(1)
 		return manager.client, nil
@@ -97,6 +97,14 @@ func acquireClient(uri string, maxPool uint64, log *slog.Logger) (*mongo.Client,
 	globalMongoClients[uri] = manager
 
 	return client, nil
+}
+
+// acquireClient is a convenience wrapper that takes globalMongoMu before delegating to
+// acquireClientLocked. External callers and tests that do not already hold the lock should use this.
+func acquireClient(uri string, maxPool uint64, log *slog.Logger) (*mongo.Client, error) {
+	globalMongoMu.Lock()
+	defer globalMongoMu.Unlock()
+	return acquireClientLocked(uri, maxPool, log)
 }
 
 func releaseClient(uri string) {
@@ -149,23 +157,25 @@ func (c *MongoConfig) getOrCreateClient(_ context.Context) (*mongo.Client, error
 		return nil, errors.New("connection string is required")
 	}
 
+	// Hold globalMongoMu for the entire function so all reads and writes of connString and
+	// clientAcquired are synchronized. acquireClientLocked assumes the lock is already held.
+	globalMongoMu.Lock()
+	defer globalMongoMu.Unlock()
+
 	if c.connString == "" {
 		c.connString = c.ConnectionString
 	}
 
-	// Only acquire the client once per config instance
+	// Only acquire the client once per config instance; subsequent calls return the shared
+	// client without incrementing the ref-count (the ref was already taken on first acquire).
 	if !c.clientAcquired {
-		client, err := acquireClient(c.ConnectionString, c.MaxPoolSize, c.Log)
+		client, err := acquireClientLocked(c.ConnectionString, c.MaxPoolSize, c.Log)
 		if err != nil {
 			return nil, err
 		}
 		c.clientAcquired = true
 		return client, nil
 	}
-
-	// Return the existing client without incrementing refCount
-	globalMongoMu.Lock()
-	defer globalMongoMu.Unlock()
 
 	manager, exists := globalMongoClients[c.connString]
 	if !exists {

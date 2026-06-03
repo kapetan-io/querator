@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"strconv"
 	"strings"
 	"time"
 
@@ -20,6 +19,7 @@ import (
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/color"
 	"github.com/kapetan-io/tackle/set"
+	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
@@ -110,17 +110,52 @@ type Logging struct {
 	Handler string `yaml:"handler"`
 }
 
+// QueueStorage selects the backend that stores queue metadata. Exactly one backend section
+// (memory, badger, or mongo) may be set. When none is set, the in-memory backend is used.
 type QueueStorage struct {
-	Name   string            `yaml:"name"`
-	Driver string            `yaml:"driver"`
-	Config map[string]string `yaml:"config"`
+	Memory *MemoryConfig `yaml:"memory"`
+	Badger *BadgerConfig `yaml:"badger"`
+	Mongo  *MongoConfig  `yaml:"mongo"`
 }
 
+// PartitionStorage selects the backend for a named partition store. Exactly one backend section
+// (memory, badger, or mongo) must be set.
 type PartitionStorage struct {
-	Name     string            `yaml:"name"`
-	Driver   string            `yaml:"driver"`
-	Affinity int               `yaml:"affinity"`
-	Config   map[string]string `yaml:"config"`
+	Name     string        `yaml:"name"`
+	Affinity int           `yaml:"affinity"`
+	Memory   *MemoryConfig `yaml:"memory"`
+	Badger   *BadgerConfig `yaml:"badger"`
+	Mongo    *MongoConfig  `yaml:"mongo"`
+}
+
+// MemoryConfig configures the in-memory backend. It accepts no options; select it with an empty
+// mapping (`memory: {}`).
+type MemoryConfig struct{}
+
+// BadgerConfig configures the BadgerDB backend.
+type BadgerConfig struct {
+	StorageDir string `yaml:"storage-dir"`
+}
+
+func (c BadgerConfig) validate() error {
+	if c.StorageDir == "" {
+		return errors.New("badger: 'storage-dir' is required")
+	}
+	return nil
+}
+
+// MongoConfig configures the MongoDB backend.
+type MongoConfig struct {
+	ConnectionString string `yaml:"connection-string"`
+	Database         string `yaml:"database"`
+	MaxPoolSize      uint64 `yaml:"max-pool-size"`
+}
+
+func (c MongoConfig) validate() error {
+	if c.ConnectionString == "" {
+		return errors.New("mongo: 'connection-string' is required")
+	}
+	return nil
 }
 
 type Queue struct {
@@ -138,6 +173,20 @@ type Partition struct {
 	Partition   int    `yaml:"partition"`
 	ReadOnly    bool   `yaml:"read-only"`
 	StorageName string `yaml:"storage-name"`
+}
+
+// ReadConfig decodes a Querator YAML config from r with strict field checking enabled. Unknown or
+// misspelled keys — including a config option placed under the wrong backend — are reported as an
+// error instead of being silently ignored.
+func ReadConfig(r io.Reader) (File, error) {
+	dec := yaml.NewDecoder(r)
+	dec.KnownFields(true)
+
+	var file File
+	if err := dec.Decode(&file); err != nil {
+		return File{}, fmt.Errorf("while reading config file: %w", err)
+	}
+	return file, nil
 }
 
 func ApplyConfigFile(ctx context.Context, conf *Config, file File, w io.Writer) error {
@@ -210,31 +259,59 @@ func toLogLevel(level string) slog.Level {
 	}
 }
 
+// selected reports the name of the single backend that is set and how many are set, so callers can
+// enforce the "exactly one backend" rule with a clear error.
+func selected(memory, badger, mongo bool) (name string, count int) {
+	if memory {
+		name, count = "memory", count+1
+	}
+	if badger {
+		name, count = "badger", count+1
+	}
+	if mongo {
+		name, count = "mongo", count+1
+	}
+	return name, count
+}
+
+func backendErr(what string, count int) error {
+	if count == 0 {
+		return fmt.Errorf("%s must define exactly one backend (memory, badger, mongo)", what)
+	}
+	return fmt.Errorf("%s defines multiple backends; only one of (memory, badger, mongo) is allowed", what)
+}
+
 func setupPartitionStorage(file File, d *Config) error {
 	for _, ps := range file.PartitionStorage {
-		var s store.PartitionStore
+		name, count := selected(ps.Memory != nil, ps.Badger != nil, ps.Mongo != nil)
+		if count != 1 {
+			return backendErr(fmt.Sprintf("partition storage '%s'", ps.Name), count)
+		}
 
-		switch strings.ToLower(ps.Driver) {
+		var s store.PartitionStore
+		switch name {
 		case "memory":
 			s = store.NewMemoryPartitionStore(store.Config{}, d.Service.Log)
 		case "badger":
+			if err := ps.Badger.validate(); err != nil {
+				return err
+			}
 			s = store.NewBadgerPartitionStore(store.BadgerConfig{
-				StorageDir: ps.Config["storage-dir"],
+				StorageDir: ps.Badger.StorageDir,
 				Log:        d.Service.Log,
 			})
 		case "mongo":
-			maxPool, err := parseMaxPoolSize(ps.Config["max-pool-size"])
-			if err != nil {
+			if err := ps.Mongo.validate(); err != nil {
 				return err
 			}
 			s = store.NewMongoPartitionStore(store.MongoConfig{
-				ConnectionString: ps.Config["connection-string"],
-				Database:         ps.Config["database"],
-				MaxPoolSize:      maxPool,
+				ConnectionString: ps.Mongo.ConnectionString,
+				Database:         ps.Mongo.Database,
+				MaxPoolSize:      ps.Mongo.MaxPoolSize,
 				Log:              d.Service.Log,
 			})
 		default:
-			return fmt.Errorf("invalid driver; '%s' is not one of (Memory, Badger, Mongo)", ps.Driver)
+			return fmt.Errorf("unknown backend %q", name)
 		}
 
 		d.Service.StorageConfig.PartitionStorage = append(d.Service.StorageConfig.PartitionStorage, store.PartitionStorage{
@@ -246,41 +323,36 @@ func setupPartitionStorage(file File, d *Config) error {
 	return nil
 }
 
-// parseMaxPoolSize parses the optional Mongo max-pool-size config value. An empty value means "use
-// the driver default" (0).
-func parseMaxPoolSize(v string) (uint64, error) {
-	if v == "" {
-		return 0, nil
-	}
-	n, err := strconv.ParseUint(v, 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("invalid max-pool-size; '%s' is not a valid number: %w", v, err)
-	}
-	return n, nil
-}
-
 func setupQueueStorage(ctx context.Context, file File, conf *Config) error {
-	switch strings.ToLower(file.QueueStorage.Driver) {
-	case "memory", "":
+	qs := file.QueueStorage
+	name, count := selected(qs.Memory != nil, qs.Badger != nil, qs.Mongo != nil)
+	if count > 1 {
+		return backendErr("queue storage", count)
+	}
+
+	switch name {
+	case "", "memory":
 		conf.Service.StorageConfig.Queues = store.NewMemoryQueues(conf.Service.Log)
 	case "badger":
+		if err := qs.Badger.validate(); err != nil {
+			return err
+		}
 		conf.Service.StorageConfig.Queues = store.NewBadgerQueues(store.BadgerConfig{
-			StorageDir: file.QueueStorage.Config["storage-dir"],
+			StorageDir: qs.Badger.StorageDir,
 			Log:        conf.Service.Log,
 		})
 	case "mongo":
-		maxPool, err := parseMaxPoolSize(file.QueueStorage.Config["max-pool-size"])
-		if err != nil {
+		if err := qs.Mongo.validate(); err != nil {
 			return err
 		}
 		conf.Service.StorageConfig.Queues = store.NewMongoQueues(store.MongoConfig{
-			ConnectionString: file.QueueStorage.Config["connection-string"],
-			Database:         file.QueueStorage.Config["database"],
-			MaxPoolSize:      maxPool,
+			ConnectionString: qs.Mongo.ConnectionString,
+			Database:         qs.Mongo.Database,
+			MaxPoolSize:      qs.Mongo.MaxPoolSize,
 			Log:              conf.Service.Log,
 		})
 	default:
-		return fmt.Errorf("invalid driver; '%s' is not one of (Memory, Badger, Mongo)", file.QueueStorage.Driver)
+		return fmt.Errorf("unknown backend %q", name)
 	}
 
 	for _, queue := range file.Queues {

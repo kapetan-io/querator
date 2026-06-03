@@ -12,7 +12,6 @@ import (
 	"github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/daemon"
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
 )
 
 var serverCommand = &cobra.Command{
@@ -48,9 +47,9 @@ func StartServer(ctx context.Context, w io.Writer) error {
 		}
 		defer func() { _ = reader.Close() }()
 
-		decoder := yaml.NewDecoder(reader)
-		if err := decoder.Decode(&file); err != nil {
-			return fmt.Errorf("while reading config file: %w", err)
+		file, err = daemon.ReadConfig(reader)
+		if err != nil {
+			return err
 		}
 		file.ConfigFile = flags.ConfigFile
 	}

@@ -17,15 +17,13 @@ BadgerDB is ideal for:
 
 ```yaml
 queue-storage:
-  driver: badger
-  config:
+  badger:
     storage-dir: /data/queues
 
 partition-storage:
   - name: badger-01
-    driver: badger
     affinity: 1
-    config:
+    badger:
       storage-dir: /data/partitions
 ```
 
@@ -39,15 +37,13 @@ partition-storage:
 
 ```yaml
 queue-storage:
-  driver: badger
-  config:
+  badger:
     storage-dir: /data/queues
 
 partition-storage:
   - name: badger-01
-    driver: badger
     affinity: 1
-    config:
+    badger:
       storage-dir: /data/partitions
 ```
 
@@ -64,15 +60,13 @@ You can configure multiple BadgerDB partition stores with different storage dire
 ```yaml
 partition-storage:
   - name: badger-ssd
-    driver: badger
     affinity: 7
-    config:
+    badger:
       storage-dir: /mnt/ssd/querator
 
   - name: badger-hdd
-    driver: badger
     affinity: 3
-    config:
+    badger:
       storage-dir: /mnt/hdd/querator
 ```
 

@@ -26,19 +26,17 @@ MongoDB is ideal for:
 
 ```yaml
 queue-storage:
-  driver: mongo
-  config:
+  mongo:
     connection-string: "mongodb://user:pass@localhost:27017"
     database: querator
 
 partition-storage:
   - name: mongo-01
-    driver: mongo
     affinity: 1
-    config:
+    mongo:
       connection-string: "mongodb://user:pass@localhost:27017"
       database: querator
-      max-pool-size: "50"
+      max-pool-size: 50
 ```
 
 ### Configuration Options
@@ -47,7 +45,7 @@ partition-storage:
 |--------|------|----------|---------|-------------|
 | `connection-string` | string | Yes | - | MongoDB connection URI (see format below) |
 | `database` | string | No | `querator` | Logical database name within the MongoDB server |
-| `max-pool-size` | string (integer) | No | driver default | Maximum connections in the pool per client (`0` = driver default) |
+| `max-pool-size` | integer | No | driver default | Maximum connections in the pool per client (`0` = driver default) |
 
 ### Connection String Format
 
@@ -110,11 +108,10 @@ last user closes. The `max-pool-size` setting caps connections per client.
 ```yaml
 partition-storage:
   - name: mongo-01
-    driver: mongo
-    config:
+    mongo:
       connection-string: "mongodb://user:pass@localhost:27017"
       database: querator
-      max-pool-size: "50"
+      max-pool-size: 50
 ```
 
 ## Performance Considerations

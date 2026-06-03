@@ -18,16 +18,14 @@ PostgreSQL is ideal for:
 
 ```yaml
 queue-storage:
-  driver: postgres
-  config:
+  postgres:
     # sslmode=disable for local development only; use sslmode=require or higher in production
     connection-string: "postgres://user:pass@localhost:5432/querator?sslmode=disable"
 
 partition-storage:
   - name: postgres-01
-    driver: postgres
     affinity: 1
-    config:
+    postgres:
       connection-string: "postgres://user:pass@localhost:5432/querator?sslmode=disable"
       max-conns: 10
 ```
@@ -73,15 +71,13 @@ connection-string: "postgres://querator:secret@localhost:5432/querator?connect_t
 
 ```yaml
 queue-storage:
-  driver: postgres
-  config:
+  postgres:
     connection-string: "postgres://querator_user:secure_password@db-primary.internal:5432/querator?sslmode=verify-full&pool_max_conns=20"
 
 partition-storage:
   - name: postgres-01
-    driver: postgres
     affinity: 1
-    config:
+    postgres:
       connection-string: "postgres://querator_user:secure_password@db-primary.internal:5432/querator?sslmode=verify-full"
       max-conns: 50
 ```
@@ -93,16 +89,14 @@ You can distribute partitions across multiple PostgreSQL servers:
 ```yaml
 partition-storage:
   - name: postgres-us-east
-    driver: postgres
     affinity: 5
-    config:
+    postgres:
       connection-string: "postgres://user:pass@db-us-east.internal:5432/querator"
       max-conns: 50
 
   - name: postgres-us-west
-    driver: postgres
     affinity: 5
-    config:
+    postgres:
       connection-string: "postgres://user:pass@db-us-west.internal:5432/querator"
       max-conns: 50
 ```
@@ -223,8 +217,7 @@ The `max-conns` setting controls the maximum number of connections per storage b
 ```yaml
 partition-storage:
   - name: postgres-01
-    driver: postgres
-    config:
+    postgres:
       connection-string: "postgres://user:pass@localhost:5432/querator"
       max-conns: 50  # Maximum 50 connections to this database
 ```
@@ -260,8 +253,7 @@ Configure Querator with the managed service endpoint:
 ```yaml
 partition-storage:
   - name: postgres-prod
-    driver: postgres
-    config:
+    postgres:
       connection-string: "postgres://user:pass@managed-postgres.cloud:5432/querator?sslmode=require"
 ```
 

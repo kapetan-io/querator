@@ -1,7 +1,9 @@
 # This is an example config file
 
-# Querator currently supports "memory", "badger", "postgres", and "mongo" storage drivers
-# TODO: Need to document all options for each storage driver
+# Querator currently supports "memory", "badger", "postgres", and "mongo" storage drivers.
+# Each storage entry selects its backend by nesting the backend's options under a section named
+# after the backend (memory, badger, mongo). Exactly one backend section may be set per entry, and
+# unknown options are rejected at startup rather than silently ignored.
 
 # HTTP server listen address (use 0.0.0.0 for Docker)
 address: 0.0.0.0:2319
@@ -14,23 +16,24 @@ logging:
 
 # Queue Storage defines where metadata about the queues is stored
 queue-storage:
-  driver: badger
-  config:
+  badger:
     storage-dir: /data/queues
 
 # Partition Storage defines where partitions are stored
 partition-storage:
   - name: badger-01
-    driver: badger
     affinity: 1
-    config:
+    badger:
       storage-dir: /data/partitions
 
+  # The in-memory backend has no options; select it with an empty mapping.
+  #  - name: mem-01
+  #    affinity: 1
+  #    memory: {}
+
 #  - name: postgres-01
-#    driver: postgres
 #    affinity: 1
-#
-#    config:
+#    postgres:
 #      host: localhost
 #      port: 5432
 #      user: foo
@@ -43,23 +46,20 @@ partition-storage:
 # MongoDB partition storage. Non-transactional and standalone-compatible: a single mongod (no replica
 # set) is sufficient. See docs/storage/mongodb.md
 #  - name: mongo-01
-#    driver: mongo
 #    affinity: 1
-#
-#    config:
+#    mongo:
 #      connection-string: "mongodb://user:pass@localhost:27017"
 #      database: querator
 #      # Caps the driver connection pool per client; omit for the driver default.
-#      max-pool-size: "50"
+#      max-pool-size: 50
 
 # MongoDB may also back queue metadata. When queue and partition storage share a connection string
 # they share one driver client, so set max-pool-size consistently in both places.
 # queue-storage:
-#   driver: mongo
-#   config:
+#   mongo:
 #     connection-string: "mongodb://user:pass@localhost:27017"
 #     database: querator
-#     max-pool-size: "50"
+#     max-pool-size: 50
 
 # Auth Backend defines the authentication and authorization backend.
 # Options:

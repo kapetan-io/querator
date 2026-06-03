@@ -4,6 +4,8 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,11 +14,77 @@ import (
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gopkg.in/yaml.v3"
 )
 
+func TestReadConfigErrs(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		config  string
+		wantErr string
+	}{
+		{
+			// A typo in a backend option must fail rather than silently fall back to the default.
+			name: "MisspelledKey",
+			config: `
+partition-storage:
+  - name: mongo-00
+    mongo:
+      connection-string: "mongodb://localhost:27017"
+      max-poolsize: 50
+`,
+			wantErr: "field max-poolsize not found",
+		},
+		{
+			// max-pool-size belongs to mongo; placing it under badger must fail.
+			name: "MisplacedKey",
+			config: `
+partition-storage:
+  - name: badger-00
+    badger:
+      storage-dir: /tmp/badger1
+      max-pool-size: 50
+`,
+			wantErr: "field max-pool-size not found",
+		},
+		{
+			name: "MistypedValue",
+			config: `
+queue-storage:
+  mongo:
+    connection-string: "mongodb://localhost:27017"
+    max-pool-size: not-a-number
+`,
+			wantErr: "cannot unmarshal",
+		},
+		{
+			name: "UnknownTopLevelKey",
+			config: `
+bogus-section: true
+`,
+			wantErr: "field bogus-section not found",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := daemon.ReadConfig(strings.NewReader(test.config))
+			require.ErrorContains(t, err, test.wantErr)
+		})
+	}
+}
+
+// TestExampleConfigDecodes guards the shipped example.yaml against the strict decoder: every key it
+// documents must be a key the config structs actually accept, or operators copying it would hit an
+// "unknown field" error on startup.
+func TestExampleConfigDecodes(t *testing.T) {
+	f, err := os.Open("../example.yaml")
+	require.NoError(t, err)
+	defer func() { _ = f.Close() }()
+
+	_, err = daemon.ReadConfig(f)
+	require.NoError(t, err)
+}
+
 func TestApplyConfigFileErrs(t *testing.T) {
-	tests := []struct {
+	for _, test := range []struct {
 		name        string
 		file        daemon.File
 		expectedErr string
@@ -31,56 +99,78 @@ func TestApplyConfigFileErrs(t *testing.T) {
 			expectedErr: "invalid handler; 'invalid' is not one of (color, text, json)",
 		},
 		{
-			name: "InvalidPartitionStorageDriver",
+			name: "PartitionStorageNoBackend",
+			file: daemon.File{
+				PartitionStorage: []daemon.PartitionStorage{
+					{Name: "test"},
+				},
+			},
+			expectedErr: "partition storage 'test' must define exactly one backend (memory, badger, mongo)",
+		},
+		{
+			name: "PartitionStorageMultipleBackends",
 			file: daemon.File{
 				PartitionStorage: []daemon.PartitionStorage{
 					{
 						Name:   "test",
-						Driver: "invalid",
+						Memory: &daemon.MemoryConfig{},
+						Badger: &daemon.BadgerConfig{StorageDir: "/tmp/badger1"},
 					},
 				},
 			},
-			expectedErr: "invalid driver; 'invalid' is not one of (Memory, Badger, Mongo)",
+			expectedErr: "partition storage 'test' defines multiple backends; only one of (memory, badger, mongo) is allowed",
 		},
 		{
-			name: "InvalidQueueStorageDriver",
-			file: daemon.File{
-				QueueStorage: daemon.QueueStorage{
-					Driver: "invalid",
-				},
-			},
-			expectedErr: "invalid driver; 'invalid' is not one of (Memory, Badger, Mongo)",
-		},
-		{
-			name: "InvalidQueueStorageMaxPoolSize",
-			file: daemon.File{
-				QueueStorage: daemon.QueueStorage{
-					Driver: "mongo",
-					Config: map[string]string{
-						"connection-string": "mongodb://localhost:27017",
-						"max-pool-size":     "not-a-number",
-					},
-				},
-			},
-			expectedErr: "invalid max-pool-size; 'not-a-number' is not a valid number: " +
-				"strconv.ParseUint: parsing \"not-a-number\": invalid syntax",
-		},
-		{
-			name: "InvalidPartitionStorageMaxPoolSize",
+			name: "PartitionStorageMongoMissingConnectionString",
 			file: daemon.File{
 				PartitionStorage: []daemon.PartitionStorage{
 					{
-						Name:   "mongo-00",
-						Driver: "mongo",
-						Config: map[string]string{
-							"connection-string": "mongodb://localhost:27017",
-							"max-pool-size":     "not-a-number",
-						},
+						Name:  "mongo-00",
+						Mongo: &daemon.MongoConfig{Database: "querator"},
 					},
 				},
 			},
-			expectedErr: "invalid max-pool-size; 'not-a-number' is not a valid number: " +
-				"strconv.ParseUint: parsing \"not-a-number\": invalid syntax",
+			expectedErr: "mongo: 'connection-string' is required",
+		},
+		{
+			name: "PartitionStorageBadgerMissingStorageDir",
+			file: daemon.File{
+				PartitionStorage: []daemon.PartitionStorage{
+					{
+						Name:   "badger-00",
+						Badger: &daemon.BadgerConfig{},
+					},
+				},
+			},
+			expectedErr: "badger: 'storage-dir' is required",
+		},
+		{
+			name: "QueueStorageMultipleBackends",
+			file: daemon.File{
+				QueueStorage: daemon.QueueStorage{
+					Memory: &daemon.MemoryConfig{},
+					Mongo:  &daemon.MongoConfig{ConnectionString: "mongodb://localhost:27017"},
+				},
+			},
+			expectedErr: "queue storage defines multiple backends; only one of (memory, badger, mongo) is allowed",
+		},
+		{
+			name: "QueueStorageMongoMissingConnectionString",
+			file: daemon.File{
+				QueueStorage: daemon.QueueStorage{
+					Mongo: &daemon.MongoConfig{Database: "querator"},
+				},
+			},
+			expectedErr: "mongo: 'connection-string' is required",
+		},
+		{
+			name: "QueueStorageBadgerMissingStorageDir",
+			file: daemon.File{
+				QueueStorage: daemon.QueueStorage{
+					Badger: &daemon.BadgerConfig{},
+				},
+			},
+			expectedErr: "badger: 'storage-dir' is required",
 		},
 		{
 			name: "InvalidPartitionStorageReference",
@@ -88,7 +178,7 @@ func TestApplyConfigFileErrs(t *testing.T) {
 				PartitionStorage: []daemon.PartitionStorage{
 					{
 						Name:   "test",
-						Driver: "memory",
+						Memory: &daemon.MemoryConfig{},
 					},
 				},
 				Queues: []daemon.Queue{
@@ -104,13 +194,11 @@ func TestApplyConfigFileErrs(t *testing.T) {
 			},
 			expectedErr: "invalid partition storage; queue 'test-queue' references 'non-existent' which is undefined",
 		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	} {
+		t.Run(test.name, func(t *testing.T) {
 			conf := &daemon.Config{}
-			err := daemon.ApplyConfigFile(context.Background(), conf, tt.file, io.Discard)
-			assert.EqualError(t, err, tt.expectedErr)
+			err := daemon.ApplyConfigFile(context.Background(), conf, test.file, io.Discard)
+			assert.EqualError(t, err, test.expectedErr)
 		})
 	}
 }
@@ -124,12 +212,12 @@ func TestApplyConfigFile(t *testing.T) {
 		PartitionStorage: []daemon.PartitionStorage{
 			{
 				Name:     "mem-00",
-				Driver:   "memory",
+				Memory:   &daemon.MemoryConfig{},
 				Affinity: 0,
 			},
 		},
 		QueueStorage: daemon.QueueStorage{
-			Driver: "Memory",
+			Memory: &daemon.MemoryConfig{},
 		},
 		Queues: []daemon.Queue{
 			{
@@ -181,11 +269,11 @@ func TestApplyConfigFromYAML(t *testing.T) {
 	validConfig := `
 partition-storage:
   - name: mem-00
-    driver: Memory
+    memory: {}
     affinity: 0
 
 queue-storage:
-  driver: Memory
+  memory: {}
 
 queues:
   - name: queue-1
@@ -200,8 +288,7 @@ queues:
         read-only: false
         storage-name: mem-00
 `
-	var file daemon.File
-	err := yaml.Unmarshal([]byte(validConfig), &file)
+	file, err := daemon.ReadConfig(strings.NewReader(validConfig))
 	require.NoError(t, err)
 
 	conf := &daemon.Config{}
@@ -232,17 +319,14 @@ func TestBadgerConfig(t *testing.T) {
 	badgerConfig := `
 partition-storage:
   - name: badger-00
-    driver: Badger
     affinity: 0
-    config:
+    badger:
       storage-dir: /tmp/badger1
 queue-storage:
-  driver: badger
-  config:
+  badger:
     storage-dir: "/tmp/queue-storage"
 `
-	var file daemon.File
-	err := yaml.Unmarshal([]byte(badgerConfig), &file)
+	file, err := daemon.ReadConfig(strings.NewReader(badgerConfig))
 	require.NoError(t, err)
 
 	var conf daemon.Config
@@ -259,21 +343,18 @@ func TestMongoConfig(t *testing.T) {
 	mongoConfig := `
 partition-storage:
   - name: mongo-00
-    driver: mongo
     affinity: 1
-    config:
+    mongo:
       connection-string: "mongodb://localhost:27017"
       database: querator
-      max-pool-size: "50"
+      max-pool-size: 50
 queue-storage:
-  driver: Mongo
-  config:
+  mongo:
     connection-string: "mongodb://localhost:27017"
     database: querator
-    max-pool-size: "25"
+    max-pool-size: 25
 `
-	var file daemon.File
-	err := yaml.Unmarshal([]byte(mongoConfig), &file)
+	file, err := daemon.ReadConfig(strings.NewReader(mongoConfig))
 	require.NoError(t, err)
 
 	var conf daemon.Config

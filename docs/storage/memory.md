@@ -17,28 +17,28 @@ InMemory is ideal for:
 
 ```yaml
 queue-storage:
-  driver: memory
+  memory: {}
 
 partition-storage:
   - name: memory-01
-    driver: memory
     affinity: 1
+    memory: {}
 ```
 
 ### Configuration Options
 
-InMemory storage has **no configuration options**. Simply specify `driver: memory` and it works.
+InMemory storage has **no configuration options**. Simply specify `memory: {}` and it works.
 
 ### Example: Testing Setup
 
 ```yaml
 queue-storage:
-  driver: memory
+  memory: {}
 
 partition-storage:
   - name: memory-01
-    driver: memory
     affinity: 1
+    memory: {}
 ```
 
 This is the simplest possible configuration - perfect for tests and local development.
@@ -50,14 +50,13 @@ While possible, mixing InMemory with persistent storage is not recommended:
 ```yaml
 # NOT RECOMMENDED: Queue metadata persisted, but items are ephemeral
 queue-storage:
-  driver: badger
-  config:
+  badger:
     storage-dir: /data/queues
 
 partition-storage:
   - name: memory-01
-    driver: memory
     affinity: 1
+    memory: {}
 ```
 
 In this configuration, queue metadata survives restarts, but all queue items are lost. This creates confusing behavior and should be avoided.

@@ -40,7 +40,7 @@ func TestApplyConfigFileErrs(t *testing.T) {
 					},
 				},
 			},
-			expectedErr: "invalid driver; 'invalid' is not one of (Memory, Badger)",
+			expectedErr: "invalid driver; 'invalid' is not one of (Memory, Badger, Mongo)",
 		},
 		{
 			name: "InvalidQueueStorageDriver",
@@ -49,7 +49,38 @@ func TestApplyConfigFileErrs(t *testing.T) {
 					Driver: "invalid",
 				},
 			},
-			expectedErr: "invalid driver; 'invalid' is not one of (Memory, Badger)",
+			expectedErr: "invalid driver; 'invalid' is not one of (Memory, Badger, Mongo)",
+		},
+		{
+			name: "InvalidQueueStorageMaxPoolSize",
+			file: daemon.File{
+				QueueStorage: daemon.QueueStorage{
+					Driver: "mongo",
+					Config: map[string]string{
+						"connection-string": "mongodb://localhost:27017",
+						"max-pool-size":     "not-a-number",
+					},
+				},
+			},
+			expectedErr: "invalid max-pool-size; 'not-a-number' is not a valid number: " +
+				"strconv.ParseUint: parsing \"not-a-number\": invalid syntax",
+		},
+		{
+			name: "InvalidPartitionStorageMaxPoolSize",
+			file: daemon.File{
+				PartitionStorage: []daemon.PartitionStorage{
+					{
+						Name:   "mongo-00",
+						Driver: "mongo",
+						Config: map[string]string{
+							"connection-string": "mongodb://localhost:27017",
+							"max-pool-size":     "not-a-number",
+						},
+					},
+				},
+			},
+			expectedErr: "invalid max-pool-size; 'not-a-number' is not a valid number: " +
+				"strconv.ParseUint: parsing \"not-a-number\": invalid syntax",
 		},
 		{
 			name: "InvalidPartitionStorageReference",
@@ -222,4 +253,44 @@ queue-storage:
 		conf.Service.StorageConfig.PartitionStorage[0].PartitionStore.(*store.BadgerPartitionStore).Config().StorageDir)
 	assert.Equal(t, "/tmp/queue-storage",
 		conf.Service.StorageConfig.Queues.(*store.BadgerQueues).Config().StorageDir)
+}
+
+func TestMongoConfig(t *testing.T) {
+	mongoConfig := `
+partition-storage:
+  - name: mongo-00
+    driver: mongo
+    affinity: 1
+    config:
+      connection-string: "mongodb://localhost:27017"
+      database: querator
+      max-pool-size: "50"
+queue-storage:
+  driver: Mongo
+  config:
+    connection-string: "mongodb://localhost:27017"
+    database: querator
+    max-pool-size: "25"
+`
+	var file daemon.File
+	err := yaml.Unmarshal([]byte(mongoConfig), &file)
+	require.NoError(t, err)
+
+	var conf daemon.Config
+	ctx := context.Background()
+	err = daemon.ApplyConfigFile(ctx, &conf, file, io.Discard)
+	require.NoError(t, err)
+
+	partitionConfig := conf.Service.StorageConfig.PartitionStorage[0].PartitionStore.(*store.MongoPartitionStore).Config()
+	assert.Equal(t, "mongodb://localhost:27017", partitionConfig.ConnectionString)
+	assert.Equal(t, "querator", partitionConfig.Database)
+	assert.Equal(t, uint64(50), partitionConfig.MaxPoolSize)
+
+	queueConfig := conf.Service.StorageConfig.Queues.(*store.MongoQueues).Config()
+	assert.Equal(t, "mongodb://localhost:27017", queueConfig.ConnectionString)
+	assert.Equal(t, "querator", queueConfig.Database)
+	// queue-storage must honor max-pool-size, not silently drop it: queue and partition storage share
+	// a process-global client keyed by connection string, so an unset size here would override the
+	// partition-storage pool cap depending on which storage acquires the client first.
+	assert.Equal(t, uint64(25), queueConfig.MaxPoolSize)
 }

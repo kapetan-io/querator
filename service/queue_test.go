@@ -25,6 +25,7 @@ import (
 func TestQueue(t *testing.T) {
 	badgerdb := badgerTestSetup{Dir: t.TempDir()}
 	postgres := postgresTestSetup{}
+	mongo := mongoTestSetup{}
 
 	for _, tc := range []struct {
 		Setup    NewStorageFunc
@@ -54,6 +55,15 @@ func TestQueue(t *testing.T) {
 			},
 			TearDown: func() {
 				postgres.Teardown()
+			},
+		},
+		{
+			Name: "MongoDB",
+			Setup: func() store.Config {
+				return mongo.Setup(store.MongoConfig{})
+			},
+			TearDown: func() {
+				mongo.Teardown()
 			},
 		},
 		// {
@@ -1218,186 +1228,186 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	})
 
 	t.Run("QueueClear/Scheduled", func(t *testing.T) {
-			nowSched := clock.NewProvider()
-			nowSched.Freeze(clock.Now())
-			defer nowSched.UnFreeze()
+		nowSched := clock.NewProvider()
+		nowSched.Freeze(clock.Now())
+		defer nowSched.UnFreeze()
 
-			var scheduledQueueName = random.String("queue-", 10)
-			dSched, cSched, ctxSched := newDaemon(t, 60*clock.Second, svc.Config{
-				StorageConfig: setup(),
-				Clock:         nowSched,
+		var scheduledQueueName = random.String("queue-", 10)
+		dSched, cSched, ctxSched := newDaemon(t, 60*clock.Second, svc.Config{
+			StorageConfig: setup(),
+			Clock:         nowSched,
+		})
+		defer func() {
+			dSched.Shutdown(t)
+			tearDown()
+		}()
+
+		createQueueAndWait(t, ctxSched, cSched, &pb.QueueInfo{
+			RequestedPartitions: 1,
+			LeaseTimeout:        "1m0s",
+			ExpireTimeout:       "24h0m0s",
+			QueueName:           scheduledQueueName,
+		})
+
+		// Produce regular items AND scheduled items
+		const numRegular = 10
+		const numScheduled = 20
+		enqueueAt := nowSched.Now().Add(5 * clock.Minute)
+
+		var regularItems []*pb.QueueProduceItem
+		for i := 0; i < numRegular; i++ {
+			regularItems = append(regularItems, &pb.QueueProduceItem{
+				Reference: random.String("regular-", 10),
+				Encoding:  random.String("enc-", 10),
+				Kind:      random.String("kind-", 10),
+				Utf8:      fmt.Sprintf("regular-%d", i),
 			})
-			defer func() {
-				dSched.Shutdown(t)
-				tearDown()
-			}()
+		}
+		require.NoError(t, cSched.QueueProduce(ctxSched, &pb.QueueProduceRequest{
+			RequestTimeout: "1m",
+			QueueName:      scheduledQueueName,
+			Items:          regularItems,
+		}))
 
-			createQueueAndWait(t, ctxSched, cSched, &pb.QueueInfo{
-				RequestedPartitions: 1,
-				LeaseTimeout:        "1m0s",
-				ExpireTimeout:       "24h0m0s",
-				QueueName:           scheduledQueueName,
+		var scheduledItems []*pb.QueueProduceItem
+		for i := 0; i < numScheduled; i++ {
+			scheduledItems = append(scheduledItems, &pb.QueueProduceItem{
+				Reference: random.String("scheduled-", 10),
+				Encoding:  random.String("enc-", 10),
+				Kind:      random.String("kind-", 10),
+				Utf8:      fmt.Sprintf("scheduled-%d", i),
+				EnqueueAt: timestamppb.New(enqueueAt),
 			})
+		}
+		require.NoError(t, cSched.QueueProduce(ctxSched, &pb.QueueProduceRequest{
+			RequestTimeout: "1m",
+			QueueName:      scheduledQueueName,
+			Items:          scheduledItems,
+		}))
 
-			// Produce regular items AND scheduled items
-			const numRegular = 10
-			const numScheduled = 20
-			enqueueAt := nowSched.Now().Add(5 * clock.Minute)
+		// Verify scheduled items exist
+		var scheduledList pb.StorageItemsListResponse
+		require.NoError(t, cSched.StorageScheduledList(ctxSched, scheduledQueueName, 0, &scheduledList, nil))
+		assert.Equal(t, numScheduled, len(scheduledList.Items))
 
-			var regularItems []*pb.QueueProduceItem
-			for i := 0; i < numRegular; i++ {
-				regularItems = append(regularItems, &pb.QueueProduceItem{
-					Reference: random.String("regular-", 10),
-					Encoding:  random.String("enc-", 10),
-					Kind:      random.String("kind-", 10),
-					Utf8:      fmt.Sprintf("regular-%d", i),
-				})
-			}
-			require.NoError(t, cSched.QueueProduce(ctxSched, &pb.QueueProduceRequest{
-				RequestTimeout: "1m",
-				QueueName:      scheduledQueueName,
-				Items:          regularItems,
-			}))
+		// Verify regular items exist
+		var itemsList pb.StorageItemsListResponse
+		require.NoError(t, cSched.StorageItemsList(ctxSched, scheduledQueueName, 0, &itemsList, nil))
+		assert.Equal(t, numRegular, len(itemsList.Items))
 
-			var scheduledItems []*pb.QueueProduceItem
-			for i := 0; i < numScheduled; i++ {
-				scheduledItems = append(scheduledItems, &pb.QueueProduceItem{
-					Reference: random.String("scheduled-", 10),
-					Encoding:  random.String("enc-", 10),
-					Kind:      random.String("kind-", 10),
-					Utf8:      fmt.Sprintf("scheduled-%d", i),
-					EnqueueAt: timestamppb.New(enqueueAt),
-				})
-			}
-			require.NoError(t, cSched.QueueProduce(ctxSched, &pb.QueueProduceRequest{
-				RequestTimeout: "1m",
-				QueueName:      scheduledQueueName,
-				Items:          scheduledItems,
-			}))
+		// Clear only scheduled items
+		require.NoError(t, cSched.QueueClear(ctxSched, &pb.QueueClearRequest{
+			QueueName: scheduledQueueName,
+			Scheduled: true,
+		}))
 
-			// Verify scheduled items exist
-			var scheduledList pb.StorageItemsListResponse
-			require.NoError(t, cSched.StorageScheduledList(ctxSched, scheduledQueueName, 0, &scheduledList, nil))
-			assert.Equal(t, numScheduled, len(scheduledList.Items))
+		// Verify scheduled items removed
+		require.NoError(t, cSched.StorageScheduledList(ctxSched, scheduledQueueName, 0, &scheduledList, nil))
+		assert.Equal(t, 0, len(scheduledList.Items))
 
-			// Verify regular items exist
-			var itemsList pb.StorageItemsListResponse
-			require.NoError(t, cSched.StorageItemsList(ctxSched, scheduledQueueName, 0, &itemsList, nil))
-			assert.Equal(t, numRegular, len(itemsList.Items))
+		// Verify regular items remain
+		require.NoError(t, cSched.StorageItemsList(ctxSched, scheduledQueueName, 0, &itemsList, nil))
+		assert.Equal(t, numRegular, len(itemsList.Items))
 
-			// Clear only scheduled items
-			require.NoError(t, cSched.QueueClear(ctxSched, &pb.QueueClearRequest{
-				QueueName: scheduledQueueName,
-				Scheduled: true,
-			}))
-
-			// Verify scheduled items removed
-			require.NoError(t, cSched.StorageScheduledList(ctxSched, scheduledQueueName, 0, &scheduledList, nil))
-			assert.Equal(t, 0, len(scheduledList.Items))
-
-			// Verify regular items remain
-			require.NoError(t, cSched.StorageItemsList(ctxSched, scheduledQueueName, 0, &itemsList, nil))
-			assert.Equal(t, numRegular, len(itemsList.Items))
-
-			// Verify stats.Scheduled is 0
-			var stats pb.QueueStatsResponse
-			require.NoError(t, cSched.QueueStats(ctxSched, &pb.QueueStatsRequest{QueueName: scheduledQueueName}, &stats))
-			require.Len(t, stats.LogicalQueues, 1)
-			require.Len(t, stats.LogicalQueues[0].Partitions, 1)
-			p := stats.LogicalQueues[0].Partitions[0]
-			assert.Equal(t, int32(0), p.Scheduled)
-			assert.Equal(t, int32(numRegular), p.Total)
+		// Verify stats.Scheduled is 0
+		var stats pb.QueueStatsResponse
+		require.NoError(t, cSched.QueueStats(ctxSched, &pb.QueueStatsRequest{QueueName: scheduledQueueName}, &stats))
+		require.Len(t, stats.LogicalQueues, 1)
+		require.Len(t, stats.LogicalQueues[0].Partitions, 1)
+		p := stats.LogicalQueues[0].Partitions[0]
+		assert.Equal(t, int32(0), p.Scheduled)
+		assert.Equal(t, int32(numRegular), p.Total)
 	})
 
 	t.Run("QueueClear/ScheduledAndQueue", func(t *testing.T) {
-			nowCombined := clock.NewProvider()
-			nowCombined.Freeze(clock.Now())
-			defer nowCombined.UnFreeze()
+		nowCombined := clock.NewProvider()
+		nowCombined.Freeze(clock.Now())
+		defer nowCombined.UnFreeze()
 
-			var combinedQueueName = random.String("queue-", 10)
-			dCombined, cCombined, ctxCombined := newDaemon(t, 60*clock.Second, svc.Config{
-				StorageConfig: setup(),
-				Clock:         nowCombined,
+		var combinedQueueName = random.String("queue-", 10)
+		dCombined, cCombined, ctxCombined := newDaemon(t, 60*clock.Second, svc.Config{
+			StorageConfig: setup(),
+			Clock:         nowCombined,
+		})
+		defer func() {
+			dCombined.Shutdown(t)
+			tearDown()
+		}()
+
+		createQueueAndWait(t, ctxCombined, cCombined, &pb.QueueInfo{
+			RequestedPartitions: 1,
+			LeaseTimeout:        "1m0s",
+			ExpireTimeout:       "24h0m0s",
+			QueueName:           combinedQueueName,
+		})
+
+		// Produce regular items AND scheduled items
+		const numRegular = 15
+		const numScheduled = 25
+		enqueueAt := nowCombined.Now().Add(5 * clock.Minute)
+
+		var regularItems []*pb.QueueProduceItem
+		for i := 0; i < numRegular; i++ {
+			regularItems = append(regularItems, &pb.QueueProduceItem{
+				Reference: random.String("regular-", 10),
+				Encoding:  random.String("enc-", 10),
+				Kind:      random.String("kind-", 10),
+				Utf8:      fmt.Sprintf("regular-%d", i),
 			})
-			defer func() {
-				dCombined.Shutdown(t)
-				tearDown()
-			}()
+		}
+		require.NoError(t, cCombined.QueueProduce(ctxCombined, &pb.QueueProduceRequest{
+			RequestTimeout: "1m",
+			QueueName:      combinedQueueName,
+			Items:          regularItems,
+		}))
 
-			createQueueAndWait(t, ctxCombined, cCombined, &pb.QueueInfo{
-				RequestedPartitions: 1,
-				LeaseTimeout:        "1m0s",
-				ExpireTimeout:       "24h0m0s",
-				QueueName:           combinedQueueName,
+		var scheduledItems []*pb.QueueProduceItem
+		for i := 0; i < numScheduled; i++ {
+			scheduledItems = append(scheduledItems, &pb.QueueProduceItem{
+				Reference: random.String("scheduled-", 10),
+				Encoding:  random.String("enc-", 10),
+				Kind:      random.String("kind-", 10),
+				Utf8:      fmt.Sprintf("scheduled-%d", i),
+				EnqueueAt: timestamppb.New(enqueueAt),
 			})
+		}
+		require.NoError(t, cCombined.QueueProduce(ctxCombined, &pb.QueueProduceRequest{
+			RequestTimeout: "1m",
+			QueueName:      combinedQueueName,
+			Items:          scheduledItems,
+		}))
 
-			// Produce regular items AND scheduled items
-			const numRegular = 15
-			const numScheduled = 25
-			enqueueAt := nowCombined.Now().Add(5 * clock.Minute)
+		// Verify both exist
+		var scheduledList pb.StorageItemsListResponse
+		require.NoError(t, cCombined.StorageScheduledList(ctxCombined, combinedQueueName, 0, &scheduledList, nil))
+		assert.Equal(t, numScheduled, len(scheduledList.Items))
 
-			var regularItems []*pb.QueueProduceItem
-			for i := 0; i < numRegular; i++ {
-				regularItems = append(regularItems, &pb.QueueProduceItem{
-					Reference: random.String("regular-", 10),
-					Encoding:  random.String("enc-", 10),
-					Kind:      random.String("kind-", 10),
-					Utf8:      fmt.Sprintf("regular-%d", i),
-				})
-			}
-			require.NoError(t, cCombined.QueueProduce(ctxCombined, &pb.QueueProduceRequest{
-				RequestTimeout: "1m",
-				QueueName:      combinedQueueName,
-				Items:          regularItems,
-			}))
+		var itemsList pb.StorageItemsListResponse
+		require.NoError(t, cCombined.StorageItemsList(ctxCombined, combinedQueueName, 0, &itemsList, nil))
+		assert.Equal(t, numRegular, len(itemsList.Items))
 
-			var scheduledItems []*pb.QueueProduceItem
-			for i := 0; i < numScheduled; i++ {
-				scheduledItems = append(scheduledItems, &pb.QueueProduceItem{
-					Reference: random.String("scheduled-", 10),
-					Encoding:  random.String("enc-", 10),
-					Kind:      random.String("kind-", 10),
-					Utf8:      fmt.Sprintf("scheduled-%d", i),
-					EnqueueAt: timestamppb.New(enqueueAt),
-				})
-			}
-			require.NoError(t, cCombined.QueueProduce(ctxCombined, &pb.QueueProduceRequest{
-				RequestTimeout: "1m",
-				QueueName:      combinedQueueName,
-				Items:          scheduledItems,
-			}))
+		// Clear both scheduled and queue items
+		require.NoError(t, cCombined.QueueClear(ctxCombined, &pb.QueueClearRequest{
+			QueueName: combinedQueueName,
+			Scheduled: true,
+			Queue:     true,
+		}))
 
-			// Verify both exist
-			var scheduledList pb.StorageItemsListResponse
-			require.NoError(t, cCombined.StorageScheduledList(ctxCombined, combinedQueueName, 0, &scheduledList, nil))
-			assert.Equal(t, numScheduled, len(scheduledList.Items))
+		// Verify both removed
+		require.NoError(t, cCombined.StorageScheduledList(ctxCombined, combinedQueueName, 0, &scheduledList, nil))
+		assert.Equal(t, 0, len(scheduledList.Items))
 
-			var itemsList pb.StorageItemsListResponse
-			require.NoError(t, cCombined.StorageItemsList(ctxCombined, combinedQueueName, 0, &itemsList, nil))
-			assert.Equal(t, numRegular, len(itemsList.Items))
+		require.NoError(t, cCombined.StorageItemsList(ctxCombined, combinedQueueName, 0, &itemsList, nil))
+		assert.Equal(t, 0, len(itemsList.Items))
 
-			// Clear both scheduled and queue items
-			require.NoError(t, cCombined.QueueClear(ctxCombined, &pb.QueueClearRequest{
-				QueueName: combinedQueueName,
-				Scheduled: true,
-				Queue:     true,
-			}))
-
-			// Verify both removed
-			require.NoError(t, cCombined.StorageScheduledList(ctxCombined, combinedQueueName, 0, &scheduledList, nil))
-			assert.Equal(t, 0, len(scheduledList.Items))
-
-			require.NoError(t, cCombined.StorageItemsList(ctxCombined, combinedQueueName, 0, &itemsList, nil))
-			assert.Equal(t, 0, len(itemsList.Items))
-
-			// Verify stats
-			var stats pb.QueueStatsResponse
-			require.NoError(t, cCombined.QueueStats(ctxCombined, &pb.QueueStatsRequest{QueueName: combinedQueueName}, &stats))
-			require.Len(t, stats.LogicalQueues, 1)
-			require.Len(t, stats.LogicalQueues[0].Partitions, 1)
-			p := stats.LogicalQueues[0].Partitions[0]
-			assert.Equal(t, int32(0), p.Scheduled)
-			assert.Equal(t, int32(0), p.Total)
+		// Verify stats
+		var stats pb.QueueStatsResponse
+		require.NoError(t, cCombined.QueueStats(ctxCombined, &pb.QueueStatsRequest{QueueName: combinedQueueName}, &stats))
+		require.Len(t, stats.LogicalQueues, 1)
+		require.Len(t, stats.LogicalQueues[0].Partitions, 1)
+		p := stats.LogicalQueues[0].Partitions[0]
+		assert.Equal(t, int32(0), p.Scheduled)
+		assert.Equal(t, int32(0), p.Total)
 	})
 
 	t.Run("QueueReload", func(t *testing.T) {
@@ -2481,6 +2491,79 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			assert.True(t, dlqItem.LeaseDeadline.AsTime().Before(now.Now()))
 		})
 
+		t.Run("SourceIDPreservedOnLeaseExpiry", func(t *testing.T) {
+			queueName := random.String("queue-", 10)
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				QueueName:           queueName,
+				LeaseTimeout:        "1m0s",
+				ExpireTimeout:       ExpireTimeout,
+				RequestedPartitions: 1,
+				MaxAttempts:         10,
+			})
+
+			// Import an item carrying a SourceID (the provenance a dead-letter move records).
+			sourceID := random.String("source-", 10)
+			ref := random.String("ref-", 10)
+			var importResp pb.StorageItemsImportResponse
+			require.NoError(t, c.StorageItemsImport(ctx, &pb.StorageItemsImportRequest{
+				QueueName: queueName,
+				Partition: 0,
+				Items: []*pb.StorageItem{
+					{
+						SourceId:       sourceID,
+						Reference:      ref,
+						Encoding:       "test-encoding",
+						Kind:           "test-kind",
+						Payload:        []byte("test payload"),
+						ExpireDeadline: timestamppb.New(now.Now().Add(1 * clock.Hour)),
+					},
+				},
+			}, &importResp))
+			require.Len(t, importResp.Items, 1)
+
+			// SourceID is visible on the imported item before it is leased.
+			var resp pb.StorageItemsListResponse
+			require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &resp, nil))
+			item := findInStorageList(ref, &resp)
+			require.NotNil(t, item)
+			assert.Equal(t, sourceID, item.SourceId)
+
+			// Lease the item, then let the lease expire so the lifecycle re-queues it to the tail.
+			var lease pb.QueueLeaseResponse
+			require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+				ClientId:       random.String("client-", 10),
+				RequestTimeout: "5s",
+				QueueName:      queueName,
+				BatchSize:      1,
+			}, &lease))
+			require.Len(t, lease.Items, 1)
+
+			now.Advance(2 * clock.Minute)
+
+			// Wait for the item to be re-queued after the lease expires (still under MaxAttempts),
+			// capturing it so SourceID can be asserted without a second list call.
+			var requeued *pb.StorageItem
+			require.NoError(t, retry.On(ctx, RetryTenTimes, func(ctx context.Context, i int) error {
+				var resp pb.StorageItemsListResponse
+				if err := c.StorageItemsList(ctx, queueName, 0, &resp, nil); err != nil {
+					return err
+				}
+				found := findInStorageList(ref, &resp)
+				if found == nil {
+					return fmt.Errorf("item not found in storage")
+				}
+				if found.IsLeased {
+					return fmt.Errorf("expected item to be re-queued (IsLeased=false)")
+				}
+				requeued = found
+				return nil
+			}))
+
+			// SourceID must survive the lease-expiry re-queue (insert-before-delete tail move).
+			require.NotNil(t, requeued)
+			assert.Equal(t, sourceID, requeued.SourceId)
+		})
+
 		t.Run("UnlimitedAttempts", func(t *testing.T) {
 			queueName := random.String("queue-", 10)
 			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
@@ -2685,7 +2768,6 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		})
 
 	})
-
 
 	t.Run("SourceID", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
@@ -3196,10 +3278,10 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 			// Create DLQ queue
 			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
-				QueueName:         dlqName,
-				LeaseTimeout:      LeaseTimeout,
-				ExpireTimeout:     ExpireTimeout,
-				MaxAttempts:       10,
+				QueueName:           dlqName,
+				LeaseTimeout:        LeaseTimeout,
+				ExpireTimeout:       ExpireTimeout,
+				MaxAttempts:         10,
 				RequestedPartitions: 1,
 			}))
 

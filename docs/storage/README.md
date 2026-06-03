@@ -82,15 +82,13 @@ You can mix storage backends. For example, you could use BadgerDB for queue meta
 
 ```yaml
 queue-storage:
-  driver: badger
-  config:
+  badger:
     storage-dir: /data/queues
 
 partition-storage:
   - name: postgres-01
-    driver: postgres
     affinity: 1
-    config:
+    postgres:
       connection-string: "postgres://user:pass@localhost:5432/querator"
 ```
 
@@ -101,15 +99,13 @@ You can configure multiple partition stores with different affinities to distrib
 ```yaml
 partition-storage:
   - name: badger-01
-    driver: badger
     affinity: 3
-    config:
+    badger:
       storage-dir: /data/partitions-badger
 
   - name: postgres-01
-    driver: postgres
     affinity: 7
-    config:
+    postgres:
       connection-string: "postgres://user:pass@localhost:5432/querator"
 ```
 

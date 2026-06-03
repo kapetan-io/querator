@@ -3337,15 +3337,17 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			}
 		})
 
-		// SingleWriter routes dead-letter production through the dead-letter queue's own
-		// requestLoop (ADR-0003). The three sub-tests below cover the behavioral and accounting
-		// constraints that the old off-loop direct-storage write violated.
+		// SingleWriter covers the behavioral and accounting guarantees that hold because
+		// dead-letter production flows through the dead-letter queue's own requestLoop, the
+		// sole writer of its partitions (ADR-0003): blocked consumers are woken, and the
+		// queue's in-memory accounting stays consistent with storage.
 		t.Run("SingleWriter", func(t *testing.T) {
 
-			// WakesBlockedConsumer verifies acceptance #1 and the liveness behavioral constraint:
-			// a consumer blocked on QueueLease against the dead-letter queue is offered a newly
-			// dead-lettered item promptly. The old direct storage write bypassed the dead-letter
-			// loop and never re-evaluated the waiting lease, so this fails on main.
+			// WakesBlockedConsumer: a consumer blocked on QueueLease against the dead-letter
+			// queue must be offered a newly dead-lettered item promptly. The dead-letter produce
+			// runs on the dead-letter queue's loop, which re-evaluates waiting leases in the same
+			// pass, so the blocked consumer is satisfied as soon as the item arrives rather than
+			// waiting out its request timeout.
 			t.Run("WakesBlockedConsumer", func(t *testing.T) {
 				now := clock.NewProvider()
 				now.Freeze(clock.Now())
@@ -3420,11 +3422,11 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				}
 			})
 
-			// StatsReflectDeadLetteredItem verifies acceptance #2 and the in-memory accounting
-			// invariant: after an item is dead-lettered with no consumer leasing it, the
-			// dead-letter partition's public stats report unLeased == total and a nextLifecycleRun
-			// advanced toward the item's expiry. The old direct storage write left the in-memory
-			// accounting stale (unLeased 0, nextLifecycleRun ~37y), so this fails on main.
+			// StatsReflectDeadLetteredItem: after an item is dead-lettered with no consumer
+			// leasing it, the dead-letter partition's public stats must report unLeased == total
+			// and a nextLifecycleRun advanced toward the item's expiry. Producing through the
+			// dead-letter queue's loop updates State.UnLeased and schedules the lifecycle timer in
+			// the same pass, so the in-memory accounting stays consistent with storage.
 			t.Run("StatsReflectDeadLetteredItem", func(t *testing.T) {
 				now := clock.NewProvider()
 				now.Freeze(clock.Now())
@@ -3473,8 +3475,8 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				}, 10*clock.Second, 100*clock.Millisecond)
 
 				// The dead-letter partition's in-memory accounting must match storage: unLeased ==
-				// total, and nextLifecycleRun advanced toward the item's expiry (well under the 24h
-				// expiry, not the ~37-year humanize.LongTime the stale path would report).
+				// total, and nextLifecycleRun scheduled within the item's expiry window (a partition
+				// with no scheduled lifecycle work reports humanize.LongTime, decades out).
 				dlqExpireDur, err := clock.ParseDuration(dlqExpire)
 				require.NoError(t, err)
 				require.Eventually(t, func() bool {
@@ -3497,12 +3499,12 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				}, 10*clock.Second, 100*clock.Millisecond)
 			})
 
-			// RetainsItemOnFailedMove verifies acceptance #4 and the delete-after-confirm /
-			// backpressure behavioral constraints: when the dead-letter produce cannot complete,
-			// the source item is retained (never deleted before a confirmed produce), and a later
-			// pass moves it without duplication. The dead-letter queue is paused to force the
-			// internal produce to block past WriteTimeout and fail. A single-partition dead-letter
-			// queue keeps the no-duplicate assertion deterministic via SourceID dedup.
+			// RetainsItemOnFailedMove covers delete-after-confirm and backpressure: when the
+			// dead-letter produce cannot complete, the source item is retained (never deleted
+			// before a confirmed produce), and a later pass moves it without duplication. The
+			// dead-letter queue is paused to force the produce to block past WriteTimeout and
+			// fail. A single-partition dead-letter queue keeps the no-duplicate assertion
+			// deterministic via SourceID dedup.
 			t.Run("RetainsItemOnFailedMove", func(t *testing.T) {
 				now := clock.NewProvider()
 				now.Freeze(clock.Now())

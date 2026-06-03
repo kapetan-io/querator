@@ -21,7 +21,7 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-// The MongoDB backend is non-transactional and standalone-compatible (see ADR-0026): it uses no
+// The MongoDB backend is non-transactional and standalone-compatible: it uses no
 // multi-document transactions, requires no replica set, and upholds querator's correctness contracts
 // through single-document atomic operations, insert-before-delete ordering, and the single-writer-per
 // -partition guarantee (ADR-0003/0009).
@@ -643,7 +643,9 @@ func (p *MongoPartition) createIndexes(ctx context.Context, client *mongo.Client
 			Options: options.Index().SetName("expire"),
 		},
 		{
-			// Dedup lookup: NON-unique (see Correctness / ADR-0026).
+			// Dedup lookup: NON-unique. Deduplication is an application-level check-before-insert,
+			// safe because each partition is driven by a single logical-queue goroutine
+			// (ADR-0003/0009); a non-unique index also lets a tail-move preserve source_id.
 			Keys:    bson.D{{Key: "source_id", Value: 1}},
 			Options: options.Index().SetName("src").SetPartialFilterExpression(bson.M{"source_id": bson.M{"$exists": true}}),
 		},
@@ -930,8 +932,8 @@ nextBatch:
 				}
 			default:
 				// Immediate retry: assign a new KSUID and place at the tail (ADR-0022). Insert the new
-				// tail document first, then delete the old (ADR-0026 — a crash degrades to a duplicate,
-				// never a loss).
+				// tail document first, then delete the old — a crash between the two degrades to a
+				// duplicate, never a loss.
 				newItem := &types.Item{
 					IsLeased:       false,
 					ExpireDeadline: item.ExpireDeadline,
@@ -1419,8 +1421,8 @@ func (p *MongoPartition) TakeAction(ctx context.Context, batch types.LifeCycleBa
 		for _, action := range batch.Requests[i].Actions {
 			switch action.Action {
 			case types.ActionLeaseExpired:
-				// Existence check before the tail move is intentional and must stay separate. ADR-0026
-				// mandates insert-before-delete: the new tail document is written first so that a crash
+				// Existence check before the tail move is intentional and must stay separate.
+				// Insert-before-delete is required: the new tail document is written first so that a crash
 				// between the two operations degrades to a duplicate rather than a loss. Folding the
 				// check into the delete (e.g., FindOneAndDelete) would invert that order — delete first,
 				// insert second — violating the durability guarantee. The check guards against the
@@ -1439,7 +1441,7 @@ func (p *MongoPartition) TakeAction(ctx context.Context, batch types.LifeCycleBa
 					return errors.Errorf("check item existence: %w", err)
 				}
 
-				// Insert the requeued tail document first, then delete the old (ADR-0026). Copy the
+				// Insert the requeued tail document first, then delete the old. Copy the
 				// whole item and reset only the lease state so every payload/provenance field
 				// (including SourceID) is carried forward without per-field enumeration.
 				requeued := action.Item

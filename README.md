@@ -162,7 +162,7 @@ indexes is not required, but can be used to improve Querator’s reliability and
 ### Storage Backends
 Querator supports multiple storage backends for different deployment scenarios. See the
 [Storage Documentation](docs/storage/README.md) for detailed configuration options for BadgerDB, PostgreSQL,
-and InMemory backends.
+MongoDB, and InMemory backends.
 
 ##### InMemory
 This backend stores all queues and items into RAM memory. This is useful when testing and creating a baseline for 
@@ -176,9 +176,13 @@ or in limited resource environments where High Availability is not a concern.
 This backend uses PostgreSQL for production deployments requiring high availability and horizontal scaling.
 See [PostgreSQL Storage Documentation](docs/storage/postgres.md) for configuration details.
 
+##### MongoDB
+This backend uses MongoDB for production deployments. Querator needs only ordered primary keys, so the
+backend is non-transactional and runs against a standalone `mongod` (no replica set) as well as a managed
+cluster. See [MongoDB Storage Documentation](docs/storage/mongodb.md) for configuration details.
+
 ##### Planned Backends
 - MySQL
-- MongoDB
 
 ## Installation
 

@@ -1,21 +1,21 @@
 # MongoDB Storage Backend
 
-MongoDB is a widely deployed document database. Querator uses MongoDB as a partition and queue-metadata
-backend for deployments that already run MongoDB or want a document store without a relational schema.
+MongoDB is a widely deployed document database and a natural fit for Querator, which needs only ordered
+primary keys from its storage. Querator uses MongoDB as a partition and queue-metadata backend for
+production deployments.
 
-The defining property of this backend is that it is **non-transactional and standalone-compatible**: it
-uses no multi-document transactions, requires no replica set, and runs against a single `mongod`. It
-upholds querator's correctness contracts through single-document atomic operations, insert-before-delete
-ordering, and the single-writer-per-partition guarantee. This design is recorded in
-[ADR-0026](../adr/0026-mongodb-backend-consistency-model.md).
+This backend is **non-transactional and standalone-compatible**: it uses no multi-document transactions,
+requires no replica set, and runs against a single `mongod`. It upholds querator's correctness contracts
+through single-document atomic operations, insert-before-delete ordering, and the
+single-writer-per-partition guarantee.
 
 ## Overview
 
 MongoDB is ideal for:
+- **Production workloads**: Horizontal scaling across multiple Querator instances
 - **Existing MongoDB infrastructure**: Reuse an operational MongoDB deployment
-- **Standalone / edge / development**: Works against a single-node `mongod` — no replica set required
 - **Managed clusters**: Atlas and other managed MongoDB topologies
-- **Document-oriented operations**: Teams already invested in MongoDB tooling
+- **Standalone / development**: Works against a single-node `mongod` — no replica set required
 
 > **Scope:** Auth stores (namespaces, users, API keys, roles, role bindings) are not yet implemented on
 > MongoDB — configure memory or badger for those, exactly as the PostgreSQL backend does.
@@ -101,61 +101,6 @@ db.createUser({
 Querator creates collections and indexes lazily on first use — no manual setup is required. When a
 partition is first written, the collection (and its indexes) are created implicitly.
 
-## Data Model
-
-### Collection-per-partition
-
-Each partition is backed by one MongoDB collection named `items_<hash>_<partition>`, where `<hash>` is
-the 10-character base-62 hash of the queue name and `<partition>` is the partition number. Queue
-metadata lives in a single `queues` collection keyed by `_id` = queue name.
-
-**Examples:**
-- Queue `my-queue` partition 0: `items_c5a38fb13ab1_0`
-- Queue `orders` partition 1: `items_d79c8788647f_1`
-
-### Item document
-
-```
-{
-  _id:             string,   // KSUID (lexicographically sortable) — the FIFO key
-  source_id:       string,   // omitted when nil (DLQ/import provenance only)
-  is_leased:       bool,
-  lease_deadline:  int64|null, // null when the item carries no lease deadline
-  expire_deadline: int64,
-  enqueue_at:      int64,    // omitted when the item is not scheduled
-  created_at:      int64,
-  attempts:        int32,
-  max_attempts:    int32,
-  reference:       string,
-  encoding:        string,
-  kind:            string,
-  payload:         binary
-}
-```
-
-**Timestamps are stored as int64 microseconds-since-epoch** rather than BSON `Date`. BSON `Date` is
-millisecond precision, whereas querator (and the PostgreSQL backend) work at microsecond precision; the
-int64 representation keeps round-trips bit-stable with the rest of the system. The partial-filter index
-design is unaffected because it relies only on equality and `$exists`, which behave identically on an
-int64 field.
-
-### Indexes
-
-| Purpose | Index key | Partial filter |
-|---|---|---|
-| FIFO / primary | `_id` | (implicit) |
-| Lease selection | `{is_leased: 1, _id: 1}` | `{is_leased: false}` |
-| Scheduled | `{enqueue_at: 1}` | `{enqueue_at: {$exists: true}}` |
-| Lease expiry | `{lease_deadline: 1}` | `{is_leased: true}` |
-| Item expiry | `{expire_deadline: 1}` | (none) |
-| Dedup lookup | `{source_id: 1}` | `{source_id: {$exists: true}}` |
-
-There is **no unique index on `source_id`** — a deliberate divergence from PostgreSQL. Deduplication is
-performed by an application-level check-before-insert (the same approach the InMemory and BadgerDB
-backends use), which is safe because each partition is driven by a single logical-queue goroutine. This
-also lets an item move to the tail (immediate retry, lease-expiry requeue, dead-letter move) preserve its
-`source_id` on the new document without a key collision. See ADR-0026 for the full rationale.
-
 ## Connection Pooling
 
 A `mongo.Client` is itself a connection pool. Querator shares one client per connection string across all
@@ -192,6 +137,5 @@ partition-storage:
 
 - [MongoDB Documentation](https://www.mongodb.com/docs/)
 - [Go Driver Documentation](https://pkg.go.dev/go.mongodb.org/mongo-driver/mongo)
-- [ADR-0026: MongoDB backend consistency model](../adr/0026-mongodb-backend-consistency-model.md)
 - [example.yaml](../../example.yaml) - Complete configuration examples
 - [Storage Backend Overview](README.md) - Compare all storage backends

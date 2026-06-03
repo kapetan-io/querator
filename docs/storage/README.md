@@ -17,7 +17,7 @@ Querator currently supports four storage backends:
 |---------|----------|----------|------------|---------|
 | Persistence | No | Yes | Yes | Yes |
 | Distributed | No | No | Yes | Yes |
-| Transactions | No | Yes | Yes | No (not required — see ADR-0026) |
+| Transactions | No | Yes | Yes | No (not required) |
 | Replica set required | n/a | n/a | n/a | No (standalone works) |
 | High Availability | No | No | Yes (with replication) | Yes (managed/replica set) |
 | Suitable for Production | No | Single-node only | Yes | Yes |
@@ -57,18 +57,17 @@ Use PostgreSQL when:
 
 ### MongoDB
 Use MongoDB when:
-- You already operate MongoDB and want to reuse it
-- You want a document store without a relational schema
-- You need to run against a standalone `mongod` (no replica set) — at the edge, in development, or in
-  simple single-node deployments
+- Running production workloads
+- You need horizontal scaling across multiple Querator instances
+- High availability is required
+- You have existing MongoDB infrastructure
 - You deploy to a managed MongoDB cluster (Atlas)
 
-The MongoDB backend is non-transactional by design and requires no replica set (see
-[ADR-0026](../adr/0026-mongodb-backend-consistency-model.md)). Auth stores are not yet implemented on
-MongoDB — pair it with memory or badger for those.
+Querator needs only ordered primary keys, so the MongoDB backend is non-transactional by design and
+runs against a standalone `mongod` — no replica set required (it works equally well on a managed
+cluster). Auth stores are not yet implemented on MongoDB — pair it with memory or badger for those.
 
-**Not recommended for:** Workloads that require a database-enforced unique constraint on `source_id`
-(deduplication is application-level on this backend).
+**Not recommended for:** Single-node embedded deployments, edge devices.
 
 ## Configuration Patterns
 

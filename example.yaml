@@ -41,7 +41,7 @@ partition-storage:
 #      client-key: /path/to/client/key
 
 # MongoDB partition storage. Non-transactional and standalone-compatible: a single mongod (no replica
-# set) is sufficient. See docs/storage/mongodb.md and docs/adr/0026-mongodb-backend-consistency-model.md
+# set) is sufficient. See docs/storage/mongodb.md
 #  - name: mongo-01
 #    driver: mongo
 #    affinity: 1

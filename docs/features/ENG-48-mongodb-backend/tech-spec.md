@@ -8,7 +8,7 @@ _Related ADRs: 0003 (R/W sync point), 0004 (item id not immutable), 0014 (ordere
 
 Add a MongoDB storage backend to querator at parity with the PostgreSQL backend: `MongoQueues` (queue metadata) and `MongoPartitionStore`/`MongoPartition` (item storage). Auth stores (`Namespaces`, `Users`, `APIKeys`, `Roles`, `RoleBindings`) are **out of scope** — they remain on memory/badger, exactly as the Postgres backend leaves them. The backend must pass the existing functional suite unchanged with a new `MongoDB` backend-table entry, wire `mongo` into the daemon config, and ship operator docs.
 
-The defining design decision is that this backend is **non-transactional and standalone-compatible**: it uses no multi-document transactions, requires no replica set, and upholds querator's correctness contracts through single-document atomic operations, insert-before-delete ordering, and the single-writer-per-partition guarantee (ADR-0003/0009). This is captured in **ADR-0026**.
+The defining design decision is that this backend is **non-transactional and standalone-compatible**: it uses no multi-document transactions, requires no replica set, and upholds querator's correctness contracts through single-document atomic operations, insert-before-delete ordering, and the single-writer-per-partition guarantee (ADR-0003/0009).
 
 Scope is **Phase 1 only**. Auth-store parity is a separate future ticket.
 
@@ -116,7 +116,7 @@ MongoDB `partialFilterExpression` supports only equality, `$exists: true`, `$gt/
 | Item expiry | `{expire_deadline: 1}` | (none) | Plain index. |
 | Dedup lookup | `{source_id: 1}` | `{source_id: {$exists: true}}` | **Non-unique** (see Correctness). Optional but recommended for the check-before-insert lookup. |
 
-**There is no unique index on `source_id`** — a deliberate divergence from Postgres, justified in Correctness and ADR-0026.
+**There is no unique index on `source_id`** — a deliberate divergence from Postgres, justified in Correctness.
 
 ## Correctness
 
@@ -128,12 +128,12 @@ Every read (`Lease` candidate select, `List`, `ListScheduled`, `ScanForActions`,
 
 ### Invariant: at-least-once (no item loss) under the non-transactional model
 
-The contract (ADR-0026 "Avoid Rollbacks", ADR-0022 "found later") is that partial failures degrade to **duplicates**, never to loss. Every operation that *moves* an item to a new `_id` (immediate `Retry`, lease-expiry requeue in `TakeAction`, DLQ move) MUST **insert the new tail document first, then delete the old**:
+The contract (ADR-0022 "found later") is that partial failures degrade to **duplicates**, never to loss. Every operation that *moves* an item to a new `_id` (immediate `Retry`, lease-expiry requeue in `TakeAction`, DLQ move) MUST **insert the new tail document first, then delete the old**:
 
 - Crash between insert and delete → the old document still exists and is re-found by the next lifecycle scan (lease still expired) → re-requeued → at worst a duplicate. No loss.
 - The reverse order (delete-then-insert) is **prohibited** — it opens a loss window the contract forbids.
 
-`Produce`/`Complete`/`Lease` need no multi-document atomicity: `Produce` is independent inserts (`insertMany(ordered:false)`, partial-tolerant like Postgres); `Complete` is partial-tolerant deletes (ADR-0026 — the client retries the whole request, and unknown/already-complete ids are silently ignored); `Lease` claims are per-document atomic (below). **Preserved without transactions.**
+`Produce`/`Complete`/`Lease` need no multi-document atomicity: `Produce` is independent inserts (`insertMany(ordered:false)`, partial-tolerant like Postgres); `Complete` is partial-tolerant deletes (the client retries the whole request, and unknown/already-complete ids are silently ignored); `Lease` claims are per-document atomic (below). **Preserved without transactions.**
 
 ### Invariant: single lease per item
 
@@ -141,7 +141,7 @@ The contract (ADR-0026 "Avoid Rollbacks", ADR-0022 "found later") is that partia
 
 ### Invariant: source_id dedup (no unique index)
 
-Dedup is implemented exactly as InMemory and BadgerDB already do it — an **application-level check-before-insert**, not a DB unique constraint (only Postgres uses a unique index, an incidental artifact of its `ON CONFLICT` idiom). On `Produce`/`Add`, for each item whose `source_id` is set, a `FindOne({source_id: ...})` (and a within-batch seen-set) gates the insert; an existing match is silently skipped. This is safe because a `Partition` is driven by a **single logical-queue goroutine** (ADR-0003/0009) — the same single-writer property that already makes InMemory's map check and Badger's get-before-put correct. Dropping the unique index is what lets the insert-first requeue ordering work with `source_id` preserved on the tail copy (no possible key collision), keeping behavioral parity with InMemory/Postgres (which both preserve `source_id` across requeue). Trade-off accepted in ADR-0026: no hard DB backstop if the single-writer invariant is ever violated.
+Dedup is implemented exactly as InMemory and BadgerDB already do it — an **application-level check-before-insert**, not a DB unique constraint (only Postgres uses a unique index, an incidental artifact of its `ON CONFLICT` idiom). On `Produce`/`Add`, for each item whose `source_id` is set, a `FindOne({source_id: ...})` (and a within-batch seen-set) gates the insert; an existing match is silently skipped. This is safe because a `Partition` is driven by a **single logical-queue goroutine** (ADR-0003/0009) — the same single-writer property that already makes InMemory's map check and Badger's get-before-put correct. Dropping the unique index is what lets the insert-first requeue ordering work with `source_id` preserved on the tail copy (no possible key collision), keeping behavioral parity with InMemory/Postgres (which both preserve `source_id` across requeue). Trade-off accepted: no hard DB backstop if the single-writer invariant is ever violated.
 
 ### Behavioral constraint: no replica set / no transactions
 
@@ -203,7 +203,7 @@ Add `go.mongodb.org/mongo-driver` (the official driver) to `go.mod`. No other ne
 
 Follow the Postgres backend's two-tier model:
 
-- **Function-level errors** (connection/write failures) are wrapped and returned; the caller assumes the batch did not apply (ADR-0026). Map "queue not found" to `store.ErrQueueNotExist`; map duplicate `queues._id` on `Add` to an invalid-option error (`queue already exists`).
+- **Function-level errors** (connection/write failures) are wrapped and returned; the caller assumes the batch did not apply. Map "queue not found" to `store.ErrQueueNotExist`; map duplicate `queues._id` on `Add` to an invalid-option error (`queue already exists`).
 - **Per-request validation errors** are set on `batch.Requests[i].Err` (e.g. `reply.NewInvalidOption("invalid storage id…")` for not-found/not-leased in `Complete`/`Retry`) and do not fail the whole call.
 
 There is no general Mongo-error→store-error table; only the two cases above are mapped, mirroring Postgres.

@@ -2479,6 +2479,10 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 			// Verify DLQ item has SourceID set to the item ID from the second lease
 			assert.Equal(t, secondLeaseID, dlqItem.SourceId)
+			// The dead-letter move clears the original ID so the dead-letter queue generates a
+			// fresh one; the new ID must be non-empty and distinct from the SourceID.
+			assert.NotEmpty(t, dlqItem.Id)
+			assert.NotEqual(t, dlqItem.SourceId, dlqItem.Id)
 
 			// Verify item fields are preserved
 			assert.Equal(t, ref, dlqItem.Reference)

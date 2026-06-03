@@ -829,26 +829,28 @@ nextBatch:
 				continue nextBatch
 			}
 
-			var res struct {
-				IsLeased bool `bson:"is_leased"`
-			}
-			err := coll.FindOne(ctx, bson.M{"_id": string(id)},
-				options.FindOne().SetProjection(bson.M{"is_leased": 1})).Decode(&res)
-			if errors.Is(err, mongo.ErrNoDocuments) {
-				batch.Requests[i].Err = reply.NewInvalidOption("invalid storage id; '%s' does not exist", id)
-				continue nextBatch
-			}
-			if err != nil {
-				return errors.Errorf("mongo partition %s/%d: failed to check item: %w",
-					p.info.Queue.Name, p.info.PartitionNum, err)
-			}
-
-			if !res.IsLeased {
+			// FindOneAndDelete atomically checks is_leased and deletes in one round trip.
+			// On success (err == nil) the item was leased and is now deleted.
+			// On ErrNoDocuments the item was either missing or present-but-not-leased;
+			// a cheap follow-up projection read disambiguates for the error path only.
+			res := coll.FindOneAndDelete(ctx, bson.M{"_id": string(id), "is_leased": true})
+			switch err := res.Err(); {
+			case err == nil:
+				// deleted atomically; success — proceed to next id
+			case errors.Is(err, mongo.ErrNoDocuments):
+				// Ambiguous: missing OR present-but-unleased. One cheap read to distinguish.
+				e := coll.FindOne(ctx, bson.M{"_id": string(id)},
+					options.FindOne().SetProjection(bson.M{"_id": 1})).Err()
+				if errors.Is(e, mongo.ErrNoDocuments) {
+					batch.Requests[i].Err = reply.NewInvalidOption("invalid storage id; '%s' does not exist", id)
+					continue nextBatch
+				} else if e != nil {
+					return errors.Errorf("mongo partition %s/%d: failed to check item: %w",
+						p.info.Queue.Name, p.info.PartitionNum, e)
+				}
 				batch.Requests[i].Err = reply.NewConflict("item(s) cannot be completed; '%s' is not marked as leased", id)
 				continue nextBatch
-			}
-
-			if _, err := coll.DeleteOne(ctx, bson.M{"_id": string(id)}); err != nil {
+			default:
 				return errors.Errorf("mongo partition %s/%d: failed to delete item: %w",
 					p.info.Queue.Name, p.info.PartitionNum, err)
 			}

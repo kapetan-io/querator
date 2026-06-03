@@ -31,17 +31,15 @@ partition-storage:
   #    affinity: 1
   #    memory: {}
 
+# PostgreSQL partition storage.
 #  - name: postgres-01
 #    affinity: 1
 #    postgres:
-#      host: localhost
-#      port: 5432
-#      user: foo
-#      pass: bar
-#      database: querator
-#      ca-file: /path/to/ca
-#      client-cert: /path/to/client/cert
-#      client-key: /path/to/client/key
+#      connection-string: "postgres://user:pass@localhost:5432/querator"
+#      # Caps the pgx connection pool per client; omit for the driver default.
+#      max-conns: 50
+#      # Rows fetched per scan batch; omit to use the default (1000).
+#      scan-batch-size: 1000
 
 # MongoDB partition storage. Non-transactional and standalone-compatible: a single mongod (no replica
 # set) is sufficient. See docs/storage/mongodb.md
@@ -60,6 +58,14 @@ partition-storage:
 #     connection-string: "mongodb://user:pass@localhost:27017"
 #     database: querator
 #     max-pool-size: 50
+
+# PostgreSQL may also back queue metadata. When queue and partition storage share a connection string
+# they share one pgx pool, so set max-conns consistently in both places.
+# queue-storage:
+#   postgres:
+#     connection-string: "postgres://user:pass@localhost:5432/querator"
+#     max-conns: 50
+#     scan-batch-size: 1000
 
 # Auth Backend defines the authentication and authorization backend.
 # Options:

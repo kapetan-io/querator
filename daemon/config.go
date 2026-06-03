@@ -111,21 +111,23 @@ type Logging struct {
 }
 
 // QueueStorage selects the backend that stores queue metadata. Exactly one backend section
-// (memory, badger, or mongo) may be set. When none is set, the in-memory backend is used.
+// (memory, badger, mongo, or postgres) may be set. When none is set, the in-memory backend is used.
 type QueueStorage struct {
-	Memory *MemoryConfig `yaml:"memory"`
-	Badger *BadgerConfig `yaml:"badger"`
-	Mongo  *MongoConfig  `yaml:"mongo"`
+	Memory   *MemoryConfig   `yaml:"memory"`
+	Badger   *BadgerConfig   `yaml:"badger"`
+	Mongo    *MongoConfig    `yaml:"mongo"`
+	Postgres *PostgresConfig `yaml:"postgres"`
 }
 
 // PartitionStorage selects the backend for a named partition store. Exactly one backend section
-// (memory, badger, or mongo) must be set.
+// (memory, badger, mongo, or postgres) must be set.
 type PartitionStorage struct {
-	Name     string        `yaml:"name"`
-	Affinity int           `yaml:"affinity"`
-	Memory   *MemoryConfig `yaml:"memory"`
-	Badger   *BadgerConfig `yaml:"badger"`
-	Mongo    *MongoConfig  `yaml:"mongo"`
+	Name     string          `yaml:"name"`
+	Affinity int             `yaml:"affinity"`
+	Memory   *MemoryConfig   `yaml:"memory"`
+	Badger   *BadgerConfig   `yaml:"badger"`
+	Mongo    *MongoConfig    `yaml:"mongo"`
+	Postgres *PostgresConfig `yaml:"postgres"`
 }
 
 // MemoryConfig configures the in-memory backend. It accepts no options; select it with an empty
@@ -154,6 +156,20 @@ type MongoConfig struct {
 func (c MongoConfig) validate() error {
 	if c.ConnectionString == "" {
 		return errors.New("mongo: 'connection-string' is required")
+	}
+	return nil
+}
+
+// PostgresConfig configures the PostgreSQL backend.
+type PostgresConfig struct {
+	ConnectionString string `yaml:"connection-string"`
+	MaxConns         int32  `yaml:"max-conns"`
+	ScanBatchSize    int    `yaml:"scan-batch-size"`
+}
+
+func (c PostgresConfig) validate() error {
+	if c.ConnectionString == "" {
+		return errors.New("postgres: 'connection-string' is required")
 	}
 	return nil
 }
@@ -261,7 +277,7 @@ func toLogLevel(level string) slog.Level {
 
 // selected reports the name of the single backend that is set and how many are set, so callers can
 // enforce the "exactly one backend" rule with a clear error.
-func selected(memory, badger, mongo bool) (name string, count int) {
+func selected(memory, badger, mongo, postgres bool) (name string, count int) {
 	if memory {
 		name, count = "memory", count+1
 	}
@@ -271,19 +287,22 @@ func selected(memory, badger, mongo bool) (name string, count int) {
 	if mongo {
 		name, count = "mongo", count+1
 	}
+	if postgres {
+		name, count = "postgres", count+1
+	}
 	return name, count
 }
 
 func backendErr(what string, count int) error {
 	if count == 0 {
-		return fmt.Errorf("%s must define exactly one backend (memory, badger, mongo)", what)
+		return fmt.Errorf("%s must define exactly one backend (memory, badger, mongo, postgres)", what)
 	}
-	return fmt.Errorf("%s defines multiple backends; only one of (memory, badger, mongo) is allowed", what)
+	return fmt.Errorf("%s defines multiple backends; only one of (memory, badger, mongo, postgres) is allowed", what)
 }
 
 func setupPartitionStorage(file File, d *Config) error {
 	for _, ps := range file.PartitionStorage {
-		name, count := selected(ps.Memory != nil, ps.Badger != nil, ps.Mongo != nil)
+		name, count := selected(ps.Memory != nil, ps.Badger != nil, ps.Mongo != nil, ps.Postgres != nil)
 		if count != 1 {
 			return backendErr(fmt.Sprintf("partition storage '%s'", ps.Name), count)
 		}
@@ -310,6 +329,16 @@ func setupPartitionStorage(file File, d *Config) error {
 				MaxPoolSize:      ps.Mongo.MaxPoolSize,
 				Log:              d.Service.Log,
 			})
+		case "postgres":
+			if err := ps.Postgres.validate(); err != nil {
+				return err
+			}
+			s = store.NewPostgresPartitionStore(store.PostgresConfig{
+				ConnectionString: ps.Postgres.ConnectionString,
+				MaxConns:         ps.Postgres.MaxConns,
+				ScanBatchSize:    ps.Postgres.ScanBatchSize,
+				Log:              d.Service.Log,
+			})
 		default:
 			return fmt.Errorf("unknown backend %q", name)
 		}
@@ -325,7 +354,7 @@ func setupPartitionStorage(file File, d *Config) error {
 
 func setupQueueStorage(ctx context.Context, file File, conf *Config) error {
 	qs := file.QueueStorage
-	name, count := selected(qs.Memory != nil, qs.Badger != nil, qs.Mongo != nil)
+	name, count := selected(qs.Memory != nil, qs.Badger != nil, qs.Mongo != nil, qs.Postgres != nil)
 	if count > 1 {
 		return backendErr("queue storage", count)
 	}
@@ -349,6 +378,16 @@ func setupQueueStorage(ctx context.Context, file File, conf *Config) error {
 			ConnectionString: qs.Mongo.ConnectionString,
 			Database:         qs.Mongo.Database,
 			MaxPoolSize:      qs.Mongo.MaxPoolSize,
+			Log:              conf.Service.Log,
+		})
+	case "postgres":
+		if err := qs.Postgres.validate(); err != nil {
+			return err
+		}
+		conf.Service.StorageConfig.Queues = store.NewPostgresQueues(store.PostgresConfig{
+			ConnectionString: qs.Postgres.ConnectionString,
+			MaxConns:         qs.Postgres.MaxConns,
+			ScanBatchSize:    qs.Postgres.ScanBatchSize,
 			Log:              conf.Service.Log,
 		})
 	default:

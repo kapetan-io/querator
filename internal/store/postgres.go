@@ -179,6 +179,10 @@ func NewPostgresQueues(conf PostgresConfig) *PostgresQueues {
 	return &PostgresQueues{conf: conf}
 }
 
+func (p *PostgresQueues) Config() PostgresConfig {
+	return p.conf
+}
+
 func (p *PostgresQueues) ensureTable(_ context.Context, pool *pgxpool.Pool) error {
 	// Use a context with reasonable timeout for table creation
 	bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -476,6 +480,10 @@ func NewPostgresPartitionStore(conf PostgresConfig) *PostgresPartitionStore {
 	set.Default(&conf.Log, slog.Default())
 	set.Default(&conf.ScanBatchSize, 1000)
 	return &PostgresPartitionStore{conf: conf}
+}
+
+func (p *PostgresPartitionStore) Config() PostgresConfig {
+	return p.conf
 }
 
 func (p *PostgresPartitionStore) Get(info types.PartitionInfo) Partition {

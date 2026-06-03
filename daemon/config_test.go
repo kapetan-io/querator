@@ -105,7 +105,7 @@ func TestApplyConfigFileErrs(t *testing.T) {
 					{Name: "test"},
 				},
 			},
-			expectedErr: "partition storage 'test' must define exactly one backend (memory, badger, mongo)",
+			expectedErr: "partition storage 'test' must define exactly one backend (memory, badger, mongo, postgres)",
 		},
 		{
 			name: "PartitionStorageMultipleBackends",
@@ -118,7 +118,7 @@ func TestApplyConfigFileErrs(t *testing.T) {
 					},
 				},
 			},
-			expectedErr: "partition storage 'test' defines multiple backends; only one of (memory, badger, mongo) is allowed",
+			expectedErr: "partition storage 'test' defines multiple backends; only one of (memory, badger, mongo, postgres) is allowed",
 		},
 		{
 			name: "PartitionStorageMongoMissingConnectionString",
@@ -131,6 +131,18 @@ func TestApplyConfigFileErrs(t *testing.T) {
 				},
 			},
 			expectedErr: "mongo: 'connection-string' is required",
+		},
+		{
+			name: "PartitionStoragePostgresMissingConnectionString",
+			file: daemon.File{
+				PartitionStorage: []daemon.PartitionStorage{
+					{
+						Name:     "postgres-00",
+						Postgres: &daemon.PostgresConfig{MaxConns: 10},
+					},
+				},
+			},
+			expectedErr: "postgres: 'connection-string' is required",
 		},
 		{
 			name: "PartitionStorageBadgerMissingStorageDir",
@@ -152,7 +164,7 @@ func TestApplyConfigFileErrs(t *testing.T) {
 					Mongo:  &daemon.MongoConfig{ConnectionString: "mongodb://localhost:27017"},
 				},
 			},
-			expectedErr: "queue storage defines multiple backends; only one of (memory, badger, mongo) is allowed",
+			expectedErr: "queue storage defines multiple backends; only one of (memory, badger, mongo, postgres) is allowed",
 		},
 		{
 			name: "QueueStorageMongoMissingConnectionString",
@@ -162,6 +174,15 @@ func TestApplyConfigFileErrs(t *testing.T) {
 				},
 			},
 			expectedErr: "mongo: 'connection-string' is required",
+		},
+		{
+			name: "QueueStoragePostgresMissingConnectionString",
+			file: daemon.File{
+				QueueStorage: daemon.QueueStorage{
+					Postgres: &daemon.PostgresConfig{MaxConns: 10},
+				},
+			},
+			expectedErr: "postgres: 'connection-string' is required",
 		},
 		{
 			name: "QueueStorageBadgerMissingStorageDir",
@@ -374,4 +395,41 @@ queue-storage:
 	// a process-global client keyed by connection string, so an unset size here would override the
 	// partition-storage pool cap depending on which storage acquires the client first.
 	assert.Equal(t, uint64(25), queueConfig.MaxPoolSize)
+}
+
+func TestPostgresConfig(t *testing.T) {
+	postgresConfig := `
+partition-storage:
+  - name: postgres-00
+    affinity: 1
+    postgres:
+      connection-string: "postgres://localhost:5432/querator"
+      max-conns: 50
+      scan-batch-size: 500
+queue-storage:
+  postgres:
+    connection-string: "postgres://localhost:5432/querator"
+    max-conns: 25
+    scan-batch-size: 250
+`
+	file, err := daemon.ReadConfig(strings.NewReader(postgresConfig))
+	require.NoError(t, err)
+
+	var conf daemon.Config
+	ctx := context.Background()
+	err = daemon.ApplyConfigFile(ctx, &conf, file, io.Discard)
+	require.NoError(t, err)
+
+	partitionConfig := conf.Service.StorageConfig.PartitionStorage[0].PartitionStore.(*store.PostgresPartitionStore).Config()
+	assert.Equal(t, "postgres://localhost:5432/querator", partitionConfig.ConnectionString)
+	assert.Equal(t, int32(50), partitionConfig.MaxConns)
+	assert.Equal(t, 500, partitionConfig.ScanBatchSize)
+
+	queueConfig := conf.Service.StorageConfig.Queues.(*store.PostgresQueues).Config()
+	assert.Equal(t, "postgres://localhost:5432/querator", queueConfig.ConnectionString)
+	// queue-storage must honor max-conns, not silently drop it: queue and partition storage share a
+	// process-global pgx pool keyed by connection string, so the first storage to acquire the pool
+	// sets the cap. An unset value here would let one path override the other's pool size.
+	assert.Equal(t, int32(25), queueConfig.MaxConns)
+	assert.Equal(t, 250, queueConfig.ScanBatchSize)
 }

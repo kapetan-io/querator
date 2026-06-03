@@ -269,9 +269,14 @@ func setupQueueStorage(ctx context.Context, file File, conf *Config) error {
 			Log:        conf.Service.Log,
 		})
 	case "mongo":
+		maxPool, err := parseMaxPoolSize(file.QueueStorage.Config["max-pool-size"])
+		if err != nil {
+			return err
+		}
 		conf.Service.StorageConfig.Queues = store.NewMongoQueues(store.MongoConfig{
 			ConnectionString: file.QueueStorage.Config["connection-string"],
 			Database:         file.QueueStorage.Config["database"],
+			MaxPoolSize:      maxPool,
 			Log:              conf.Service.Log,
 		})
 	default:

@@ -52,12 +52,14 @@ partition-storage:
 #      # Caps the driver connection pool per client; omit for the driver default.
 #      max-pool-size: "50"
 
-# MongoDB may also back queue metadata:
+# MongoDB may also back queue metadata. When queue and partition storage share a connection string
+# they share one driver client, so set max-pool-size consistently in both places.
 # queue-storage:
 #   driver: mongo
 #   config:
 #     connection-string: "mongodb://user:pass@localhost:27017"
 #     database: querator
+#     max-pool-size: "50"
 
 # Auth Backend defines the authentication and authorization backend.
 # Options:

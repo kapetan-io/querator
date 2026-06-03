@@ -274,10 +274,13 @@ func (qm *QueuesManager) LifeCycle(ctx context.Context, req *types.LifeCycleRequ
 		return nil
 	}
 
-	// DLQ is configured - prepare items for DLQ
+	// DLQ is configured - prepare items for DLQ. Capture the original IDs now (used to delete
+	// from the source partition after a successful produce) since we clear item.ID below.
+	itemIDs := make([][]byte, 0, len(deadItems))
 	for _, item := range deadItems {
 		// Set SourceID to original ID for idempotency
 		item.SourceID = item.ID
+		itemIDs = append(itemIDs, item.ID)
 		// Clear ID so DLQ storage generates a new one
 		item.ID = nil
 		// Reset state for DLQ
@@ -296,11 +299,6 @@ func (qm *QueuesManager) LifeCycle(ctx context.Context, req *types.LifeCycleRequ
 	}
 
 	// Delete items from source partition after successful DLQ produce
-	var itemIDs [][]byte
-	for _, item := range deadItems {
-		// Use SourceID since we cleared ID when preparing for DLQ
-		itemIDs = append(itemIDs, item.SourceID)
-	}
 	batch := types.CompleteBatch{}
 	batch.Add(&types.CompleteRequest{Ids: itemIDs})
 	if err := req.PartitionStorage.Complete(ctx, batch); err != nil {

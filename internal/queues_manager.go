@@ -329,7 +329,9 @@ func (qm *QueuesManager) ProduceToQueue(ctx context.Context, queueName string, i
 	if logical == nil {
 		return errors.Errorf("queue '%s' has no available partitions", queueName)
 	}
-	if err := logical.ProduceInternal(ctx, items); err != nil {
+	// Route through the dead-letter queue's own requestLoop (ADR-0003). The items are already
+	// built; ExpireDeadline is assigned by the loop, so we pass them through unmodified.
+	if err := logical.ProduceDeadLetter(ctx, &types.ProduceRequest{Items: items}); err != nil {
 		return errors.Errorf("failed to produce to queue '%s': %w", queueName, err)
 	}
 

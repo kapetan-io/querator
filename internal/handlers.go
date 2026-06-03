@@ -85,6 +85,8 @@ func (l *Logical) handleStats(state *QueueState, r *Request) {
 		//  make fetching on disk stats a separate call.
 		ps.Failures = s.State.Failures
 		ps.NumLeased = s.State.NumLeased
+		ps.UnLeased = s.State.UnLeased
+		ps.NextLifecycleRun = s.Lifecycle.NextLifecycleRun.Sub(l.conf.Clock.Now().UTC())
 		qs.Partitions = append(qs.Partitions, ps)
 	}
 
@@ -181,7 +183,7 @@ func (l *Logical) handleShutdown(state *QueueState, req *types.ShutdownRequest) 
 		select {
 		case r := <-l.requestCh:
 			switch r.Method {
-			case MethodProduce:
+			case MethodProduce, MethodProduceInternal:
 				o := r.Request.(*types.ProduceRequest)
 				o.Err = ErrQueueShutdown
 				close(o.ReadyCh)

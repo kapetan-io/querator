@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/dustin/go-humanize"
-	"github.com/kapetan-io/errors"
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/transport/reply"
@@ -41,6 +40,10 @@ const (
 	MethodReload
 	MethodNotify
 	MethodNotifyScheduled
+	// MethodProduceInternal carries pre-built items (e.g. dead-letter moves) produced through
+	// this Logical's requestLoop. It is treated as a hot request indistinguishable from
+	// MethodProduce once inside the loop. See docs/adr/0003-rw-sync-point.md.
+	MethodProduceInternal
 
 	DefaultMaxLeaseBatchSize        = 1_000
 	DefaultMaxProduceBatchSize      = 1_000
@@ -98,6 +101,11 @@ type LogicalConfig struct {
 // and efficiently. Since a Logical is the synchronization point for R/W there can ONLY BE ONE instance of a
 // Logical running anywhere in the cluster at any given time. All consume and produce requests for the partitions
 // assigned to this Logical instance MUST go through this singleton.
+//
+// Dead-letter movement is no exception: items dead-lettered from a source queue are produced to the dead-letter
+// queue via ProduceDeadLetter, which routes through this Logical's requestCh exactly like a client Produce. This
+// preserves the single-writer-per-partition invariant — no goroutine other than this Logical's requestLoop
+// writes to its partitions. See docs/adr/0003-rw-sync-point.md.
 type Logical struct {
 	// TODO: Failures should be used to indicate all partitions for this Logical Queue have failed. The QueueManager
 	//  can check for this flag and avoid routing clients to this Logical Queue.
@@ -346,43 +354,50 @@ func (l *Logical) Retry(ctx context.Context, req *types.RetryRequest) error {
 	return req.Err
 }
 
-// ProduceInternal writes items directly to storage without going through the request channel.
-// This method is used internally by the QueuesManager for DLQ item movement.
-// It bypasses client validation and writes directly to the selected partition.
-func (l *Logical) ProduceInternal(ctx context.Context, items []*types.Item) error {
+// ProduceDeadLetter produces pre-built items (e.g. dead-letter moves from a source queue's
+// lifecycle) through this Logical's requestLoop, preserving the single-writer-per-partition
+// invariant (ADR-0003). Unlike the client-facing Produce, it skips client validation
+// (RequestTimeout, ClientID, batch-size limits) since the items are already built and validated
+// upstream by QueuesManager.LifeCycle. ExpireDeadline is assigned by the loop in
+// assignProduceRequests, so the caller must not pre-assign it.
+//
+// The hand-off is synchronous: it blocks until the loop confirms the produce (required by the
+// delete-after-confirm invariant — the caller deletes the source item only after this returns
+// success) or until ctx is done. If the request channel is full it returns immediately rather
+// than blocking, so a saturated dead-letter queue never stalls the source loop; the caller
+// retains the source item and retries on the next lifecycle pass.
+func (l *Logical) ProduceDeadLetter(ctx context.Context, req *types.ProduceRequest) error {
 	if l.inShutdown.Load() {
 		return ErrQueueShutdown
 	}
+	l.inFlight.Add(1)
+	defer l.inFlight.Add(-1)
 
-	if len(items) == 0 {
+	if len(req.Items) == 0 {
 		return nil
 	}
 
-	// Use first partition for DLQ writes (simple approach)
-	if len(l.conf.StoragePartitions) == 0 {
-		return errors.New("no storage partitions available")
+	req.ReadyCh = make(chan struct{})
+	req.Context = ctx
+
+	select {
+	case l.requestCh <- &Request{
+		Method:  MethodProduceInternal,
+		Request: req,
+	}:
+	default:
+		return reply.NewRetryRequest(MsgQueueOverLoaded)
 	}
 
-	partition := l.conf.StoragePartitions[0]
-
-	// Assign ExpireTimeout to each item
-	now := l.conf.Clock.Now().UTC()
-	for _, item := range items {
-		item.ExpireDeadline = now.Add(l.conf.ExpireTimeout)
+	// Wait until the request has been processed or the caller's context is done. Unlike the
+	// client Produce, we honor ctx here so a stalled dead-letter queue cannot block the source
+	// loop indefinitely; the lifecycle's WriteTimeout context bounds the wait.
+	select {
+	case <-req.ReadyCh:
+		return req.Err
+	case <-ctx.Done():
+		return ctx.Err()
 	}
-
-	// Create a produce batch for storage
-	batch := types.ProduceBatch{}
-	batch.Add(&types.ProduceRequest{
-		Items: items,
-	})
-
-	// Write directly to storage
-	if err := partition.Produce(ctx, batch, now); err != nil {
-		return errors.Errorf("failed to produce items to partition: %w", err)
-	}
-
-	return nil
 }
 
 // QueueStats retrieves stats about the queue and items in storage
@@ -669,7 +684,7 @@ func (l *Logical) requestLoop() {
 
 func (l *Logical) handleRequest(state *QueueState, req *Request) {
 	switch req.Method {
-	case MethodProduce, MethodLease, MethodComplete, MethodRetry:
+	case MethodProduce, MethodProduceInternal, MethodLease, MethodComplete, MethodRetry:
 		l.handleHotRequests(state, req)
 	case MethodStorageItemsList, MethodStorageItemsImport, MethodStorageItemsDelete,
 		MethodQueueStats, MethodQueuePause, MethodQueueClear, MethodUpdateInfo,
@@ -750,7 +765,7 @@ func (l *Logical) handleHotRequests(state *QueueState, req *Request) {
 
 func (l *Logical) isHotRequest(req *Request) bool {
 	switch req.Method {
-	case MethodProduce, MethodLease, MethodComplete, MethodRetry:
+	case MethodProduce, MethodProduceInternal, MethodLease, MethodComplete, MethodRetry:
 		return true
 	default:
 		return false
@@ -796,7 +811,7 @@ func (l *Logical) reqToState(req *Request, state *QueueState) {
 	//  request_timeout contract we have with the client.
 
 	switch req.Method {
-	case MethodProduce:
+	case MethodProduce, MethodProduceInternal:
 		state.Producers.Add(req.Request.(*types.ProduceRequest))
 	case MethodComplete:
 		state.Completes.Add(req.Request.(*types.CompleteRequest))

@@ -171,6 +171,13 @@ type PartitionStats struct {
 	AverageLeasedAge clock.Duration
 	// Scheduled is the total number of scheduled items in the partition
 	Scheduled int
+	// UnLeased is the count of un-leased items the Logical believes are available in the
+	// partition, sourced from in-memory PartitionState. Pairs with the storage-derived Total;
+	// divergence indicates in-memory accounting drift.
+	UnLeased int
+	// NextLifecycleRun is the duration until the partition's lifecycle/GC routine next runs,
+	// sourced from in-memory PartitionLifecycleState.
+	NextLifecycleRun clock.Duration
 }
 
 // PartitionCompleter is an interface for completing items in a partition.

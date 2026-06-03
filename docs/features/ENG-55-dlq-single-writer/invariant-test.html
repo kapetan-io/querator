@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Invariant Test Report — ENG-55 Dead-Letter Single-Writer Routing</title>
+<style>
+  :root { --bg:#0f1117; --panel:#171a21; --panel2:#1d212b; --ink:#e6e8ee; --muted:#9aa3b2;
+          --green:#3fb950; --red:#f85149; --amber:#d29922; --blue:#58a6ff; --line:#2b313c; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 32px 24px 80px; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 20px; margin: 38px 0 12px; border-bottom: 1px solid var(--line); padding-bottom: 6px; }
+  h3 { font-size: 16px; margin: 22px 0 8px; }
+  .sub { color: var(--muted); margin: 0 0 22px; }
+  code, .mono { font-family: ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size: 13px; }
+  .pill { display:inline-block; padding:2px 9px; border-radius:999px; font-size:12px; font-weight:600;
+          border:1px solid var(--line); }
+  .mv { color:var(--green); border-color:#1f4128; background:#10241657; }
+  .lr { color:var(--red); border-color:#5c2222; background:#2a141457; }
+  .ap { color:var(--blue); border-color:#1f3a5c; background:#10203657; }
+  .no { color:var(--amber); border-color:#5c4a1f; background:#2a230f57; }
+  .da { color:var(--muted); }
+  .cards { display:grid; gap:14px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px 18px; }
+  .card h3 { margin-top:0; }
+  .meta { color:var(--muted); font-size:13px; }
+  .kv { display:grid; grid-template-columns: 150px 1fr; gap:4px 14px; margin:10px 0; }
+  .kv div:nth-child(odd){ color:var(--muted); }
+  table { border-collapse:collapse; width:100%; margin:8px 0 4px; font-size:13.5px; }
+  th,td { text-align:left; padding:7px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:600; }
+  .keep { color:var(--green); font-weight:600; }
+  .discard { color:var(--muted); font-weight:600; }
+  .banner { border-radius:10px; padding:14px 18px; margin:18px 0; border:1px solid; }
+  .banner.ok { border-color:#1f4128; background:#10241630; }
+  .banner.warn { border-color:#5c4a1f; background:#2a230f30; }
+  .proof { background:var(--panel2); border:1px solid var(--line); border-radius:8px; padding:10px 14px; margin:10px 0; }
+  .proof .step { margin:3px 0; }
+  .tag { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+  ul { margin:6px 0; padding-left:20px; }
+  a { color:var(--blue); }
+  .small { font-size:12.5px; color:var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Invariant Test Report</h1>
+  <p class="sub">Feature scope: <strong>ENG-55 — Dead-Letter Single-Writer Routing</strong> ·
+     <code>docs/features/ENG-55-dlq-single-writer/</code> · Last run <strong>2026-06-03 02:08</strong></p>
+
+  <div class="banner ok">
+    <strong>✓ No live violations.</strong> The ENG-55 fix is present on this branch
+    (commit <code>2865c7d</code>). All three stated-consequence assertions are
+    <strong>mutation-verified</strong> — each was driven red by reintroducing the exact invariant
+    violation, then green on revert. Baseline suite green; working tree clean (added: this report only).
+  </div>
+
+  <h2>Scope &amp; Baseline</h2>
+  <ul>
+    <li><strong>Invariants in scope:</strong> ADR-0003 (R/W single sync point) restated load-bearing at
+        <code>internal/logical.go:100-108</code>, plus the four Correctness Constraints in the ENG-55
+        blueprint (single-writer, accounting-matches-storage, delete-after-confirm, prompt-wake) and the
+        deadlock-freedom precondition (<code>validateDeadQueue</code>).</li>
+    <li><strong>Governed resources:</strong> (a) the dead-letter storage partition; (b) the dead-letter
+        <code>Logical</code>'s in-memory <code>QueueState</code> / <code>Partition.State.UnLeased</code> /
+        <code>Lifecycle.NextLifecycleRun</code>; (c) source-partition items pending a dead-letter move.</li>
+    <li><strong>Defensive mechanisms found:</strong> per-backend partition mutex (e.g.
+        <code>MemoryPartition</code> lock) and individually-atomic backend <code>Produce</code> —
+        these guarantee <em>integrity</em> of a single partition write regardless of which goroutine calls it.
+        This is precisely why an integrity-only suite stayed green on the buggy <code>main</code>.</li>
+    <li><strong>Surface used:</strong> <code>QueueProduce</code>, <code>QueueLease</code>,
+        <code>QueueStats</code> (incl. the new <code>unLeased</code> / <code>nextLifecycleRun</code> partition
+        fields), <code>StorageItemsList</code>, <code>PauseQueue</code> — all driven through the client. No
+        internal calls.</li>
+    <li><strong>Baseline:</strong> <code>go test ./service/ -race</code> on
+        <code>DeadLetterQueue/SingleWriter</code> — green before mutation, green after revert.</li>
+  </ul>
+
+  <h2>The masking lesson (why <code>-race</code> + integrity tests missed ENG-55)</h2>
+  <p>The single-writer bypass and a data race look identical at the diff, but the partition mutex makes the
+     bypass <em>memory-safe</em> and <em>integrity-preserving</em>: under the reintroduced bypass the
+     dead-lettered item was still durably written to storage. So every assertion of the form "the item is in
+     the dead-letter queue / not lost / not duplicated" <strong>passes on broken code</strong>. The only
+     assertions that fail are the ones the mutex cannot satisfy — the consequences of the single writer
+     <em>also</em> being the thing that wakes waiters and advances the in-memory timer in the same pass:
+     <strong>liveness</strong> and <strong>timeliness/accounting</strong>. Those are the kept assertions below.</p>
+
+  <h2>Invariant Ledger</h2>
+  <div class="cards" id="ledger"></div>
+
+  <h2>Mutation Proofs</h2>
+  <div id="proofs"></div>
+
+  <h2>Run History</h2>
+  <table id="history">
+    <thead><tr><th>Run</th><th>Examined</th><th>Mutation-verified</th><th>Live violations</th><th>Already-proven</th><th>Needs-observability</th></tr></thead>
+    <tbody></tbody>
+  </table>
+
+  <p class="small">This report accumulates across runs. The embedded JSON below is authoritative; the tables
+     above are rendered from it. Only <code>mutation-verified</code> and <code>live-red</code> verdicts are
+     trusted across runs without re-probing.</p>
+
+<script type="application/json" id="invariant-test-data">
+{
+  "feature": "ENG-55-dlq-single-writer",
+  "scope": "feature",
+  "runs": [
+    {
+      "timestamp": "2026-06-03 02:08",
+      "branch": "thrawn01/eng-55-dlq-item-movement-violates-single-writer-per-partition",
+      "fixCommit": "2865c7d",
+      "examined": 5,
+      "mutationVerified": 3,
+      "liveViolations": 0,
+      "alreadyProven": 2,
+      "needsObservability": 0,
+      "discardedAll": 0,
+      "baseline": "green",
+      "note": "Fix already applied on branch. Three committed surface tests confirmed as genuine invariant tests via red-then-green mutation. No new tests required; no gaps found."
+    }
+  ],
+  "invariants": [
+    {
+      "id": "INV-1",
+      "statement": "Each storage partition is mutated by exactly one goroutine: the requestLoop of the Logical that owns it. Dead-letter movement is no exception — it routes through the dead-letter queue's requestCh, not a direct off-loop storage write.",
+      "source": "ADR-0003 (R/W sync point); restated load-bearing at internal/logical.go:100-108 ('there can ONLY BE ONE instance of a Logical ... All consume and produce requests ... MUST go through this singleton').",
+      "resources": ["dead-letter storage partition", "dead-letter Logical in-memory QueueState (Partition.State.UnLeased, Lifecycle.NextLifecycleRun)", "waiting lease requests on the dead-letter queue"],
+      "defensiveMechanisms": "Per-backend partition mutex + atomic backend Produce. Guarantees integrity of the single write but NOT that the in-memory state/waiters/timer of the owning Logical are updated — those live only on its requestLoop.",
+      "purpose": "The single writer is the only place that, in one pass, keeps in-memory QueueState consistent with storage AND re-evaluates waiting leases (wakes blocked consumers) AND advances the lifecycle/expiry timer. A direct off-loop write stores the item but skips all three.",
+      "consequences": [
+        {"bucket":"integrity","defect":"Dead-lettered item lost/corrupted/duplicated in storage.","surfaceObservable":true,"verdict":"DISCARD","reason":"The partition mutex + atomic Produce store the item correctly even under the bypass — proven: the reintroduced direct write still landed the item in dead-letter storage. An integrity assertion passes on broken code."},
+        {"bucket":"liveness","defect":"A consumer blocked on QueueLease against the dead-letter queue is never woken when an item is dead-lettered; it waits until its own request timeout.","surfaceObservable":true,"verdict":"KEEP","reason":"No mechanism re-evaluates the waiting lease unless the produce runs through the loop's assignToPartitions. Asserted with a tight wall-clock bound (10s) far below the 15m request timeout, so only a real wake can satisfy it."},
+        {"bucket":"timeliness","defect":"In-memory accounting stays stale: unLeased reads 0 while total is 1, and nextLifecycleRun stays at humanize.LongTime (~37y) instead of advancing toward the item's expiry.","surfaceObservable":true,"verdict":"KEEP","reason":"notifyExpired / State.UnLeased updates happen only on the owning loop. Observable via the new QueueStats partition fields; bound requires nextLifecycleRun <= dlqExpire+1m, which the stale ~37y value cannot meet."}
+      ],
+      "tests": [
+        {"name":"WakesBlockedConsumer","file":"service/queue_test.go (DeadLetterQueue/SingleWriter/WakesBlockedConsumer)","assertion":"blocked dead-letter QueueLease receives the dead-lettered item within 10s (request timeout 15m)","bucket":"liveness"},
+        {"name":"StatsReflectDeadLetteredItem","file":"service/queue_test.go (DeadLetterQueue/SingleWriter/StatsReflectDeadLetteredItem)","assertion":"dead-letter partition QueueStats reports unLeased==total==1 and 0 < nextLifecycleRun <= 24h+1m","bucket":"timeliness"}
+      ],
+      "status": "mutation-verified",
+      "evidenceGrade": "mutation-verified",
+      "history": [{"run":"2026-06-03 02:08","status":"mutation-verified","note":"Both kept assertions red under the single-writer bypass, green on revert. Integrity consequence discarded (mutex masks it)."}]
+    },
+    {
+      "id": "INV-2",
+      "statement": "After items are produced to a partition, that partition's in-memory State.UnLeased reflects them and Lifecycle.NextLifecycleRun is no later than the earliest produced item's ExpireDeadline.",
+      "source": "ENG-55 blueprint, State Invariants ('In-memory partition accounting matches storage after a produce'); enforced by handleStats override at internal/handlers.go:88-89,163.",
+      "resources": ["dead-letter Logical in-memory Partition.State.UnLeased", "Lifecycle.NextLifecycleRun"],
+      "defensiveMechanisms": "None for the in-memory fields — they are not behind the partition mutex; they are mutated only by the owning requestLoop. Application-logic invariant, not schema-enforced.",
+      "purpose": "Divergence between in-memory accounting and storage signals a write that bypassed the loop; pairing unLeased with the storage-derived total makes drift operator-visible.",
+      "consequences": [
+        {"bucket":"timeliness","defect":"unLeased/nextLifecycleRun drift from storage after an off-loop write.","surfaceObservable":true,"verdict":"KEEP","reason":"Same observable and same test as INV-1 timeliness — the accounting invariant is the timeliness consequence of single-writer."}
+      ],
+      "tests": [
+        {"name":"StatsReflectDeadLetteredItem","file":"service/queue_test.go (DeadLetterQueue/SingleWriter/StatsReflectDeadLetteredItem)","assertion":"unLeased==total and nextLifecycleRun advanced toward expiry","bucket":"timeliness"}
+      ],
+      "status": "mutation-verified",
+      "evidenceGrade": "mutation-verified",
+      "history": [{"run":"2026-06-03 02:08","status":"mutation-verified","note":"Covered by the same mutation as INV-1 (bypass) — red then green."}]
+    },
+    {
+      "id": "INV-3",
+      "statement": "A source item is never deleted before its dead-letter copy is durably produced. A failed or dropped internal produce leaves the source item in place for the next lifecycle pass.",
+      "source": "ENG-55 blueprint, Behavioral Constraints ('Never delete a source item before its dead-letter copy is durably produced'); implemented at internal/queues_manager.go:289-313 (produce, then Complete only on success).",
+      "resources": ["source partition items", "dead-letter partition items"],
+      "defensiveMechanisms": "None that masks the ordering — the partition mutex guards each single partition independently; it cannot make a cross-partition delete-before-confirm ordering correct. So an integrity/no-loss assertion here is NOT masked.",
+      "purpose": "Guarantees no item is lost across the move: storage retains the source until the dead-letter copy is confirmed; SourceID dedup is only a secondary, partition-scoped net.",
+      "consequences": [
+        {"bucket":"integrity","defect":"On a failed dead-letter produce, the source item is deleted anyway and the dead-letter copy never lands → item permanently lost.","surfaceObservable":true,"verdict":"KEEP","reason":"Not masked: no single-partition mutex governs the inter-partition ordering. Observable via StorageItemsList on both queues. Bound: source must retain exactly 1 while the move is unconfirmed, and after recovery the dead-letter queue holds exactly 1 (no loss, no dup)."}
+      ],
+      "tests": [
+        {"name":"RetainsItemOnFailedMove","file":"service/queue_test.go (DeadLetterQueue/SingleWriter/RetainsItemOnFailedMove)","assertion":"with dead-letter queue paused (produce fails on WriteTimeout): source retains 1 item, dead-letter storage empty; after unpause+advance, dead-letter holds exactly 1 and source 0","bucket":"integrity"}
+      ],
+      "status": "mutation-verified",
+      "evidenceGrade": "mutation-verified",
+      "history": [{"run":"2026-06-03 02:08","status":"mutation-verified","note":"Red under delete-after-confirm guard removal (source emptied at queue_test.go:3579), green on revert."}]
+    },
+    {
+      "id": "INV-4",
+      "statement": "Backpressure leaves no item lost: when the dead-letter queue cannot accept the produce (full requestCh / unconfirmed within WriteTimeout), the internal produce returns an error rather than blocking, and the source item is retained and retried next pass. The source loop is never stalled on a saturated dead-letter queue.",
+      "source": "ENG-55 blueprint, Behavioral Constraints ('Backpressure leaves no item lost'); ProduceDeadLetter non-blocking send + ctx-bounded wait at internal/logical.go:369-401.",
+      "resources": ["source partition items", "dead-letter requestCh"],
+      "defensiveMechanisms": "None masking — retention on failure is the same code path and observable as INV-3.",
+      "purpose": "A stalled/saturated dead-letter queue must degrade to retry-next-pass, not lose items or stall the source lifecycle.",
+      "consequences": [
+        {"bucket":"liveness","defect":"Source lifecycle stalls waiting on a saturated dead-letter queue, or the item is dropped on a full channel.","surfaceObservable":true,"verdict":"KEEP","reason":"Covered by RetainsItemOnFailedMove, which forces the failure (paused dead-letter queue → WriteTimeout) and asserts retention + eventual single move. ProduceWaiting==1 confirms the move was attempted over requestCh, not bypassed."}
+      ],
+      "tests": [
+        {"name":"RetainsItemOnFailedMove","file":"service/queue_test.go (DeadLetterQueue/SingleWriter/RetainsItemOnFailedMove)","assertion":"ProduceWaiting==1 during the failed move; item retained and moved exactly once after recovery","bucket":"liveness"}
+      ],
+      "status": "mutation-verified",
+      "evidenceGrade": "mutation-verified",
+      "history": [{"run":"2026-06-03 02:08","status":"mutation-verified","note":"Same test/mutation as INV-3; the failed-move scenario IS the backpressure scenario."}]
+    },
+    {
+      "id": "INV-5",
+      "statement": "Dead-lettering never deadlocks. The source loop and the dead-letter queue loop are always distinct goroutines (validateDeadQueue forbids a queue being its own dead-letter queue and forbids dead-letter chains), and the dead-letter queue never produces back to the source.",
+      "source": "ENG-55 blueprint, Behavioral Constraints ('Dead-lettering never deadlocks'); validateDeadQueue at internal/queues_manager.go:341-385 (self-reference + no-chain).",
+      "resources": ["queue configuration (DeadQueue field)"],
+      "defensiveMechanisms": "Structural: the lifecycle goroutine that calls ProduceDeadLetter is distinct from the requestLoop that services it, so the synchronous hand-off cannot self-deadlock even absent validation. validateDeadQueue additionally forbids self-reference and chains at configuration time.",
+      "purpose": "Guarantees the synchronous source→dead-letter hand-off cannot form a cycle.",
+      "consequences": [
+        {"bucket":"liveness","defect":"A self-referencing or chained dead-letter configuration could (in a naive design) deadlock the hand-off.","surfaceObservable":true,"verdict":"already-proven","reason":"The deadlock scenario is unreachable because configuration validation rejects it; the precondition is the testable surface. Existing surface tests assert rejection of self-reference (service/queues_test.go:344-353, 'cannot reference itself') and chains (service/queues_test.go:372-390, 'already has its own dead_queue configured'). No additional masked-but-testable consequence exists."}
+      ],
+      "tests": [
+        {"name":"CreateQueue self-reference rejected","file":"service/queues_test.go:344-353","assertion":"DeadQueue == queueName is rejected with 'cannot reference itself'","bucket":"liveness"},
+        {"name":"CreateQueue chain rejected","file":"service/queues_test.go:372-390","assertion":"configuring a DLQ that itself has a DLQ is rejected with 'already has its own dead_queue configured'","bucket":"liveness"}
+      ],
+      "status": "already-proven",
+      "evidenceGrade": "spec-asserted",
+      "history": [{"run":"2026-06-03 02:08","status":"already-proven","note":"Precondition validation tested; deadlock-freedom also structurally guaranteed by goroutine separation. Re-examine on future runs (not mutation-verified)."}]
+    }
+  ]
+}
+</script>
+
+<script>
+  const data = JSON.parse(document.getElementById("invariant-test-data").textContent);
+  const sCls = { "mutation-verified":"mv", "live-violation":"lr", "already-proven":"ap",
+                 "needs-observability":"no", "discarded-all":"da", "open-decision":"no" };
+  const sTxt = { "mutation-verified":"mutation-verified", "live-violation":"LIVE VIOLATION",
+                 "already-proven":"already-proven", "needs-observability":"needs-observability",
+                 "discarded-all":"discarded-all", "open-decision":"open-decision" };
+
+  const ledger = document.getElementById("ledger");
+  for (const inv of data.invariants) {
+    const card = document.createElement("div");
+    card.className = "card";
+    let rows = inv.consequences.map(c => {
+      const v = c.verdict === "KEEP" ? '<span class="keep">KEEP</span>'
+              : c.verdict === "DISCARD" ? '<span class="discard">DISCARD</span>'
+              : '<span class="ap">'+c.verdict+'</span>';
+      return `<tr><td><code>${c.bucket}</code></td><td>${v}</td><td>${c.defect}</td><td class="small">${c.reason}</td></tr>`;
+    }).join("");
+    const tests = (inv.tests||[]).map(t => `<li><code>${t.name}</code> — ${t.assertion} <span class="small">(${t.file})</span></li>`).join("");
+    card.innerHTML = `
+      <h3>${inv.id} <span class="pill ${sCls[inv.status]}">${sTxt[inv.status]}</span></h3>
+      <p>${inv.statement}</p>
+      <div class="kv">
+        <div>Source</div><div class="small">${inv.source}</div>
+        <div>Resources</div><div class="small">${inv.resources.join("; ")}</div>
+        <div>Defensive</div><div class="small">${inv.defensiveMechanisms}</div>
+        <div>Purpose</div><div class="small">${inv.purpose}</div>
+      </div>
+      <table><thead><tr><th>Bucket</th><th>Verdict</th><th>Defect if violated</th><th>Reason</th></tr></thead><tbody>${rows}</tbody></table>
+      <div class="tag" style="margin-top:10px">Tests</div><ul>${tests}</ul>`;
+    ledger.appendChild(card);
+  }
+
+  const proofs = document.getElementById("proofs");
+  const proofData = [
+    { mut:"Mutation A — single-writer bypass", loc:"internal/logical.go · ProduceDeadLetter",
+      desc:"Replaced the requestCh hand-off with a direct partition.Produce() off the dead-letter loop (the removed ProduceInternal behavior).",
+      hits:["WakesBlockedConsumer → RED: \"blocked dead-letter consumer was not woken after the item was dead-lettered\"",
+            "StatsReflectDeadLetteredItem → RED: \"Condition never satisfied\" (unLeased/nextLifecycleRun stale)",
+            "Integrity unaffected: the item was still written to dead-letter storage — confirms the mutex masks the integrity bucket",
+            "Reverted → both GREEN"] },
+    { mut:"Mutation B — delete-after-confirm guard removal", loc:"internal/queues_manager.go · LifeCycle",
+      desc:"Dropped the `return err` after a failed ProduceToQueue so the source item is deleted even when the dead-letter produce never confirmed.",
+      hits:["RetainsItemOnFailedMove → RED: queue_test.go:3579 \"[] should have 1 item(s), but has 0\" (source item lost)",
+            "Reverted → GREEN"] }
+  ];
+  for (const p of proofData) {
+    const d = document.createElement("div");
+    d.className = "proof";
+    d.innerHTML = `<div><strong>${p.mut}</strong> <span class="small">— ${p.loc}</span></div>
+      <div class="small" style="margin:4px 0 8px">${p.desc}</div>` +
+      p.hits.map(h => `<div class="step mono">• ${h}</div>`).join("");
+    proofs.appendChild(d);
+  }
+
+  const hb = document.querySelector("#history tbody");
+  for (const r of data.runs) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${r.timestamp}<br><span class="small">${r.fixCommit||""}</span></td>
+      <td>${r.examined}</td><td>${r.mutationVerified}</td>
+      <td>${r.liveViolations}</td><td>${r.alreadyProven}</td><td>${r.needsObservability}</td>`;
+    hb.appendChild(tr);
+  }
+</script>
+
+</div>
+</body>
+</html>

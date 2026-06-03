@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ENG-55 — Observability scope for the secondary (state-drift) test</title>
+<style>
+  :root{
+    --ink:#1a1f29; --muted:#5b6573; --line:#e2e6ec; --bg:#fbfcfd;
+    --accent:#2f6fed; --add:#1a7f4b; --add-bg:#e9f7ef; --warn:#b25000; --warn-bg:#fdf1e6;
+    --code-bg:#f4f6f9; --keep:#6b7280;
+  }
+  *{box-sizing:border-box}
+  body{font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    color:var(--ink); background:var(--bg); margin:0; padding:0 20px 80px}
+  .wrap{max-width:880px; margin:0 auto}
+  header{padding:40px 0 8px; border-bottom:1px solid var(--line); margin-bottom:28px}
+  h1{font-size:26px; margin:0 0 6px; letter-spacing:-.01em}
+  h2{font-size:19px; margin:38px 0 12px; padding-top:8px; letter-spacing:-.01em}
+  h3{font-size:15px; margin:24px 0 8px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted)}
+  .sub{color:var(--muted); font-size:14px}
+  p{margin:12px 0}
+  code{background:var(--code-bg); padding:1px 6px; border-radius:5px; font:13.5px/1.5 "SF Mono",ui-monospace,Menlo,Consolas,monospace}
+  pre{background:var(--code-bg); border:1px solid var(--line); border-radius:8px; padding:14px 16px; overflow:auto}
+  pre code{background:none; padding:0}
+  table{border-collapse:collapse; width:100%; margin:14px 0; font-size:14.5px}
+  th,td{text-align:left; padding:9px 12px; border-bottom:1px solid var(--line); vertical-align:top}
+  th{font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted)}
+  td.k{font-family:"SF Mono",ui-monospace,Menlo,monospace; font-size:13px; white-space:nowrap}
+  .tag{display:inline-block; font-size:11px; font-weight:600; padding:2px 8px; border-radius:20px; letter-spacing:.03em}
+  .tag.add{background:var(--add-bg); color:var(--add)}
+  .tag.keep{background:#eef1f4; color:var(--keep)}
+  .row-add td{background:var(--add-bg)}
+  .callout{border-left:3px solid var(--accent); background:#eef4ff; padding:12px 16px; border-radius:0 8px 8px 0; margin:18px 0}
+  .callout.warn{border-color:var(--warn); background:var(--warn-bg)}
+  .lead{font-size:17px; color:var(--ink)}
+  ul{margin:10px 0; padding-left:22px}
+  li{margin:6px 0}
+  .pill{font-size:12px; color:var(--muted)}
+  .legend{font-size:13px; color:var(--muted); margin:6px 0 0}
+  .q{background:#fff; border:1px solid var(--line); border-radius:10px; padding:18px 20px; margin:22px 0}
+  .q h3{margin-top:0}
+  hr{border:none; border-top:1px solid var(--line); margin:36px 0}
+  .small{font-size:13px; color:var(--muted)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Observability scope for the secondary test</h1>
+  <div class="sub">ENG-55 · DLQ item movement violates single-writer-per-partition · <span class="pill">decision input, not a commitment</span></div>
+</header>
+
+<p class="lead">
+You leaned toward building <strong>both</strong> tests, but asked to first see what the secondary
+(&ldquo;state / GC drift&rdquo;) test would add to the <strong>public interface</strong>. This page is
+exactly that: what stats exist today, what I propose to add, why each field is the minimum needed to
+make the bug observable, and the cost of growing the wire API. Nothing here is implemented yet.
+</p>
+
+<div class="callout">
+  <strong>The crux.</strong> The primary liveness test needs <em>no</em> new observability — it watches a
+  blocked <code>QueueLease</code> on the dead-letter queue. The secondary test is different: the state it
+  must observe (the Logical&rsquo;s <em>in-memory</em> view of the DLQ partition) is <strong>not exposed
+  anywhere today</strong>. So &ldquo;build both tests&rdquo; necessarily means &ldquo;add fields to the
+  public <code>QueueStats</code> API.&rdquo; That is the scope you&rsquo;re weighing.
+</div>
+
+<h2>Why storage-derived stats can&rsquo;t prove this bug</h2>
+<p>
+The current bug writes the dead-lettered item <em>directly to the DLQ&rsquo;s storage partition</em>. So the
+item <strong>is</strong> physically in storage. Every stat we expose today is read from storage
+(<code>partition.Store.Stats()</code>) — meaning <code>total</code>, <code>scheduled</code>, and the age
+averages all already reflect the item, on <code>main</code> and on the fix alike. They cannot distinguish
+buggy from correct.
+</p>
+<p>
+What the bug actually corrupts is the Logical&rsquo;s <strong>in-memory</strong> bookkeeping for that
+partition, which the direct write skips entirely:
+</p>
+<ul>
+  <li><strong>In-memory un-leased count</strong> (<code>p.State.UnLeased</code>) is never incremented — the
+      Logical doesn&rsquo;t know the new item exists for distribution purposes.</li>
+  <li><strong>The partition&rsquo;s lifecycle/GC timer</strong> (<code>p.Lifecycle.NextLifecycleRun</code>) is
+      never advanced — so the item&rsquo;s <code>ExpireDeadline</code> isn&rsquo;t scheduled for GC on time
+      (defect #2 in the ticket).</li>
+</ul>
+<p>
+Neither of those is on the wire today. That&rsquo;s the gap the secondary test forces us to close.
+</p>
+
+<h2>Public stats today — <code>QueuePartitionStats</code> (proto/queue.proto)</h2>
+<p class="small">This is the wire contract returned by <code>Client.QueueStats()</code>. Source of each field noted.</p>
+<table>
+  <thead><tr><th>Field</th><th>Type</th><th>Source today</th><th>Reflects the bug?</th></tr></thead>
+  <tbody>
+    <tr><td class="k">partition</td><td>int32</td><td>identity</td><td class="small">n/a</td></tr>
+    <tr><td class="k">total</td><td>int32</td><td>storage</td><td class="small">no — item is in storage on main too</td></tr>
+    <tr><td class="k">totalLeased</td><td>int32</td><td>in-memory <code>NumLeased</code></td><td class="small">no</td></tr>
+    <tr><td class="k">failures</td><td>int32</td><td>in-memory</td><td class="small">no</td></tr>
+    <tr><td class="k">averageAge</td><td>string</td><td>storage</td><td class="small">no</td></tr>
+    <tr><td class="k">averageLeasedAge</td><td>string</td><td>storage</td><td class="small">no</td></tr>
+    <tr><td class="k">scheduled</td><td>int32</td><td>storage</td><td class="small">no</td></tr>
+  </tbody>
+</table>
+
+<h2>Proposed addition — the minimal set</h2>
+<p>
+Two new fields on <code>QueuePartitionStats</code> (and the internal <code>types.PartitionStats</code> +
+the <code>handleStats</code> handler that fills them from live <code>QueueState</code>). One field per defect.
+</p>
+<table>
+  <thead><tr><th>Field</th><th>Type</th><th>Source</th><th>What it makes observable</th></tr></thead>
+  <tbody>
+    <tr class="row-add">
+      <td class="k">unLeased <span class="tag add">ADD</span></td>
+      <td>int32</td>
+      <td>in-memory <code>p.State.UnLeased</code></td>
+      <td>The Logical&rsquo;s own count of available items in the partition. On <code>main</code> after dead-letter
+          this stays <strong>stale</strong> (e.g. 0) while <code>total</code> reads 1 from storage — the divergence
+          <em>is</em> the bug. On the fix, <code>unLeased == total</code>.</td>
+    </tr>
+    <tr class="row-add">
+      <td class="k">nextLifecycleRun <span class="tag add">ADD</span></td>
+      <td>string (duration)</td>
+      <td>in-memory <code>p.Lifecycle.NextLifecycleRun</code></td>
+      <td>When the partition&rsquo;s GC/expiry routine will next run. On <code>main</code> after dead-letter it stays
+          far in the future (the timer was never advanced). On the fix it moves up to the item&rsquo;s
+          <code>ExpireDeadline</code>. This is the direct observable for defect&nbsp;#2.</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>How the secondary test would use them</h3>
+<pre><code>// Drive a source item to dead-letter, then poll the DLQ's public stats:
+require.Eventually(t, func() bool {
+    stats := mustQueueStats(t, c, dlqName)
+    p := stats.LogicalQueues[0].Partitions[0]
+    // In-memory view agrees with storage  -> single-writer path ran
+    // GC timer advanced to the item's expiry -> lifecycle was notified
+    return p.UnLeased == p.Total && p.UnLeased == 1
+}, 10*clock.Second, 100*clock.Millisecond)</code></pre>
+<p class="small">
+On <code>main</code> this never becomes true within the window (in-memory <code>unLeased</code> stays 0 until an
+unrelated wake re-syncs it); on the fix it&rsquo;s true almost immediately. Same shape as the primary test, but
+asserting the <em>internal accounting</em> rather than consumer delivery.</p>
+
+<h2>Considered and deliberately excluded</h2>
+<ul>
+  <li><strong><code>mostRecentDeadline</code></strong> — also drifts, but it&rsquo;s redundant with
+      <code>nextLifecycleRun</code> for proving the defect, and it&rsquo;s a less meaningful operator signal.
+      Excluded to keep the surface minimal.</li>
+  <li><strong>A separate <code>/debug</code>-only endpoint</strong> instead of first-class stats — keeps the
+      permanent public API smaller, but adds a second observability mechanism and a test-only surface the
+      <code>surface-testing</code> philosophy discourages. See the open question below.</li>
+</ul>
+
+<h2>Cost of growing the public surface</h2>
+<ul>
+  <li><strong>Permanent wire contract.</strong> Proto fields are forever — once <code>unLeased</code> /
+      <code>nextLifecycleRun</code> ship, clients may depend on them and we can&rsquo;t quietly remove them.</li>
+  <li><strong>A new invariant to honor.</strong> Exposing &ldquo;in-memory <code>unLeased</code> vs storage
+      <code>total</code>&rdquo; tacitly promises they normally agree — which is precisely what we&rsquo;re fixing,
+      but it also means any <em>future</em> divergence becomes a visible, supportable contract.</li>
+  <li><strong>Genuinely useful, though.</strong> Both fields help operators independent of this bug:
+      <code>unLeased</code> surfaces distribution skew, and <code>nextLifecycleRun</code> exposes the GC cadence
+      that is otherwise invisible. They are not test-only scaffolding.</li>
+  <li><strong>Mechanical footprint:</strong> 2 proto fields, regenerate (<code>make proto</code>), 2 fields on
+      <code>types.PartitionStats</code>, ~4 lines in <code>handleStats</code> to copy from <code>QueueState</code>,
+      and the client mapping. Small.</li>
+</ul>
+
+<hr>
+
+<div class="q">
+  <h3>The decision in front of you</h3>
+  <p style="margin-top:6px">
+  The <strong>primary liveness test</strong> proves the bug and the fix on its own, with zero API change.
+  The <strong>secondary test</strong> buys a second, independent proof (in-memory accounting + GC scheduling)
+  at the cost of two permanent fields on the public <code>QueueStats</code> contract.
+  </p>
+  <p style="margin-bottom:0">Three ways to go:</p>
+  <ul style="margin-bottom:4px">
+    <li><strong>A. Both tests, fields as first-class stats</strong> — the scope drawn above. Recommended if you
+        value the operator-facing <code>unLeased</code> / <code>nextLifecycleRun</code> signals anyway.</li>
+    <li><strong>B. Both tests, behind a debug-only surface</strong> — proves the same thing without a permanent
+        public-API promise; adds a separate observability mechanism.</li>
+    <li><strong>C. Primary test only</strong> — smallest change; the GC-drift defect is fixed but only
+        <em>indirectly</em> verified (via the liveness behavior it shares a code path with).</li>
+  </ul>
+</div>
+
+<p class="small">Once you pick, I&rsquo;ll fold the answer into the Blueprint&rsquo;s Testing and Architecture
+sections and continue.</p>
+
+</div>
+</body>
+</html>

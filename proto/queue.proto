@@ -298,6 +298,14 @@ message QueuePartitionStats {
   string averageLeasedAge = 6 [json_name = "average_leased_age"];
   // Scheduled is the number of scheduled items in the partition
   int32 scheduled = 7;
+  // UnLeased is the count of un-leased items the Logical believes are available in the partition,
+  // sourced from in-memory state. Pairs with the storage-derived total; divergence indicates
+  // in-memory accounting drift.
+  int32 unLeased = 8 [json_name = "un_leased"];
+  // NextLifecycleRun is the duration until the partition's lifecycle/GC routine next runs,
+  // sourced from in-memory state. Exposes GC cadence and the expiry-scheduling the dead-letter
+  // path must advance.
+  string nextLifecycleRun = 9 [json_name = "next_lifecycle_run"];
 }
 
 message QueueLogicalStats {

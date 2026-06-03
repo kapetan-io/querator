@@ -2479,6 +2479,10 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 			// Verify DLQ item has SourceID set to the item ID from the second lease
 			assert.Equal(t, secondLeaseID, dlqItem.SourceId)
+			// The dead-letter move clears the original ID so the dead-letter queue generates a
+			// fresh one; the new ID must be non-empty and distinct from the SourceID.
+			assert.NotEmpty(t, dlqItem.Id)
+			assert.NotEqual(t, dlqItem.SourceId, dlqItem.Id)
 
 			// Verify item fields are preserved
 			assert.Equal(t, ref, dlqItem.Reference)
@@ -3331,6 +3335,285 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				assert.Equal(t, "idempotency-test-1", resp.Items[0].Reference)
 				assert.Equal(t, sourceID, resp.Items[0].SourceId)
 			}
+		})
+
+		// SingleWriter covers the behavioral and accounting guarantees that hold because
+		// dead-letter production flows through the dead-letter queue's own requestLoop, the
+		// sole writer of its partitions (ADR-0003): blocked consumers are woken, and the
+		// queue's in-memory accounting stays consistent with storage.
+		t.Run("SingleWriter", func(t *testing.T) {
+
+			// WakesBlockedConsumer: a consumer blocked on QueueLease against the dead-letter
+			// queue must be offered a newly dead-lettered item promptly. The dead-letter produce
+			// runs on the dead-letter queue's loop, which re-evaluates waiting leases in the same
+			// pass, so the blocked consumer is satisfied as soon as the item arrives rather than
+			// waiting out its request timeout.
+			t.Run("WakesBlockedConsumer", func(t *testing.T) {
+				now := clock.NewProvider()
+				now.Freeze(clock.Now())
+				defer now.UnFreeze()
+
+				queueName := random.String("queue-", 10)
+				dlqName := random.String("dlq-", 10)
+				d, c, ctx := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: setup(), Clock: now})
+				defer func() {
+					d.Shutdown(t)
+					tearDown()
+				}()
+
+				// Dead-letter queue with a long expiry so the dead-lettered item lingers.
+				createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+					QueueName:           dlqName,
+					LeaseTimeout:        "1m",
+					ExpireTimeout:       "24h0m0s",
+					RequestedPartitions: 1,
+				})
+				// Source queue with a short expiry that drives the item to dead-letter on expiry.
+				createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+					QueueName:           queueName,
+					LeaseTimeout:        "1m",
+					ExpireTimeout:       "1m",
+					DeadQueue:           dlqName,
+					RequestedPartitions: 1,
+				})
+
+				// A consumer blocks on the dead-letter queue before any item exists. The request
+				// timeout is far longer than the clock advance below, so any wake must come from
+				// the dead-letter produce, not from a request timeout.
+				leaseCtx, leaseCancel := context.WithCancel(ctx)
+				defer leaseCancel()
+				type leaseResult struct {
+					resp *pb.QueueLeaseResponse
+					err  error
+				}
+				resultCh := make(chan leaseResult, 1)
+				go func() {
+					resp := &pb.QueueLeaseResponse{}
+					err := c.QueueLease(leaseCtx, &pb.QueueLeaseRequest{
+						QueueName:      dlqName,
+						RequestTimeout: "15m",
+						ClientId:       random.String("dlq-client-", 10),
+						BatchSize:      10,
+					}, resp)
+					resultCh <- leaseResult{resp: resp, err: err}
+				}()
+
+				// Wait until the consumer is registered as waiting on the dead-letter queue.
+				require.NoError(t, untilLeaseClientWaiting(t, c, dlqName, 1))
+
+				// Produce to the source queue, then expire it so the lifecycle dead-letters it.
+				require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+					QueueName:      queueName,
+					RequestTimeout: "1m",
+					Items: []*pb.QueueProduceItem{
+						{Reference: "wake-test", Encoding: "text", Kind: "test", Bytes: []byte("payload")},
+					},
+				}))
+				now.Advance(2 * clock.Minute)
+
+				// The blocked consumer must receive the dead-lettered item promptly (wall-clock).
+				select {
+				case res := <-resultCh:
+					require.NoError(t, res.err)
+					require.Len(t, res.resp.Items, 1)
+					assert.Equal(t, "wake-test", res.resp.Items[0].Reference)
+				case <-clock.After(10 * clock.Second):
+					t.Fatal("blocked dead-letter consumer was not woken after the item was dead-lettered")
+				}
+			})
+
+			// StatsReflectDeadLetteredItem: after an item is dead-lettered with no consumer
+			// leasing it, the dead-letter partition's public stats must report unLeased == total
+			// and a nextLifecycleRun advanced toward the item's expiry. Producing through the
+			// dead-letter queue's loop updates State.UnLeased and schedules the lifecycle timer in
+			// the same pass, so the in-memory accounting stays consistent with storage.
+			t.Run("StatsReflectDeadLetteredItem", func(t *testing.T) {
+				now := clock.NewProvider()
+				now.Freeze(clock.Now())
+				defer now.UnFreeze()
+
+				const dlqExpire = "24h0m0s"
+				queueName := random.String("queue-", 10)
+				dlqName := random.String("dlq-", 10)
+				d, c, ctx := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: setup(), Clock: now})
+				defer func() {
+					d.Shutdown(t)
+					tearDown()
+				}()
+
+				createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+					QueueName:           dlqName,
+					LeaseTimeout:        "1m",
+					ExpireTimeout:       dlqExpire,
+					RequestedPartitions: 1,
+				})
+				createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+					QueueName:           queueName,
+					LeaseTimeout:        "1m",
+					ExpireTimeout:       "1m",
+					DeadQueue:           dlqName,
+					RequestedPartitions: 1,
+				})
+
+				require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+					QueueName:      queueName,
+					RequestTimeout: "1m",
+					Items: []*pb.QueueProduceItem{
+						{Reference: "drift-test", Encoding: "text", Kind: "test", Bytes: []byte("payload")},
+					},
+				}))
+				// Expire the source item; no consumer leases it on the dead-letter queue.
+				now.Advance(2 * clock.Minute)
+
+				// Wait for the item to land in the dead-letter partition's storage.
+				require.Eventually(t, func() bool {
+					var resp pb.StorageItemsListResponse
+					if err := c.StorageItemsList(ctx, dlqName, 0, &resp, nil); err != nil {
+						return false
+					}
+					return len(resp.Items) == 1
+				}, 10*clock.Second, 100*clock.Millisecond)
+
+				// The dead-letter partition's in-memory accounting must match storage: unLeased ==
+				// total, and nextLifecycleRun scheduled within the item's expiry window (a partition
+				// with no scheduled lifecycle work reports humanize.LongTime, decades out).
+				dlqExpireDur, err := clock.ParseDuration(dlqExpire)
+				require.NoError(t, err)
+				require.Eventually(t, func() bool {
+					var stats pb.QueueStatsResponse
+					if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: dlqName}, &stats); err != nil {
+						return false
+					}
+					if len(stats.LogicalQueues) != 1 || len(stats.LogicalQueues[0].Partitions) != 1 {
+						return false
+					}
+					p := stats.LogicalQueues[0].Partitions[0]
+					if p.Total != 1 || p.UnLeased != p.Total {
+						return false
+					}
+					next, perr := clock.ParseDuration(p.NextLifecycleRun)
+					if perr != nil {
+						return false
+					}
+					return next > 0 && next <= dlqExpireDur+clock.Minute
+				}, 10*clock.Second, 100*clock.Millisecond)
+			})
+
+			// RetainsItemOnFailedMove covers delete-after-confirm and backpressure: when the
+			// dead-letter produce cannot complete, the source item is retained (never deleted
+			// before a confirmed produce), and a later pass moves it without duplication. The
+			// dead-letter queue is paused to force the produce to block past WriteTimeout and
+			// fail. A single-partition dead-letter queue keeps the no-duplicate assertion
+			// deterministic via SourceID dedup.
+			t.Run("RetainsItemOnFailedMove", func(t *testing.T) {
+				now := clock.NewProvider()
+				now.Freeze(clock.Now())
+				defer now.UnFreeze()
+
+				queueName := random.String("queue-", 10)
+				dlqName := random.String("dlq-", 10)
+				d, c, ctx := newDaemon(t, 30*clock.Second, svc.Config{
+					StorageConfig: setup(),
+					Clock:         now,
+					// Short write timeout so the produce to the paused dead-letter queue fails fast.
+					WriteTimeout: 500 * clock.Millisecond,
+				})
+				defer func() {
+					d.Shutdown(t)
+					tearDown()
+				}()
+
+				// Dead-letter queue with a long expiry so the moved item never expires during the
+				// clock advance used to trigger the source's later pass.
+				createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+					QueueName:           dlqName,
+					LeaseTimeout:        "1m",
+					ExpireTimeout:       "24h0m0s",
+					RequestedPartitions: 1,
+				})
+				// Source queue: MaxAttempts=1 with a moderate expiry. Leasing then expiring the
+				// lease drives the item to max-attempts dead-letter while keeping its ExpireDeadline
+				// in the future, so a failed move reschedules to a reachable time (not LongTime).
+				createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+					QueueName:           queueName,
+					LeaseTimeout:        "1m",
+					ExpireTimeout:       "30m",
+					MaxAttempts:         1,
+					DeadQueue:           dlqName,
+					RequestedPartitions: 1,
+				})
+
+				require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+					QueueName:      queueName,
+					RequestTimeout: "1m",
+					Items: []*pb.QueueProduceItem{
+						{Reference: "no-loss-test", Encoding: "text", Kind: "test", Bytes: []byte("payload")},
+					},
+				}))
+
+				// Lease the item (attempt 1), reaching MaxAttempts.
+				var lease pb.QueueLeaseResponse
+				require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+					QueueName:      queueName,
+					RequestTimeout: "5m",
+					ClientId:       "client-1",
+					BatchSize:      10,
+				}, &lease))
+				require.Len(t, lease.Items, 1)
+
+				// Pause the dead-letter queue so the internal produce cannot be applied.
+				require.NoError(t, d.Service().PauseQueue(ctx, dlqName, true))
+
+				// Expire the lease; the source lifecycle attempts to dead-letter the item but the
+				// paused dead-letter queue cannot confirm the produce, so the move fails.
+				now.Advance(2 * clock.Minute)
+
+				// The dead-letter produce is buffered (waiting) in the paused dead-letter queue,
+				// proving the move was attempted over its requestCh.
+				require.Eventually(t, func() bool {
+					var stats pb.QueueStatsResponse
+					if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: dlqName}, &stats); err != nil {
+						return false
+					}
+					return len(stats.LogicalQueues) == 1 && stats.LogicalQueues[0].ProduceWaiting == 1
+				}, 10*clock.Second, 100*clock.Millisecond)
+
+				// Delete-after-confirm: the source item is retained (the move never confirmed) and
+				// nothing has been written to the dead-letter partition's storage.
+				var srcList pb.StorageItemsListResponse
+				require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &srcList, nil))
+				require.Len(t, srcList.Items, 1)
+				assert.Equal(t, "no-loss-test", srcList.Items[0].Reference)
+
+				var dlqList pb.StorageItemsListResponse
+				require.NoError(t, c.StorageItemsList(ctx, dlqName, 0, &dlqList, nil))
+				assert.Empty(t, dlqList.Items)
+
+				// Un-pause the dead-letter queue, then advance the clock past the source item's
+				// ExpireDeadline to trigger a later lifecycle pass that moves the item.
+				require.NoError(t, d.Service().PauseQueue(ctx, dlqName, false))
+				now.Advance(29 * clock.Minute)
+
+				// The item is moved exactly once: the dead-letter queue holds one copy (SourceID
+				// dedup collapses the buffered flush and the retried move) and the source is empty.
+				require.Eventually(t, func() bool {
+					var dlqResp pb.StorageItemsListResponse
+					if err := c.StorageItemsList(ctx, dlqName, 0, &dlqResp, nil); err != nil {
+						return false
+					}
+					var srcResp pb.StorageItemsListResponse
+					if err := c.StorageItemsList(ctx, queueName, 0, &srcResp, nil); err != nil {
+						return false
+					}
+					return len(dlqResp.Items) == 1 && len(srcResp.Items) == 0
+				}, 15*clock.Second, 100*clock.Millisecond)
+
+				// Confirm it is exactly one and stays one (no duplication).
+				var finalDLQ pb.StorageItemsListResponse
+				require.NoError(t, c.StorageItemsList(ctx, dlqName, 0, &finalDLQ, nil))
+				require.Len(t, finalDLQ.Items, 1)
+				assert.Equal(t, "no-loss-test", finalDLQ.Items[0].Reference)
+			})
 		})
 	})
 }

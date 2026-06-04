@@ -80,14 +80,20 @@ func (l *Logical) handleStats(state *QueueState, r *Request) {
 		if err := p.Stats(r.Context, &ps, now); err != nil {
 			r.Err = err
 		}
-		s := state.Partitions[p.Info().PartitionNum]
+		ps.Partition = p.Info().PartitionNum
+		// Look up the in-memory partition by number. state.Partitions is
+		// continuously reordered by sortPartitionsByLoad (ADR-0019), so it
+		// cannot be indexed by partition number.
+		s := state.GetPartition(p.Info().PartitionNum)
 		// TODO Override the on disk stats with in-memory stats. We should
 		//  warn if these stats do not match, or avoid querying the disk, or
 		//  make fetching on disk stats a separate call.
-		ps.Failures = s.State.Failures
-		ps.NumLeased = s.State.NumLeased
-		ps.UnLeased = s.State.UnLeased
-		ps.NextLifecycleRun = s.Lifecycle.NextLifecycleRun.Sub(now)
+		if s != nil {
+			ps.Failures = s.State.Failures
+			ps.NumLeased = s.State.NumLeased
+			ps.UnLeased = s.State.UnLeased
+			ps.NextLifecycleRun = s.Lifecycle.NextLifecycleRun.Sub(now)
+		}
 		qs.Partitions = append(qs.Partitions, ps)
 	}
 

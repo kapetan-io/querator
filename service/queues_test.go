@@ -390,6 +390,64 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					assert.Contains(t, duhErr.Message(), "already has its own dead_queue configured")
 				})
 
+				t.Run("MultiPartitionDLQ", func(t *testing.T) {
+					dlqName := random.String("dlq-", 10)
+					queueName := random.String("queue-", 10)
+
+					// Create a DLQ with multiple partitions. SourceID dedup is partition-scoped,
+					// so a multi-partition DLQ cannot guarantee no duplicates on a retried move (ENG-57).
+					require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+						QueueName:           dlqName,
+						ExpireTimeout:       "10m",
+						LeaseTimeout:        "1m",
+						RequestedPartitions: 2,
+					}))
+
+					// Creating a source queue that references the multi-partition DLQ must be rejected
+					err := c.QueuesCreate(ctx, &pb.QueueInfo{
+						QueueName:           queueName,
+						DeadQueue:           dlqName,
+						ExpireTimeout:       "10m",
+						LeaseTimeout:        "1m",
+						RequestedPartitions: 1,
+					})
+					require.Error(t, err)
+					var duhErr duh.Error
+					require.True(t, errors.As(err, &duhErr))
+					assert.Equal(t, duh.CodeBadRequest, duhErr.Code())
+					assert.Contains(t, duhErr.Message(), "must have a single partition")
+				})
+
+				t.Run("MultiPartitionDLQOnUpdate", func(t *testing.T) {
+					dlqName := random.String("dlq-", 10)
+					queueName := random.String("queue-", 10)
+
+					require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+						QueueName:           dlqName,
+						ExpireTimeout:       "10m",
+						LeaseTimeout:        "1m",
+						RequestedPartitions: 2,
+					}))
+
+					// Create a source queue with no DLQ, then attempt to add the multi-partition DLQ via update
+					require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+						QueueName:           queueName,
+						ExpireTimeout:       "10m",
+						LeaseTimeout:        "1m",
+						RequestedPartitions: 1,
+					}))
+
+					err := c.QueuesUpdate(ctx, &pb.QueueInfo{
+						QueueName: queueName,
+						DeadQueue: dlqName,
+					})
+					require.Error(t, err)
+					var duhErr duh.Error
+					require.True(t, errors.As(err, &duhErr))
+					assert.Equal(t, duh.CodeBadRequest, duhErr.Code())
+					assert.Contains(t, duhErr.Message(), "must have a single partition")
+				})
+
 				t.Run("ValidDLQ", func(t *testing.T) {
 					dlqName := random.String("dlq-", 10)
 					queueName := random.String("queue-", 10)
@@ -419,6 +477,38 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					}))
 					require.Equal(t, 1, len(list.Items))
 					assert.Equal(t, dlqName, list.Items[0].DeadQueue)
+				})
+
+				t.Run("MultiPartitionSourceQueue", func(t *testing.T) {
+					dlqName := random.String("dlq-", 10)
+					queueName := random.String("queue-", 10)
+
+					// Single-partition DLQ
+					require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+						QueueName:           dlqName,
+						ExpireTimeout:       "10m",
+						LeaseTimeout:        "1m",
+						RequestedPartitions: 1,
+					}))
+
+					// The single-partition constraint applies only to the DLQ. A source queue with
+					// multiple partitions referencing a single-partition DLQ is valid (ENG-57).
+					require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+						QueueName:           queueName,
+						DeadQueue:           dlqName,
+						ExpireTimeout:       "10m",
+						LeaseTimeout:        "1m",
+						RequestedPartitions: 8,
+					}))
+
+					var list pb.QueuesListResponse
+					require.NoError(t, c.QueuesList(ctx, &list, &querator.ListOptions{
+						Pivot: queueName,
+						Limit: 1,
+					}))
+					require.Equal(t, 1, len(list.Items))
+					assert.Equal(t, dlqName, list.Items[0].DeadQueue)
+					assert.Equal(t, int32(8), list.Items[0].RequestedPartitions)
 				})
 			})
 		})

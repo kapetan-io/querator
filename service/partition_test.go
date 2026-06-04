@@ -161,6 +161,54 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		assert.Equal(t, 1, notLeased)
 	})
 
+	// Regression for ENG-56: QueueStats must report each partition's own
+	// number and in-memory state. Producing more items to partition 0 than
+	// partition 1 forces sortPartitionsByLoad (ADR-0019) to reorder the
+	// in-memory partition slice away from partition-number order.
+	t.Run("StatsPerPartitionInMemory", func(t *testing.T) {
+		var queueName = random.String("queue-", 10)
+
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			QueueName:           queueName,
+			LeaseTimeout:        "1m",
+			ExpireTimeout:       "10m",
+			MaxAttempts:         10,
+			RequestedPartitions: 2,
+		})
+
+		// First batch lands in partition 0, second batch in partition 1. The
+		// larger first batch makes partition 0 the heavier partition, so the
+		// load sort reorders state.Partitions away from partition-number order.
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			Items:          produceRandomItems(11),
+			QueueName:      queueName,
+			RequestTimeout: "1m",
+		}))
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			Items:          produceRandomItems(10),
+			QueueName:      queueName,
+			RequestTimeout: "1m",
+		}))
+
+		var stats pb.QueueStatsResponse
+		require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats))
+		require.Len(t, stats.LogicalQueues, 1)
+		require.Len(t, stats.LogicalQueues[0].Partitions, 2)
+
+		// The Partitions slice is ordered by partition number. No items are
+		// leased, so each partition's in-memory UnLeased must equal its
+		// storage-derived Total, and each entry must carry its own number.
+		partition0 := stats.LogicalQueues[0].Partitions[0]
+		assert.Equal(t, int32(0), partition0.Partition)
+		assert.Equal(t, int32(11), partition0.Total)
+		assert.Equal(t, int32(11), partition0.UnLeased)
+
+		partition1 := stats.LogicalQueues[0].Partitions[1]
+		assert.Equal(t, int32(1), partition1.Partition)
+		assert.Equal(t, int32(10), partition1.Total)
+		assert.Equal(t, int32(10), partition1.UnLeased)
+	})
+
 	t.Run("OpportunisticLease", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
 

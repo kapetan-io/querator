@@ -379,6 +379,15 @@ func (qm *QueuesManager) validateDeadQueue(ctx context.Context, info types.Queue
 		return reply.NewInvalidOption("dead_queue is invalid; '%s' already has its own dead_queue configured", info.DeadQueue)
 	}
 
+	// Enforce single-partition dead-letter queues (ENG-57). SourceID dedup is partition-scoped,
+	// so a multi-partition DLQ can duplicate an item when a failed-then-retried lifecycle move
+	// lands on a different partition than the first attempt and escapes the partition-local
+	// SourceID index. Constraining the DLQ to one partition makes that dedup a hard guarantee.
+	if dlqInfo.RequestedPartitions > 1 {
+		return reply.NewInvalidOption("dead_queue is invalid; '%s' must have a single partition, but has '%d'",
+			info.DeadQueue, dlqInfo.RequestedPartitions)
+	}
+
 	return nil
 }
 

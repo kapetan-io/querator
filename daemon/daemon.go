@@ -104,7 +104,19 @@ func (d *Daemon) Shutdown(ctx context.Context) error {
 		d.conf.Service.Log.Info("HTTP Server shutdown", "address", srv.Addr)
 	}
 	d.servers = nil
-	return nil
+
+	// Join the serve goroutines so Shutdown doesn't report done while listeners are still running
+	done := make(chan struct{})
+	go func() {
+		d.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (d *Daemon) Service() *service.Service {

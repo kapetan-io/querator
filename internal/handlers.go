@@ -114,10 +114,13 @@ func (l *Logical) handlePause(state *QueueState, r *Request) {
 	l.log.Debug("paused", "logical", l.instanceID)
 	defer l.log.Debug("un-paused", "logical", l.instanceID)
 
-	for req := range l.requestCh {
-		if l.isHotRequest(req) {
-			l.consumeHotCh(state, req)
-		} else {
+	for {
+		select {
+		case req := <-l.requestCh:
+			if l.isHotRequest(req) {
+				l.consumeHotCh(state, req)
+				continue
+			}
 			switch req.Method {
 			case MethodQueuePause:
 				pr := req.Request.(*types.PauseRequest)
@@ -134,6 +137,10 @@ func (l *Logical) handlePause(state *QueueState, r *Request) {
 			default:
 				l.handleColdRequests(state, req)
 			}
+		case req := <-l.shutdownCh:
+			// Once handled, requestLoop() notices inShutdown and exits
+			l.handleShutdown(state, req)
+			return
 		}
 	}
 }
@@ -179,6 +186,27 @@ func (l *Logical) handleReload(state *QueueState, req *Request) {
 func (l *Logical) handleShutdown(state *QueueState, req *types.ShutdownRequest) {
 	// Cancel any open leases
 	for _, r := range state.Leases.Requests {
+		if r != nil {
+			r.Err = ErrQueueShutdown
+			close(r.ReadyCh)
+		}
+	}
+
+	// While paused, produce, complete and retry requests accumulate in state
+	// unprocessed; cancel them or the in-flight drain below never finishes.
+	for _, r := range state.Producers.Requests {
+		if r != nil {
+			r.Err = ErrQueueShutdown
+			close(r.ReadyCh)
+		}
+	}
+	for _, r := range state.Completes.Requests {
+		if r != nil {
+			r.Err = ErrQueueShutdown
+			close(r.ReadyCh)
+		}
+	}
+	for _, r := range state.Retries.Requests {
 		if r != nil {
 			r.Err = ErrQueueShutdown
 			close(r.ReadyCh)

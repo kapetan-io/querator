@@ -1455,9 +1455,9 @@ func (p *MongoPartition) TakeAction(ctx context.Context, batch types.LifeCycleBa
 					return errors.Errorf("delete expired item: %w", err)
 				}
 
-			case types.ActionItemExpired:
+			case types.ActionItemExpired, types.ActionItemMaxAttempts:
 				if _, err := coll.DeleteOne(ctx, bson.M{"_id": string(action.Item.ID)}); err != nil {
-					return errors.Errorf("delete expired item: %w", err)
+					return errors.Errorf("delete dead item: %w", err)
 				}
 
 			case types.ActionDeleteItem:
@@ -1469,6 +1469,12 @@ func (p *MongoPartition) TakeAction(ctx context.Context, batch types.LifeCycleBa
 				if _, err := coll.UpdateOne(ctx, bson.M{"_id": string(action.Item.ID)},
 					bson.M{"$unset": bson.M{"enqueue_at": ""}}); err != nil {
 					return errors.Errorf("queue scheduled item: %w", err)
+				}
+
+			default:
+				if p.conf.Log != nil {
+					p.conf.Log.Warn("assertion failed; undefined action", "action",
+						fmt.Sprintf("0x%X", int(action.Action)))
 				}
 			}
 		}

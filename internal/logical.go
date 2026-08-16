@@ -193,9 +193,15 @@ func (l *Logical) Produce(ctx context.Context, req *types.ProduceRequest) error 
 		return reply.NewRetryRequest(MsgQueueOverLoaded)
 	}
 
-	// Wait until the request has been processed
-	<-req.ReadyCh
-	return req.Err
+	// Wait until the request has been processed or the client has gone away. If the
+	// client goes away the request loop may still apply the produce after we return.
+	// See docs/adr/0009-client-timeouts.md
+	select {
+	case <-req.ReadyCh:
+		return req.Err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // Lease is called by clients wanting to lease a new item from the queue. This call
@@ -306,11 +312,20 @@ func (l *Logical) Complete(ctx context.Context, req *types.CompleteRequest) erro
 		return reply.NewRetryRequest(MsgQueueOverLoaded)
 	}
 
-	// Wait until the request has been processed
-	<-req.ReadyCh
-	return req.Err
+	// Wait until the request has been processed or the client has gone away. If the
+	// client goes away the request loop may still apply the complete after we return.
+	// See docs/adr/0009-client-timeouts.md
+	select {
+	case <-req.ReadyCh:
+		return req.Err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
+// Retry is called by clients who wish to retry or dead-letter leased items. The call will
+// block until the retry has been applied or until the request is cancelled via the passed
+// context or RequestTimeout is reached.
 func (l *Logical) Retry(ctx context.Context, req *types.RetryRequest) error {
 	if l.inShutdown.Load() {
 		return ErrQueueShutdown
@@ -349,9 +364,15 @@ func (l *Logical) Retry(ctx context.Context, req *types.RetryRequest) error {
 		return reply.NewRetryRequest(MsgQueueOverLoaded)
 	}
 
-	// Wait until the request has been processed
-	<-req.ReadyCh
-	return req.Err
+	// Wait until the request has been processed or the client has gone away. If the
+	// client goes away the request loop may still apply the retry after we return.
+	// See docs/adr/0009-client-timeouts.md
+	select {
+	case <-req.ReadyCh:
+		return req.Err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // ProduceDeadLetter produces pre-built items (e.g. dead-letter moves from a source queue's

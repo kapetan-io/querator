@@ -1711,11 +1711,11 @@ func (p *PostgresPartition) TakeAction(ctx context.Context, batch types.LifeCycl
 					return errors.Errorf("insert requeued item: %w", err)
 				}
 
-			case types.ActionItemExpired:
+			case types.ActionItemExpired, types.ActionItemMaxAttempts:
 				_, err = tx.Exec(ctx, `DELETE FROM `+p.tableName()+` WHERE id = $1`, action.Item.ID)
 				if err != nil {
 					p.mu.Unlock()
-					return errors.Errorf("delete expired item: %w", err)
+					return errors.Errorf("delete dead item: %w", err)
 				}
 
 			case types.ActionDeleteItem:
@@ -1730,6 +1730,12 @@ func (p *PostgresPartition) TakeAction(ctx context.Context, batch types.LifeCycl
 				if err != nil {
 					p.mu.Unlock()
 					return errors.Errorf("queue scheduled item: %w", err)
+				}
+
+			default:
+				if p.conf.Log != nil {
+					p.conf.Log.Warn("assertion failed; undefined action", "action",
+						fmt.Sprintf("0x%X", int(action.Action)))
 				}
 			}
 		}

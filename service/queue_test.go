@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"slices"
 	"sync"
 	"testing"
 
@@ -1629,6 +1630,143 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			pFinal := statsFinal.LogicalQueues[0].Partitions[0]
 			assert.Equal(t, int32(numItems-numCompleted), pFinal.Total)
 		})
+	})
+
+	t.Run("ContextCancel", func(t *testing.T) {
+		// A client which cancels its context during Produce, Complete or Retry must be
+		// released even when the queue is stalled. The pause loop buffers hot requests
+		// without processing them, so only context cancellation can release the caller.
+		var queueName = random.String("queue-", 10)
+		d, c, ctx := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: setup()})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			LeaseTimeout:        LeaseTimeout,
+			ExpireTimeout:       ExpireTimeout,
+			QueueName:           queueName,
+			RequestedPartitions: 1,
+		})
+
+		// Produce and lease two items so Complete and Retry reference valid leased ids
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			QueueName:      queueName,
+			RequestTimeout: "1m",
+			Items: []*pb.QueueProduceItem{
+				{Reference: "complete-me", Encoding: "text", Kind: "test", Bytes: []byte("payload")},
+				{Reference: "retry-me", Encoding: "text", Kind: "test", Bytes: []byte("payload")},
+			},
+		}))
+
+		var lease pb.QueueLeaseResponse
+		require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+			ClientId:       random.String("client-", 10),
+			RequestTimeout: "5s",
+			QueueName:      queueName,
+			BatchSize:      2,
+		}, &lease))
+		require.Len(t, lease.Items, 2)
+
+		// Pause the queue so hot requests are buffered but never processed
+		require.NoError(t, d.Service().PauseQueue(ctx, queueName, true))
+
+		for _, test := range []struct {
+			Name string
+			Call func(ctx context.Context) error
+		}{
+			{
+				Name: "Produce",
+				Call: func(ctx context.Context) error {
+					return c.QueueProduce(ctx, &pb.QueueProduceRequest{
+						QueueName:      queueName,
+						RequestTimeout: "1m",
+						Items: []*pb.QueueProduceItem{
+							{Reference: "cancelled", Encoding: "text", Kind: "test", Bytes: []byte("payload")},
+						},
+					})
+				},
+			},
+			{
+				Name: "Complete",
+				Call: func(ctx context.Context) error {
+					return c.QueueComplete(ctx, &pb.QueueCompleteRequest{
+						QueueName:      queueName,
+						Partition:      lease.Partition,
+						RequestTimeout: "1m",
+						Ids:            []string{lease.Items[0].Id},
+					})
+				},
+			},
+			{
+				Name: "Retry",
+				Call: func(ctx context.Context) error {
+					return c.QueueRetry(ctx, &pb.QueueRetryRequest{
+						QueueName: queueName,
+						Partition: lease.Partition,
+						Items:     []*pb.QueueRetryItem{{Id: lease.Items[1].Id}},
+					})
+				},
+			},
+		} {
+			t.Run(test.Name, func(t *testing.T) {
+				cancelCtx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+
+				errCh := make(chan error, 1)
+				go func() {
+					errCh <- test.Call(cancelCtx)
+				}()
+
+				// Wait until the request is in flight inside the logical queue
+				require.Eventually(t, func() bool {
+					var stats pb.QueueStatsResponse
+					if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats); err != nil {
+						return false
+					}
+					return len(stats.LogicalQueues) == 1 && stats.LogicalQueues[0].InFlight == 1
+				}, 10*clock.Second, 100*clock.Millisecond)
+
+				cancel()
+
+				// The call must return promptly with the context error
+				select {
+				case err := <-errCh:
+					require.ErrorContains(t, err, "context canceled")
+				case <-clock.After(5 * clock.Second):
+					t.Fatal("call did not return after context cancellation")
+				}
+
+				// The handler goroutine must be released while the queue is still paused
+				require.Eventually(t, func() bool {
+					var stats pb.QueueStatsResponse
+					if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats); err != nil {
+						return false
+					}
+					return len(stats.LogicalQueues) == 1 && stats.LogicalQueues[0].InFlight == 0
+				}, 10*clock.Second, 100*clock.Millisecond)
+			})
+		}
+
+		// Un-pause so the buffered requests drain and shutdown can proceed
+		require.NoError(t, d.Service().PauseQueue(ctx, queueName, false))
+
+		// The request loop still applies the buffered requests even though the callers
+		// are gone (see docs/adr/0009-client-timeouts.md): the complete removes one item,
+		// the retry returns the other to the queue and the produce adds a new item.
+		// Waiting for the drain also quiesces the loop before shutdown.
+		require.Eventually(t, func() bool {
+			var list pb.StorageItemsListResponse
+			if err := c.StorageItemsList(ctx, queueName, 0, &list, nil); err != nil {
+				return false
+			}
+			refs := make([]string, 0, len(list.Items))
+			for _, item := range list.Items {
+				refs = append(refs, item.Reference)
+			}
+			return len(refs) == 2 && slices.Contains(refs, "retry-me") && slices.Contains(refs, "cancelled")
+		}, 10*clock.Second, 100*clock.Millisecond)
 	})
 
 	t.Run("Errors", func(t *testing.T) {

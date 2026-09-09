@@ -273,6 +273,65 @@ func testShutdown(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		}
 	})
 
+	t.Run("ShutdownDuringUnpauseDrain", func(t *testing.T) {
+		queueName := random.String("queue-", 10)
+		storage := setup()
+		defer tearDown()
+
+		d, c, ctx := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: storage})
+		defer d.cancel()
+
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			QueueName:           queueName,
+			LeaseTimeout:        "1m0s",
+			ExpireTimeout:       "24h0m0s",
+			RequestedPartitions: 1,
+		})
+
+		require.NoError(t, d.Service().PauseQueue(ctx, queueName, true))
+
+		// Buffer enough produce requests that the un-pause drain takes long enough
+		// for Shutdown to land while the request loop is still mid-request.
+		const numProducers = 10
+		const numItems = 1_000
+		produceErr := make(chan error, numProducers)
+		for i := 0; i < numProducers; i++ {
+			go func() {
+				produceErr <- c.QueueProduce(ctx, &pb.QueueProduceRequest{
+					QueueName:      queueName,
+					RequestTimeout: "20s",
+					Items:          produceRandomItems(numItems),
+				})
+			}()
+		}
+
+		require.Eventually(t, func() bool {
+			var resp pb.QueueStatsResponse
+			require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &resp))
+			return resp.LogicalQueues[0].ProduceWaiting == numProducers
+		}, 10*time.Second, 100*time.Millisecond)
+
+		// PauseQueue(false) returns as soon as the loop accepts the un-pause; the loop
+		// then applies the buffered requests to storage before it selects again.
+		require.NoError(t, d.Service().PauseQueue(ctx, queueName, false))
+
+		// Shutdown must be delivered to the loop after the drain instead of the loop
+		// exiting on the shutdown flag alone and leaving the partitions open.
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		require.NoError(t, d.d.Shutdown(shutdownCtx))
+
+		// The drain completed before shutdown was handled, so every producer succeeded
+		for i := 0; i < numProducers; i++ {
+			select {
+			case err := <-produceErr:
+				require.NoError(t, err)
+			case <-time.After(5 * time.Second):
+				t.Fatal("produce request did not return after shutdown")
+			}
+		}
+	})
+
 	t.Run("ShutdownDuringActiveRequests", func(t *testing.T) {
 		queueName := random.String("queue-", 10)
 		storage := setup()

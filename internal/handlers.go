@@ -138,7 +138,7 @@ func (l *Logical) handlePause(state *QueueState, r *Request) {
 				l.handleColdRequests(state, req)
 			}
 		case req := <-l.shutdownCh:
-			// Once handled, requestLoop() notices inShutdown and exits
+			// Once handled, requestLoop() notices state.Shutdown and exits
 			l.handleShutdown(state, req)
 			return
 		}
@@ -257,5 +257,6 @@ func (l *Logical) handleShutdown(state *QueueState, req *types.ShutdownRequest) 
 			req.Err = err
 		}
 	}
+	state.Shutdown = true
 	close(req.ReadyCh)
 }

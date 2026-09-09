@@ -649,6 +649,10 @@ type QueueState struct {
 	LifecycleTimer    clock.Timer
 	ScheduledTimer    clock.Timer
 	Partitions        []*Partition
+	// Shutdown is set once handleShutdown has run, from either the main or the pause loop.
+	// It is the only signal the request loop exits on; exiting on the inShutdown flag alone
+	// would skip handleShutdown and strand the sender on shutdownCh (ENG-160).
+	Shutdown bool
 }
 
 func (q *QueueState) GetPartition(num int) *Partition {
@@ -679,7 +683,7 @@ func (l *Logical) requestLoop() {
 		select {
 		case req := <-l.requestCh:
 			l.handleRequest(&state, req)
-			if l.inShutdown.Load() {
+			if state.Shutdown {
 				return
 			}
 

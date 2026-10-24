@@ -197,65 +197,61 @@ brew install querator
 go install github.com/kapetan-io/querator/cmd/querator@latest
 ```
 
-## Design
+## Why Querator is built the way it is
 
-Querator is a lease-based queue that spreads work across partitions behind logical queues. Features are marked
-**Shipped** when they run today and **Planned** when a decision record describes them but the code does not
-build them yet. Every pattern links to the code or the architecture decision record (ADR) behind it.
+Most queues make you pick between losing work and doing it twice. Querator is built around a simpler idea. When
+a consumer takes an item, it gets a **lease**, a short exclusive claim on that item. Finish the work and mark
+it complete, and the item is gone. Crash, and the lease runs out and someone else picks it up. You might process an
+item twice after a failure. You will not silently lose one.
 
-### How a queue works
+Features below that work today are marked **Shipped**. Features we have designed but not built are marked
+**Planned**.
 
-A queue holds items. A producer adds them, a consumer leases them, and the consumer completes or retries
-each one. The lease is what makes delivery almost exactly once, and four rules around it keep one bad item or one
-crashed consumer from stalling the queue.
+### Bad items can't block good ones
 
-* **Shipped: produce, lease, complete.** A leased item belongs to one consumer until its `lease_deadline`. Complete
-  removes it. If the consumer dies, the deadline passes and the item goes to someone else, so a failure causes a
-  duplicate rather than a lost item.
-* **Shipped: failed items go to the back.** An item that is retried or whose lease expires gets a new ID that
-  sorts after every queued item, so one poison item never sits at the head and blocks the queue
-  ([ADR 0004](docs/adr/0004-item-id-is-not-immutable.md), [ADR 0022](docs/adr/0022-managing-item-lifecycles.md)).
-* **Shipped: max attempts and dead-letter queues.** After a queue's attempt limit, an item moves to the queue's
-  dead-letter queue instead of cycling forever. A consumer can also send an item there directly with `dead: true`.
-* **Shipped: scheduled delivery.** `enqueue_at` on produce and `retry_at` on retry hold an item until the given time
-  ([ADR 0024](docs/adr/0024-scheduled-items.md)).
-* **Shipped: one goroutine per logical queue.** A single goroutine owns all reads and writes for a logical queue and
-  batches them into one storage call. Querator does the synchronization, so the database does not
-  ([ADR 0003](docs/adr/0003-rw-sync-point.md), [`internal/logical.go`](internal/logical.go)).
-* **Shipped: overload shedding.** When a logical queue's request backlog is full, new requests get a retry reply
-  (`queue is overloaded; try again later`) instead of queuing without limit.
+* **Shipped: failed items go to the back of the line.** If an item is retried or its lease runs out, it rejoins
+  the queue at the tail. One poison item can't sit at the front and hold up everything behind it.
+* **Shipped: max attempts and dead-letter queues.** Set a limit and an item that keeps failing moves to a
+  dead-letter queue, where you can look at it later. A consumer can also send an item there on purpose with
+  `dead: true`.
+* **Shipped: scheduled delivery.** Produce with `enqueue_at`, or retry with `retry_at`, and the item stays hidden
+  until that time.
 
-### How a queue scales
+### Fast without leaning on your database
 
-A queue is made of logical queues, and a logical queue is made of partitions.
+* **Shipped: one goroutine runs each logical queue.** All reads and writes for a logical queue go through a single
+  goroutine, which batches them into one database call. Querator does the coordination itself, so your database
+  isn't doing locking on every request.
+* **Shipped: overload shedding.** If requests pile up faster than the queue can take them, new ones get a
+  "try again later" reply instead of building an unbounded backlog.
+
+### Scales by adding partitions
+
+A queue is made of logical queues, and a logical queue is made of partitions. Each partition is one table,
+collection or bucket in your database.
 
 ![](docs/Querator%20Logical%20Queue%20Diagram.png)
 
-* **Shipped: partitions.** A queue has one or more partitions, and each partition is one table, collection or bucket
-  in the storage backend. One partition gives you strict FIFO. More partitions give you more throughput and give up
-  strict order ([ADR 0016](docs/adr/0016-queue-partitions.md)).
-* **Shipped: work spread by load.** Produced items go to the partitions holding the fewest items, and consumers
-  lease from every partition. Clients never pick a partition, so there is nothing for operators to
-  balance by hand ([ADR 0019](docs/adr/0019-partition-item-distribution.md)).
-* **Shipped: pluggable storage.** In-memory, BadgerDB, PostgreSQL and MongoDB all implement one interface that only
-  needs ordered primary keys ([ADR 0014](docs/adr/0014-ordered-storage.md), [Storage Backends](#storage-backends)).
-* **Shipped: embedded or service.** Run it as a library inside your process, or as a server over HTTP with protobuf
-  or JSON ([ADR 0002](docs/adr/0002-design-goals.md)).
-* **Shipped: namespaces and roles.** Queues live in namespaces, API keys are bound to roles, and a key only reaches
-  the namespaces its roles allow ([ADR 0025](docs/adr/0025-multi-tenancy-and-auth.md)).
-* **Planned: logical queues that follow the consumers.** Today each queue runs one logical queue over all its
-  partitions. The design grows and shrinks the number of logical queues with the number of consumers and
-  partitions, so work stays evenly spread even with more consumers than partitions
-  ([ADR 0016](docs/adr/0016-queue-partitions.md)).
-* **Planned: a cluster of Querator instances.** A leader assigns logical queues and partitions to instances and
-  rebalances them as instances come and go ([ADR 0017](docs/adr/0017-cluster-operation.md)). Until then, run one
-  instance per set of queues.
-* **Planned: partition maintenance.** Partition states such as draining and unavailable let operators move
-  data between stores without downtime ([ADR 0023](docs/adr/0023-partition-maintenance.md)). A partition can be
-  marked read-only today.
+* **Shipped: partitions.** One partition gives you strict first-in-first-out order. If you need more throughput
+  and can give up strict order, add partitions.
+* **Shipped: work spread by load.** Querator decides which partition gets each item, so clients never pick one.
+  Producers and consumers just talk to the queue.
+* **Shipped: your database, your choice.** In-memory, BadgerDB, PostgreSQL and MongoDB all work. Any database that
+  can keep rows in primary key order can be added. See [Storage Backends](#storage-backends).
+* **Shipped: library or service.** Embed it in your Go program, or run it as a server speaking HTTP with protobuf
+  or JSON.
+* **Shipped: namespaces and roles.** Teams or tenants get their own namespaces, and API keys carry roles that limit
+  what each key can reach.
 
-The full list of decisions is in [docs/adr](docs/adr). ADR titles and filenames sometimes carry different numbers,
-so the links above use filenames.
+### Where it's going
+
+* **Planned: logical queues that follow your consumers.** Today every queue runs one logical queue. We plan to grow
+  and shrink them with the number of consumers, so work stays evenly spread even with more consumers than
+  partitions.
+* **Planned: a cluster of Querator instances.** A leader will hand queues and partitions out across instances and
+  rebalance as instances come and go. Until then, one instance owns a queue.
+* **Planned: moving partitions without downtime.** Operators will be able to drain a partition and move its data
+  to another store while the queue keeps running. A partition can be marked read-only today.
 
 ### Embedded Querator
 Querator is a library that exposes all API functionality through `Service` method calls. Use the `daemon` package, or

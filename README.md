@@ -197,45 +197,68 @@ brew install querator
 go install github.com/kapetan-io/querator/cmd/querator@latest
 ```
 
-## Architecture Overview
-Querator enables API users to interact with queues created by the user, where each queue can consist of one or more
-partitions. Each partition is backed by a single table, collection, or bucket provided by the chosen backend storage.
+## Why Querator is built the way it is
 
-Partitions are a fundamental component of Querator, enabling the Querator to scale horizontally and handle high volumes
-of data efficiently. Partitions provide the following benefits.
+Most queues make you pick between losing work and doing it twice. Querator is built around a simpler idea. When
+a consumer takes an item, it gets a **lease**, a short exclusive claim on that item. Finish the work and mark
+it complete, and the item is gone. Crash, and the lease runs out and someone else picks it up. You might process an
+item twice after a failure. You will not silently lose one.
 
-##### Scalability
-Partitions allow a single queue to be distributed across multiple Querator instances in a cluster. This distribution
-prevents any single instance from being overwhelmed by data volume, enabling the system to manage larger data volumes
-than a single server could handle. By dividing a queue into multiple partitions, Querator can scale beyond the limits
-of a single machine, making it suitable for large-scale distributed systems.
+Features below that work today are marked **Shipped**. Features we have designed but not built are marked
+**Planned**.
 
-##### Parallel Distribution
-Partitions serve as units of parallelism, allowing multiple consumer instances to process different partitions
-concurrently. This significantly increases overall processing throughput. Unlike some legacy streaming and queuing
-platforms, clients are not assigned specific partitions. Instead, clients interact with Querator endpoints, which
-automatically distribute producers and consumers requests across partitions as needed. This automation eliminates the
-need for operators to manage the number of consumers per partition to achieve even work distribution.
+### Bad items can't block good ones
 
-For example, if there are 100 partitions and only one consumer, the single consumer will receive items from all 100
-partitions in a round-robin fashion as they become available. As the number of consumers increases, Querator
-automatically adjusts and rebalances the consumers to partitions to ensure even distribution, even if the number
-of consumers exceeds the total number of partitions. This is achieved through "Logical Queues," which dynamically
-grow and shrink based on the number of consumers and available partitions.
-See [ADR 0016 Queue Partitions](docs/adr/0016-queue-partitions.md) for details
+* **Shipped: failed items go to the back of the line.** If an item is retried or its lease runs out, it rejoins
+  the queue at the tail. One poison item can't sit at the front and hold up everything behind it.
+* **Shipped: max attempts and dead-letter queues.** Set a limit and an item that keeps failing moves to a
+  dead-letter queue, where you can look at it later. A consumer can also send an item there on purpose with
+  `dead: true`.
+* **Shipped: scheduled delivery.** Produce with `enqueue_at`, or retry with `retry_at`, and the item stays hidden
+  until that time.
 
-> NOTE: Logical queues distributed across multiple Querator instances are not yet supported.
+### Fast without leaning on your database
+
+* **Shipped: one goroutine runs each logical queue.** All reads and writes for a logical queue go through a single
+  goroutine, which batches them into one database call. Querator does the coordination itself, so your database
+  isn't doing locking on every request.
+* **Shipped: overload shedding.** If requests pile up faster than the queue can take them, new ones get a
+  "try again later" reply instead of building an unbounded backlog.
+
+### Scales by adding partitions
+
+A queue is made of logical queues, and a logical queue is made of partitions. Each partition is one table,
+collection or bucket in your database.
+
 ![](docs/Querator%20Logical%20Queue%20Diagram.png)
 
+* **Shipped: partitions.** One partition gives you strict first-in-first-out order. If you need more throughput
+  and can give up strict order, add partitions.
+* **Shipped: work spread by load.** Querator decides which partition gets each item, so clients never pick one.
+  Producers and consumers just talk to the queue.
+* **Shipped: your database, your choice.** In-memory, BadgerDB, PostgreSQL and MongoDB all work. Any database that
+  can keep rows in primary key order can be added. See [Storage Backends](#storage-backends).
+* **Shipped: library or service.** Embed it in your Go program, or run it as a server speaking HTTP with protobuf
+  or JSON.
+* **Shipped: namespaces and roles.** Teams or tenants get their own namespaces, and API keys carry roles that limit
+  what each key can reach.
+
+### Where it's going
+
+* **Planned: logical queues that follow your consumers.** Today every queue runs one logical queue. We plan to grow
+  and shrink them with the number of consumers, so work stays evenly spread even with more consumers than
+  partitions.
+* **Planned: a cluster of Querator instances.** A leader will hand queues and partitions out across instances and
+  rebalance as instances come and go. Until then, one instance owns a queue.
+* **Planned: moving partitions without downtime.** Operators will be able to drain a partition and move its data
+  to another store while the queue keeps running. A partition can be marked read-only today.
+
 ### Embedded Querator
-Querator is designed as a library which exposes all API functionality via `Service` method calls. Users can use
-the `daemon` package or invoke `querator.NewService()` directly to get a new instance of `Service` to interact with.
+Querator is a library that exposes all API functionality through `Service` method calls. Use the `daemon` package, or
+call `service.New()` to get a `Service` to work with directly.
 
 ### HTTP API
 See [Querator API Reference](https://querator.io/api) for API documentation
-
-### Design
-See our [Architecture Decision Docs](docs/adr) for details on our current implementation design.
 
 ### Contributing 
 - Join our [Discord](https://discord.gg/XwfBdN9wdg)

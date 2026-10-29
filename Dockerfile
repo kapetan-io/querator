@@ -1,5 +1,5 @@
 # Build stage - use bookworm for better cross-platform QEMU emulation support
-FROM golang:1.24-bookworm AS builder
+FROM golang:1.26.10-bookworm AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \

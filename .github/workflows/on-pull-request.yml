@@ -11,17 +11,12 @@ on:
       - main
 
 env:
-  GOLANGCI_LINT_VERSION: v2.5.0
+  GOLANGCI_LINT_VERSION: v2.15.0
 
 jobs:
   ci:
     name: CI
-    strategy:
-      matrix:
-        go-version:
-          - 1.23.x
-        os: [ ubuntu-latest ]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -29,7 +24,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: ${{ matrix.go-version }}
+          go-version-file: go.mod
           cache: true
 
       - name: Cache golangci-lint
@@ -42,7 +37,16 @@ jobs:
         run: |
           if [ ! -f ~/.local/bin/golangci-lint ]; then
             mkdir -p ~/.local/bin
-            curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b ~/.local/bin ${{ env.GOLANGCI_LINT_VERSION }}
+            version=${GOLANGCI_LINT_VERSION#v}
+            name=golangci-lint-${version}-linux-amd64
+            base=https://github.com/golangci/golangci-lint/releases/download/${GOLANGCI_LINT_VERSION}
+            cd "$(mktemp -d)"
+            curl -sSfLO "${base}/${name}.tar.gz"
+            curl -sSfLO "${base}/golangci-lint-${version}-checksums.txt"
+            # install.sh matches the .sbom.json line in the checksums file too and fails
+            grep "  ${name}.tar.gz\$" "golangci-lint-${version}-checksums.txt" | sha256sum -c -
+            tar -xzf "${name}.tar.gz"
+            install "${name}/golangci-lint" ~/.local/bin/golangci-lint
           fi
           echo ~/.local/bin >> $GITHUB_PATH
 

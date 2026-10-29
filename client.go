@@ -243,7 +243,7 @@ func WithConn(conn net.Conn) ClientConfig {
 		Endpoint: "http://memory",
 		Client: &http.Client{
 			Transport: &http.Transport{
-				Dial: func(network, addr string) (net.Conn, error) {
+				DialContext: func(_ context.Context, network, addr string) (net.Conn, error) {
 					return conn, nil
 				},
 				MaxConnsPerHost:     1,

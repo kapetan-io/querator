@@ -1,6 +1,6 @@
 module github.com/kapetan-io/querator
 
-go 1.25.0
+go 1.26.10
 
 require (
 	github.com/anishathalye/porcupine v1.1.0

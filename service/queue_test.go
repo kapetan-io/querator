@@ -2024,8 +2024,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				clientID := random.String("client-", 10)
 				resultCh := make(chan error)
 				var wg sync.WaitGroup
-				wg.Add(1)
-				go func() {
+				wg.Go(func() {
 					var res pb.QueueLeaseResponse
 					resultCh <- c.QueueLease(ctx, &pb.QueueLeaseRequest{
 						QueueName:      queueName,
@@ -2033,8 +2032,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 						RequestTimeout: "2s",
 						BatchSize:      1,
 					}, &res)
-					wg.Done()
-				}()
+				})
 
 				// Wait until there is one lease client blocking on the queue.
 				require.NoError(t, untilLeaseClientWaiting(t, c, queueName, 1))

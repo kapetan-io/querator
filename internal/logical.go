@@ -142,8 +142,7 @@ func SpawnLogicalQueue(conf LogicalConfig) (*Logical, error) {
 	l.log = conf.Log.With("code.namespace", "Logical", "queue", conf.Name, "instance-id", l.instanceID)
 
 	l.log.LogAttrs(context.Background(), LevelDebugAll, "logical queue started")
-	l.wg.Add(1)
-	go l.requestLoop()
+	l.wg.Go(l.requestLoop)
 	return l, nil
 }
 
@@ -665,7 +664,6 @@ func (q *QueueState) GetPartition(num int) *Partition {
 }
 
 func (l *Logical) requestLoop() {
-	defer l.wg.Done()
 	var state QueueState
 
 	l.prepareQueueState(&state)
@@ -797,7 +795,6 @@ func (l *Logical) isHotRequest(req *Request) bool {
 	}
 }
 
-
 func (l *Logical) consumeHotCh(state *QueueState, req *Request) {
 	// Add the first request from the channel to the client request state
 	l.reqToState(req, state)
@@ -848,7 +845,6 @@ func (l *Logical) reqToState(req *Request, state *QueueState) {
 		panic(fmt.Sprintf("undefined request method '%d'", req.Method))
 	}
 }
-
 
 // -------------------------------------------------
 // Handlers for the main and pause loops

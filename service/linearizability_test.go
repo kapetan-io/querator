@@ -110,9 +110,7 @@ func testLinearizability(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		for ci := range numConsumers {
 			clientID := ci + 1
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				leaseClientID := random.String("lin-client-", 10)
 				for opCount.Load() < int64(numItems) {
 					inp := linInput{op: opLease}
@@ -197,7 +195,7 @@ func testLinearizability(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					mu.Unlock()
 					opCount.Add(1)
 				}
-			}()
+			})
 		}
 
 		wg.Wait()
@@ -274,9 +272,7 @@ func testLinearizability(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		for ci := range numConsumers {
 			clientID := ci + 1
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				rng := rand.New(rand.NewSource(int64(ci)))
 				leaseClientID := random.String("lin-client-", 10)
 
@@ -385,7 +381,7 @@ func testLinearizability(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					mu.Unlock()
 					completed.Add(1)
 				}
-			}()
+			})
 		}
 
 		wg.Wait()
@@ -468,9 +464,7 @@ func testLinearizability(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		for si := range numStallers {
 			clientID := si + 1
 			stallerWg.Add(1)
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				leaseClientID := random.String("lin-stall-", 10)
 				call := time.Now().UnixNano()
 
@@ -519,7 +513,7 @@ func testLinearizability(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					Return:   time.Now().UnixNano(),
 				})
 				mu.Unlock()
-			}()
+			})
 		}
 
 		// Wait for all stallers to acquire their items before starting consumers.
@@ -528,9 +522,7 @@ func testLinearizability(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		// Normal consumers: lease and complete.
 		for ci := range numConsumers {
 			clientID := numStallers + ci + 1
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				leaseClientID := random.String("lin-client-", 10)
 
 				for completed.Load() < int64(numItems) {
@@ -605,7 +597,7 @@ func testLinearizability(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					mu.Unlock()
 					completed.Add(1)
 				}
-			}()
+			})
 		}
 
 		wg.Wait()

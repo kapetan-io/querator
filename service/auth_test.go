@@ -925,14 +925,12 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 
 		// Authenticate all keys concurrently, triggering concurrent UpdateLastUsed goroutines
 		var wg sync.WaitGroup
-		wg.Add(numUsers)
 		for i := 0; i < numUsers; i++ {
-			go func(key string) {
-				defer wg.Done()
-				c := newClientWithAPIKey(t, d, key)
+			wg.Go(func() {
+				c := newClientWithAPIKey(t, d, keys[i])
 				var listRes pb.QueuesListResponse
 				_ = c.QueuesList(ctx, &listRes, nil)
-			}(keys[i])
+			})
 		}
 		wg.Wait()
 

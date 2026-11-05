@@ -3,10 +3,6 @@ package daemon_test
 import (
 	"context"
 	"fmt"
-	"github.com/kapetan-io/querator/daemon"
-	pb "github.com/kapetan-io/querator/proto"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"io"
 	"net"
 	"net/http"
@@ -14,6 +10,11 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/kapetan-io/querator/daemon"
+	pb "github.com/kapetan-io/querator/proto"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestInMemoryListener(t *testing.T) {
@@ -29,9 +30,7 @@ func TestInMemoryListener(t *testing.T) {
 	clientCount := 3
 	var wg sync.WaitGroup
 	for i := 0; i < clientCount; i++ {
-		wg.Add(1)
-		go func(id int) {
-			defer wg.Done()
+		wg.Go(func() {
 			// Each client gets its own net.Pipe
 			serverConn, clientConn := net.Pipe()
 			_ = listener.ServeConn(serverConn)
@@ -50,19 +49,19 @@ func TestInMemoryListener(t *testing.T) {
 				Timeout: 2 * time.Second,
 			}
 
-			url := fmt.Sprintf("http://inmemory/client%d", id)
+			url := fmt.Sprintf("http://inmemory/client%d", i)
 			resp, err := client.Get(url)
 			if err != nil {
-				t.Errorf("client %d error: %v", id, err)
+				t.Errorf("client %d error: %v", i, err)
 				return
 			}
 			defer func() { _ = resp.Body.Close() }()
 			body, _ := io.ReadAll(resp.Body)
-			expected := fmt.Sprintf("Hello, client%d!", id)
+			expected := fmt.Sprintf("Hello, client%d!", i)
 			if !strings.Contains(string(body), expected) {
-				t.Errorf("client %d got unexpected body: %q", id, body)
+				t.Errorf("client %d got unexpected body: %q", i, body)
 			}
-		}(i)
+		})
 	}
 	wg.Wait()
 	_ = listener.Close()

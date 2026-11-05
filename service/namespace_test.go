@@ -518,12 +518,10 @@ func testNamespaces(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		const goroutines = 10
 		var wg sync.WaitGroup
-		wg.Add(goroutines)
 
 		for i := 0; i < goroutines; i++ {
-			go func(idx int) {
-				defer wg.Done()
-				ns := fmt.Sprintf("concurrent-ns-%d", idx)
+			wg.Go(func() {
+				ns := fmt.Sprintf("concurrent-ns-%d", i)
 
 				err := c.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: ns})
 				require.NoError(t, err)
@@ -534,7 +532,7 @@ func testNamespaces(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 				err = c.NamespacesDelete(ctx, &pb.NamespacesDeleteRequest{Name: ns})
 				require.NoError(t, err)
-			}(i)
+			})
 		}
 		wg.Wait()
 	})
@@ -596,10 +594,10 @@ func testNamespaceAPIKeyTag(t *testing.T, setup NewStorageFunc, tearDown func())
 			}()
 
 			for _, test := range []struct {
-				Name   string
-				Tag    string
-				Msg    string
-				Code   int
+				Name string
+				Tag  string
+				Msg  string
+				Code int
 			}{
 				{
 					Name: "UppercaseLetters",

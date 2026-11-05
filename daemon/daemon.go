@@ -20,6 +20,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"net"
+	"net/http"
+	"sync"
+
 	"github.com/duh-rpc/duh-go"
 	"github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/internal"
@@ -29,10 +34,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/net/netutil"
-	"log/slog"
-	"net"
-	"net/http"
-	"sync"
 )
 
 type Daemon struct {
@@ -183,16 +184,15 @@ func (d *Daemon) spawnHTTPS(ctx context.Context, mux http.Handler) error {
 	d.Listener = netutil.LimitListener(l, d.conf.Service.MaxConcurrentRequests)
 	srv.Addr = d.Listener.Addr().String()
 
-	d.wg.Add(1)
-	go func() {
-		defer d.wg.Done()
+	d.wg.Go(func() {
 		d.conf.Service.Log.Info("HTTPS Listening ...", "address", d.Listener.Addr().String())
 		if err := srv.ServeTLS(d.Listener, "", ""); err != nil {
 			if !errors.Is(err, http.ErrServerClosed) {
 				d.conf.Service.Log.Error("while starting TLS HTTP server", "error", err)
 			}
 		}
-	}()
+	})
+
 	if err := duh.WaitForConnect(ctx, d.Listener.Addr().String(), d.conf.ClientTLS()); err != nil {
 		return err
 	}
@@ -217,15 +217,13 @@ func (d *Daemon) spawnHTTP(ctx context.Context, h http.Handler) error {
 	d.Listener = netutil.LimitListener(l, d.conf.Service.MaxConcurrentRequests)
 	srv.Addr = d.Listener.Addr().String()
 
-	d.wg.Add(1)
-	go func() {
-		defer d.wg.Done()
+	d.wg.Go(func() {
 		if err := srv.Serve(d.Listener); err != nil {
 			if !errors.Is(err, http.ErrServerClosed) {
 				d.conf.Service.Log.Error("while starting HTTP server", "error", err)
 			}
 		}
-	}()
+	})
 
 	if err := duh.WaitForConnect(ctx, d.Listener.Addr().String(), nil); err != nil {
 		return err
@@ -245,15 +243,13 @@ func (d *Daemon) spawnInMemory(_ context.Context, h http.Handler) error {
 	d.Listener = NewInMemoryListener()
 	srv.Addr = d.Listener.Addr().String()
 
-	d.wg.Add(1)
-	go func() {
-		defer d.wg.Done()
+	d.wg.Go(func() {
 		if err := srv.Serve(d.Listener); err != nil {
 			if !errors.Is(err, http.ErrServerClosed) {
 				d.conf.Service.Log.Error("while starting InMemory server", "error", err)
 			}
 		}
-	}()
+	})
 
 	d.conf.Service.Log.Info("InMemory Server Started", "address", d.Listener.Addr().String())
 	d.servers = append(d.servers, srv)

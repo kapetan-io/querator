@@ -235,7 +235,7 @@ func (l *Logical) Lease(ctx context.Context, req *types.LeaseRequest) error {
 
 	if req.NumRequested > l.conf.MaxLeaseBatchSize {
 		return reply.NewInvalidOption("invalid batch size; max_lease_batch_size is %d, "+
-			"but %d was requested", l.conf.MaxProduceBatchSize, req.NumRequested)
+			"but %d was requested", l.conf.MaxLeaseBatchSize, req.NumRequested)
 	}
 
 	if req.RequestTimeout == clock.Duration(0) {

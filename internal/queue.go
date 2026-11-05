@@ -73,17 +73,16 @@ func (q *Queue) GetAll() []*Logical {
 }
 
 func (q *Queue) GetNext() (Remote, *Logical) {
-	defer q.mutex.Unlock()
 	q.mutex.Lock()
+	defer q.mutex.Unlock()
 
 	if len(q.ordered) == 0 {
 		return nil, nil
 	}
+
 	l := q.ordered[q.idx]
-	q.idx++
-	if q.idx >= len(q.ordered) {
-		q.idx = 0
-	}
+	q.idx = (q.idx + 1) % len(q.ordered)
+
 	return nil, l
 }
 

@@ -104,31 +104,19 @@ type LeaseBatchIterator struct {
 }
 
 func (it *LeaseBatchIterator) Next(item *Item) bool {
-	count := len(it.b.Requests)
+	reqCount := len(it.b.Requests)
 	// Find the next request in the batch which has not met its NumRequested limit
-	for count != 0 {
-		// If we encounter a nil, then we skip it
-		if it.b.Requests[it.pos] == nil {
-			it.pos++
-			if it.pos == len(it.b.Requests) {
-				it.pos = 0
-			}
-			count--
+	for count := reqCount; count > 0; count-- {
+		var request = it.b.Requests[it.pos]
+
+		// If we encounter a nil or a request that has met its NumRequested limit, then we skip it
+		if request == nil || len(request.Items) >= request.NumRequested {
+			it.pos = (it.pos + 1) % reqCount
 			continue
 		}
-		if len(it.b.Requests[it.pos].Items) == it.b.Requests[it.pos].NumRequested {
-			it.pos++
-			if it.pos == len(it.b.Requests) {
-				it.pos = 0
-			}
-			count--
-			continue
-		}
-		it.b.Requests[it.pos].Items = append(it.b.Requests[it.pos].Items, item)
-		it.pos++
-		if it.pos == len(it.b.Requests) {
-			it.pos = 0
-		}
+
+		request.Items = append(request.Items, item)
+		it.pos = (it.pos + 1) % reqCount
 		return true
 	}
 	return false

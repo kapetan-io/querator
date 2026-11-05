@@ -630,7 +630,8 @@ func pauseAndLease(t *testing.T, ctx context.Context, s *svc.Service, c *querato
 						return
 					}
 				}
-				panic(err)
+				// WaitGroup.Go must not panic, or Done is skipped and wg.Wait hangs
+				t.Errorf("lease request %d: %v", i, err)
 			}
 		})
 	}

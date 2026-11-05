@@ -20,8 +20,8 @@ import (
 // counting calls to UpdateLastUsed. Used to demonstrate the cache-miss fan-out race.
 type slowAPIKeys struct {
 	store.APIKeys
-	getByHashDelay  time.Duration
-	updateLastUsed  atomic.Int64
+	getByHashDelay time.Duration
+	updateLastUsed atomic.Int64
 }
 
 func (s *slowAPIKeys) GetByHash(ctx context.Context, hash string, key *types.APIKey) error {
@@ -83,14 +83,12 @@ func TestAuthCacheCloseRace(t *testing.T) {
 		const numGoroutines = 20
 		var ready, done sync.WaitGroup
 		ready.Add(numGoroutines)
-		done.Add(numGoroutines)
 		for range numGoroutines {
-			go func() {
+			done.Go(func() {
 				ready.Done()
 				ready.Wait() // wait for all goroutines to be ready before proceeding
-				defer done.Done()
 				_, _ = cache.Authenticate(context.Background(), generated.Key)
-			}()
+			})
 		}
 
 		// Wait for all Authenticate calls to complete before calling Close.
@@ -165,14 +163,12 @@ func TestAuthCacheMissUpdateLastUsedFanOut(t *testing.T) {
 
 	var ready, done sync.WaitGroup
 	ready.Add(numGoroutines)
-	done.Add(numGoroutines)
 	for range numGoroutines {
-		go func() {
+		done.Go(func() {
 			ready.Done()
 			ready.Wait()
-			defer done.Done()
 			_, _ = cache.Authenticate(context.Background(), generated.Key)
-		}()
+		})
 	}
 	done.Wait()
 	cache.Close()

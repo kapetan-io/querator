@@ -620,12 +620,10 @@ func pauseAndLease(t *testing.T, ctx context.Context, s *svc.Service, c *querato
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(len(requests))
 
 	for i := range requests {
-		go func(idx int) {
-			defer wg.Done()
-			if err := c.QueueLease(ctx, requests[idx], responses[idx]); err != nil {
+		wg.Go(func() {
+			if err := c.QueueLease(ctx, requests[i], responses[i]); err != nil {
 				var d duh.Error
 				if errors.As(err, &d) {
 					if d.Code() == duh.CodeRetryRequest {
@@ -634,7 +632,7 @@ func pauseAndLease(t *testing.T, ctx context.Context, s *svc.Service, c *querato
 				}
 				panic(err)
 			}
-		}(i)
+		})
 	}
 
 	_ctx, cancel := context.WithTimeout(context.Background(), clock.Second*10)

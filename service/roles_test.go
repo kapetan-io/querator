@@ -882,17 +882,15 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 				// One succeeds; the other may receive ErrRoleBindingNotExist due to the
 				// non-atomic fetch→list→delete in RoleBindingsDelete.
 				var wg sync.WaitGroup
-				wg.Add(2)
 				errs := make([]error, 2)
 				for i := range 2 {
-					go func(idx int) {
-						defer wg.Done()
-						errs[idx] = c.RoleBindingsDelete(ctx, &pb.RoleBindingDeleteRequest{
+					wg.Go(func() {
+						errs[i] = c.RoleBindingsDelete(ctx, &pb.RoleBindingDeleteRequest{
 							Namespace: ns,
 							RoleName:  roleName,
 							UserId:    userRes.Id,
 						})
-					}(i)
+					})
 				}
 				wg.Wait()
 

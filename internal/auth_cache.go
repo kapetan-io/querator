@@ -77,9 +77,8 @@ func NewAuthCache(conf AuthCacheConfig) *AuthCache {
 		ttl:             conf.TTL,
 	}
 
-	c.wg.Add(2)
-	go c.cleanupLoop()
-	go c.lastUsedLoop()
+	c.wg.Go(c.cleanupLoop)
+	c.wg.Go(c.lastUsedLoop)
 
 	return c
 }
@@ -203,7 +202,6 @@ func (c *AuthCache) Close() {
 }
 
 func (c *AuthCache) cleanupLoop() {
-	defer c.wg.Done()
 	ticker := time.NewTicker(c.cleanupInterval)
 	defer ticker.Stop()
 
@@ -235,7 +233,6 @@ func (c *AuthCache) cleanup() {
 }
 
 func (c *AuthCache) lastUsedLoop() {
-	defer c.wg.Done()
 	for {
 		select {
 		case update := <-c.lastUsedCh:

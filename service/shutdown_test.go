@@ -359,15 +359,13 @@ func testShutdown(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		// Launch concurrent requests
 		for i := 0; i < numRequests; i++ {
-			wg.Add(1)
-			go func(idx int) {
-				defer wg.Done()
-				results[idx] = c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			wg.Go(func() {
+				results[i] = c.QueueProduce(ctx, &pb.QueueProduceRequest{
 					QueueName:      queueName,
 					RequestTimeout: "5s",
 					Items:          produceRandomItems(1),
 				})
-			}(i)
+			})
 		}
 
 		// Let some requests start

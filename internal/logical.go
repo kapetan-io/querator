@@ -881,19 +881,15 @@ func (l *Logical) nextTimeout(r *types.LeaseBatch) clock.Duration {
 			continue
 		}
 
-		// If request has already expired
-		if l.conf.Clock.Now().UTC().After(req.RequestDeadline) {
-			// Inform our waiting client
-			req.Err = ErrRequestTimeout
-			close(req.ReadyCh)
-			r.MarkNil(i)
-			continue
-		}
+		reqExpired := l.conf.Clock.Now().UTC().After(req.RequestDeadline)
+		clientGone := req.Context.Err() != nil
 
-		// If client has gone away
-		if req.Context.Err() != nil {
-			r.TotalRequested -= req.NumRequested
-			req.Err = req.Context.Err()
+		if reqExpired || clientGone {
+			if reqExpired {
+				req.Err = ErrRequestTimeout
+			} else {
+				req.Err = req.Context.Err()
+			}
 			close(req.ReadyCh)
 			r.MarkNil(i)
 			continue

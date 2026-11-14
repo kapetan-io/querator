@@ -23,31 +23,22 @@ operations. This is considered the "normal" operating state for the partition.
 ### Error
 If a partition is marked as "Error" this means there was some issue with the underlying storage
 such that the partition is unavailable for interaction. When in this state `LifeCycle` will continually
-attempt to recover the partition into an "Available" state.
-
-TODO: Details
-
-### Unavailable
-If a partition is marked as "Unavailable" the partition is unavailable for any action. When in this
-state no assumptions about the underlying status of the storage system is made, and no interaction
-with the partition is possible.
-
-TODO: Details
+attempt to recover the partition into an "Available" state. Today this is the partition's failure count
+(`PartitionState.Failures != 0`); no separate state value exists.
 
 ### Draining
 If a partition is marked as "Draining" the partition refuses production of new items into the partition,
 but consumption and completion of items in the partition is allowed until all items in the partition
-are completely drained.
+are completely drained. Once drained, the partition can be decommissioned, migrated to another storage
+system, or have maintenance performed on its underlying storage without interrupting the queue.
+Draining is the mechanism ADR-0016 calls a "read-only" partition.
 
-TODO: Details
+TODO: Details. Open question: whether scheduled items and items waiting on retry count as remaining.
 
-### Paused
-Pauses both the production and consumption of items to and from a partition. Pausing allows existing
-leases to be completed, but new leases are not allowed, and new items cannot be produced to
-the partition. This allows a partition to "rest" while maintenance is preformed, migration is completed
-or the partition is reloaded.
-
-TODO: Details
+### Pausing is not a partition state
+Querator does not pause partitions or queues. [13. Pausing a queue](0013-pausing-a-queue.md) was rejected in favor
+of draining, and a partition "Unavailable" state was considered and dropped, because nothing needs it. Reload, the
+only operation that would have used it, runs on the owning `Logical` request loop and does not need it.
 
 ## Partition Operations
 
@@ -72,22 +63,13 @@ process is the same.
 
 > NOTE: A Partition cannot be re-assigned or rebalanced to a different `Logical` during the reload process.
 
-The reload process occurs sequentially by iterating through the partitions requested, reloading each until
-the reload process for all requested partitions is complete. Any subsequent reload requests to the `Logical`
-will fail until the current reload process is completed. The `Logical` queue is responsible for managing 
-the reload process. To preform a reload the `Logical` preforms the following on each partition to be 
-reloaded sequentially.
+The reload runs on the `Logical` request loop, which is the only writer of its partitions, so no other request
+touches a partition while it reloads. For each partition requested the `Logical` reads the status of the entire
+partition from the underlying storage and updates the in-memory counts of leased and un-leased items. A partition
+whose storage cannot be read is marked "Error".
 
-1. Mark the partition as "Unavailable" if it is not already marked as such.
-2. Notify `LifeCycle` to read the status of the entire partition from the underlying storage
-3. LifeCycle will call `Logical.PartitionStateChange()` updating the current state of the partition and marking the
-partition as "Available".
-
-> NOTE: Marking the partition as "Unavailable" means any outstanding leases given to clients will 
-> not be allowed to mark the item as completed until the reload process is complete. As such it is 
-> recommended to "Pause" the partitions you wish to reload first, allowing any outstanding item 
-> leases to be completed before reload is run. This is not required however, and any outstanding 
-> leases can be marked as completed after reload is completed.
+> NOTE: Outstanding leases are not invalidated by a reload. Complete and retry requests for them wait on the 
+> `Logical` request loop and are handled once the reload finishes.
 
 ## Consequences
 

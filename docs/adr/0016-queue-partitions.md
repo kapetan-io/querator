@@ -4,7 +4,7 @@ Date: 2024-08-15
 
 ## Status
 
-Proposed
+Accepted
 
 Supercedes [13. pausing a queue](0013-pausing-a-queue.md)
 

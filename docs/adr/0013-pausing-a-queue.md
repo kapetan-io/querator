@@ -4,7 +4,12 @@ Date: 2024-07-16
 
 ## Status
 
-Superceded by [16. Queue Partitions](0016-queue-partitions.md)
+Rejected. Do not implement `/queue.pause`.
+
+Superceded by [16. Queue Partitions](0016-queue-partitions.md), which replaces pausing with read-only
+(draining) partitions. The implementation proved more complex than assumed, and maintenance windows can outlast
+the time clients are willing to wait. `Service.PauseQueue` exists only to simulate contention in tests and is not
+part of the API.
 
 ## Context
 

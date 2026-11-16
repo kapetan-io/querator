@@ -146,6 +146,17 @@ func Find(needle string, haystack []PartitionStorage) PartitionStorage {
 	return PartitionStorage{}
 }
 
+// CanPlacePartitions is true when at least one backend has an affinity above 0, the
+// minimum needed to assign a new queue's partitions anywhere.
+func CanPlacePartitions(backends []PartitionStorage) bool {
+	for _, b := range backends {
+		if b.Affinity > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // Config is the configuration accepted by QueueManager to manage storage of queues, scheduled items,
 // and partitions.
 type Config struct {

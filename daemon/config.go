@@ -395,6 +395,10 @@ func setupQueueStorage(ctx context.Context, file File, conf *Config) error {
 	}
 
 	for _, queue := range file.Queues {
+		if len(queue.Partitions) == 0 && !store.CanPlacePartitions(conf.Service.StorageConfig.PartitionStorage) {
+			return fmt.Errorf("invalid queue '%s'; no storage backend can take partitions, "+
+				"at least one partition storage needs an affinity above 0", queue.Name)
+		}
 		for _, p := range queue.Partitions {
 			found := store.Find(p.StorageName, conf.Service.StorageConfig.PartitionStorage)
 			if found.Name == "" {

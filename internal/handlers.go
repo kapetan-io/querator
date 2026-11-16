@@ -3,9 +3,10 @@ package internal
 import (
 	"context"
 	"fmt"
+	"log/slog"
+
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
-	"log/slog"
 )
 
 // handleColdRequests routes cold requests to specific handlers
@@ -173,10 +174,12 @@ func (l *Logical) handleReload(state *QueueState, req *Request) {
 				"partition", partition.Info.PartitionNum,
 				"error", err)
 			partition.State.Failures = 1
+			partition.State.Status = types.PartitionError
 		} else {
 			partition.State.UnLeased = stats.Total - stats.NumLeased
 			partition.State.NumLeased = stats.NumLeased
 			partition.State.Failures = 0
+			partition.State.Status = types.PartitionAvailable
 		}
 	}
 

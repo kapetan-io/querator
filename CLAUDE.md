@@ -20,7 +20,7 @@ This codebase uses a **functional testing approach** where tests exercise comple
 
 #### Adding New Tests
 1. **Location**: Add tests inside the `testXXXX()` function in test files
-2. **Backend Coverage**: Tests automatically run against InMemory and BadgerDB - no extra work needed
+2. **Backend Coverage**: Tests automatically run against every storage backend - no extra work needed
 3. **Organization**:
     - Happy path tests: Add as top-level `t.Run("TestName", ...)`
     - Error tests: Add under `t.Run("Errors", func() { t.Run("QueueMethodName", ...) })`
@@ -48,7 +48,7 @@ This codebase uses a **functional testing approach** where tests exercise comple
   })
 ```
 
-This structure ensures **every test automatically validates both storage backends** and maintains **complete functional
+This structure ensures **every test automatically validates every storage backend** and maintains **complete functional
 coverage** through public API testing only.
 
 ### Running Individual Tests
@@ -57,7 +57,7 @@ Use nested test paths from `go test ./... -v` output:
 # Run specific test
 go test ./... -run "^TestQueue/<Backend>/Errors/QueueLease/DuplicateClientId$"
 
-Where <Backend> is either `InMemory` or `BadgerDB`
+Where <Backend> is the name of a storage backend
 
 # Run test suite for specific storage backend
 go test ./... -v -run "^TestQueue/InMemory.*$"
@@ -70,9 +70,8 @@ the tests are all nested under a single test function.
 
 ### Core Components
 
-**Service Layer (`service.go`)**
+**Service Layer**
 - Main entry point implementing the Querator API
-- Manages configuration via `ServiceConfig`
 - Key limits: `MaxLeaseBatchSize`, `MaxProduceBatchSize`
 
 **QueuesManager (`internal/queues_manager.go`)**
@@ -82,8 +81,6 @@ the tests are all nested under a single test function.
 
 **Storage Backends (`internal/store/`)**
 - Pluggable storage system with `Queues` and `Storage` interfaces
-- Current implementations: InMemory, BadgerDB
-- Planned: PostgreSQL, MySQL, SurrealDB, FoundationDB
 
 **Queue Structure**
 - Each queue can have multiple partitions for horizontal scaling
@@ -100,13 +97,11 @@ the tests are all nested under a single test function.
 **Time Conventions**
 - Deadlines: `time.Time` (specific point in time)
 - Timeouts: `time.Duration` (duration of time)
-- All timestamps in UTC using `time.Now().UTC()`
 - Examples: `LeaseDeadline`, `LeaseTimeout`
 
 ### Lease-Based Processing
 - Items are leased to consumers with deadlines
 - Consumers must complete or retry items before lease expires
-- Enables exactly-once processing semantics
 - Supports scheduled item delivery and retry mechanisms
 
 ## Code Style Guidelines
@@ -120,13 +115,13 @@ the tests are all nested under a single test function.
 - All tests MUST be in the `XXXX_test` package and NOT in the same package which is under test
 
 ### Naming Conventions
-- Follow `doc/NAMING.md` guidelines
+- Follow `docs/NAMING.md` guidelines
 - Use `const` for unchanging values
 - Prefer short, single-word variable names
 - Options vs Args vs Config distinction matters
 
 ### Required Practices
-- Always use `time.Now().UTC()` instead of `time.Now()`
+- Always use `clock.Now().UTC()` instead of `time.Now()`
 - Use inline structs instead of single-use variables
 - Avoid abbreviations in variable names
 - Single letter variables only for small scopes (loop indices)

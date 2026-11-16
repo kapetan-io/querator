@@ -94,7 +94,7 @@ partition-storage:
 
 ### Multiple Partition Stores
 
-You can configure multiple partition stores with different affinities to distribute queues across storage backends:
+You can configure multiple partition stores with different affinities to spread each queue's partitions across storage backends:
 
 ```yaml
 partition-storage:
@@ -110,6 +110,13 @@ partition-storage:
 ```
 
 This configuration would place 30% of partitions on BadgerDB and 70% on PostgreSQL.
+
+Affinity splits each queue's partitions, not the set of queues. Querator rounds each backend's
+share down and gives the leftover partitions one each to the backends with the highest affinity,
+ties going to the backend listed first. A queue with 10 partitions gets 3 on BadgerDB and 7 on
+PostgreSQL, while a queue with 1 partition always lands on PostgreSQL. A backend with an affinity
+of 0 receives no new partitions. `/queues.info` lists each partition with the `storage_name` of
+the backend which holds it.
 
 ## Storage Directory Structure
 

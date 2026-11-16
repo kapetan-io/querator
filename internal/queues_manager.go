@@ -1,9 +1,11 @@
 package internal
 
 import (
+	"cmp"
 	"context"
 	"log/slog"
 	"math"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -96,7 +98,6 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Que
 	// place the partitions depending on the storage backend configurations. As such
 	// any details included by the caller will be ignored.
 
-	// TODO: Test partitions are spread across multiple backends
 	// Spread the partitions across the storage backends according to affinity
 	var partitionIdx = 0
 	for idx, count := range qm.assignPartitions(info.RequestedPartitions) {
@@ -500,15 +501,41 @@ func (qm *QueuesManager) Shutdown(ctx context.Context) error {
 	}
 }
 
-// assignPartitions assigns partition counts to a backend based on affinity
+// assignPartitions assigns partition counts to each backend in proportion to its affinity.
+// The partitions left over after rounding each share down go one at a time to the backends
+// with the highest affinity, so the counts always add up to totalPartitions. A backend
+// with an affinity of 0 or less never receives a partition.
+//
+// Known problem: when no backend has a positive affinity this assigns no partitions, and the
+// first produce to the resulting queue panics. Whether to refuse that config is ENG-744.
 func (qm *QueuesManager) assignPartitions(totalPartitions int) []int {
+	backends := qm.conf.StorageConfig.PartitionStorage
+	assignments := make([]int, len(backends))
 	var totalAffinity float64
-	for _, backend := range qm.conf.StorageConfig.PartitionStorage {
-		totalAffinity += backend.Affinity
+	var preferred []int
+	for i, b := range backends {
+		if b.Affinity > 0 {
+			totalAffinity += b.Affinity
+			preferred = append(preferred, i)
+		}
 	}
-	assignments := make([]int, len(qm.conf.StorageConfig.PartitionStorage))
-	for i, b := range qm.conf.StorageConfig.PartitionStorage {
-		assignments[i] = int(math.Floor((b.Affinity / totalAffinity) * float64(totalPartitions)))
+	if len(preferred) == 0 {
+		return assignments
+	}
+
+	var assigned int
+	for _, i := range preferred {
+		assignments[i] = int(math.Floor((backends[i].Affinity / totalAffinity) * float64(totalPartitions)))
+		assigned += assignments[i]
+	}
+
+	// Ties keep the configured order
+	slices.SortStableFunc(preferred, func(a, b int) int {
+		return cmp.Compare(backends[b].Affinity, backends[a].Affinity)
+	})
+	for i := 0; assigned < totalPartitions; i++ {
+		assignments[preferred[i%len(preferred)]]++
+		assigned++
 	}
 	return assignments
 }

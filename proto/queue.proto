@@ -231,6 +231,8 @@ message QueueInfo {
   // actual partitions if the requested partition count was recently changed via rebalance request.
   int32 requestedPartitions = 9 [json_name = "requested_partitions"];
 
+  // The partitions of this queue and the storage backend which holds each one.
+  // Set by Querator; ignored on create and update.
   repeated PartitionInfo partitions = 10;
 
   // The namespace this queue belongs to. Used for multi-tenant isolation.
@@ -241,6 +243,9 @@ message QueueInfo {
 message PartitionInfo {
   // TODO: Information on the partitions availability, migration or rebalance status.
   int32 partition = 1;
+  // The name of the storage backend which holds this partition, as given by the `name` of an
+  // entry under `partition-storage` in the Querator config. Set by Querator; ignored on create and update.
+  string storageName = 2 [json_name = "storage_name"];
 }
 
 message QueueClearRequest {

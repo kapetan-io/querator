@@ -1315,6 +1315,14 @@ components:
             The number of partitions this queue has requested. This might be
             different than the number of currently active partitions as the
             system grows or contracts the number of partitions.
+        partitions:
+          type: array
+          description: >-
+            The partitions of this queue and the storage backend which holds
+            each one. Set by Querator; ignored by `/queues.create` and
+            `/queues.update`.
+          items:
+            $ref: '#/components/schemas/PartitionInfo'
       required:
         - queue_name
         - requested_partitions
@@ -1325,6 +1333,26 @@ components:
         - reference
         - lease_timeout
         - expire_timeout
+    PartitionInfo:
+      type: object
+      properties:
+        partition:
+          type: integer
+          description: The partition number
+        storage_name:
+          type: string
+          description: >-
+            The name of the storage backend which holds this partition, as
+            given by the `name` of an entry under `partition-storage` in the
+            Querator config. `/queues.create` places a queue's partitions on
+            the storage backends in proportion to each backend's affinity, and
+            never on a backend with an affinity of 0. A queue defined in the
+            config file keeps the `storage-name` given there.
+          examples:
+            - badger-0
+      required:
+        - partition
+        - storage_name
     StorageItem:
       type: object
       properties:

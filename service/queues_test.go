@@ -78,7 +78,8 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	defer goleak.VerifyNone(t, goleakOptions...)
 
 	t.Run("CRUD", func(t *testing.T) {
-		d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+		conf := setup()
+		d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
@@ -123,6 +124,10 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			assert.Equal(t, "1m0s", list.Items[0].LeaseTimeout)
 			assert.Equal(t, "10m0s", list.Items[0].ExpireTimeout)
 			assert.Equal(t, deadQueueName, list.Items[0].DeadQueue)
+			// /queues.list reads the queue back from storage, proving the storage name is saved
+			require.Len(t, list.Items[0].Partitions, 1)
+			assert.Equal(t, int32(0), list.Items[0].Partitions[0].Partition)
+			assert.Equal(t, conf.PartitionStorage[0].Name, list.Items[0].Partitions[0].StorageName)
 			assert.Equal(t, "CreateTestRef", list.Items[0].Reference)
 		})
 
@@ -609,7 +614,8 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	})
 
 	t.Run("Errors", func(t *testing.T) {
-		d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+		conf := setup()
+		d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
@@ -1099,6 +1105,9 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				assert.Equal(t, int32(1), resp.RequestedPartitions)
 				assert.NotNil(t, resp.CreatedAt)
 				assert.NotNil(t, resp.UpdatedAt)
+				require.Len(t, resp.Partitions, 1)
+				assert.Equal(t, int32(0), resp.Partitions[0].Partition)
+				assert.Equal(t, conf.PartitionStorage[0].Name, resp.Partitions[0].StorageName)
 			})
 
 			// Test validation errors

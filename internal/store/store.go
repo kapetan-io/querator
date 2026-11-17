@@ -1,9 +1,12 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"iter"
 	"log/slog"
+	"math"
+	"slices"
 	"time"
 
 	"github.com/kapetan-io/querator/internal/types"
@@ -155,6 +158,59 @@ func CanPlacePartitions(backends []PartitionStorage) bool {
 		}
 	}
 	return false
+}
+
+// PlacePartitions spreads the partitions a queue requests across the backends in proportion
+// to their affinity. Any partitions already on info are ignored.
+func PlacePartitions(backends []PartitionStorage, info types.QueueInfo) []types.PartitionInfo {
+	var placed []types.PartitionInfo
+	info.PartitionInfo = nil
+	for idx, count := range assignPartitions(backends, info.RequestedPartitions) {
+		for i := 0; i < count; i++ {
+			placed = append(placed, types.PartitionInfo{
+				StorageName:  backends[idx].Name,
+				PartitionNum: len(placed),
+				Queue:        info,
+			})
+		}
+	}
+	return placed
+}
+
+// assignPartitions assigns partition counts to each backend in proportion to its affinity.
+// The partitions left over after rounding each share down go one at a time to the backends
+// with the highest affinity, so the counts always add up to totalPartitions. A backend
+// with an affinity of 0 or less never receives a partition. Callers check
+// CanPlacePartitions first, so a queue that requests partitions always gets them.
+func assignPartitions(backends []PartitionStorage, totalPartitions int) []int {
+	assignments := make([]int, len(backends))
+	var totalAffinity float64
+	var preferred []int
+	for i, b := range backends {
+		if b.Affinity > 0 {
+			totalAffinity += b.Affinity
+			preferred = append(preferred, i)
+		}
+	}
+	if len(preferred) == 0 {
+		return assignments
+	}
+
+	var assigned int
+	for _, i := range preferred {
+		assignments[i] = int(math.Floor((backends[i].Affinity / totalAffinity) * float64(totalPartitions)))
+		assigned += assignments[i]
+	}
+
+	// Ties keep the configured order
+	slices.SortStableFunc(preferred, func(a, b int) int {
+		return cmp.Compare(backends[b].Affinity, backends[a].Affinity)
+	})
+	for i := 0; assigned < totalPartitions; i++ {
+		assignments[preferred[i%len(preferred)]]++
+		assigned++
+	}
+	return assignments
 }
 
 // Config is the configuration accepted by QueueManager to manage storage of queues, scheduled items,

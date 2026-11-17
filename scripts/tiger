@@ -1,0 +1,13 @@
+#!/bin/sh
+# Runs Tiger over every package and exits with Tiger's own code
+# (0 clean, 1 findings, 2 couldn't check), or 127 when tiger isn't installed.
+# `make tiger` and the pre-push hook both run this.
+# GOTOOLCHAIN pins the go command Tiger loads packages with to the version in go.mod.
+# A newer local Go makes Tiger exit 2 with "export data version ... is greater than maximum supported".
+if ! command -v tiger >/dev/null 2>&1; then
+	echo "tiger is not installed. This repository checks every push with Tiger, a static analyzer" >&2
+	echo "that finds unbounded loops, goroutines nobody waits for and similar problems. Install it with:" >&2
+	echo "  go install github.com/kapetan-io/tiger/cmd/tiger@latest" >&2
+	exit 127
+fi
+GOTOOLCHAIN="go$(go list -m -f '{{.GoVersion}}')" tiger check ./...

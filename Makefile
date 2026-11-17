@@ -1,4 +1,5 @@
 .DEFAULT_GOAL := build
+_ := $(shell ./scripts/hooks)
 VERSION=$(shell git describe --tags --exact-match 2>/dev/null || echo "dev-build")
 
 .PHONY: install
@@ -36,6 +37,14 @@ benchmark-throughput: ## Run throughput benchmarks
 .PHONY: lint
 lint: ## Run Go linter
 	golangci-lint run -v ./...
+
+.PHONY: tiger
+tiger: ## Run Tiger over every package
+	./scripts/tiger
+
+.PHONY: hooks
+hooks: ## Turn on the committed git hooks in this clone
+	git config core.hooksPath .githooks
 
 .PHONY: tidy
 tidy:

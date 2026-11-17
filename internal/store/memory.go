@@ -1358,12 +1358,12 @@ func NewMemoryRoles(log *slog.Logger) *MemoryRoles {
 	}
 }
 
-func (m *MemoryRoles) Get(_ context.Context, namespace, name string, role *types.Role) error {
+func (m *MemoryRoles) Get(_ context.Context, key RoleKey, role *types.Role) error {
+	namespace, name := key.Namespace, key.Name
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	key := namespace + "\x00" + name
-	id, ok := m.byNamespaceName[key]
+	id, ok := m.byNamespaceName[namespace+"\x00"+name]
 	if !ok {
 		return types.NewErrRoleNotExist(namespace + ":" + name)
 	}
@@ -1626,7 +1626,8 @@ func (m *MemoryRoleBindings) List(_ context.Context, namespace string, bindings 
 	return nil
 }
 
-func (m *MemoryRoleBindings) ListByUser(_ context.Context, userID, namespace string, bindings *[]types.RoleBinding, limit int) error {
+func (m *MemoryRoleBindings) ListByUser(_ context.Context, member NamespaceMember, bindings *[]types.RoleBinding, limit int) error {
+	userID, namespace := member.UserID, member.Namespace
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -1666,7 +1667,8 @@ func (m *MemoryRoleBindings) ListByRole(_ context.Context, roleID string, bindin
 	return nil
 }
 
-func (m *MemoryRoleBindings) DeleteByUserAndRole(_ context.Context, namespace, userID, roleID string) error {
+func (m *MemoryRoleBindings) DeleteByUserAndRole(_ context.Context, key RoleBindingKey) error {
+	namespace, userID, roleID := key.Namespace, key.UserID, key.RoleID
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

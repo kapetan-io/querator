@@ -1114,18 +1114,18 @@ func (b *BadgerPartition) getDB() (*badger.DB, error) {
 // Queues Implementation
 // ---------------------------------------------
 
-func NewBadgerQueues(conf BadgerConfig) Queues {
-	set.Default(conf.Log, slog.Default())
-	return &BadgerQueues{
-		conf: conf,
-	}
-}
-
 type BadgerQueues struct {
 	QueuesValidation
 	mu   sync.Mutex
 	db   *badger.DB
 	conf BadgerConfig
+}
+
+func NewBadgerQueues(conf BadgerConfig) Queues {
+	set.Default(conf.Log, slog.Default())
+	return &BadgerQueues{
+		conf: conf,
+	}
 }
 
 var _ Queues = &BadgerQueues{}
@@ -2371,7 +2371,8 @@ func (b *BadgerRoles) getDB() (*badger.DB, error) {
 	return db, nil
 }
 
-func (b *BadgerRoles) Get(_ context.Context, namespace, name string, role *types.Role) error {
+func (b *BadgerRoles) Get(_ context.Context, key RoleKey, role *types.Role) error {
+	namespace, name := key.Namespace, key.Name
 	db, err := b.getDB()
 	if err != nil {
 		return err
@@ -2899,7 +2900,8 @@ func (b *BadgerRoleBindings) List(_ context.Context, namespace string, bindings 
 	})
 }
 
-func (b *BadgerRoleBindings) ListByUser(_ context.Context, userID, namespace string, bindings *[]types.RoleBinding, limit int) error {
+func (b *BadgerRoleBindings) ListByUser(_ context.Context, member NamespaceMember, bindings *[]types.RoleBinding, limit int) error {
+	userID, namespace := member.UserID, member.Namespace
 	db, err := b.getDB()
 	if err != nil {
 		return err
@@ -2976,7 +2978,8 @@ func (b *BadgerRoleBindings) ListByRole(_ context.Context, roleID string, bindin
 	})
 }
 
-func (b *BadgerRoleBindings) DeleteByUserAndRole(_ context.Context, namespace, userID, roleID string) error {
+func (b *BadgerRoleBindings) DeleteByUserAndRole(_ context.Context, key RoleBindingKey) error {
+	namespace, userID, roleID := key.Namespace, key.UserID, key.RoleID
 	db, err := b.getDB()
 	if err != nil {
 		return err

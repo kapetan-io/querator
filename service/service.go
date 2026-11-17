@@ -81,9 +81,6 @@ func New(ctx context.Context, conf Config) (*Service, error) {
 	set.Default(&conf.ReadTimeout, 3*time.Second)
 	set.Default(&conf.WriteTimeout, 3*time.Second)
 
-	// TODO: Validate the Storage Config (somewhere) ensure that we have at least one storage backend with an affinity
-	//  greater than 0.0 else QueuesManager will be unable to assign partitions.
-
 	// TODO: The queue store should also know if the config provided is valid, IE: does every partition
 	//  storage name exist in the config? If not, then it's a bad config and Querator should not start.
 

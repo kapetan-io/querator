@@ -65,6 +65,15 @@ func NewQueuesManager(conf QueuesManagerConfig) (*QueuesManager, error) {
 		return nil, errors.New("conf.Config.PartitionStorage cannot be empty")
 	}
 
+	// store.Find returns the first match, so a repeated name would open partitions on the wrong backend
+	seen := make(map[string]struct{}, len(conf.StorageConfig.PartitionStorage))
+	for _, b := range conf.StorageConfig.PartitionStorage {
+		if _, ok := seen[b.Name]; ok {
+			return nil, errors.Errorf("duplicate partition storage name '%s'; every partition storage must have a unique name", b.Name)
+		}
+		seen[b.Name] = struct{}{}
+	}
+
 	qm := &QueuesManager{
 		log:    conf.Log.With("code.namespace", "QueuesManager"),
 		queues: make(map[string]*Queue),
@@ -86,6 +95,11 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Que
 	q, ok := qm.queues[info.Name]
 	if ok {
 		return q, reply.NewInvalidOption("invalid queue; '%s' already exists", info.Name)
+	}
+
+	if !store.CanPlacePartitions(qm.conf.StorageConfig.PartitionStorage) {
+		return nil, reply.NewRequestFailed("no storage backend can take partitions; " +
+			"at least one partition storage needs an affinity above 0")
 	}
 
 	// Validate DLQ configuration before creating queue
@@ -164,6 +178,14 @@ func (qm *QueuesManager) get(ctx context.Context, name string) (*Queue, error) {
 			).Error("queue partition references unknown storage name")
 		}
 		partitions = append(partitions, b.PartitionStore.Get(info))
+	}
+
+	// A queue stored with no partitions has nothing to run. Without a logical queue, produce and lease
+	// report "no available partitions", complete and retry reject every partition number, and the
+	// queue can still be inspected and deleted.
+	if len(partitions) == 0 {
+		qm.queues[queue.Name] = NewQueue(queue)
+		return qm.queues[queue.Name], nil
 	}
 
 	// Single logical queue per queue. Multi-logical support deferred until demonstrated need.
@@ -504,10 +526,8 @@ func (qm *QueuesManager) Shutdown(ctx context.Context) error {
 // assignPartitions assigns partition counts to each backend in proportion to its affinity.
 // The partitions left over after rounding each share down go one at a time to the backends
 // with the highest affinity, so the counts always add up to totalPartitions. A backend
-// with an affinity of 0 or less never receives a partition.
-//
-// Known problem: when no backend has a positive affinity this assigns no partitions, and the
-// first produce to the resulting queue panics. Whether to refuse that config is ENG-744.
+// with an affinity of 0 or less never receives a partition. Create refuses a queue when
+// no backend has a positive affinity, so a queue that requests partitions always gets them.
 func (qm *QueuesManager) assignPartitions(totalPartitions int) []int {
 	backends := qm.conf.StorageConfig.PartitionStorage
 	assignments := make([]int, len(backends))

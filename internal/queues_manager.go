@@ -98,7 +98,7 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Que
 	}
 
 	if !store.CanPlacePartitions(qm.conf.StorageConfig.PartitionStorage) {
-		return nil, reply.NewInvalidOption("invalid queue; no storage backend can take partitions, " +
+		return nil, reply.NewRequestFailed("no storage backend can take partitions; " +
 			"at least one partition storage needs an affinity above 0")
 	}
 

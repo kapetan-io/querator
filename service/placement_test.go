@@ -67,7 +67,7 @@ func TestPlacement(t *testing.T) {
 				require.Error(t, err)
 				var duhErr duh.Error
 				require.True(t, errors.As(err, &duhErr))
-				assert.Equal(t, duh.CodeBadRequest, duhErr.Code())
+				assert.Equal(t, duh.CodeRequestFailed, duhErr.Code())
 				assert.Contains(t, duhErr.Message(), "no storage backend can take partitions")
 
 				// No queue was created
@@ -123,14 +123,19 @@ func TestPlacement(t *testing.T) {
 			RequestTimeout: "1s",
 			Ids:            []string{"id-1"},
 		})
-		require.Error(t, err)
+		var duhErr duh.Error
+		require.True(t, errors.As(err, &duhErr))
+		assert.Equal(t, duh.CodeBadRequest, duhErr.Code())
+		assert.Contains(t, duhErr.Message(), "partition is invalid")
 
 		err = c.QueueRetry(ctx, &pb.QueueRetryRequest{
 			QueueName: name,
 			Partition: 0,
 			Items:     []*pb.QueueRetryItem{{Id: "id-1"}},
 		})
-		require.Error(t, err)
+		require.True(t, errors.As(err, &duhErr))
+		assert.Equal(t, duh.CodeBadRequest, duhErr.Code())
+		assert.Contains(t, duhErr.Message(), "partition is invalid")
 
 		// Process is alive and the queue can still be inspected and removed
 		var info pb.QueueInfo
@@ -166,5 +171,32 @@ func TestPlacement(t *testing.T) {
 		_, err := daemon.NewDaemon(ctx, *conf)
 		require.Error(t, err)
 		assert.ErrorContains(t, err, "mem-00")
+	})
+
+	t.Run("RestartKeepsStoredConfigQueueOnAffinityZeroBackends", func(t *testing.T) {
+		dir := t.TempDir()
+		file := daemon.File{
+			PartitionStorage: []daemon.PartitionStorage{
+				{Name: "badger-0", Badger: &daemon.BadgerConfig{StorageDir: dir}},
+			},
+			QueueStorage: daemon.QueueStorage{Badger: &daemon.BadgerConfig{StorageDir: dir}},
+		}
+
+		// A queue stored while a backend could still place partitions
+		first := &daemon.Config{}
+		require.NoError(t, daemon.ApplyConfigFile(context.Background(), first, file, nil))
+		require.NoError(t, first.Service.StorageConfig.Queues.Add(context.Background(), types.QueueInfo{
+			Name:                "queue-1",
+			LeaseTimeout:        clock.Minute,
+			ExpireTimeout:       10 * clock.Minute,
+			RequestedPartitions: 2,
+		}))
+		require.NoError(t, first.Service.StorageConfig.Queues.Close(context.Background()))
+
+		// Restart with the queue listed without partitions and every backend at affinity 0
+		file.Queues = []daemon.Queue{{Name: "queue-1", RequestedPartitions: 2}}
+		second := &daemon.Config{}
+		require.NoError(t, daemon.ApplyConfigFile(context.Background(), second, file, nil))
+		require.NoError(t, second.Service.StorageConfig.Queues.Close(context.Background()))
 	})
 }

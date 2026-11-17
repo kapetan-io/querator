@@ -395,6 +395,11 @@ func setupQueueStorage(ctx context.Context, file File, conf *Config) error {
 	}
 
 	for _, queue := range file.Queues {
+		// A queue already in the store is left alone, so a restart on affinity-0 backends still starts
+		var stored types.QueueInfo
+		if err := conf.Service.StorageConfig.Queues.Get(ctx, queue.Name, &stored); err == nil {
+			continue
+		}
 		if len(queue.Partitions) == 0 && !store.CanPlacePartitions(conf.Service.StorageConfig.PartitionStorage) {
 			return fmt.Errorf("invalid queue '%s'; no storage backend can take partitions, "+
 				"at least one partition storage needs an affinity above 0", queue.Name)

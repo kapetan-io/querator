@@ -413,7 +413,12 @@ func setupQueueStorage(ctx context.Context, file File, conf *Config) error {
 			p.StorageName = found.Name
 		}
 
-		if err := conf.Service.StorageConfig.Queues.Add(ctx, queue.ToQueueInfo()); err != nil {
+		info := queue.ToQueueInfo()
+		if len(queue.Partitions) == 0 {
+			info.PartitionInfo = store.PlacePartitions(conf.Service.StorageConfig.PartitionStorage, info)
+		}
+
+		if err := conf.Service.StorageConfig.Queues.Add(ctx, info); err != nil {
 			if errors.Is(err, store.ErrQueueAlreadyExists) {
 				continue
 			}

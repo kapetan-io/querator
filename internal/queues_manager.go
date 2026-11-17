@@ -1,11 +1,8 @@
 package internal
 
 import (
-	"cmp"
 	"context"
 	"log/slog"
-	"math"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -42,7 +39,6 @@ type Remote interface {
 		res *proto.StorageItemsImportResponse) error
 	StorageItemsDelete(ctx context.Context, req *proto.StorageItemsDeleteRequest) error
 }
-
 
 // QueuesManager manages queues in use, and information about that queue.
 type QueuesManager struct {
@@ -113,20 +109,11 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Que
 	// any details included by the caller will be ignored.
 
 	// Spread the partitions across the storage backends according to affinity
-	var partitionIdx = 0
-	for idx, count := range qm.assignPartitions(info.RequestedPartitions) {
-		for i := 0; i < count; i++ {
-			p := types.PartitionInfo{
-				StorageName:  qm.conf.StorageConfig.PartitionStorage[idx].Name,
-				PartitionNum: partitionIdx,
-				Queue:        info,
-			}
-			partitionIdx++
-			info.PartitionInfo = append(info.PartitionInfo, p)
-			qm.log.LogAttrs(ctx, LevelDebugAll, "Partition Assigned",
-				slog.String("queue", p.Queue.Name), slog.String("storage", p.StorageName),
-				slog.Bool("read-only", p.ReadOnly), slog.Int("partition", p.PartitionNum))
-		}
+	info.PartitionInfo = store.PlacePartitions(qm.conf.StorageConfig.PartitionStorage, info)
+	for _, p := range info.PartitionInfo {
+		qm.log.LogAttrs(ctx, LevelDebugAll, "Partition Assigned",
+			slog.String("queue", p.Queue.Name), slog.String("storage", p.StorageName),
+			slog.Bool("read-only", p.ReadOnly), slog.Int("partition", p.PartitionNum))
 	}
 
 	info.CreatedAt = qm.conf.LogicalConfig.Clock.Now().UTC()
@@ -521,41 +508,4 @@ func (qm *QueuesManager) Shutdown(ctx context.Context) error {
 		qm.log.LogAttrs(ctx, LevelDebugAll, "Shutdown complete")
 		return errors.Wrap(err)
 	}
-}
-
-// assignPartitions assigns partition counts to each backend in proportion to its affinity.
-// The partitions left over after rounding each share down go one at a time to the backends
-// with the highest affinity, so the counts always add up to totalPartitions. A backend
-// with an affinity of 0 or less never receives a partition. Create refuses a queue when
-// no backend has a positive affinity, so a queue that requests partitions always gets them.
-func (qm *QueuesManager) assignPartitions(totalPartitions int) []int {
-	backends := qm.conf.StorageConfig.PartitionStorage
-	assignments := make([]int, len(backends))
-	var totalAffinity float64
-	var preferred []int
-	for i, b := range backends {
-		if b.Affinity > 0 {
-			totalAffinity += b.Affinity
-			preferred = append(preferred, i)
-		}
-	}
-	if len(preferred) == 0 {
-		return assignments
-	}
-
-	var assigned int
-	for _, i := range preferred {
-		assignments[i] = int(math.Floor((backends[i].Affinity / totalAffinity) * float64(totalPartitions)))
-		assigned += assignments[i]
-	}
-
-	// Ties keep the configured order
-	slices.SortStableFunc(preferred, func(a, b int) int {
-		return cmp.Compare(backends[b].Affinity, backends[a].Affinity)
-	})
-	for i := 0; assigned < totalPartitions; i++ {
-		assignments[preferred[i%len(preferred)]]++
-		assigned++
-	}
-	return assignments
 }

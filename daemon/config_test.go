@@ -433,3 +433,51 @@ queue-storage:
 	assert.Equal(t, int32(25), queueConfig.MaxConns)
 	assert.Equal(t, 250, queueConfig.ScanBatchSize)
 }
+
+func TestApplyConfigFilePlacesUnlistedPartitions(t *testing.T) {
+	ctx := context.Background()
+	apply := func(t *testing.T, queue daemon.Queue) types.QueueInfo {
+		t.Helper()
+		conf := &daemon.Config{}
+		require.NoError(t, daemon.ApplyConfigFile(ctx, conf, daemon.File{
+			PartitionStorage: []daemon.PartitionStorage{
+				{Name: "mem-00", Memory: &daemon.MemoryConfig{}, Affinity: 1},
+				{Name: "mem-01", Memory: &daemon.MemoryConfig{}, Affinity: 3},
+				{Name: "mem-02", Memory: &daemon.MemoryConfig{}, Affinity: 0},
+			},
+			QueueStorage: daemon.QueueStorage{Memory: &daemon.MemoryConfig{}},
+			Queues:       []daemon.Queue{queue},
+		}, io.Discard))
+
+		var info types.QueueInfo
+		require.NoError(t, conf.Service.StorageConfig.Queues.Get(ctx, queue.Name, &info))
+		return info
+	}
+
+	t.Run("PlacedByAffinity", func(t *testing.T) {
+		info := apply(t, daemon.Queue{
+			Name: "queue-1", RequestedPartitions: 4,
+			LeaseTimeout: time.Minute, ExpireTimeout: time.Hour,
+		})
+
+		require.Len(t, info.PartitionInfo, 4)
+		counts := map[string]int{}
+		for idx, p := range info.PartitionInfo {
+			counts[p.StorageName]++
+			assert.Equal(t, idx, p.PartitionNum)
+			assert.Equal(t, "queue-1", p.Queue.Name)
+		}
+		assert.Equal(t, map[string]int{"mem-00": 1, "mem-01": 3}, counts)
+	})
+
+	t.Run("ListedPartitionsKeptAsIs", func(t *testing.T) {
+		info := apply(t, daemon.Queue{
+			Name: "queue-2", RequestedPartitions: 20,
+			LeaseTimeout: time.Minute, ExpireTimeout: time.Hour,
+			Partitions: []daemon.Partition{{Partition: 0, StorageName: "mem-02"}},
+		})
+
+		require.Len(t, info.PartitionInfo, 1)
+		assert.Equal(t, "mem-02", info.PartitionInfo[0].StorageName)
+	})
+}

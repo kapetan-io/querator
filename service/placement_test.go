@@ -177,26 +177,79 @@ func TestPlacement(t *testing.T) {
 		dir := t.TempDir()
 		file := daemon.File{
 			PartitionStorage: []daemon.PartitionStorage{
-				{Name: "badger-0", Badger: &daemon.BadgerConfig{StorageDir: dir}},
+				{Name: "badger-0", Badger: &daemon.BadgerConfig{StorageDir: dir}, Affinity: 1},
 			},
 			QueueStorage: daemon.QueueStorage{Badger: &daemon.BadgerConfig{StorageDir: dir}},
+			Queues: []daemon.Queue{{
+				Name: "queue-1", LeaseTimeout: clock.Minute, ExpireTimeout: 10 * clock.Minute,
+				RequestedPartitions: 2,
+			}},
 		}
 
-		// A queue stored while a backend could still place partitions
+		// First start places the queue's partitions while a backend can take them
 		first := &daemon.Config{}
 		require.NoError(t, daemon.ApplyConfigFile(context.Background(), first, file, nil))
-		require.NoError(t, first.Service.StorageConfig.Queues.Add(context.Background(), types.QueueInfo{
-			Name:                "queue-1",
-			LeaseTimeout:        clock.Minute,
-			ExpireTimeout:       10 * clock.Minute,
-			RequestedPartitions: 2,
-		}))
+		var before types.QueueInfo
+		require.NoError(t, first.Service.StorageConfig.Queues.Get(context.Background(), "queue-1", &before))
+		require.Len(t, before.PartitionInfo, 2)
 		require.NoError(t, first.Service.StorageConfig.Queues.Close(context.Background()))
 
-		// Restart with the queue listed without partitions and every backend at affinity 0
-		file.Queues = []daemon.Queue{{Name: "queue-1", RequestedPartitions: 2}}
+		// Restart with the queue still listed without partitions and every backend at affinity 0
+		file.PartitionStorage[0].Affinity = 0
 		second := &daemon.Config{}
 		require.NoError(t, daemon.ApplyConfigFile(context.Background(), second, file, nil))
+		var after types.QueueInfo
+		require.NoError(t, second.Service.StorageConfig.Queues.Get(context.Background(), "queue-1", &after))
+		assert.Equal(t, before.PartitionInfo, after.PartitionInfo)
 		require.NoError(t, second.Service.StorageConfig.Queues.Close(context.Background()))
+	})
+
+	t.Run("ConfigFileQueueWithoutPartitionsServesRequests", func(t *testing.T) {
+		conf := &daemon.Config{ListenAddress: "localhost:0"}
+		require.NoError(t, daemon.ApplyConfigFile(context.Background(), conf, daemon.File{
+			PartitionStorage: []daemon.PartitionStorage{
+				{Name: "mem-a", Memory: &daemon.MemoryConfig{}, Affinity: 1},
+				{Name: "mem-b", Memory: &daemon.MemoryConfig{}, Affinity: 2},
+			},
+			QueueStorage: daemon.QueueStorage{Memory: &daemon.MemoryConfig{}},
+			Queues: []daemon.Queue{{
+				Name: "queue-1", LeaseTimeout: clock.Minute, ExpireTimeout: 10 * clock.Minute,
+				RequestedPartitions: 3,
+			}},
+		}, nil))
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*clock.Second)
+		defer cancel()
+		d, err := daemon.NewDaemon(ctx, *conf)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, d.Shutdown(ctx)) }()
+		c := d.MustClient()
+
+		var info pb.QueueInfo
+		require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: "queue-1"}, &info))
+		require.Len(t, info.Partitions, 3)
+
+		// Every produce lands on a placed partition and every item comes back on lease
+		for i := 0; i < 6; i++ {
+			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+				QueueName:      "queue-1",
+				RequestTimeout: "1s",
+				Items:          []*pb.QueueProduceItem{{Bytes: []byte("x")}},
+			}))
+		}
+		// A lease reads one partition at a time, so keep leasing until all 6 items are back
+		var leased int
+		require.Eventually(t, func() bool {
+			var res pb.QueueLeaseResponse
+			require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+				QueueName:      "queue-1",
+				ClientId:       "client-1",
+				BatchSize:      6,
+				RequestTimeout: "1s",
+			}, &res))
+			leased += len(res.Items)
+			return leased >= 6
+		}, 5*clock.Second, 10*clock.Millisecond)
+		assert.Equal(t, 6, leased)
 	})
 }

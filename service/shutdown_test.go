@@ -296,8 +296,8 @@ func testShutdown(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer tearDown()
 
 		d := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: storage})
-		c, ctx := d.MustClient(), d.Context()
 		defer d.cancel()
+		c, ctx := d.MustClient(), d.Context()
 
 		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 			QueueName:           queueName,
@@ -373,8 +373,8 @@ func testShutdown(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		// A second daemon sees the two leased items untouched
 		d2 := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: storage})
-		c2, ctx2 := d2.MustClient(), d2.Context()
 		defer d2.Shutdown(t)
+		c2, ctx2 := d2.MustClient(), d2.Context()
 
 		var list pb.StorageItemsListResponse
 		require.NoError(t, c2.StorageItemsList(ctx2, queueName, 0, &list, &querator.ListOptions{Limit: 100}))

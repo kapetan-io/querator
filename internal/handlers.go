@@ -9,7 +9,6 @@ import (
 	"log/slog"
 )
 
-// handleColdRequests routes cold requests to specific handlers
 func (l *Logical) handleColdRequests(state *QueueState, req *Request) {
 	switch req.Method {
 	case MethodStorageItemsList, MethodStorageItemsImport, MethodStorageItemsDelete:
@@ -84,13 +83,7 @@ func (l *Logical) handleStats(state *QueueState, r *Request) {
 			r.Err = err
 		}
 		ps.Partition = p.Info().PartitionNum
-		// Look up the in-memory partition by number. state.Partitions is
-		// continuously reordered by sortPartitionsByLoad (ADR-0019), so it
-		// cannot be indexed by partition number.
 		s := state.GetPartition(p.Info().PartitionNum)
-		// TODO Override the on disk stats with in-memory stats. We should
-		//  warn if these stats do not match, or avoid querying the disk, or
-		//  make fetching on disk stats a separate call.
 		if s != nil {
 			ps.Failures = s.State.Failures
 			ps.NumLeased = s.State.NumLeased
@@ -103,8 +96,6 @@ func (l *Logical) handleStats(state *QueueState, r *Request) {
 	close(r.ReadyCh)
 }
 
-// handlePause sets or cancels state.Paused. While paused, requestLoop holds produce, lease,
-// complete and retry requests in state; cancelling the pause applies them.
 func (l *Logical) handlePause(state *QueueState, r *Request) {
 	pr := r.Request.(*types.PauseRequest)
 	close(r.ReadyCh)
@@ -123,8 +114,6 @@ func (l *Logical) handlePause(state *QueueState, r *Request) {
 }
 
 func (l *Logical) handleClear(_ *QueueState, req *Request) {
-	// NOTE: When clearing a queue, ensure we flush any cached items. As of this current
-	// version (V0), there is no cached data to sync, but this will likely change in the future.
 	cr := req.Request.(*types.ClearRequest)
 
 	if cr.Queue || cr.Scheduled {
@@ -161,7 +150,6 @@ func (l *Logical) handleReload(state *QueueState, req *Request) {
 }
 
 func (l *Logical) handleShutdown(state *QueueState, req *types.ShutdownRequest) {
-	// Cancel any open leases
 	for _, r := range state.Leases.Requests {
 		if r != nil {
 			r.Err = ErrQueueShutdown
@@ -169,8 +157,6 @@ func (l *Logical) handleShutdown(state *QueueState, req *types.ShutdownRequest) 
 		}
 	}
 
-	// While paused, produce, complete and retry requests accumulate in state
-	// unprocessed; cancel them or the in-flight drain below never finishes.
 	for _, r := range state.Producers.Requests {
 		if r != nil {
 			r.Err = ErrQueueShutdown
@@ -198,8 +184,6 @@ func (l *Logical) handleShutdown(state *QueueState, req *types.ShutdownRequest) 
 	state.LifecycleTimer.Stop()
 	state.ScheduledTimer.Stop()
 
-	// TODO: Should close the partitions in `state.Partitions` not in conf.StoragePartitions
-	//  as the list of partitions could have changed since init.
 	for _, p := range l.conf.StoragePartitions {
 		l.log.LogAttrs(req.Context, LevelDebugAll, "close partition",
 			slog.Int("partition", p.Info().PartitionNum))
@@ -211,8 +195,6 @@ func (l *Logical) handleShutdown(state *QueueState, req *types.ShutdownRequest) 
 	close(req.ReadyCh)
 }
 
-// rejectInFlight answers every request still in requestCh with ErrQueueShutdown until no
-// caller is in flight, or until ctx ends.
 func (l *Logical) rejectInFlight(ctx context.Context) error {
 	for {
 		if l.inFlight.Load() == 0 {
@@ -224,7 +206,6 @@ func (l *Logical) rejectInFlight(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
-			// A caller in flight may not have sent its request yet, so check again.
 		}
 	}
 }

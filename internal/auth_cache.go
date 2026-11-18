@@ -17,15 +17,12 @@ import (
 )
 
 const (
-	// DefaultCacheTTL is how long cached entries remain valid
-	DefaultCacheTTL = 5 * time.Minute
-	// DefaultCleanupInterval is how often to clean up expired entries
+	DefaultCacheTTL        = 5 * time.Minute
 	DefaultCleanupInterval = time.Minute
 
 	lastUsedBufferSize = 64
 )
 
-// AuthCacheConfig configures the auth cache
 type AuthCacheConfig struct {
 	CleanupInterval time.Duration
 	APIKeys         store.APIKeys
@@ -34,7 +31,6 @@ type AuthCacheConfig struct {
 	TTL             time.Duration
 }
 
-// AuthCache provides caching for API key lookups to reduce storage load
 type AuthCache struct {
 	cleanupInterval time.Duration
 	byKeyHash       map[string]authCacheEntry
@@ -62,7 +58,6 @@ type authCacheEntry struct {
 	principal    auth.Principal
 }
 
-// NewAuthCache creates a new auth cache
 func NewAuthCache(conf AuthCacheConfig) *AuthCache {
 	set.Default(&conf.Log, slog.Default())
 	set.Default(&conf.TTL, DefaultCacheTTL)
@@ -86,7 +81,6 @@ func NewAuthCache(conf AuthCacheConfig) *AuthCache {
 	return c
 }
 
-// Authenticate validates an API key and returns the principal
 func (c *AuthCache) Authenticate(ctx context.Context, key string) (auth.Principal, error) {
 	if err := auth.ValidateAPIKeyFormat(key); err != nil {
 		return auth.Principal{}, types.ErrAPIKeyInvalid
@@ -112,8 +106,6 @@ func (c *AuthCache) Authenticate(ctx context.Context, key string) (auth.Principa
 	}
 
 	v, err, _ := c.sf.Do(keyHash, func() (any, error) {
-		// Use a detached context with a bounded timeout so that a single caller's
-		// context cancellation does not propagate to all callers sharing this flight.
 		sfCtx, sfCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer sfCancel()
 
@@ -169,7 +161,6 @@ func (c *AuthCache) Authenticate(ctx context.Context, key string) (auth.Principa
 	return v.(auth.Principal), nil
 }
 
-// Invalidate removes a cached entry by key hash
 func (c *AuthCache) Invalidate(keyHash string) {
 	c.mu.Lock()
 	if entry, ok := c.byKeyHash[keyHash]; ok {
@@ -184,7 +175,6 @@ func (c *AuthCache) Invalidate(keyHash string) {
 	c.mu.Unlock()
 }
 
-// InvalidateUser removes all cached entries for a user
 func (c *AuthCache) InvalidateUser(userID string) {
 	c.mu.Lock()
 	if hashes, ok := c.byUserID[userID]; ok {
@@ -196,7 +186,6 @@ func (c *AuthCache) InvalidateUser(userID string) {
 	c.mu.Unlock()
 }
 
-// Close stops the cleanup and last-used goroutines and waits for them
 func (c *AuthCache) Close() {
 	c.once.Do(func() { close(c.stop) })
 	c.wg.Wait()
@@ -240,7 +229,6 @@ func (c *AuthCache) lastUsedLoop() {
 		case update := <-c.lastUsedCh:
 			c.recordLastUsed(update)
 		case <-c.stop:
-			// Drain remaining updates before exiting
 			for {
 				select {
 				case update := <-c.lastUsedCh:

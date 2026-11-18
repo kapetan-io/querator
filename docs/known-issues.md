@@ -139,3 +139,34 @@ Kubernetes, Prometheus exporters, and most production Go services.
 **Workaround**: Restrict network access to the API port at the infrastructure level (firewall
 rules, service mesh policy, or Kubernetes NetworkPolicy) so that only trusted scrapers and
 probes can reach `/metrics` and `/health`.
+
+## Failed or Slow Partitions Are Not Worked Around
+
+**Severity**: Medium  
+**Component**: `internal/distribution.go`, `internal/logical.go`
+
+[ADR-0019](adr/0019-partition-item-distribution.md) decides that when a write to a partition
+fails, Querator retries the request on another partition until the client's `request_timeout`.
+The Logical Queue does not do this yet. It writes each partition's batch once per pass and in
+turn, one partition after another.
+
+* A storage error during a pass is logged. Produce and lease requests on that partition are not
+  moved to another partition. Complete and retry requests get a retry error. A failed produce
+  write is reported to the client as success (ENG-771).
+* A partition only counts as failed when a read fails during load, reload or a lifecycle run. A
+  failed write does not mark it, and nothing tells a slow partition from a failed one.
+* Partitions are written one after another, so one slow partition delays every other partition
+  of the same Logical Queue.
+* Time spent waiting on a slow partition is not checked against the waiting clients' request
+  deadlines before they are answered.
+* `QueuesManager` keeps routing clients to a Logical Queue whose partitions have all failed.
+* When every partition has failed, a produce request stays in the Logical Queue unassigned. It is
+  tried again only when another produce, lease, complete or retry request arrives, and it is not
+  answered when its request timeout passes.
+* Partition health is a failure count. [ADR-0023](adr/0023-partition-maintenance.md) describes a
+  partition status that distribution should check instead.
+
+**Impact**: During a partition outage or slowdown, requests that another partition could serve
+wait or fail instead, and a slow partition raises latency for the whole queue.
+
+**Workaround**: None. Clients retry on the retry error or after their request timeout.

@@ -77,7 +77,7 @@ type Request struct {
 	// The request struct for this method
 	Request any
 	// Used to wait for this request to complete
-	ReadyCh chan struct{}
+	ReadyCh readySignal
 	// The error to be returned to the caller
 	Err error
 }

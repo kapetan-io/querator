@@ -149,15 +149,7 @@ func (l *Logical) assignLeaseRequests(state *QueueState) {
 		if req == nil {
 			continue
 		}
-		// Perform a reverse search through state.Partitions finding the first partition where b.State.Failures == 0
-		var assigned *Partition
-		for i := len(state.Partitions) - 1; i >= 0; i-- {
-			// TODO: This should check for partition availability see docs/adr/0023-partition-maintenance.md
-			if state.Partitions[i].State.Failures == 0 {
-				assigned = state.Partitions[i]
-				break
-			}
-		}
+		assigned := lastHealthyPartition(state.Partitions)
 
 		if assigned == nil {
 			l.log.Warn("no healthy partitions, lease request not assigned",
@@ -181,55 +173,54 @@ func (l *Logical) assignLeaseRequests(state *QueueState) {
 }
 
 func (l *Logical) assignCompleteRequests(state *QueueState) {
-nextRequest:
 	for _, req := range state.Completes.Requests {
 		if req == nil {
 			continue
 		}
-		var found bool
-		for i, p := range state.Partitions {
-			// Assign the complete request to the partition if found
-			if req.Partition == p.Info.PartitionNum {
-				if p.State.Failures != 0 {
-					req.Err = reply.NewRetryRequest("partition not available;"+
-						" partition '%d' is failing, retry again", req.Partition)
-					continue nextRequest
-				}
-				state.Partitions[i].CompleteRequests.Add(req)
-				found = true
-			}
-		}
-		if !found {
+		p := state.GetPartition(req.Partition)
+		if p == nil {
 			req.Err = reply.NewRetryRequest("partition not found;"+
 				" partition '%d' may have moved, retry again", req.Partition)
+			continue
 		}
+		if p.State.Failures != 0 {
+			req.Err = reply.NewRetryRequest("partition not available;"+
+				" partition '%d' is failing, retry again", req.Partition)
+			continue
+		}
+		p.CompleteRequests.Add(req)
 	}
 }
 
 func (l *Logical) assignRetryRequests(state *QueueState) {
-nextRequest:
 	for _, req := range state.Retries.Requests {
 		if req == nil {
 			continue
 		}
-		var found bool
-		for i, p := range state.Partitions {
-			// Assign the retry request to the partition if found
-			if req.Partition == p.Info.PartitionNum {
-				if p.State.Failures != 0 {
-					req.Err = reply.NewRetryRequest("partition not available;"+
-						" partition '%d' is failing, retry again", req.Partition)
-					continue nextRequest
-				}
-				state.Partitions[i].RetryRequests.Add(req)
-				found = true
-			}
-		}
-		if !found {
+		p := state.GetPartition(req.Partition)
+		if p == nil {
 			req.Err = reply.NewRetryRequest("partition not found;"+
 				" partition '%d' may have moved, retry again", req.Partition)
+			continue
+		}
+		if p.State.Failures != 0 {
+			req.Err = reply.NewRetryRequest("partition not available;"+
+				" partition '%d' is failing, retry again", req.Partition)
+			continue
+		}
+		p.RetryRequests.Add(req)
+	}
+}
+
+// lastHealthyPartition returns the last partition in sort order with no failures, or nil.
+// TODO: This should check for partition availability see docs/adr/0023-partition-maintenance.md
+func lastHealthyPartition(partitions []*Partition) *Partition {
+	for _, p := range slices.Backward(partitions) {
+		if p.State.Failures == 0 {
+			return p
 		}
 	}
+	return nil
 }
 
 // sortPartitionsByLoad sorts partitions by failures (ascending) then UnLeased (ascending)

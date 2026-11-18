@@ -287,6 +287,100 @@ func testShutdown(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		require.Error(t, produceErr)
 	})
 
+	t.Run("PauseWithWaitingHotRequestsThenShutdown", func(t *testing.T) {
+		queueName := random.String("queue-", 10)
+		storage := setup()
+		defer tearDown()
+
+		d := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: storage})
+		c, ctx := d.MustClient(), d.Context()
+		defer d.cancel()
+
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			QueueName:           queueName,
+			LeaseTimeout:        "1m0s",
+			ExpireTimeout:       "24h0m0s",
+			RequestedPartitions: 1,
+		})
+
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			QueueName:      queueName,
+			RequestTimeout: "5s",
+			Items:          produceRandomItems(2),
+		}))
+
+		var lease pb.QueueLeaseResponse
+		require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+			ClientId:       random.String("client-", 10),
+			RequestTimeout: "5s",
+			QueueName:      queueName,
+			BatchSize:      2,
+		}, &lease))
+		require.Len(t, lease.Items, 2)
+
+		require.NoError(t, d.Service().PauseQueue(ctx, queueName))
+
+		heldCtx, cancelHeld := context.WithCancel(ctx)
+		defer cancelHeld()
+
+		errs := make([]error, 4)
+		duringCalls(cancelHeld, func() {
+			// Wait until the paused request loop holds all four requests
+			require.Eventually(t, func() bool {
+				var resp pb.QueueStatsResponse
+				require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &resp))
+				return resp.LogicalQueues[0].InFlight == 4
+			}, 10*time.Second, 100*time.Millisecond)
+
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			require.NoError(t, d.d.Shutdown(shutdownCtx))
+		}, func() {
+			errs[0] = c.QueueProduce(heldCtx, &pb.QueueProduceRequest{
+				QueueName:      queueName,
+				RequestTimeout: "20s",
+				Items:          produceRandomItems(1),
+			})
+		}, func() {
+			errs[1] = c.QueueLease(heldCtx, &pb.QueueLeaseRequest{
+				ClientId:       random.String("client-", 10),
+				RequestTimeout: "20s",
+				QueueName:      queueName,
+				BatchSize:      1,
+			}, &pb.QueueLeaseResponse{})
+		}, func() {
+			errs[2] = c.QueueComplete(heldCtx, &pb.QueueCompleteRequest{
+				QueueName:      queueName,
+				Partition:      lease.Partition,
+				RequestTimeout: "20s",
+				Ids:            []string{lease.Items[0].Id},
+			})
+		}, func() {
+			errs[3] = c.QueueRetry(heldCtx, &pb.QueueRetryRequest{
+				QueueName: queueName,
+				Partition: lease.Partition,
+				Items:     []*pb.QueueRetryItem{{Id: lease.Items[1].Id}},
+			})
+		})
+
+		// Every held request is cancelled, none is applied
+		for _, err := range errs {
+			assert.ErrorContains(t, err, "queue is shutting down")
+		}
+
+		// A second daemon sees the two leased items untouched
+		d2 := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: storage})
+		c2, ctx2 := d2.MustClient(), d2.Context()
+		defer d2.Shutdown(t)
+
+		var list pb.StorageItemsListResponse
+		require.NoError(t, c2.StorageItemsList(ctx2, queueName, 0, &list, &querator.ListOptions{Limit: 100}))
+		require.Len(t, list.Items, 2)
+		for _, item := range list.Items {
+			assert.True(t, item.IsLeased)
+		}
+	})
+
 	t.Run("ShutdownDuringUnpauseDrain", func(t *testing.T) {
 		queueName := random.String("queue-", 10)
 		storage := setup()

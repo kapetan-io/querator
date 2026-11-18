@@ -112,9 +112,9 @@ type Logical struct {
 	//  can check for this flag and avoid routing clients to this Logical Queue.
 	// Failures      atomic.Bool
 
-	requestCh chan *Request
+	requestCh requestInbox
 
-	shutdownCh chan *types.ShutdownRequest
+	shutdownCh shutdownRequests
 	wg         sync.WaitGroup
 	conf       LogicalConfig
 	log        *slog.Logger
@@ -135,8 +135,8 @@ func SpawnLogicalQueue(conf LogicalConfig) (*Logical, error) {
 	set.Default(&conf.Clock, clock.NewProvider())
 
 	l := &Logical{
-		shutdownCh: make(chan *types.ShutdownRequest),
-		requestCh:  make(chan *Request, conf.MaxRequestsPerQueue),
+		shutdownCh: make(shutdownRequests),
+		requestCh:  make(requestInbox, conf.MaxRequestsPerQueue),
 		instanceID: random.Alpha("", 10),
 		conf:       conf,
 	}
@@ -266,9 +266,15 @@ func (l *Logical) Lease(ctx context.Context, req *types.LeaseRequest) error {
 		return reply.NewRetryRequest(MsgQueueOverLoaded)
 	}
 
-	// Wait until the request has been processed
-	<-req.ReadyCh
-	return req.Err
+	// Wait until the request has been processed or the client has gone away. If the
+	// client goes away the request loop may still lease items to this request after we return.
+	// See docs/adr/0009-client-timeouts.md
+	select {
+	case <-req.ReadyCh:
+		return req.Err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // Complete is called by clients who wish to mark an item as complete. The call will block
@@ -645,14 +651,13 @@ type QueueState struct {
 	Retries           types.RetryBatch
 	Producers         types.ProduceBatch
 	Leases            types.LeaseBatch
-	NextMaintenanceCh <-chan clock.Time
+	NextMaintenanceCh requestTimeoutAlarm
 	LifecycleTimer    clock.Timer
 	ScheduledTimer    clock.Timer
 	Partitions        []*Partition
-	// Shutdown is set once handleShutdown has run, from either the main or the pause loop.
-	// It is the only signal the request loop exits on; exiting on the inShutdown flag alone
-	// would skip handleShutdown and strand the sender on shutdownCh (ENG-160).
-	Shutdown bool
+	// Paused holds produce, lease, complete and retry requests in state unprocessed, and stops
+	// the lifecycle, scheduled and request timeout timers, until a pause request cancels it.
+	Paused bool
 }
 
 func (q *QueueState) GetPartition(num int) *Partition {
@@ -677,30 +682,34 @@ func (l *Logical) requestLoop() {
 			slog.Int("Completes", len(state.Completes.Requests)),
 			slog.Int("LifeCycles", len(state.LifeCycles.Requests)),
 			slog.Int("InFlight", int(l.inFlight.Load())),
+			slog.Bool("Paused", state.Paused),
 		)
+
+		// A nil channel never fires, so a paused loop waits only on requests and shutdown.
+		lifecycleCh, scheduledCh, maintenanceCh := state.LifecycleTimer.C(), state.ScheduledTimer.C(), state.NextMaintenanceCh
+		if state.Paused {
+			lifecycleCh, scheduledCh, maintenanceCh = nil, nil, nil
+		}
 
 		select {
 		case req := <-l.requestCh:
 			l.handleRequest(&state, req)
-			if state.Shutdown {
-				return
-			}
 
 		case req := <-l.shutdownCh:
 			l.handleShutdown(&state, req)
 			return
 
-		case <-state.LifecycleTimer.C():
+		case <-lifecycleCh:
 			l.log.LogAttrs(context.Background(), LevelDebugAll, "lifecycle timer fired")
 			l.runLifecycle(&state)
 			state.LifecycleTimer.Reset(l.minNextLifecycleRun(&state))
 
-		case <-state.ScheduledTimer.C():
+		case <-scheduledCh:
 			l.log.LogAttrs(context.Background(), LevelDebugAll, "scheduled timer fired")
 			l.runScheduled(&state)
 			state.ScheduledTimer.Reset(l.minNextScheduledRun(&state))
 
-		case <-state.NextMaintenanceCh:
+		case <-maintenanceCh:
 			l.handleRequestTimeouts(&state)
 		}
 	}
@@ -709,7 +718,13 @@ func (l *Logical) requestLoop() {
 func (l *Logical) handleRequest(state *QueueState, req *Request) {
 	switch req.Method {
 	case MethodProduce, MethodProduceInternal, MethodLease, MethodComplete, MethodRetry:
-		l.handleHotRequests(state, req)
+		if state.Paused {
+			l.reqToState(req, state)
+			return
+		}
+		if cold := l.handleHotRequests(state, req); cold != nil {
+			l.handleColdRequests(state, cold)
+		}
 	case MethodStorageItemsList, MethodStorageItemsImport, MethodStorageItemsDelete,
 		MethodQueueStats, MethodQueuePause, MethodQueueClear, MethodUpdateInfo,
 		MethodUpdatePartitions, MethodReload:
@@ -729,13 +744,14 @@ func (l *Logical) handleRequestTimeouts(state *QueueState) {
 	}
 }
 
-func (l *Logical) handleHotRequests(state *QueueState, req *Request) {
+// handleHotRequests applies req and every hot request waiting behind it in requestCh. It
+// returns the first cold request it drew from requestCh, which the caller must handle next.
+func (l *Logical) handleHotRequests(state *QueueState, req *Request) *Request {
 	// If request is empty, do not consume more requests, the caller only wants us
 	// to process requests currently waiting in 'state'
+	var cold *Request
 	if req != nil {
-		// Consume all requests from the hot channel, adding the requests to
-		// the client request state.
-		l.consumeHotCh(state, req)
+		cold = l.consumeHotCh(state, req)
 	}
 
 	// Assign all the client requests in 'state' to appropriate partitions
@@ -785,6 +801,7 @@ func (l *Logical) handleHotRequests(state *QueueState, req *Request) {
 
 	// Handle any request timeouts and update our next run timer
 	l.handleRequestTimeouts(state)
+	return cold
 }
 
 func (l *Logical) isHotRequest(req *Request) bool {
@@ -801,32 +818,24 @@ func (l *Logical) isHotRequest(req *Request) bool {
 	return false
 }
 
-func (l *Logical) consumeHotCh(state *QueueState, req *Request) {
-	// Add the first request from the channel to the client request state
+// consumeHotCh adds req, and the hot requests already waiting in requestCh, to the client
+// request state. It stops at the first cold request and returns it, or returns nil.
+func (l *Logical) consumeHotCh(state *QueueState, req *Request) *Request {
 	l.reqToState(req, state)
 
-EMPTY:
-	// Add any hot requests in the requestCh to the client requests state
-	for {
+	// Only this goroutine receives from requestCh, so it holds at least this many requests.
+	for range len(l.requestCh) {
 		select {
-		case req := <-l.requestCh:
-			// Only consume hot requests (produce, lease, complete, retry, lifecycle)
-			if l.isHotRequest(req) {
-				l.reqToState(req, state)
-			} else {
-				// Put cold request back on channel for later processing
-				select {
-				case l.requestCh <- req:
-				default:
-					// Channel full, handle it now
-					l.handleColdRequests(state, req)
-				}
-				break EMPTY
+		case next := <-l.requestCh:
+			if !l.isHotRequest(next) {
+				return next
 			}
+			l.reqToState(next, state)
 		default:
-			break EMPTY
+			return nil
 		}
 	}
+	return nil
 }
 
 func (l *Logical) reqToState(req *Request, state *QueueState) {
@@ -853,7 +862,7 @@ func (l *Logical) reqToState(req *Request, state *QueueState) {
 }
 
 // -------------------------------------------------
-// Handlers for the main and pause loops
+// Handlers for requestLoop
 // -------------------------------------------------
 
 func (l *Logical) queueRequest(ctx context.Context, r *Request) error {
@@ -861,7 +870,7 @@ func (l *Logical) queueRequest(ctx context.Context, r *Request) error {
 		return ErrQueueShutdown
 	}
 
-	r.ReadyCh = make(chan struct{})
+	r.ReadyCh = make(readySignal)
 	r.Context = ctx
 
 	select {

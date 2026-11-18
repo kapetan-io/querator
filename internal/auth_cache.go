@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"maps"
 	"sync"
 	"time"
 
@@ -20,6 +21,8 @@ const (
 	DefaultCacheTTL = 5 * time.Minute
 	// DefaultCleanupInterval is how often to clean up expired entries
 	DefaultCleanupInterval = time.Minute
+
+	lastUsedBufferSize = 64
 )
 
 // AuthCacheConfig configures the auth cache
@@ -36,11 +39,11 @@ type AuthCache struct {
 	cleanupInterval time.Duration
 	byKeyHash       map[string]authCacheEntry
 	byUserID        map[string]map[string]struct{}
-	lastUsedCh      chan lastUsedUpdate
+	lastUsedCh      lastUsedUpdates
 	users           store.Users
 	apiKeys         store.APIKeys
 	log             *slog.Logger
-	stopCleanup     chan struct{}
+	stop            stopSignal
 	sf              singleflight.Group
 	mu              sync.RWMutex
 	wg              sync.WaitGroup
@@ -69,8 +72,8 @@ func NewAuthCache(conf AuthCacheConfig) *AuthCache {
 		cleanupInterval: conf.CleanupInterval,
 		byKeyHash:       make(map[string]authCacheEntry),
 		byUserID:        make(map[string]map[string]struct{}),
-		lastUsedCh:      make(chan lastUsedUpdate, 64),
-		stopCleanup:     make(chan struct{}),
+		lastUsedCh:      make(lastUsedUpdates, lastUsedBufferSize),
+		stop:            make(stopSignal),
 		apiKeys:         conf.APIKeys,
 		users:           conf.Users,
 		log:             conf.Log,
@@ -193,12 +196,10 @@ func (c *AuthCache) InvalidateUser(userID string) {
 	c.mu.Unlock()
 }
 
-// Close stops the cleanup goroutine and waits for pending operations
+// Close stops the cleanup and last-used goroutines and waits for them
 func (c *AuthCache) Close() {
-	c.once.Do(func() {
-		close(c.stopCleanup)
-		c.wg.Wait()
-	})
+	c.once.Do(func() { close(c.stop) })
+	c.wg.Wait()
 }
 
 func (c *AuthCache) cleanupLoop() {
@@ -209,7 +210,7 @@ func (c *AuthCache) cleanupLoop() {
 		select {
 		case <-ticker.C:
 			c.cleanup()
-		case <-c.stopCleanup:
+		case <-c.stop:
 			return
 		}
 	}
@@ -218,17 +219,18 @@ func (c *AuthCache) cleanupLoop() {
 func (c *AuthCache) cleanup() {
 	now := clock.Now().UTC()
 	c.mu.Lock()
-	for hash, entry := range c.byKeyHash {
-		if now.After(entry.expiresAt) {
-			delete(c.byKeyHash, hash)
-			if hashes, ok := c.byUserID[entry.principal.UserID]; ok {
-				delete(hashes, hash)
-				if len(hashes) == 0 {
-					delete(c.byUserID, entry.principal.UserID)
-				}
+	maps.DeleteFunc(c.byKeyHash, func(hash string, entry authCacheEntry) bool {
+		if !now.After(entry.expiresAt) {
+			return false
+		}
+		if hashes, ok := c.byUserID[entry.principal.UserID]; ok {
+			delete(hashes, hash)
+			if len(hashes) == 0 {
+				delete(c.byUserID, entry.principal.UserID)
 			}
 		}
-	}
+		return true
+	})
 	c.mu.Unlock()
 }
 
@@ -236,17 +238,23 @@ func (c *AuthCache) lastUsedLoop() {
 	for {
 		select {
 		case update := <-c.lastUsedCh:
-			_ = c.apiKeys.UpdateLastUsed(context.Background(), update.keyID, update.at)
-		case <-c.stopCleanup:
+			c.recordLastUsed(update)
+		case <-c.stop:
 			// Drain remaining updates before exiting
 			for {
 				select {
 				case update := <-c.lastUsedCh:
-					_ = c.apiKeys.UpdateLastUsed(context.Background(), update.keyID, update.at)
+					c.recordLastUsed(update)
 				default:
 					return
 				}
 			}
 		}
+	}
+}
+
+func (c *AuthCache) recordLastUsed(update lastUsedUpdate) {
+	if err := c.apiKeys.UpdateLastUsed(context.Background(), update.keyID, update.at); err != nil {
+		c.log.Warn("failed to record api key last used time", "key_id", update.keyID, "error", err)
 	}
 }

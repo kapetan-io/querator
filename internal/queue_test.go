@@ -1,91 +1,54 @@
-package internal
+package internal_test
 
 import (
 	"context"
+	"testing"
+
+	"github.com/kapetan-io/querator/internal"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
-// This is a happy path unit test for internal.NewQueue() DO NOT ADD MORE TESTS
-// Remove this test once functional tests cover this scenario.
-func TestNewQueue(t *testing.T) {
-	q := NewQueue(types.QueueInfo{
+// Unreachable from the service: QueuesManager spawns one Logical per queue, so rotation across
+// several Logicals can only be driven through the internal package's exported API.
+func TestQueueGetNextRotatesOverLogicals(t *testing.T) {
+	q := internal.NewQueue(types.QueueInfo{
 		PartitionInfo: []types.PartitionInfo{
-			{
-				PartitionNum: 0,
-			},
-			{
-				PartitionNum: 1,
-			},
-			{
-				PartitionNum: 2,
-			},
+			{PartitionNum: 0},
+			{PartitionNum: 1},
+			{PartitionNum: 2},
 		},
 	})
 
-	l1, err := SpawnLogicalQueue(LogicalConfig{
-		QueueInfo: types.QueueInfo{
-			PartitionInfo: []types.PartitionInfo{
-				{
-					PartitionNum: 0,
-				},
+	var logicals []*internal.Logical
+	for num := range 3 {
+		l, err := internal.SpawnLogicalQueue(internal.LogicalConfig{
+			QueueInfo: types.QueueInfo{
+				PartitionInfo: []types.PartitionInfo{{PartitionNum: num}},
 			},
-		},
-	})
-	require.NoError(t, err)
-	defer func() { _ = l1.Shutdown(context.Background()) }()
-	l2, err := SpawnLogicalQueue(LogicalConfig{
-		QueueInfo: types.QueueInfo{
-			PartitionInfo: []types.PartitionInfo{
-				{
-					PartitionNum: 1,
-				},
-			},
-		},
-	})
-	require.NoError(t, err)
-	defer func() { _ = l2.Shutdown(context.Background()) }()
-	l3, err := SpawnLogicalQueue(LogicalConfig{
-		QueueInfo: types.QueueInfo{
-			PartitionInfo: []types.PartitionInfo{
-				{
-					PartitionNum: 2,
-				},
-			},
-		},
-	})
-	require.NoError(t, err)
-	defer func() { _ = l3.Shutdown(context.Background()) }()
-	require.NotNil(t, q.AddLogical(l1, l2, l3))
+		})
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, l.Shutdown(context.Background())) })
+		logicals = append(logicals, l)
+	}
+	require.NotNil(t, q.AddLogical(logicals...))
+	// Adding the same Logical twice does not add it to the rotation twice.
+	require.NotNil(t, q.AddLogical(logicals[0]))
 
-	assert.Equal(t, 3, len(q.GetAll()))
+	assert.Equal(t, logicals, q.GetAll())
 
-	_, l, err := q.GetByPartition(0)
-	require.NoError(t, err)
-	assert.Equal(t, 0, l.conf.PartitionInfo[0].PartitionNum)
+	for num, want := range logicals {
+		got, err := q.GetByPartition(num)
+		require.NoError(t, err)
+		assert.Same(t, want, got)
+	}
 
-	_, l, err = q.GetByPartition(1)
-	require.NoError(t, err)
-	assert.Equal(t, 1, l.conf.PartitionInfo[0].PartitionNum)
-
-	_, l, err = q.GetByPartition(2)
-	require.NoError(t, err)
-	assert.Equal(t, 2, l.conf.PartitionInfo[0].PartitionNum)
-
-	_, n := q.GetNext()
-	assert.Equal(t, 0, n.conf.PartitionInfo[0].PartitionNum)
-	_, n = q.GetNext()
-	assert.Equal(t, 1, n.conf.PartitionInfo[0].PartitionNum)
-	_, n = q.GetNext()
-	assert.Equal(t, 2, n.conf.PartitionInfo[0].PartitionNum)
-	_, n = q.GetNext()
-	assert.Equal(t, 0, n.conf.PartitionInfo[0].PartitionNum)
-	_, n = q.GetNext()
-	assert.Equal(t, 1, n.conf.PartitionInfo[0].PartitionNum)
-	_, n = q.GetNext()
-	assert.Equal(t, 2, n.conf.PartitionInfo[0].PartitionNum)
-	_, n = q.GetNext()
-	assert.Equal(t, 0, n.conf.PartitionInfo[0].PartitionNum)
+	assert.Same(t, logicals[0], q.GetNext())
+	assert.Same(t, logicals[1], q.GetNext())
+	assert.Same(t, logicals[2], q.GetNext())
+	assert.Same(t, logicals[0], q.GetNext())
+	assert.Same(t, logicals[1], q.GetNext())
+	assert.Same(t, logicals[2], q.GetNext())
+	assert.Same(t, logicals[0], q.GetNext())
 }

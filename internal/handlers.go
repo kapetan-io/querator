@@ -103,53 +103,23 @@ func (l *Logical) handleStats(state *QueueState, r *Request) {
 	close(r.ReadyCh)
 }
 
-// handlePause places Logical into a special loop where operations none of the // produce,
-// lease, complete, retry operations will be processed until we leave the loop.
+// handlePause sets or cancels state.Paused. While paused, requestLoop holds produce, lease,
+// complete and retry requests in state; cancelling the pause applies them.
 func (l *Logical) handlePause(state *QueueState, r *Request) {
 	pr := r.Request.(*types.PauseRequest)
-
-	if !pr.Pause {
-		close(r.ReadyCh)
-		return
-	}
 	close(r.ReadyCh)
 
-	l.log.Debug("paused", "logical", l.instanceID)
-	defer l.log.Debug("un-paused", "logical", l.instanceID)
-
-	for {
-		select {
-		case req := <-l.requestCh:
-			if l.isHotRequest(req) {
-				l.consumeHotCh(state, req)
-				continue
-			}
-			switch req.Method {
-			case MethodQueuePause:
-				pr := req.Request.(*types.PauseRequest)
-				if pr.Pause {
-					// Already paused, ignore this request
-					close(req.ReadyCh)
-					continue
-				}
-				// Cancel the pause
-				close(req.ReadyCh)
-				// Process any hot requests waiting
-				l.handleHotRequests(state, nil)
-				return
-			case MethodStorageItemsList, MethodStorageItemsImport, MethodStorageItemsDelete,
-				MethodQueueStats, MethodQueueClear, MethodUpdateInfo,
-				MethodUpdatePartitions, MethodReload:
-				l.handleColdRequests(state, req)
-			default:
-				assert.Unreachable(fmt.Sprintf("undefined request method '%d'", req.Method))
-			}
-		case req := <-l.shutdownCh:
-			// Once handled, requestLoop() notices state.Shutdown and exits
-			l.handleShutdown(state, req)
-			return
-		}
+	if pr.Pause == state.Paused {
+		return
 	}
+	state.Paused = pr.Pause
+
+	if state.Paused {
+		l.log.Debug("paused", "logical", l.instanceID)
+		return
+	}
+	l.log.Debug("un-paused", "logical", l.instanceID)
+	l.handleHotRequests(state, nil)
 }
 
 func (l *Logical) handleClear(_ *QueueState, req *Request) {
@@ -220,35 +190,9 @@ func (l *Logical) handleShutdown(state *QueueState, req *types.ShutdownRequest) 
 		}
 	}
 
-	// Consume all requests currently in flight
-	for l.inFlight.Load() != 0 {
-		select {
-		case r := <-l.requestCh:
-			switch r.Method {
-			case MethodProduce, MethodProduceInternal:
-				o := r.Request.(*types.ProduceRequest)
-				o.Err = ErrQueueShutdown
-				close(o.ReadyCh)
-			case MethodLease:
-				o := r.Request.(*types.LeaseRequest)
-				o.Err = ErrQueueShutdown
-				close(o.ReadyCh)
-			case MethodComplete:
-				o := r.Request.(*types.CompleteRequest)
-				o.Err = ErrQueueShutdown
-				close(o.ReadyCh)
-			case MethodRetry:
-				o := r.Request.(*types.RetryRequest)
-				o.Err = ErrQueueShutdown
-				close(o.ReadyCh)
-			default:
-				assert.Unreachable(fmt.Sprintf("undefined request method '%d'", r.Method))
-			}
-		default:
-			// If there is a request still in flight, it is possible
-			// it hasn't been added to the channel yet, so we continue trying
-			// until there are no more waiting requests.
-		}
+	if err := l.rejectInFlight(req.Context); err != nil {
+		l.log.Warn("shutdown context ended before in-flight requests drained", "error", err)
+		req.Err = err
 	}
 
 	state.LifecycleTimer.Stop()
@@ -264,6 +208,51 @@ func (l *Logical) handleShutdown(state *QueueState, req *types.ShutdownRequest) 
 			req.Err = err
 		}
 	}
-	state.Shutdown = true
 	close(req.ReadyCh)
+}
+
+// rejectInFlight answers every request still in requestCh with ErrQueueShutdown until no
+// caller is in flight, or until ctx ends.
+func (l *Logical) rejectInFlight(ctx context.Context) error {
+	for {
+		if l.inFlight.Load() == 0 {
+			return nil
+		}
+		select {
+		case r := <-l.requestCh:
+			rejectWithShutdown(r)
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			// A caller in flight may not have sent its request yet, so check again.
+		}
+	}
+}
+
+func rejectWithShutdown(r *Request) {
+	switch r.Method {
+	case MethodProduce, MethodProduceInternal:
+		o := r.Request.(*types.ProduceRequest)
+		o.Err = ErrQueueShutdown
+		close(o.ReadyCh)
+	case MethodLease:
+		o := r.Request.(*types.LeaseRequest)
+		o.Err = ErrQueueShutdown
+		close(o.ReadyCh)
+	case MethodComplete:
+		o := r.Request.(*types.CompleteRequest)
+		o.Err = ErrQueueShutdown
+		close(o.ReadyCh)
+	case MethodRetry:
+		o := r.Request.(*types.RetryRequest)
+		o.Err = ErrQueueShutdown
+		close(o.ReadyCh)
+	case MethodStorageItemsList, MethodStorageItemsImport, MethodStorageItemsDelete,
+		MethodQueueStats, MethodQueuePause, MethodQueueClear, MethodUpdateInfo,
+		MethodUpdatePartitions, MethodReload:
+		r.Err = ErrQueueShutdown
+		close(r.ReadyCh)
+	default:
+		assert.Unreachable(fmt.Sprintf("undefined request method '%d'", r.Method))
+	}
 }

@@ -18,6 +18,7 @@ import (
 	"github.com/kapetan-io/querator/transport/reply"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/set"
+	"github.com/kapetan-io/tiger/assert"
 	"github.com/segmentio/ksuid"
 )
 
@@ -950,8 +951,7 @@ func (b *BadgerPartition) TakeAction(_ context.Context, batch types.LifeCycleBat
 					state.UnLeased++
 
 				default:
-					b.conf.Log.Warn("assertion failed; undefined action", "action",
-						fmt.Sprintf("0x%X", int(a.Action)))
+					assert.Unreachable(fmt.Sprintf("undefined action kind '0x%X'", int(a.Action)))
 				}
 			}
 		}

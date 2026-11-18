@@ -10,6 +10,7 @@ require (
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/kapetan-io/errors v0.4.0
 	github.com/kapetan-io/tackle v0.13.0
+	github.com/kapetan-io/tiger v0.0.0-20261116085932-9a3119cc8314
 	github.com/prometheus/client_golang v1.19.1
 	github.com/segmentio/ksuid v1.0.4
 	github.com/spf13/cobra v1.9.1

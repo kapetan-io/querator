@@ -31,6 +31,7 @@ import (
 	"github.com/kapetan-io/querator/service"
 	"github.com/kapetan-io/querator/transport"
 	"github.com/kapetan-io/tackle/set"
+	"github.com/kapetan-io/tiger/assert"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/net/netutil"
@@ -121,9 +122,7 @@ func (d *Daemon) Service() *service.Service {
 
 func (d *Daemon) MustClient() *querator.Client {
 	c, err := d.Client()
-	if err != nil {
-		panic(fmt.Sprintf("[%s] failed to init daemon client - '%s'", d.conf.Service.InstanceID, err))
-	}
+	assert.NoError(err, fmt.Sprintf("[%s] failed to init daemon client", d.conf.Service.InstanceID))
 	return c
 }
 

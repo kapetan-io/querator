@@ -20,6 +20,7 @@ import (
 	"github.com/kapetan-io/querator/transport/reply"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/set"
+	"github.com/kapetan-io/tiger/assert"
 	"github.com/segmentio/ksuid"
 )
 
@@ -1733,10 +1734,7 @@ func (p *PostgresPartition) TakeAction(ctx context.Context, batch types.LifeCycl
 				}
 
 			default:
-				if p.conf.Log != nil {
-					p.conf.Log.Warn("assertion failed; undefined action", "action",
-						fmt.Sprintf("0x%X", int(action.Action)))
-				}
+				assert.Unreachable(fmt.Sprintf("undefined action kind '0x%X'", int(action.Action)))
 			}
 		}
 	}

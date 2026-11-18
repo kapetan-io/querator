@@ -29,6 +29,7 @@ import (
 	"github.com/kapetan-io/tackle/color"
 	"github.com/kapetan-io/tackle/random"
 	"github.com/kapetan-io/tackle/set"
+	tigerassert "github.com/kapetan-io/tiger/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/mongodb"
@@ -88,7 +89,7 @@ func (s *sharedPostgresContainer) Start(ctx context.Context) (err error) {
 			if strings.Contains(msg, "rootless Docker not found") {
 				err = fmt.Errorf("Docker is not available: %s", msg)
 			} else {
-				panic(r)
+				err = fmt.Errorf("container start panicked: %s", msg)
 			}
 		}
 	}()
@@ -273,14 +274,10 @@ type badgerTestSetup struct {
 
 func (b *badgerTestSetup) Setup(bc store.BadgerConfig) store.Config {
 	if !dirExists(b.Dir) {
-		if err := os.Mkdir(b.Dir, 0777); err != nil {
-			panic(err)
-		}
+		tigerassert.NoError(os.Mkdir(b.Dir, 0777), "failed to create badger test directory")
 	}
 	b.Dir = filepath.Join(b.Dir, random.String("test-data-", 10))
-	if err := os.Mkdir(b.Dir, 0777); err != nil {
-		panic(err)
-	}
+	tigerassert.NoError(os.Mkdir(b.Dir, 0777), "failed to create badger test data directory")
 	bc.StorageDir = b.Dir
 	bc.Log = log
 
@@ -302,9 +299,7 @@ func (b *badgerTestSetup) Setup(bc store.BadgerConfig) store.Config {
 }
 
 func (b *badgerTestSetup) Teardown() {
-	if err := os.RemoveAll(b.Dir); err != nil {
-		panic(err)
-	}
+	tigerassert.NoError(os.RemoveAll(b.Dir), "failed to remove badger test data directory")
 }
 
 // ---------------------------------------------------------------------
@@ -318,14 +313,10 @@ type postgresTestSetup struct {
 
 func (p *postgresTestSetup) Setup(conf store.PostgresConfig) store.Config {
 	container, err := getSharedPostgresContainer()
-	if err != nil {
-		panic(fmt.Sprintf("failed to get shared postgres container: %v", err))
-	}
+	tigerassert.NoError(err, "failed to get shared postgres container")
 
 	database, err := container.CreateDatabase(context.Background())
-	if err != nil {
-		panic(fmt.Sprintf("failed to create test database: %v", err))
-	}
+	tigerassert.NoError(err, "failed to create test database")
 
 	p.dsn = database.DSN
 	p.dbName = database.Name
@@ -394,7 +385,7 @@ func (s *sharedMongoContainer) Start(ctx context.Context) (err error) {
 			if strings.Contains(msg, "rootless Docker not found") {
 				err = fmt.Errorf("Docker is not available: %s", msg)
 			} else {
-				panic(r)
+				err = fmt.Errorf("container start panicked: %s", msg)
 			}
 		}
 	}()
@@ -455,9 +446,7 @@ type mongoTestSetup struct {
 
 func (m *mongoTestSetup) Setup(conf store.MongoConfig) store.Config {
 	container, err := getSharedMongoContainer()
-	if err != nil {
-		panic(fmt.Sprintf("failed to get shared mongo container: %v", err))
-	}
+	tigerassert.NoError(err, "failed to get shared mongo container")
 
 	m.dbName = container.DatabaseName()
 

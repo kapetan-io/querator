@@ -17,6 +17,7 @@ import (
 	"github.com/kapetan-io/tackle/random"
 	"github.com/kapetan-io/tackle/retry"
 	"github.com/kapetan-io/tackle/set"
+	"github.com/kapetan-io/tiger/assert"
 )
 
 type MethodKind int
@@ -714,7 +715,7 @@ func (l *Logical) handleRequest(state *QueueState, req *Request) {
 		MethodUpdatePartitions, MethodReload:
 		l.handleColdRequests(state, req)
 	default:
-		panic(fmt.Sprintf("undefined request method '%d'", req.Method))
+		assert.Unreachable(fmt.Sprintf("undefined request method '%d'", req.Method))
 	}
 }
 
@@ -790,9 +791,14 @@ func (l *Logical) isHotRequest(req *Request) bool {
 	switch req.Method {
 	case MethodProduce, MethodProduceInternal, MethodLease, MethodComplete, MethodRetry:
 		return true
-	default:
+	case MethodStorageItemsList, MethodStorageItemsImport, MethodStorageItemsDelete,
+		MethodQueueStats, MethodQueuePause, MethodQueueClear, MethodUpdateInfo,
+		MethodUpdatePartitions, MethodReload:
 		return false
+	default:
+		assert.Unreachable(fmt.Sprintf("undefined request method '%d'", req.Method))
 	}
+	return false
 }
 
 func (l *Logical) consumeHotCh(state *QueueState, req *Request) {
@@ -842,7 +848,7 @@ func (l *Logical) reqToState(req *Request, state *QueueState) {
 	case MethodLease:
 		addIfUnique(&state.Leases, req.Request.(*types.LeaseRequest))
 	default:
-		panic(fmt.Sprintf("undefined request method '%d'", req.Method))
+		assert.Unreachable(fmt.Sprintf("undefined request method '%d'", req.Method))
 	}
 }
 

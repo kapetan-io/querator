@@ -720,10 +720,7 @@ func TestPartitionAffinity(t *testing.T) {
 			RequestedPartitions: 4,
 		})
 
-		var stats pb.QueueStatsResponse
-		require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats))
-		require.Len(t, stats.LogicalQueues, 1)
-		assert.Len(t, stats.LogicalQueues[0].Partitions, 4)
+		require.Equal(t, map[string]int{"memory-0": 2, "memory-1": 2}, partitionsPerBackend(t, ctx, c, queueName))
 
 		// Each produce request lands in a single partition (ADR-0019), so produce
 		// one request per partition to ensure both backends receive items.

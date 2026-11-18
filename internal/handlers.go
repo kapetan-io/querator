@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
+	"github.com/kapetan-io/tiger/assert"
 	"log/slog"
 )
 
@@ -34,7 +35,7 @@ func (l *Logical) handleColdRequests(state *QueueState, req *Request) {
 	case MethodReload:
 		l.handleReload(state, req)
 	default:
-		panic(fmt.Sprintf("undefined request method '%d'", req.Method))
+		assert.Unreachable(fmt.Sprintf("undefined request method '%d'", req.Method))
 	}
 }
 
@@ -52,6 +53,8 @@ func (l *Logical) handleStorageRequests(req *Request) {
 			if err := l.conf.StoragePartitions[sr.Partition].ListScheduled(req.Context, sr.Items, sr.Options); err != nil {
 				req.Err = err
 			}
+		default:
+			assert.Unreachable(fmt.Sprintf("undefined list kind '%d'", sr.ListKind))
 		}
 	case MethodStorageItemsImport:
 		if err := l.conf.StoragePartitions[sr.Partition].Add(req.Context, *sr.Items, l.conf.Clock.Now().UTC()); err != nil {
@@ -62,7 +65,7 @@ func (l *Logical) handleStorageRequests(req *Request) {
 			req.Err = err
 		}
 	default:
-		panic(fmt.Sprintf("undefined request method '%d'", req.Method))
+		assert.Unreachable(fmt.Sprintf("undefined request method '%d'", req.Method))
 	}
 	close(req.ReadyCh)
 }
@@ -134,8 +137,12 @@ func (l *Logical) handlePause(state *QueueState, r *Request) {
 				// Process any hot requests waiting
 				l.handleHotRequests(state, nil)
 				return
-			default:
+			case MethodStorageItemsList, MethodStorageItemsImport, MethodStorageItemsDelete,
+				MethodQueueStats, MethodQueueClear, MethodUpdateInfo,
+				MethodUpdatePartitions, MethodReload:
 				l.handleColdRequests(state, req)
+			default:
+				assert.Unreachable(fmt.Sprintf("undefined request method '%d'", req.Method))
 			}
 		case req := <-l.shutdownCh:
 			// Once handled, requestLoop() notices state.Shutdown and exits
@@ -235,7 +242,7 @@ func (l *Logical) handleShutdown(state *QueueState, req *types.ShutdownRequest) 
 				o.Err = ErrQueueShutdown
 				close(o.ReadyCh)
 			default:
-				panic(fmt.Sprintf("undefined request method '%d'", r.Method))
+				assert.Unreachable(fmt.Sprintf("undefined request method '%d'", r.Method))
 			}
 		default:
 			// If there is a request still in flight, it is possible

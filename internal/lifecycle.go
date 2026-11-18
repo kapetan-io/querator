@@ -2,9 +2,11 @@ package internal
 
 import (
 	"context"
+	"fmt"
 	"github.com/dustin/go-humanize"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/tackle/clock"
+	"github.com/kapetan-io/tiger/assert"
 )
 
 // runLifecycle processes lifecycle actions for all partitions that are due
@@ -86,6 +88,8 @@ func (l *Logical) runLifecycle(state *QueueState) {
 					PartitionNum: partition.Info.PartitionNum,
 					Actions:      []types.Action{a},
 				})
+			default:
+				assert.Unreachable(fmt.Sprintf("undefined action kind '0x%X'", int(a.Action)))
 			}
 		}
 

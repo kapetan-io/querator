@@ -3,6 +3,7 @@ package daemon_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"testing"
@@ -23,15 +24,17 @@ func TestHealthEndpoint(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = d.Shutdown(ctx) }()
 
-	client := &http.Client{
-		Transport: &http.Transport{
-			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				serverConn, clientConn := net.Pipe()
-				_ = d.Listener.(*daemon.InMemoryListener).ServeConn(serverConn)
-				return clientConn, nil
-			},
+	pipes := &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			serverConn, clientConn := net.Pipe()
+			if err := d.Listener.(*daemon.InMemoryListener).ServeConn(serverConn); err != nil {
+				return nil, errors.Join(err, clientConn.Close(), serverConn.Close())
+			}
+			return clientConn, nil
 		},
 	}
+	defer pipes.CloseIdleConnections()
+	client := &http.Client{Transport: pipes}
 
 	resp, err := client.Get("http://inmemory/health")
 	require.NoError(t, err)

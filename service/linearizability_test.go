@@ -1,6 +1,7 @@
 package service_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -57,11 +58,12 @@ func testLinearizability(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	defer goleak.VerifyNone(t, goleakOptions...)
 
 	t.Run("ProduceLeaseComplete", func(t *testing.T) {
-		d, c, ctx := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: setup()})
+		d := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: setup()})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
 		}()
+		c, ctx := d.MustClient(), d.Context()
 
 		queueName := random.String("lin-", 10)
 		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
@@ -103,16 +105,20 @@ func testLinearizability(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		// Concurrent consumers race to lease and complete items.
 		var (
-			mu      sync.Mutex
-			opCount atomic.Int64
-			wg      sync.WaitGroup
+			mu        sync.Mutex
+			opCount   atomic.Int64
+			consumers []func(context.Context)
 		)
 
 		for ci := range numConsumers {
 			clientID := ci + 1
-			wg.Go(func() {
+			consumers = append(consumers, func(ctx context.Context) {
 				leaseClientID := random.String("lin-client-", 10)
-				for opCount.Load() < int64(numItems) {
+				// ctx bounds the loop if the queue never reaches numItems.
+				for ctx.Err() == nil {
+					if opCount.Load() >= int64(numItems) {
+						return
+					}
 					inp := linInput{op: opLease}
 					call := time.Now().UnixNano()
 
@@ -198,7 +204,7 @@ func testLinearizability(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			})
 		}
 
-		wg.Wait()
+		concurrently(len(consumers), func(i int) { consumers[i](ctx) })
 
 		t.Logf("recorded %d operations", len(history))
 
@@ -219,11 +225,12 @@ func testLinearizability(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	})
 
 	t.Run("ProduceLeaseRetryComplete", func(t *testing.T) {
-		d, c, ctx := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: setup()})
+		d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: setup()})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
 		}()
+		c, ctx := d.MustClient(), d.Context()
 
 		queueName := random.String("lin-", 10)
 		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
@@ -267,16 +274,20 @@ func testLinearizability(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		var (
 			mu        sync.Mutex
 			completed atomic.Int64
-			wg        sync.WaitGroup
+			consumers []func(context.Context)
 		)
 
 		for ci := range numConsumers {
 			clientID := ci + 1
-			wg.Go(func() {
+			consumers = append(consumers, func(ctx context.Context) {
 				rng := rand.New(rand.NewSource(int64(ci)))
 				leaseClientID := random.String("lin-client-", 10)
 
-				for completed.Load() < int64(numItems) {
+				// ctx bounds the loop if the queue never reaches numItems.
+				for ctx.Err() == nil {
+					if completed.Load() >= int64(numItems) {
+						return
+					}
 					call := time.Now().UnixNano()
 
 					var lease pb.QueueLeaseResponse
@@ -384,7 +395,7 @@ func testLinearizability(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			})
 		}
 
-		wg.Wait()
+		concurrently(len(consumers), func(i int) { consumers[i](ctx) })
 
 		t.Logf("recorded %d operations", len(history))
 
@@ -405,11 +416,12 @@ func testLinearizability(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	})
 
 	t.Run("LeaseExpiry", func(t *testing.T) {
-		d, c, ctx := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: setup()})
+		d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: setup()})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
 		}()
+		c, ctx := d.MustClient(), d.Context()
 
 		const leaseTimeout = 300 * time.Millisecond
 
@@ -456,7 +468,7 @@ func testLinearizability(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			mu        sync.Mutex
 			completed atomic.Int64
 			stallerWg sync.WaitGroup
-			wg        sync.WaitGroup
+			workers   []func(context.Context)
 		)
 
 		// Stallers: lease one item each, then let the lease expire.
@@ -464,7 +476,7 @@ func testLinearizability(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		for si := range numStallers {
 			clientID := si + 1
 			stallerWg.Add(1)
-			wg.Go(func() {
+			workers = append(workers, func(ctx context.Context) {
 				leaseClientID := random.String("lin-stall-", 10)
 				call := time.Now().UnixNano()
 
@@ -516,16 +528,19 @@ func testLinearizability(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			})
 		}
 
-		// Wait for all stallers to acquire their items before starting consumers.
-		stallerWg.Wait()
-
 		// Normal consumers: lease and complete.
 		for ci := range numConsumers {
 			clientID := numStallers + ci + 1
-			wg.Go(func() {
+			workers = append(workers, func(ctx context.Context) {
+				// Wait for all stallers to acquire their items before consuming.
+				stallerWg.Wait()
 				leaseClientID := random.String("lin-client-", 10)
 
-				for completed.Load() < int64(numItems) {
+				// ctx bounds the loop if the queue never reaches numItems.
+				for ctx.Err() == nil {
+					if completed.Load() >= int64(numItems) {
+						return
+					}
 					call := time.Now().UnixNano()
 
 					var lease pb.QueueLeaseResponse
@@ -600,7 +615,7 @@ func testLinearizability(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			})
 		}
 
-		wg.Wait()
+		concurrently(len(workers), func(i int) { workers[i](ctx) })
 
 		t.Logf("recorded %d operations", len(history))
 

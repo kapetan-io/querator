@@ -2,7 +2,6 @@ package service_test
 
 import (
 	"fmt"
-	"sync"
 	"testing"
 
 	"github.com/duh-rpc/duh-go"
@@ -56,11 +55,12 @@ func testNamespaces(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	testNamespacesUpdate(t, setup, tearDown)
 
 	t.Run("CRUD", func(t *testing.T) {
-		d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
 		}()
+		c, ctx := d.MustClient(), d.Context()
 
 		t.Run("Create", func(t *testing.T) {
 			nsName := random.String("ns-", 10)
@@ -115,11 +115,12 @@ func testNamespaces(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	})
 
 	t.Run("List", func(t *testing.T) {
-		d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
 		}()
+		c, ctx := d.MustClient(), d.Context()
 
 		// Create multiple namespaces
 		const numNamespaces = 10
@@ -170,11 +171,12 @@ func testNamespaces(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	})
 
 	t.Run("Errors", func(t *testing.T) {
-		d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
 		}()
+		c, ctx := d.MustClient(), d.Context()
 
 		t.Run("NamespacesCreate", func(t *testing.T) {
 			// Create a namespace first for the duplicate test
@@ -342,11 +344,12 @@ func testNamespaces(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 	t.Run("Queues", func(t *testing.T) {
 		t.Run("QueuesList", func(t *testing.T) {
-			d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+			d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
 			defer func() {
 				d.Shutdown(t)
 				tearDown()
 			}()
+			c, ctx := d.MustClient(), d.Context()
 
 			ns1 := random.String("ns1-", 10)
 			ns2 := random.String("ns2-", 10)
@@ -396,11 +399,12 @@ func testNamespaces(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		// Issue #5: Listing queues with a namespace filter returns only queues
 		// in that namespace, not queues from other namespaces.
 		t.Run("QueuesListNamespaceIsolation", func(t *testing.T) {
-			d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+			d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
 			defer func() {
 				d.Shutdown(t)
 				tearDown()
 			}()
+			c, ctx := d.MustClient(), d.Context()
 
 			ns1 := random.String("iso-a-", 10)
 			ns2 := random.String("iso-b-", 10)
@@ -436,11 +440,12 @@ func testNamespaces(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		// when the examined-item count reaches the limit would return an empty page,
 		// silently dropping matching items that appear later in the keyspace.
 		t.Run("QueuesListNamespaceFilterWithDominantOtherNamespace", func(t *testing.T) {
-			d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+			d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
 			defer func() {
 				d.Shutdown(t)
 				tearDown()
 			}()
+			c, ctx := d.MustClient(), d.Context()
 
 			// Use names that sort before "z-target" so ns2 queues appear first in key order
 			ns1 := "a-source-" + random.String("", 6)
@@ -487,11 +492,12 @@ func testNamespaces(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		t.Run("Errors", func(t *testing.T) {
 			t.Run("QueuesCreate", func(t *testing.T) {
-				d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+				d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
 				defer func() {
 					d.Shutdown(t)
 					tearDown()
 				}()
+				c, ctx := d.MustClient(), d.Context()
 
 				// Attempting to create a queue in a namespace that does not exist should fail
 				err := c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -510,31 +516,27 @@ func testNamespaces(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	})
 
 	t.Run("ConcurrentOperations", func(t *testing.T) {
-		d, c, ctx := newDaemon(t, clock.Minute, svc.Config{StorageConfig: setup()})
+		d := newDaemon(t, clock.Minute, svc.Config{StorageConfig: setup()})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
 		}()
+		c, ctx := d.MustClient(), d.Context()
 
 		const goroutines = 10
-		var wg sync.WaitGroup
+		concurrently(goroutines, func(i int) {
+			ns := fmt.Sprintf("concurrent-ns-%d", i)
 
-		for i := 0; i < goroutines; i++ {
-			wg.Go(func() {
-				ns := fmt.Sprintf("concurrent-ns-%d", i)
+			err := c.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: ns})
+			require.NoError(t, err)
 
-				err := c.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: ns})
-				require.NoError(t, err)
+			var listRes pb.NamespacesListResponse
+			err = c.NamespacesList(ctx, &listRes, nil)
+			require.NoError(t, err)
 
-				var listRes pb.NamespacesListResponse
-				err = c.NamespacesList(ctx, &listRes, nil)
-				require.NoError(t, err)
-
-				err = c.NamespacesDelete(ctx, &pb.NamespacesDeleteRequest{Name: ns})
-				require.NoError(t, err)
-			})
-		}
-		wg.Wait()
+			err = c.NamespacesDelete(ctx, &pb.NamespacesDeleteRequest{Name: ns})
+			require.NoError(t, err)
+		})
 	})
 }
 
@@ -542,11 +544,12 @@ func testNamespaceAPIKeyTag(t *testing.T, setup NewStorageFunc, tearDown func())
 	t.Helper()
 	t.Run("APIKeyTag", func(t *testing.T) {
 		t.Run("CreateWithAPIKeyTag", func(t *testing.T) {
-			d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+			d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
 			defer func() {
 				d.Shutdown(t)
 				tearDown()
 			}()
+			c, ctx := d.MustClient(), d.Context()
 
 			nsName := random.String("ns-", 10)
 			require.NoError(t, c.NamespacesCreate(ctx, &pb.NamespaceInfo{
@@ -565,11 +568,12 @@ func testNamespaceAPIKeyTag(t *testing.T, setup NewStorageFunc, tearDown func())
 		})
 
 		t.Run("CreateWithEmptyAPIKeyTag", func(t *testing.T) {
-			d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+			d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
 			defer func() {
 				d.Shutdown(t)
 				tearDown()
 			}()
+			c, ctx := d.MustClient(), d.Context()
 
 			nsName := random.String("ns-", 10)
 			require.NoError(t, c.NamespacesCreate(ctx, &pb.NamespaceInfo{
@@ -587,11 +591,12 @@ func testNamespaceAPIKeyTag(t *testing.T, setup NewStorageFunc, tearDown func())
 		})
 
 		t.Run("APIKeyTagValidationErrors", func(t *testing.T) {
-			d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+			d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
 			defer func() {
 				d.Shutdown(t)
 				tearDown()
 			}()
+			c, ctx := d.MustClient(), d.Context()
 
 			for _, test := range []struct {
 				Name string
@@ -638,11 +643,12 @@ func testNamespacesUpdate(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	t.Helper()
 	t.Run("NamespacesUpdate", func(t *testing.T) {
 		t.Run("UpdateAPIKeyTag", func(t *testing.T) {
-			d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+			d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
 			defer func() {
 				d.Shutdown(t)
 				tearDown()
 			}()
+			c, ctx := d.MustClient(), d.Context()
 
 			nsName := random.String("ns-", 10)
 			require.NoError(t, c.NamespacesCreate(ctx, &pb.NamespaceInfo{
@@ -664,11 +670,12 @@ func testNamespacesUpdate(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		})
 
 		t.Run("UpdateClearsAPIKeyTag", func(t *testing.T) {
-			d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+			d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
 			defer func() {
 				d.Shutdown(t)
 				tearDown()
 			}()
+			c, ctx := d.MustClient(), d.Context()
 
 			nsName := random.String("ns-", 10)
 			require.NoError(t, c.NamespacesCreate(ctx, &pb.NamespaceInfo{
@@ -690,11 +697,12 @@ func testNamespacesUpdate(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		})
 
 		t.Run("UpdateNonExistentNamespace", func(t *testing.T) {
-			d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+			d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
 			defer func() {
 				d.Shutdown(t)
 				tearDown()
 			}()
+			c, ctx := d.MustClient(), d.Context()
 
 			err := c.NamespacesUpdate(ctx, &pb.NamespaceInfo{
 				Name:      "nonexistent-ns-" + random.String("", 5),
@@ -708,11 +716,12 @@ func testNamespacesUpdate(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		})
 
 		t.Run("UpdateReservedNamespace", func(t *testing.T) {
-			d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+			d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
 			defer func() {
 				d.Shutdown(t)
 				tearDown()
 			}()
+			c, ctx := d.MustClient(), d.Context()
 
 			err := c.NamespacesUpdate(ctx, &pb.NamespaceInfo{
 				Name:      "_system",

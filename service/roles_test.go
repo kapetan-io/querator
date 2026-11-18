@@ -2,7 +2,6 @@ package service_test
 
 import (
 	"fmt"
-	"sync"
 	"testing"
 
 	"github.com/duh-rpc/duh-go"
@@ -48,8 +47,9 @@ func TestRoles(t *testing.T) {
 
 func testRoles(t *testing.T, setup NewStorageFunc) {
 	t.Run("RoleCreateAndList", func(t *testing.T) {
-		d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
+		d := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
 		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
 
 		ns := random.String("ns-", 10)
 		err := c.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: ns})
@@ -78,8 +78,9 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 	})
 
 	t.Run("RoleUpdate", func(t *testing.T) {
-		d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
+		d := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
 		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
 
 		ns := random.String("ns-", 10)
 		err := c.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: ns})
@@ -112,8 +113,9 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 	})
 
 	t.Run("RoleDelete", func(t *testing.T) {
-		d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
+		d := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
 		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
 
 		ns := random.String("ns-", 10)
 		err := c.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: ns})
@@ -144,8 +146,9 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 	})
 
 	t.Run("RoleBindingCreateAndList", func(t *testing.T) {
-		d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
+		d := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
 		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
 
 		ns := random.String("ns-", 10)
 		err := c.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: ns})
@@ -189,8 +192,9 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 	})
 
 	t.Run("RoleBindingDelete", func(t *testing.T) {
-		d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
+		d := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
 		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
 
 		ns := random.String("ns-", 10)
 		err := c.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: ns})
@@ -238,8 +242,9 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 	})
 
 	t.Run("RoleBindingDeleteWithManyBindings", func(t *testing.T) {
-		d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
+		d := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
 		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
 
 		ns := random.String("ns-", 10)
 		err := c.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: ns})
@@ -297,8 +302,9 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 	})
 
 	t.Run("RoleBindingDeleteWithEmptyNamespaceResolvesToSystem", func(t *testing.T) {
-		d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
+		d := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
 		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
 
 		// Create a user
 		var userRes pb.UserCreateResponse
@@ -350,8 +356,9 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 	})
 
 	t.Run("UserDeleteCascadeRoleBindings", func(t *testing.T) {
-		d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
+		d := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
 		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
 
 		ns := random.String("ns-", 10)
 		err := c.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: ns})
@@ -395,8 +402,9 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 	})
 
 	t.Run("RolesListPagination", func(t *testing.T) {
-		d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
+		d := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
 		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
 
 		ns := random.String("ns-", 10)
 		err := c.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: ns})
@@ -430,8 +438,9 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 	})
 
 	t.Run("RoleBindingsListPagination", func(t *testing.T) {
-		d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
+		d := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
 		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
 
 		ns := random.String("ns-", 10)
 		err := c.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: ns})
@@ -483,8 +492,9 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 	// Error Tests
 	t.Run("Errors", func(t *testing.T) {
 		t.Run("RolesCreate", func(t *testing.T) {
-			d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
+			d := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
 			defer d.Shutdown(t)
+			c, ctx := d.MustClient(), d.Context()
 
 			ns := random.String("ns-", 10)
 			err := c.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: ns})
@@ -553,8 +563,9 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 		t.Run("RolesUpdate", func(t *testing.T) {
 			t.Run("StandardRole", func(t *testing.T) {
 				storageConf := setup()
-				d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: storageConf})
+				d := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: storageConf})
 				defer d.Shutdown(t)
+				c, ctx := d.MustClient(), d.Context()
 
 				ns := random.String("ns-", 10)
 				err := c.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: ns})
@@ -582,8 +593,9 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 			})
 
 			t.Run("InvalidPermission", func(t *testing.T) {
-				d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
+				d := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
 				defer d.Shutdown(t)
+				c, ctx := d.MustClient(), d.Context()
 
 				ns := random.String("ns-", 10)
 				err := c.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: ns})
@@ -615,8 +627,9 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 		t.Run("RolesDelete", func(t *testing.T) {
 			t.Run("StandardRole", func(t *testing.T) {
 				storageConf := setup()
-				d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: storageConf})
+				d := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: storageConf})
 				defer d.Shutdown(t)
+				c, ctx := d.MustClient(), d.Context()
 
 				ns := random.String("ns-", 10)
 				err := c.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: ns})
@@ -643,8 +656,9 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 			})
 
 			t.Run("RoleHasBindings", func(t *testing.T) {
-				d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
+				d := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
 				defer d.Shutdown(t)
+				c, ctx := d.MustClient(), d.Context()
 
 				ns := random.String("ns-", 10)
 				err := c.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: ns})
@@ -688,8 +702,9 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 			})
 
 			t.Run("NotExist", func(t *testing.T) {
-				d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
+				d := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
 				defer d.Shutdown(t)
+				c, ctx := d.MustClient(), d.Context()
 
 				ns := random.String("ns-", 10)
 				err := c.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: ns})
@@ -707,8 +722,9 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 		})
 
 		t.Run("RoleBindingsCreate", func(t *testing.T) {
-			d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
+			d := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
 			defer d.Shutdown(t)
+			c, ctx := d.MustClient(), d.Context()
 
 			ns := random.String("ns-", 10)
 			err := c.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: ns})
@@ -813,8 +829,9 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 
 		t.Run("RoleBindingsDelete", func(t *testing.T) {
 			t.Run("NotExist", func(t *testing.T) {
-				d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
+				d := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
 				defer d.Shutdown(t)
+				c, ctx := d.MustClient(), d.Context()
 
 				ns := random.String("ns-", 10)
 				err := c.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: ns})
@@ -848,8 +865,9 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 			// (binding removed) is correct. This test documents that the current implementation
 			// is not idempotent for concurrent deletes.
 			t.Run("ConcurrentDelete", func(t *testing.T) {
-				d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
+				d := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
 				defer d.Shutdown(t)
+				c, ctx := d.MustClient(), d.Context()
 
 				ns := random.String("ns-", 10)
 				err := c.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: ns})
@@ -881,18 +899,14 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 				// Two goroutines both attempt to delete the same binding concurrently.
 				// One succeeds; the other may receive ErrRoleBindingNotExist due to the
 				// non-atomic fetch→list→delete in RoleBindingsDelete.
-				var wg sync.WaitGroup
 				errs := make([]error, 2)
-				for i := range 2 {
-					wg.Go(func() {
-						errs[i] = c.RoleBindingsDelete(ctx, &pb.RoleBindingDeleteRequest{
-							Namespace: ns,
-							RoleName:  roleName,
-							UserId:    userRes.Id,
-						})
+				concurrently(len(errs), func(i int) {
+					errs[i] = c.RoleBindingsDelete(ctx, &pb.RoleBindingDeleteRequest{
+						Namespace: ns,
+						RoleName:  roleName,
+						UserId:    userRes.Id,
 					})
-				}
-				wg.Wait()
+				})
 
 				// The binding must be gone regardless of which goroutine "won"
 				var listRes pb.RoleBindingsListResponse

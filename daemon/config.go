@@ -275,36 +275,52 @@ func toLogLevel(level string) slog.Level {
 	}
 }
 
-// selected reports the name of the single backend that is set and how many are set, so callers can
-// enforce the "exactly one backend" rule with a clear error.
-func selected(memory, badger, mongo, postgres bool) (name string, count int) {
-	if memory {
-		name, count = "memory", count+1
-	}
-	if badger {
-		name, count = "badger", count+1
-	}
-	if mongo {
-		name, count = "mongo", count+1
-	}
-	if postgres {
-		name, count = "postgres", count+1
-	}
-	return name, count
+type backends struct {
+	Memory   bool
+	Badger   bool
+	Mongo    bool
+	Postgres bool
 }
 
-func backendErr(what string, count int) error {
-	if count == 0 {
-		return fmt.Errorf("%s must define exactly one backend (memory, badger, mongo, postgres)", what)
+// selected returns the one backend set, "" when none is set, or an error naming section when more
+// than one is set.
+func (b backends) selected(section string) (string, error) {
+	var names []string
+	if b.Memory {
+		names = append(names, "memory")
 	}
-	return fmt.Errorf("%s defines multiple backends; only one of (memory, badger, mongo, postgres) is allowed", what)
+	if b.Badger {
+		names = append(names, "badger")
+	}
+	if b.Mongo {
+		names = append(names, "mongo")
+	}
+	if b.Postgres {
+		names = append(names, "postgres")
+	}
+	if len(names) > 1 {
+		return "", fmt.Errorf("%s defines multiple backends; only one of (memory, badger, mongo, postgres) is allowed", section)
+	}
+	if len(names) == 0 {
+		return "", nil
+	}
+	return names[0], nil
 }
 
 func setupPartitionStorage(file File, d *Config) error {
 	for _, ps := range file.PartitionStorage {
-		name, count := selected(ps.Memory != nil, ps.Badger != nil, ps.Mongo != nil, ps.Postgres != nil)
-		if count != 1 {
-			return backendErr(fmt.Sprintf("partition storage '%s'", ps.Name), count)
+		section := fmt.Sprintf("partition storage '%s'", ps.Name)
+		name, err := backends{
+			Memory:   ps.Memory != nil,
+			Badger:   ps.Badger != nil,
+			Mongo:    ps.Mongo != nil,
+			Postgres: ps.Postgres != nil,
+		}.selected(section)
+		if err != nil {
+			return err
+		}
+		if name == "" {
+			return fmt.Errorf("%s must define exactly one backend (memory, badger, mongo, postgres)", section)
 		}
 
 		var s store.PartitionStore
@@ -354,9 +370,14 @@ func setupPartitionStorage(file File, d *Config) error {
 
 func setupQueueStorage(ctx context.Context, file File, conf *Config) error {
 	qs := file.QueueStorage
-	name, count := selected(qs.Memory != nil, qs.Badger != nil, qs.Mongo != nil, qs.Postgres != nil)
-	if count > 1 {
-		return backendErr("queue storage", count)
+	name, err := backends{
+		Memory:   qs.Memory != nil,
+		Badger:   qs.Badger != nil,
+		Mongo:    qs.Mongo != nil,
+		Postgres: qs.Postgres != nil,
+	}.selected("queue storage")
+	if err != nil {
+		return err
 	}
 
 	switch name {

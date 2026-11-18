@@ -6,20 +6,16 @@ import (
 	"github.com/kapetan-io/querator/internal/types"
 )
 
-// RoleKey names a role within its namespace, which is how a role is looked up by name.
 type RoleKey struct {
 	Namespace string
 	Name      string
 }
 
-// NamespaceMember names a user within one namespace, which is how the role bindings
-// that apply to a request are found.
 type NamespaceMember struct {
 	Namespace string
 	UserID    string
 }
 
-// RoleBindingKey names the role binding that grants a role to a user in a namespace.
 type RoleBindingKey struct {
 	Namespace string
 	UserID    string

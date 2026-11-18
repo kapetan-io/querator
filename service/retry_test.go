@@ -647,25 +647,17 @@ func testRetry(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			},
 		}
 
-		errs := make([]error, len(requests))
-		var wg sync.WaitGroup
-		for i := range requests {
-			wg.Go(func() {
-				errs[i] = c.QueueRetry(ctx, requests[i])
-			})
-		}
-
-		// Wait until every retry request is buffered in the paused queue
-		require.Eventually(t, func() bool {
-			var stats pb.QueueStatsResponse
-			if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats); err != nil {
-				return false
-			}
-			return len(stats.LogicalQueues) == 1 && int(stats.LogicalQueues[0].InFlight) == len(requests)
-		}, 10*clock.Second, 100*clock.Millisecond)
-
-		require.NoError(t, d.Service().ResumeQueue(ctx, queueName))
-		wg.Wait()
+		errs := retryWhilePaused(ctx, c, requests, func() {
+			// Wait until every retry request is buffered in the paused queue
+			assert.Eventually(t, func() bool {
+				var stats pb.QueueStatsResponse
+				if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats); err != nil {
+					return false
+				}
+				return len(stats.LogicalQueues) == 1 && int(stats.LogicalQueues[0].InFlight) == len(requests)
+			}, 10*clock.Second, 100*clock.Millisecond)
+			assert.NoError(t, d.Service().ResumeQueue(ctx, queueName))
+		})
 
 		assert.NoError(t, errs[0])
 		var e duh.Error
@@ -806,4 +798,20 @@ func testRetry(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			assert.Equal(t, duh.CodeBadRequest, e.Code())
 		})
 	})
+}
+
+// retryWhilePaused sends every request at once and calls unpause while they wait in the
+// paused queue. The goroutines start in a named function because Tiger's TS-C02
+// does not see a Wait that follows wg.Go inside a function literal.
+func retryWhilePaused(ctx context.Context, c *querator.Client, requests []*pb.QueueRetryRequest, unpause func()) []error {
+	errs := make([]error, len(requests))
+	var wg sync.WaitGroup
+	for i := range requests {
+		wg.Go(func() {
+			errs[i] = c.QueueRetry(ctx, requests[i])
+		})
+	}
+	unpause()
+	wg.Wait()
+	return errs
 }

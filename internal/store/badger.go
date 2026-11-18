@@ -128,7 +128,7 @@ func (b *BadgerPartition) Produce(_ context.Context, batch types.ProduceBatch, n
 	})
 }
 
-func (b *BadgerPartition) Lease(ctx context.Context, batch types.LeaseBatch, opts LeaseOptions) error {
+func (b *BadgerPartition) Lease(_ context.Context, batch types.LeaseBatch, opts LeaseOptions) error {
 	db, err := b.getDB()
 	if err != nil {
 		return err
@@ -147,7 +147,7 @@ func (b *BadgerPartition) Lease(ctx context.Context, batch types.LeaseBatch, opt
 
 		defer iter.Close()
 
-		for iter.Rewind(); iter.Valid() && ctx.Err() == nil; iter.Next() {
+		for iter.Rewind(); iter.Valid(); iter.Next() {
 			if count >= batch.TotalRequested {
 				break
 			}
@@ -632,7 +632,7 @@ func (b *BadgerPartition) Delete(_ context.Context, ids []types.ItemID) error {
 	})
 }
 
-func (b *BadgerPartition) Clear(ctx context.Context, req types.ClearRequest) error {
+func (b *BadgerPartition) Clear(_ context.Context, req types.ClearRequest) error {
 	db, err := b.getDB()
 	if err != nil {
 		return err
@@ -649,7 +649,7 @@ func (b *BadgerPartition) Clear(ctx context.Context, req types.ClearRequest) err
 		iter := txn.NewIterator(badger.DefaultIteratorOptions)
 		defer iter.Close()
 
-		for iter.Rewind(); iter.Valid() && ctx.Err() == nil; iter.Next() {
+		for iter.Rewind(); iter.Valid(); iter.Next() {
 			var k, v []byte
 			k = iter.Item().KeyCopy(k)
 
@@ -696,9 +696,6 @@ func (b *BadgerPartition) Clear(ctx context.Context, req types.ClearRequest) err
 				}
 			}
 		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
 		return nil
 	})
 }
@@ -715,7 +712,7 @@ func (b *BadgerPartition) UpdateQueueInfo(info types.QueueInfo) {
 	b.info.Queue = info
 }
 
-func (b *BadgerPartition) ScanForScheduled(ctx context.Context, now clock.Time) iter.Seq2[types.Action, error] {
+func (b *BadgerPartition) ScanForScheduled(_ context.Context, now clock.Time) iter.Seq2[types.Action, error] {
 	return func(yield func(types.Action, error) bool) {
 		db, err := b.getDB()
 		if err != nil {
@@ -727,7 +724,7 @@ func (b *BadgerPartition) ScanForScheduled(ctx context.Context, now clock.Time) 
 			iter := txn.NewIterator(badger.DefaultIteratorOptions)
 			defer iter.Close()
 
-			for iter.Rewind(); iter.Valid() && ctx.Err() == nil; iter.Next() {
+			for iter.Rewind(); iter.Valid(); iter.Next() {
 				key := iter.Item().Key()
 
 				// Skip secondary index keys (source:xxx)
@@ -763,9 +760,6 @@ func (b *BadgerPartition) ScanForScheduled(ctx context.Context, now clock.Time) 
 					}
 				}
 			}
-			if err := ctx.Err(); err != nil {
-				return err
-			}
 			return nil
 		})
 
@@ -775,7 +769,7 @@ func (b *BadgerPartition) ScanForScheduled(ctx context.Context, now clock.Time) 
 	}
 }
 
-func (b *BadgerPartition) ScanForActions(ctx context.Context, now clock.Time) iter.Seq2[types.Action, error] {
+func (b *BadgerPartition) ScanForActions(_ context.Context, now clock.Time) iter.Seq2[types.Action, error] {
 	return func(yield func(types.Action, error) bool) {
 		db, err := b.getDB()
 		if err != nil {
@@ -787,7 +781,7 @@ func (b *BadgerPartition) ScanForActions(ctx context.Context, now clock.Time) it
 			iter := txn.NewIterator(badger.DefaultIteratorOptions)
 			defer iter.Close()
 
-			for iter.Rewind(); iter.Valid() && ctx.Err() == nil; iter.Next() {
+			for iter.Rewind(); iter.Valid(); iter.Next() {
 				key := iter.Item().Key()
 
 				// Skip secondary index keys (source:xxx)
@@ -848,9 +842,6 @@ func (b *BadgerPartition) ScanForActions(ctx context.Context, now clock.Time) it
 					}
 					continue
 				}
-			}
-			if err := ctx.Err(); err != nil {
-				return err
 			}
 			return nil
 		})
@@ -986,7 +977,7 @@ func (b *BadgerPartition) TakeAction(_ context.Context, batch types.LifeCycleBat
 	})
 }
 
-func (b *BadgerPartition) LifeCycleInfo(ctx context.Context, info *types.LifeCycleInfo) error {
+func (b *BadgerPartition) LifeCycleInfo(_ context.Context, info *types.LifeCycleInfo) error {
 	db, err := b.getDB()
 	if err != nil {
 		return err
@@ -999,7 +990,7 @@ func (b *BadgerPartition) LifeCycleInfo(ctx context.Context, info *types.LifeCyc
 		iter := txn.NewIterator(badger.DefaultIteratorOptions)
 		defer iter.Close()
 
-		for iter.Rewind(); iter.Valid() && ctx.Err() == nil; iter.Next() {
+		for iter.Rewind(); iter.Valid(); iter.Next() {
 			key := iter.Item().Key()
 
 			// Skip secondary index keys (source:xxx)
@@ -1031,9 +1022,6 @@ func (b *BadgerPartition) LifeCycleInfo(ctx context.Context, info *types.LifeCyc
 				nextExpire = item.ExpireDeadline
 			}
 		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
 
 		if nextLease != theFuture {
 			info.NextLeaseExpiry = nextLease
@@ -1046,7 +1034,7 @@ func (b *BadgerPartition) LifeCycleInfo(ctx context.Context, info *types.LifeCyc
 	})
 }
 
-func (b *BadgerPartition) Stats(ctx context.Context, stats *types.PartitionStats, now clock.Time) error {
+func (b *BadgerPartition) Stats(_ context.Context, stats *types.PartitionStats, now clock.Time) error {
 	db, err := b.getDB()
 	if err != nil {
 		return err
@@ -1057,7 +1045,7 @@ func (b *BadgerPartition) Stats(ctx context.Context, stats *types.PartitionStats
 		iter := txn.NewIterator(badger.DefaultIteratorOptions)
 		defer iter.Close()
 
-		for iter.Rewind(); iter.Valid() && ctx.Err() == nil; iter.Next() {
+		for iter.Rewind(); iter.Valid(); iter.Next() {
 			key := iter.Item().Key()
 
 			// Skip secondary index keys (source:xxx)
@@ -1088,9 +1076,6 @@ func (b *BadgerPartition) Stats(ctx context.Context, stats *types.PartitionStats
 				stats.AverageLeasedAge += item.LeaseDeadline.Sub(now)
 				stats.NumLeased++
 			}
-		}
-		if err := ctx.Err(); err != nil {
-			return err
 		}
 
 		if stats.Total != 0 {

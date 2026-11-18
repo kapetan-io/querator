@@ -11,6 +11,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -89,7 +90,7 @@ func (s *sharedPostgresContainer) Start(ctx context.Context) (err error) {
 			if strings.Contains(msg, "rootless Docker not found") {
 				err = fmt.Errorf("Docker is not available: %s", msg)
 			} else {
-				err = fmt.Errorf("container start panicked: %s", msg)
+				err = fmt.Errorf("container start panicked: %s\n%s", msg, debug.Stack())
 			}
 		}
 	}()
@@ -385,7 +386,7 @@ func (s *sharedMongoContainer) Start(ctx context.Context) (err error) {
 			if strings.Contains(msg, "rootless Docker not found") {
 				err = fmt.Errorf("Docker is not available: %s", msg)
 			} else {
-				err = fmt.Errorf("container start panicked: %s", msg)
+				err = fmt.Errorf("container start panicked: %s\n%s", msg, debug.Stack())
 			}
 		}
 	}()

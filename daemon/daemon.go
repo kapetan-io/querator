@@ -99,15 +99,12 @@ func (d *Daemon) Start(ctx context.Context) error {
 func (d *Daemon) Shutdown(ctx context.Context) error {
 
 	// See 0015-shutdown-errors.md for a discussion of shutdown operation
-	if err := d.service.Shutdown(ctx); err != nil {
-		return err
-	}
-	var err error
+	err := d.service.Shutdown(ctx)
 	if srv := d.server; srv != nil {
 		d.server = nil
 		d.conf.Service.Log.LogAttrs(ctx, internal.LevelDebugAll, "Shutting down HTTP server", slog.String("address", srv.Addr))
-		if err = srv.Shutdown(ctx); err != nil {
-			err = fmt.Errorf("while shutting down HTTP server %s: %w", srv.Addr, err)
+		if srvErr := srv.Shutdown(ctx); srvErr != nil {
+			err = errors.Join(err, fmt.Errorf("while shutting down HTTP server %s: %w", srv.Addr, srvErr))
 		}
 		d.conf.Service.Log.Info("HTTP Server shutdown", "address", srv.Addr)
 	}

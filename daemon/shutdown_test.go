@@ -58,3 +58,22 @@ func TestDaemonStartTwice(t *testing.T) {
 	defer cancel()
 	require.NoError(t, d.Shutdown(timeout))
 }
+
+func TestDaemonShutdownClosesListenerWhenServiceShutdownFails(t *testing.T) {
+	ctx := context.Background()
+	d, err := daemon.NewDaemon(ctx, daemon.Config{InMemoryListener: true})
+	require.NoError(t, err)
+
+	// A canceled ctx makes the service shutdown fail before the HTTP server's turn, which must
+	// still stop the server. The queue drain can finish first (about 1 run in 1,500), and then
+	// Shutdown succeeds.
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := d.Shutdown(canceled); err != nil {
+		require.ErrorIs(t, err, context.Canceled)
+	}
+
+	serverConn, clientConn := net.Pipe()
+	defer func() { _ = clientConn.Close() }()
+	require.ErrorIs(t, d.Listener.(*daemon.InMemoryListener).ServeConn(serverConn), net.ErrClosed)
+}

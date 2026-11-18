@@ -45,3 +45,16 @@ func TestDaemonShutdownReportsExpiredDeadline(t *testing.T) {
 	defer cancel()
 	require.ErrorIs(t, d.Shutdown(timeout), context.DeadlineExceeded)
 }
+
+func TestDaemonStartTwice(t *testing.T) {
+	ctx := context.Background()
+	d, err := daemon.NewDaemon(ctx, daemon.Config{InMemoryListener: true})
+	require.NoError(t, err)
+
+	// A second server would replace the first, which Shutdown could then never stop.
+	require.ErrorContains(t, d.Start(ctx), "daemon already started")
+
+	timeout, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	require.NoError(t, d.Shutdown(timeout))
+}

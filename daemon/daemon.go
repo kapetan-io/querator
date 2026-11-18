@@ -64,6 +64,9 @@ func NewDaemon(ctx context.Context, conf Config) (*Daemon, error) {
 }
 
 func (d *Daemon) Start(ctx context.Context) error {
+	if d.server != nil {
+		return errors.New("daemon already started; call Shutdown before starting it again")
+	}
 	registry := prometheus.NewRegistry()
 
 	handler := transport.NewHTTPHandler(transport.HTTPHandlerConfig{

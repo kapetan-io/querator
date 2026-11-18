@@ -19,24 +19,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Fuzz inputs are mapped into these ranges so every input runs. 100 items of at most
-// 16 KiB plus three 256 byte fields stay well under the 5 MB produce payload limit, and
-// 100 is under the default produce and lease batch limits of 1,000.
+// Fuzz inputs are mapped into the range the server accepts, so every input runs: up to the
+// default produce and lease batch limits, and a produce request under fuzzProduceMax bytes.
 const (
-	fuzzItemsMax   = 100
-	fuzzBatchMax   = 100
-	fuzzPayloadMax = 16 * 1024
-	fuzzFieldMax   = 256
+	fuzzProduceMax = 5_000_000
+	// fuzzItemOverhead covers the reference suffix and protobuf framing of one item.
+	fuzzItemOverhead = 64
 )
 
-// Each line fails to compile if a server limit drops below the fuzz range above, because a
-// negative constant can't convert to uint.
-const (
-	_ = uint(internal.DefaultMaxProduceBatchSize - fuzzItemsMax)
-	_ = uint(internal.DefaultMaxLeaseBatchSize - fuzzBatchMax)
-	// 64 bytes per item covers the reference suffix and protobuf framing.
-	_ = uint(5*duh.MegaByte - fuzzItemsMax*(fuzzPayloadMax+3*fuzzFieldMax+64))
-)
+// Fails to compile if the produce payload limit drops below fuzzProduceMax, because a negative
+// constant can't convert to uint.
+const _ = uint(5*duh.MegaByte - fuzzProduceMax)
 
 // fuzzLimit is the upper end of the range fuzzRange maps a fuzz input onto. It is its own type
 // so fuzzRange's two arguments can't be swapped.
@@ -47,9 +40,9 @@ func fuzzRange(n int, limit fuzzLimit) int {
 	return ((n-1)%int(limit)+int(limit))%int(limit) + 1
 }
 
-// fuzzField truncates s to fuzzFieldMax bytes and replaces invalid UTF-8 with '?'.
-func fuzzField(s string) string {
-	return strings.ToValidUTF8(s[:min(len(s), fuzzFieldMax)], "?")
+// fuzzField truncates s to at most limit bytes and replaces invalid UTF-8 with '?'.
+func fuzzField(s string, limit int) string {
+	return strings.ToValidUTF8(s[:min(len(s), limit)], "?")
 }
 
 // FuzzQueueInvariant tests the core queue property: all produced items must be
@@ -65,10 +58,13 @@ func FuzzQueueInvariant(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, itemCount, batchSize int,
 		payload []byte, encoding, kind, reference string) {
-		itemCount = fuzzRange(itemCount, fuzzItemsMax)
-		batchSize = fuzzRange(batchSize, fuzzBatchMax)
-		payload = payload[:min(len(payload), fuzzPayloadMax)]
-		encoding, kind, reference = fuzzField(encoding), fuzzField(kind), fuzzField(reference)
+		itemCount = fuzzRange(itemCount, internal.DefaultMaxProduceBatchSize)
+		batchSize = fuzzRange(batchSize, internal.DefaultMaxLeaseBatchSize)
+		// Each item gets an equal share of the produce request. Fields come out of that share
+		// first, each up to a quarter of it, and the payload gets what is left.
+		share := fuzzProduceMax/itemCount - fuzzItemOverhead
+		encoding, kind, reference = fuzzField(encoding, share/4), fuzzField(kind, share/4), fuzzField(reference, share/4)
+		payload = payload[:min(len(payload), share-len(encoding)-len(kind)-len(reference))]
 
 		d := newDaemon(t, 10*clock.Second, svc.Config{
 			StorageConfig: setupMemoryStorage(store.Config{}),

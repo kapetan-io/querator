@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"io"
@@ -28,13 +29,13 @@ Configuration can be provided via flags, environment variables, or a config file
 
 func init() {
 	serverCommand.Flags().StringVar(&flags.ConfigFile, "config",
-		getEnv("QUERATOR_CONFIG", ""),
+		os.Getenv("QUERATOR_CONFIG"),
 		"Configuration file path")
 	serverCommand.Flags().StringVar(&flags.Address, "address",
-		getEnv("QUERATOR_ADDRESS", "localhost:2319"),
+		cmp.Or(os.Getenv("QUERATOR_ADDRESS"), "localhost:2319"),
 		"HTTP address to bind")
 	serverCommand.Flags().StringVar(&flags.LogLevel, "log-level",
-		getEnv("QUERATOR_LOG_LEVEL", "info"),
+		cmp.Or(os.Getenv("QUERATOR_LOG_LEVEL"), "info"),
 		"Logging level (debug,error,warn,info)")
 }
 

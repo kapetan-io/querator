@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -28,11 +29,10 @@ type MockServer struct {
 
 // CapturedRequest stores details about an HTTP request
 type CapturedRequest struct {
-	Method   string
-	Path     string
-	Headers  http.Header
-	Body     []byte
-	BodyJSON map[string]interface{} // Parsed JSON body for easy access
+	Method  string
+	Path    string
+	Headers http.Header
+	Body    []byte
 }
 
 // NewMockServer creates a new mock server for testing
@@ -90,21 +90,13 @@ func (ms *MockServer) handleRequest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to read body", http.StatusBadRequest)
 		return
 	}
-	_ = r.Body.Close()
-
-	// Parse JSON body if possible (for debugging - most requests will be protobuf)
-	var bodyJSON map[string]interface{}
-	if len(body) > 0 && r.Header.Get("Content-Type") == "application/json" {
-		_ = json.Unmarshal(body, &bodyJSON)
-	}
 
 	// Capture the request
 	captured := CapturedRequest{
-		Method:   r.Method,
-		Path:     r.URL.Path,
-		Headers:  r.Header.Clone(),
-		Body:     body,
-		BodyJSON: bodyJSON,
+		Method:  r.Method,
+		Path:    r.URL.Path,
+		Headers: r.Header.Clone(),
+		Body:    body,
 	}
 
 	ms.mu.Lock()
@@ -216,5 +208,7 @@ func (ms *MockServer) writeProtoResponse(w http.ResponseWriter, msg interface{})
 		return
 	}
 
-	_, _ = w.Write(data)
+	if _, err := w.Write(data); err != nil {
+		log.Printf("mock server: writing response: %v", err)
+	}
 }

@@ -1,9 +1,9 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -38,7 +38,6 @@ func init() {
 		"30s", "Request timeout")
 	completeCommand.Flags().Int32VarP(&flags.Partition, "partition", "p",
 		0, "Partition number (required)")
-	_ = completeCommand.MarkFlagRequired("partition")
 }
 
 func RunComplete(flags FlagParams, queueName string, partition int32, cmdLineIds []string) error {
@@ -68,15 +67,14 @@ func RunComplete(flags FlagParams, queueName string, partition int32, cmdLineIds
 			_ = file.Close()
 		}()
 
-		scanner := bufio.NewScanner(file)
-		for scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
-			if line != "" {
-				ids = append(ids, line)
-			}
-		}
-		if err := scanner.Err(); err != nil {
+		content, err := io.ReadAll(file)
+		if err != nil {
 			return fmt.Errorf("failed to read file: %w", err)
+		}
+		for _, line := range strings.Split(string(content), "\n") {
+			if id := strings.TrimSpace(line); id != "" {
+				ids = append(ids, id)
+			}
 		}
 	} else {
 		// Use command line IDs

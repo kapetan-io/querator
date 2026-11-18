@@ -4,9 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/kapetan-io/tackle/random"
 	"os"
 	"time"
+
+	"github.com/kapetan-io/tackle/random"
 
 	"github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/proto"

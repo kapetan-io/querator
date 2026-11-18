@@ -18,6 +18,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -28,33 +30,30 @@ import (
 	pb "github.com/kapetan-io/querator/proto"
 )
 
-//nolint:gocritic // exitAfterDefer: we manually call cancel() before each log.Fatalf
 func main() {
-	ctx, cancel := context.WithCancel(context.Background())
-	// Create daemon with default config (localhost:2319, in-memory storage)
-	d, err := daemon.NewDaemon(ctx, daemon.Config{})
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	err := Run(ctx)
+	stop()
 	if err != nil {
-		cancel()
-		log.Fatalf("Failed to create daemon: %v", err)
+		log.Fatal(err)
 	}
-	defer cancel()
+}
 
-	// Setup graceful shutdown
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-	go func() {
-		<-sigChan
-		log.Println("Shutdown signal received, gracefully shutting down...")
-		cancel()
-
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer shutdownCancel()
-
-		if err := d.Shutdown(shutdownCtx); err != nil {
-			log.Printf("Error during shutdown: %v", err)
+// Run starts an embedded daemon, produces, leases and completes items, then serves until
+// ctx is cancelled and shuts the daemon down before it returns.
+func Run(ctx context.Context) (err error) {
+	// Create daemon with in-memory storage, listening on QUERATOR_ADDRESS or localhost:2319
+	d, err := daemon.NewDaemon(ctx, daemon.Config{ListenAddress: os.Getenv("QUERATOR_ADDRESS")})
+	if err != nil {
+		return fmt.Errorf("failed to create daemon: %w", err)
+	}
+	defer func() {
+		log.Println("Shutting down...")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if shutdownErr := d.Shutdown(shutdownCtx); shutdownErr != nil {
+			err = errors.Join(err, fmt.Errorf("during shutdown: %w", shutdownErr))
 		}
-		os.Exit(0)
 	}()
 
 	// Get client for interacting with the embedded daemon
@@ -65,15 +64,15 @@ func main() {
 	// Create a queue
 	queueName := "example-queue"
 	err = client.QueuesCreate(ctx, &pb.QueueInfo{
-		QueueName:     queueName,
-		LeaseTimeout:  "5m",
-		ExpireTimeout: "10m",
-		MaxAttempts:   3,
-		Reference:     "embedded-example",
+		QueueName:           queueName,
+		LeaseTimeout:        "5m",
+		ExpireTimeout:       "10m",
+		MaxAttempts:         3,
+		RequestedPartitions: 1,
+		Reference:           "embedded-example",
 	})
 	if err != nil {
-		cancel()
-		log.Fatalf("Failed to create queue: %v", err)
+		return fmt.Errorf("failed to create queue: %w", err)
 	}
 	log.Printf("Created queue: %s", queueName)
 
@@ -95,8 +94,7 @@ func main() {
 		},
 	})
 	if err != nil {
-		cancel()
-		log.Fatalf("Failed to produce items: %v", err)
+		return fmt.Errorf("failed to produce items: %w", err)
 	}
 	log.Println("Produced 2 items to queue")
 
@@ -109,8 +107,7 @@ func main() {
 		RequestTimeout: "30s",
 	}, &leaseResp)
 	if err != nil {
-		cancel()
-		log.Fatalf("Failed to lease items: %v", err)
+		return fmt.Errorf("failed to lease items: %w", err)
 	}
 
 	log.Printf("Leased %d items from queue", len(leaseResp.Items))
@@ -136,14 +133,14 @@ func main() {
 			Ids:            itemIds,
 		})
 		if err != nil {
-			cancel()
-			log.Fatalf("Failed to complete items: %v", err)
+			return fmt.Errorf("failed to complete items: %w", err)
 		}
 		log.Printf("Completed %d items", len(itemIds))
 	}
 
 	log.Println("Example completed successfully. Press Ctrl+C to shutdown.")
 
-	// Keep the program running until shutdown signal
+	// Keep the daemon running until shutdown signal
 	<-ctx.Done()
+	return nil
 }

@@ -115,113 +115,119 @@ func (m *MemoryPartition) Complete(ctx context.Context, batch types.CompleteBatc
 	defer m.mu.Unlock()
 	m.mu.Lock()
 
-nextBatch:
-	for i := range batch.Requests {
-		for _, id := range batch.Requests[i].Ids {
-			if err := m.validateID(id); err != nil {
-				batch.Requests[i].Err = reply.NewInvalidOption("invalid storage id; '%s': %s", id, err)
-				continue nextBatch
-			}
-
-			idx, ok := m.findID(id)
-			if !ok {
-				batch.Requests[i].Err = reply.NewInvalidOption("invalid storage id; '%s' does not exist", id)
-				continue nextBatch
-			}
-
-			// This should not happen, but we need to handle it anyway.
-			if !m.mem[idx].EnqueueAt.IsZero() {
-				m.log.LogAttrs(ctx, slog.LevelWarn, "attempted to complete a scheduled item; reported does not exist",
-					slog.String("id", string(m.mem[idx].ID)))
-				batch.Requests[i].Err = reply.NewInvalidOption("invalid storage id; '%s' does not exist", id)
-				continue nextBatch
-			}
-
-			if !m.mem[idx].IsLeased {
-				batch.Requests[i].Err = reply.NewConflict("item(s) cannot be completed; '%s' is not "+
-					"marked as leased", id)
-				continue nextBatch
-			}
-			if m.mem[idx].SourceID != nil {
-				delete(m.bySourceID, string(m.mem[idx].SourceID))
-			}
-			// Remove the item from the array
-			m.mem = append(m.mem[:idx], m.mem[idx+1:]...)
-		}
+	for _, req := range batch.Requests {
+		m.completeItems(ctx, req)
 	}
 	return nil
+}
+
+func (m *MemoryPartition) completeItems(ctx context.Context, req *types.CompleteRequest) {
+	for _, id := range req.Ids {
+		if err := m.validateID(id); err != nil {
+			req.Err = reply.NewInvalidOption("invalid storage id; '%s': %s", id, err)
+			return
+		}
+
+		idx, ok := m.findID(id)
+		if !ok {
+			req.Err = reply.NewInvalidOption("invalid storage id; '%s' does not exist", id)
+			return
+		}
+
+		// This should not happen, but we need to handle it anyway.
+		if !m.mem[idx].EnqueueAt.IsZero() {
+			m.log.LogAttrs(ctx, slog.LevelWarn, "attempted to complete a scheduled item; reported does not exist",
+				slog.String("id", string(m.mem[idx].ID)))
+			req.Err = reply.NewInvalidOption("invalid storage id; '%s' does not exist", id)
+			return
+		}
+
+		if !m.mem[idx].IsLeased {
+			req.Err = reply.NewConflict("item(s) cannot be completed; '%s' is not "+
+				"marked as leased", id)
+			return
+		}
+		if m.mem[idx].SourceID != nil {
+			delete(m.bySourceID, string(m.mem[idx].SourceID))
+		}
+		// Remove the item from the array
+		m.mem = append(m.mem[:idx], m.mem[idx+1:]...)
+	}
 }
 
 func (m *MemoryPartition) Retry(ctx context.Context, batch types.RetryBatch) error {
 	defer m.mu.Unlock()
 	m.mu.Lock()
 
-nextBatch:
-	for i := range batch.Requests {
-		for _, retryItem := range batch.Requests[i].Items {
-			if err := m.validateID(retryItem.ID); err != nil {
-				batch.Requests[i].Err = reply.NewInvalidOption("invalid storage id; '%s': %s", retryItem.ID, err)
-				continue nextBatch
-			}
+	for _, req := range batch.Requests {
+		m.retryItems(ctx, req)
+	}
+	return nil
+}
 
-			idx, ok := m.findID(retryItem.ID)
-			if !ok {
-				batch.Requests[i].Err = reply.NewInvalidOption("invalid storage id; '%s' does not exist", retryItem.ID)
-				continue nextBatch
-			}
+func (m *MemoryPartition) retryItems(ctx context.Context, req *types.RetryRequest) {
+	for _, retryItem := range req.Items {
+		if err := m.validateID(retryItem.ID); err != nil {
+			req.Err = reply.NewInvalidOption("invalid storage id; '%s': %s", retryItem.ID, err)
+			return
+		}
 
-			// This should not happen, but we need to handle it anyway.
-			if !m.mem[idx].EnqueueAt.IsZero() {
-				m.log.LogAttrs(ctx, slog.LevelWarn, "attempted to retry a scheduled item; reported does not exist",
-					slog.String("id", string(m.mem[idx].ID)))
-				batch.Requests[i].Err = reply.NewInvalidOption("invalid storage id; '%s' does not exist", retryItem.ID)
-				continue nextBatch
-			}
+		idx, ok := m.findID(retryItem.ID)
+		if !ok {
+			req.Err = reply.NewInvalidOption("invalid storage id; '%s' does not exist", retryItem.ID)
+			return
+		}
 
-			if !m.mem[idx].IsLeased {
-				batch.Requests[i].Err = reply.NewConflict("item(s) cannot be retried; '%s' is not "+
-					"marked as leased", retryItem.ID)
-				continue nextBatch
-			}
+		// This should not happen, but we need to handle it anyway.
+		if !m.mem[idx].EnqueueAt.IsZero() {
+			m.log.LogAttrs(ctx, slog.LevelWarn, "attempted to retry a scheduled item; reported does not exist",
+				slog.String("id", string(m.mem[idx].ID)))
+			req.Err = reply.NewInvalidOption("invalid storage id; '%s' does not exist", retryItem.ID)
+			return
+		}
 
-			switch {
-			case retryItem.Dead:
-				if m.mem[idx].SourceID != nil {
-					delete(m.bySourceID, string(m.mem[idx].SourceID))
-				}
-				m.mem = append(m.mem[:idx], m.mem[idx+1:]...)
-			case !retryItem.RetryAt.IsZero():
-				// If RetryAt is in the past or less than 100ms from now, treat as immediate retry
-				now := clock.Now().UTC()
-				if retryItem.RetryAt.Before(now.Add(time.Millisecond * 100)) {
-					// Immediate retry: assign new KSUID and place at tail (ADR 0022)
-					item := m.mem[idx]
-					item.IsLeased = false
-					item.LeaseDeadline = clock.Time{}
-					item.EnqueueAt = clock.Time{}
-					m.uid = m.uid.Next()
-					item.ID = []byte(m.uid.String())
-					m.mem = append(m.mem[:idx], m.mem[idx+1:]...)
-					m.mem = append(m.mem, item)
-				} else {
-					// Schedule for future retry — position is irrelevant while scheduled
-					m.mem[idx].IsLeased = false
-					m.mem[idx].LeaseDeadline = clock.Time{}
-					m.mem[idx].EnqueueAt = retryItem.RetryAt
-				}
-			default:
-				// Immediate retry (no RetryAt): assign new KSUID and place at tail (ADR 0022)
+		if !m.mem[idx].IsLeased {
+			req.Err = reply.NewConflict("item(s) cannot be retried; '%s' is not "+
+				"marked as leased", retryItem.ID)
+			return
+		}
+
+		switch {
+		case retryItem.Dead:
+			if m.mem[idx].SourceID != nil {
+				delete(m.bySourceID, string(m.mem[idx].SourceID))
+			}
+			m.mem = append(m.mem[:idx], m.mem[idx+1:]...)
+		case !retryItem.RetryAt.IsZero():
+			// If RetryAt is in the past or less than 100ms from now, treat as immediate retry
+			now := clock.Now().UTC()
+			if retryItem.RetryAt.Before(now.Add(time.Millisecond * 100)) {
+				// Immediate retry: assign new KSUID and place at tail (ADR 0022)
 				item := m.mem[idx]
 				item.IsLeased = false
 				item.LeaseDeadline = clock.Time{}
+				item.EnqueueAt = clock.Time{}
 				m.uid = m.uid.Next()
 				item.ID = []byte(m.uid.String())
 				m.mem = append(m.mem[:idx], m.mem[idx+1:]...)
 				m.mem = append(m.mem, item)
+			} else {
+				// Schedule for future retry — position is irrelevant while scheduled
+				m.mem[idx].IsLeased = false
+				m.mem[idx].LeaseDeadline = clock.Time{}
+				m.mem[idx].EnqueueAt = retryItem.RetryAt
 			}
+		default:
+			// Immediate retry (no RetryAt): assign new KSUID and place at tail (ADR 0022)
+			item := m.mem[idx]
+			item.IsLeased = false
+			item.LeaseDeadline = clock.Time{}
+			m.uid = m.uid.Next()
+			item.ID = []byte(m.uid.String())
+			m.mem = append(m.mem[:idx], m.mem[idx+1:]...)
+			m.mem = append(m.mem, item)
 		}
 	}
-	return nil
 }
 
 func (m *MemoryPartition) validateID(id []byte) error {
@@ -1358,12 +1364,12 @@ func NewMemoryRoles(log *slog.Logger) *MemoryRoles {
 	}
 }
 
-func (m *MemoryRoles) Get(_ context.Context, namespace, name string, role *types.Role) error {
+func (m *MemoryRoles) Get(_ context.Context, roleName RoleName, role *types.Role) error {
+	namespace, name := roleName.Namespace, roleName.Name
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	key := namespace + "\x00" + name
-	id, ok := m.byNamespaceName[key]
+	id, ok := m.byNamespaceName[namespace+"\x00"+name]
 	if !ok {
 		return types.NewErrRoleNotExist(namespace + ":" + name)
 	}
@@ -1626,7 +1632,8 @@ func (m *MemoryRoleBindings) List(_ context.Context, namespace string, bindings 
 	return nil
 }
 
-func (m *MemoryRoleBindings) ListByUser(_ context.Context, userID, namespace string, bindings *[]types.RoleBinding, limit int) error {
+func (m *MemoryRoleBindings) ListByUser(_ context.Context, user UserInNamespace, bindings *[]types.RoleBinding, limit int) error {
+	userID, namespace := user.UserID, user.Namespace
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -1666,7 +1673,8 @@ func (m *MemoryRoleBindings) ListByRole(_ context.Context, roleID string, bindin
 	return nil
 }
 
-func (m *MemoryRoleBindings) DeleteByUserAndRole(_ context.Context, namespace, userID, roleID string) error {
+func (m *MemoryRoleBindings) DeleteByUserAndRole(_ context.Context, binding RoleForUser) error {
+	namespace, userID, roleID := binding.Namespace, binding.UserID, binding.RoleID
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

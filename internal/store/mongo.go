@@ -100,7 +100,7 @@ func acquireClientLocked(uri string, maxPool uint64, log *slog.Logger) (*mongo.C
 	return client, nil
 }
 
-func releaseClient(uri string) {
+func releaseClient(uri string, log *slog.Logger) {
 	globalMongoMu.Lock()
 	defer globalMongoMu.Unlock()
 
@@ -110,7 +110,9 @@ func releaseClient(uri string) {
 	}
 
 	if manager.refCount.Add(-1) == 0 {
-		_ = manager.client.Disconnect(context.Background())
+		if err := manager.client.Disconnect(context.Background()); err != nil && log != nil {
+			log.Warn("failed to disconnect mongo client", "error", err)
+		}
 		delete(globalMongoClients, uri)
 	}
 }
@@ -180,7 +182,7 @@ func (c *MongoConfig) getOrCreateClient(_ context.Context) (*mongo.Client, error
 
 func (c *MongoConfig) Close() {
 	if c.connString != "" && c.clientAcquired {
-		releaseClient(c.connString)
+		releaseClient(c.connString, c.Log)
 		c.clientAcquired = false
 	}
 }
@@ -487,7 +489,7 @@ func (q *MongoQueues) List(ctx context.Context, queues *[]types.QueueInfo, opts 
 	}
 	defer func() { _ = cur.Close(ctx) }()
 
-	for cur.Next(ctx) {
+	for ctx.Err() == nil && cur.Next(ctx) {
 		var doc queueDoc
 		if err := cur.Decode(&doc); err != nil {
 			return errors.Errorf("decode queue: %w", err)
@@ -503,7 +505,9 @@ func (q *MongoQueues) List(ctx context.Context, queues *[]types.QueueInfo, opts 
 		}
 		*queues = append(*queues, info)
 	}
-
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	return cur.Err()
 }
 
@@ -826,39 +830,45 @@ func (p *MongoPartition) Complete(ctx context.Context, batch types.CompleteBatch
 
 	coll := p.collection(client)
 
-nextBatch:
-	for i := range batch.Requests {
-		for _, id := range batch.Requests[i].Ids {
-			if err := p.validateID(id); err != nil {
-				batch.Requests[i].Err = reply.NewInvalidOption("invalid storage id; '%s': %s", id, err)
-				continue nextBatch
-			}
+	for _, req := range batch.Requests {
+		if err := p.completeItems(ctx, coll, req); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
-			// FindOneAndDelete atomically checks is_leased and deletes in one round trip.
-			// On success (err == nil) the item was leased and is now deleted.
-			// On ErrNoDocuments the item was either missing or present-but-not-leased;
-			// a cheap follow-up projection read disambiguates for the error path only.
-			res := coll.FindOneAndDelete(ctx, bson.M{"_id": string(id), "is_leased": true})
-			switch err := res.Err(); {
-			case err == nil:
-				// deleted atomically; success — proceed to next id
-			case errors.Is(err, mongo.ErrNoDocuments):
-				// Ambiguous: missing OR present-but-unleased. One cheap read to distinguish.
-				e := coll.FindOne(ctx, bson.M{"_id": string(id)},
-					options.FindOne().SetProjection(bson.M{"_id": 1})).Err()
-				if errors.Is(e, mongo.ErrNoDocuments) {
-					batch.Requests[i].Err = reply.NewInvalidOption("invalid storage id; '%s' does not exist", id)
-					continue nextBatch
-				} else if e != nil {
-					return errors.Errorf("mongo partition %s/%d: failed to check item: %w",
-						p.info.Queue.Name, p.info.PartitionNum, e)
-				}
-				batch.Requests[i].Err = reply.NewConflict("item(s) cannot be completed; '%s' is not marked as leased", id)
-				continue nextBatch
-			default:
-				return errors.Errorf("mongo partition %s/%d: failed to delete item: %w",
-					p.info.Queue.Name, p.info.PartitionNum, err)
+func (p *MongoPartition) completeItems(ctx context.Context, coll *mongo.Collection, req *types.CompleteRequest) error {
+	for _, id := range req.Ids {
+		if err := p.validateID(id); err != nil {
+			req.Err = reply.NewInvalidOption("invalid storage id; '%s': %s", id, err)
+			return nil
+		}
+
+		// FindOneAndDelete atomically checks is_leased and deletes in one round trip.
+		// On success (err == nil) the item was leased and is now deleted.
+		// On ErrNoDocuments the item was either missing or present-but-not-leased;
+		// a cheap follow-up projection read disambiguates for the error path only.
+		res := coll.FindOneAndDelete(ctx, bson.M{"_id": string(id), "is_leased": true})
+		switch err := res.Err(); {
+		case err == nil:
+			// deleted atomically; success — proceed to next id
+		case errors.Is(err, mongo.ErrNoDocuments):
+			// Ambiguous: missing OR present-but-unleased. One cheap read to distinguish.
+			e := coll.FindOne(ctx, bson.M{"_id": string(id)},
+				options.FindOne().SetProjection(bson.M{"_id": 1})).Err()
+			if errors.Is(e, mongo.ErrNoDocuments) {
+				req.Err = reply.NewInvalidOption("invalid storage id; '%s' does not exist", id)
+				return nil
+			} else if e != nil {
+				return errors.Errorf("mongo partition %s/%d: failed to check item: %w",
+					p.info.Queue.Name, p.info.PartitionNum, e)
 			}
+			req.Err = reply.NewConflict("item(s) cannot be completed; '%s' is not marked as leased", id)
+			return nil
+		default:
+			return errors.Errorf("mongo partition %s/%d: failed to delete item: %w",
+				p.info.Queue.Name, p.info.PartitionNum, err)
 		}
 	}
 	return nil
@@ -876,84 +886,90 @@ func (p *MongoPartition) Retry(ctx context.Context, batch types.RetryBatch) erro
 
 	coll := p.collection(client)
 
-nextBatch:
-	for i := range batch.Requests {
-		for _, retryItem := range batch.Requests[i].Items {
-			if err := p.validateID(retryItem.ID); err != nil {
-				batch.Requests[i].Err = reply.NewInvalidOption("invalid storage id; '%s': %s", retryItem.ID, err)
-				continue nextBatch
-			}
+	for _, req := range batch.Requests {
+		if err := p.retryItems(ctx, coll, req); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
-			// Full-document read is intentional here. The three error cases (missing, scheduled,
-			// not-leased) produce distinct error messages that callers assert, and the immediate-retry
-			// path (default branch below) rebuilds the item at a new tail id using every field of the
-			// document. Collapsing the read into a FindOneAndDelete would lose the ability to
-			// distinguish "missing" from "not-leased" and would sacrifice the data needed to
-			// reconstruct the tail item, so the read-then-write shape is correct and should remain.
-			var doc mongoItem
-			err := coll.FindOne(ctx, bson.M{"_id": string(retryItem.ID)}).Decode(&doc)
-			if errors.Is(err, mongo.ErrNoDocuments) {
-				batch.Requests[i].Err = reply.NewInvalidOption("invalid storage id; '%s' does not exist", retryItem.ID)
-				continue nextBatch
-			}
-			if err != nil {
-				return errors.Errorf("failed to check lease status: %w", err)
-			}
+func (p *MongoPartition) retryItems(ctx context.Context, coll *mongo.Collection, req *types.RetryRequest) error {
+	for _, retryItem := range req.Items {
+		if err := p.validateID(retryItem.ID); err != nil {
+			req.Err = reply.NewInvalidOption("invalid storage id; '%s': %s", retryItem.ID, err)
+			return nil
+		}
 
-			item := doc.toItem()
+		// Full-document read is intentional here. The three error cases (missing, scheduled,
+		// not-leased) produce distinct error messages that callers assert, and the immediate-retry
+		// path (default branch below) rebuilds the item at a new tail id using every field of the
+		// document. Collapsing the read into a FindOneAndDelete would lose the ability to
+		// distinguish "missing" from "not-leased" and would sacrifice the data needed to
+		// reconstruct the tail item, so the read-then-write shape is correct and should remain.
+		var doc mongoItem
+		err := coll.FindOne(ctx, bson.M{"_id": string(retryItem.ID)}).Decode(&doc)
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			req.Err = reply.NewInvalidOption("invalid storage id; '%s' does not exist", retryItem.ID)
+			return nil
+		}
+		if err != nil {
+			return errors.Errorf("failed to check lease status: %w", err)
+		}
 
-			if !item.EnqueueAt.IsZero() {
-				if p.conf.Log != nil {
-					p.conf.Log.LogAttrs(ctx, slog.LevelWarn, "attempted to retry a scheduled item; reported does not exist",
-						slog.String("id", string(retryItem.ID)))
-				}
-				batch.Requests[i].Err = reply.NewInvalidOption("invalid storage id; '%s' does not exist", retryItem.ID)
-				continue nextBatch
+		item := doc.toItem()
+
+		if !item.EnqueueAt.IsZero() {
+			if p.conf.Log != nil {
+				p.conf.Log.LogAttrs(ctx, slog.LevelWarn, "attempted to retry a scheduled item; reported does not exist",
+					slog.String("id", string(retryItem.ID)))
 			}
+			req.Err = reply.NewInvalidOption("invalid storage id; '%s' does not exist", retryItem.ID)
+			return nil
+		}
 
-			if !item.IsLeased {
-				batch.Requests[i].Err = reply.NewConflict("item(s) cannot be retried; '%s' is not marked as leased", retryItem.ID)
-				continue nextBatch
+		if !item.IsLeased {
+			req.Err = reply.NewConflict("item(s) cannot be retried; '%s' is not marked as leased", retryItem.ID)
+			return nil
+		}
+
+		switch {
+		case retryItem.Dead:
+			if _, err := coll.DeleteOne(ctx, bson.M{"_id": string(retryItem.ID)}); err != nil {
+				return errors.Errorf("during Retry() delete dead: %w", err)
 			}
-
-			switch {
-			case retryItem.Dead:
-				if _, err := coll.DeleteOne(ctx, bson.M{"_id": string(retryItem.ID)}); err != nil {
-					return errors.Errorf("during Retry() delete dead: %w", err)
-				}
-			case !retryItem.RetryAt.IsZero() && !retryItem.RetryAt.Before(clock.Now().UTC().Add(time.Millisecond*100)):
-				// Schedule for future retry — position is irrelevant while scheduled.
-				if _, err := coll.UpdateOne(ctx, bson.M{"_id": string(retryItem.ID)},
-					bson.M{"$set": bson.M{
-						"is_leased":      false,
-						"lease_deadline": nil,
-						"enqueue_at":     toMicros(retryItem.RetryAt),
-					}}); err != nil {
-					return errors.Errorf("during Retry() schedule: %w", err)
-				}
-			default:
-				// Immediate retry: assign a new KSUID and place at the tail (ADR-0022). Insert the new
-				// tail document first, then delete the old — a crash between the two degrades to a
-				// duplicate, never a loss.
-				newItem := &types.Item{
-					IsLeased:       false,
-					ExpireDeadline: item.ExpireDeadline,
-					CreatedAt:      item.CreatedAt,
-					Attempts:       item.Attempts,
-					MaxAttempts:    item.MaxAttempts,
-					Reference:      item.Reference,
-					Encoding:       item.Encoding,
-					Kind:           item.Kind,
-					Payload:        item.Payload,
-					SourceID:       item.SourceID,
-				}
-				newID := p.nextID()
-				if _, err := coll.InsertOne(ctx, itemToDoc(newID, newItem)); err != nil {
-					return errors.Errorf("during Retry() insert at tail: %w", err)
-				}
-				if _, err := coll.DeleteOne(ctx, bson.M{"_id": string(retryItem.ID)}); err != nil {
-					return errors.Errorf("during Retry() delete for tail placement: %w", err)
-				}
+		case !retryItem.RetryAt.IsZero() && !retryItem.RetryAt.Before(clock.Now().UTC().Add(time.Millisecond*100)):
+			// Schedule for future retry — position is irrelevant while scheduled.
+			if _, err := coll.UpdateOne(ctx, bson.M{"_id": string(retryItem.ID)},
+				bson.M{"$set": bson.M{
+					"is_leased":      false,
+					"lease_deadline": nil,
+					"enqueue_at":     toMicros(retryItem.RetryAt),
+				}}); err != nil {
+				return errors.Errorf("during Retry() schedule: %w", err)
+			}
+		default:
+			// Immediate retry: assign a new KSUID and place at the tail (ADR-0022). Insert the new
+			// tail document first, then delete the old — a crash between the two degrades to a
+			// duplicate, never a loss.
+			newItem := &types.Item{
+				IsLeased:       false,
+				ExpireDeadline: item.ExpireDeadline,
+				CreatedAt:      item.CreatedAt,
+				Attempts:       item.Attempts,
+				MaxAttempts:    item.MaxAttempts,
+				Reference:      item.Reference,
+				Encoding:       item.Encoding,
+				Kind:           item.Kind,
+				Payload:        item.Payload,
+				SourceID:       item.SourceID,
+			}
+			newID := p.nextID()
+			if _, err := coll.InsertOne(ctx, itemToDoc(newID, newItem)); err != nil {
+				return errors.Errorf("during Retry() insert at tail: %w", err)
+			}
+			if _, err := coll.DeleteOne(ctx, bson.M{"_id": string(retryItem.ID)}); err != nil {
+				return errors.Errorf("during Retry() delete for tail placement: %w", err)
 			}
 		}
 	}
@@ -1020,12 +1036,15 @@ func (p *MongoPartition) pivot(opts types.ListOptions) (string, error) {
 
 func (p *MongoPartition) appendItems(ctx context.Context, cur *mongo.Cursor, items *[]*types.Item) error {
 	defer func() { _ = cur.Close(ctx) }()
-	for cur.Next(ctx) {
+	for ctx.Err() == nil && cur.Next(ctx) {
 		var doc mongoItem
 		if err := cur.Decode(&doc); err != nil {
 			return errors.Errorf("decode item: %w", err)
 		}
 		*items = append(*items, doc.toItem())
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	return cur.Err()
 }
@@ -1247,12 +1266,7 @@ func (p *MongoPartition) ScanForScheduled(ctx context.Context, now clock.Time) i
 		nowMicros := toMicros(now)
 		var lastID string
 
-		for {
-			if ctx.Err() != nil {
-				yield(types.Action{}, ctx.Err())
-				return
-			}
-
+		for ctx.Err() == nil {
 			client, err := p.conf.getOrCreateClient(ctx)
 			if err != nil {
 				yield(types.Action{}, err)
@@ -1302,6 +1316,7 @@ func (p *MongoPartition) ScanForScheduled(ctx context.Context, now clock.Time) i
 				return
 			}
 		}
+		yield(types.Action{}, ctx.Err())
 	}
 }
 
@@ -1314,12 +1329,7 @@ func (p *MongoPartition) ScanForActions(ctx context.Context, now clock.Time) ite
 		nowMicros := toMicros(now)
 		var lastID string
 
-		for {
-			if ctx.Err() != nil {
-				yield(types.Action{}, ctx.Err())
-				return
-			}
-
+		for ctx.Err() == nil {
 			client, err := p.conf.getOrCreateClient(ctx)
 			if err != nil {
 				yield(types.Action{}, err)
@@ -1403,6 +1413,7 @@ func (p *MongoPartition) ScanForActions(ctx context.Context, now clock.Time) ite
 				return
 			}
 		}
+		yield(types.Action{}, ctx.Err())
 	}
 }
 

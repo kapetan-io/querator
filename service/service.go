@@ -1149,7 +1149,7 @@ func (s *Service) RolesUpdate(ctx context.Context, req *proto.RoleUpdateRequest)
 
 	// Get the existing role
 	var existing types.Role
-	if err := s.conf.StorageConfig.Roles.Get(ctx, role.Namespace, role.Name, &existing); err != nil {
+	if err := s.conf.StorageConfig.Roles.Get(ctx, store.RoleName{Namespace: role.Namespace, Name: role.Name}, &existing); err != nil {
 		return err
 	}
 
@@ -1180,7 +1180,7 @@ func (s *Service) RolesDelete(ctx context.Context, req *proto.RolesDeleteRequest
 
 	// Get the role first to check standard role and get ID
 	var role types.Role
-	if err := s.conf.StorageConfig.Roles.Get(ctx, ns, req.Name, &role); err != nil {
+	if err := s.conf.StorageConfig.Roles.Get(ctx, store.RoleName{Namespace: ns, Name: req.Name}, &role); err != nil {
 		return err
 	}
 
@@ -1232,7 +1232,7 @@ func (s *Service) RoleBindingsCreate(ctx context.Context, req *proto.RoleBinding
 
 	// Verify the role exists in the namespace
 	var role types.Role
-	if err := s.conf.StorageConfig.Roles.Get(ctx, req.Namespace, req.RoleName, &role); err != nil {
+	if err := s.conf.StorageConfig.Roles.Get(ctx, store.RoleName{Namespace: req.Namespace, Name: req.RoleName}, &role); err != nil {
 		return err
 	}
 
@@ -1302,11 +1302,11 @@ func (s *Service) RoleBindingsDelete(ctx context.Context, req *proto.RoleBinding
 
 	// Get the role first to obtain its ID
 	var role types.Role
-	if err := s.conf.StorageConfig.Roles.Get(ctx, ns, req.RoleName, &role); err != nil {
+	if err := s.conf.StorageConfig.Roles.Get(ctx, store.RoleName{Namespace: ns, Name: req.RoleName}, &role); err != nil {
 		return err
 	}
 
-	if err := s.conf.StorageConfig.RoleBindings.DeleteByUserAndRole(ctx, ns, req.UserId, role.ID); err != nil {
+	if err := s.conf.StorageConfig.RoleBindings.DeleteByUserAndRole(ctx, store.RoleForUser{Namespace: ns, UserID: req.UserId, RoleID: role.ID}); err != nil {
 		return err
 	}
 	return nil
@@ -1401,7 +1401,7 @@ func (s *Service) bootstrapStandardRoles(ctx context.Context) error {
 	}
 	for _, role := range roles {
 		var existing types.Role
-		if err := s.conf.StorageConfig.Roles.Get(ctx, role.Namespace, role.Name, &existing); err != nil {
+		if err := s.conf.StorageConfig.Roles.Get(ctx, store.RoleName{Namespace: role.Namespace, Name: role.Name}, &existing); err != nil {
 			role.ID = internal.NewUID()
 			if err = s.conf.StorageConfig.Roles.Add(ctx, role); err != nil {
 				return err
@@ -1421,7 +1421,7 @@ func (s *Service) bootstrapStandardRoles(ctx context.Context) error {
 func (s *Service) bootstrapAnonymousAdminBinding(ctx context.Context) error {
 	// Look up the Admin role to get its ID
 	var adminRole types.Role
-	if err := s.conf.StorageConfig.Roles.Get(ctx, auth.SystemNamespace, auth.RoleAdmin, &adminRole); err != nil {
+	if err := s.conf.StorageConfig.Roles.Get(ctx, store.RoleName{Namespace: auth.SystemNamespace, Name: auth.RoleAdmin}, &adminRole); err != nil {
 		return err
 	}
 

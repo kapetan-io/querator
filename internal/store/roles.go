@@ -6,13 +6,29 @@ import (
 	"github.com/kapetan-io/querator/internal/types"
 )
 
+type RoleName struct {
+	Namespace string
+	Name      string
+}
+
+type UserInNamespace struct {
+	Namespace string
+	UserID    string
+}
+
+type RoleForUser struct {
+	Namespace string
+	UserID    string
+	RoleID    string
+}
+
 // Roles is storage for listing and storing information about roles.
 // Implementations should employ lazy storage initialization such that it makes contact
 // or creates underlying tables only upon first invocation.
 type Roles interface {
 	// Get fetches a Role from storage by namespace and name. Returns ErrRoleNotExist if the
 	// role requested does not exist.
-	Get(ctx context.Context, namespace, name string, role *types.Role) error
+	Get(ctx context.Context, roleName RoleName, role *types.Role) error
 
 	// GetByID fetches a Role from storage by ID. Returns ErrRoleNotExist if the
 	// role requested does not exist.
@@ -49,7 +65,7 @@ type RoleBindings interface {
 	List(ctx context.Context, namespace string, bindings *[]types.RoleBinding, opts types.ListOptions) error
 
 	// ListByUser returns role bindings for a user in a specific namespace, up to limit entries.
-	ListByUser(ctx context.Context, userID, namespace string, bindings *[]types.RoleBinding, limit int) error
+	ListByUser(ctx context.Context, user UserInNamespace, bindings *[]types.RoleBinding, limit int) error
 
 	// ListByRole returns role bindings for a specific role, up to limit entries.
 	// If limit is 0, all bindings are returned.
@@ -57,7 +73,7 @@ type RoleBindings interface {
 
 	// DeleteByUserAndRole deletes the role binding identified by (namespace, userID, roleID).
 	// Returns ErrRoleBindingNotExist if no matching binding exists.
-	DeleteByUserAndRole(ctx context.Context, namespace, userID, roleID string) error
+	DeleteByUserAndRole(ctx context.Context, binding RoleForUser) error
 
 	// Delete deletes a role binding by ID. Returns ErrRoleBindingNotExist if the binding does not exist.
 	Delete(ctx context.Context, id string) error

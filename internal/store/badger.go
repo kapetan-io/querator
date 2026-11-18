@@ -23,15 +23,9 @@ import (
 )
 
 type BadgerConfig struct {
-	// StorageDir is the directory where badger will store its data
 	StorageDir string
-	// Log is used to log warnings and errors
-	Log *slog.Logger
+	Log        *slog.Logger
 }
-
-// ---------------------------------------------
-// PartitionStore Implementation
-// ---------------------------------------------
 
 type BadgerPartitionStore struct {
 	conf BadgerConfig
@@ -55,10 +49,6 @@ func (b *BadgerPartitionStore) Config() BadgerConfig {
 	return b.conf
 }
 
-// ---------------------------------------------
-// Partition Implementation
-// ---------------------------------------------
-
 type BadgerPartition struct {
 	info types.PartitionInfo
 	conf BadgerConfig
@@ -76,12 +66,10 @@ func (b *BadgerPartition) Produce(_ context.Context, batch types.ProduceBatch, n
 	return db.Update(func(txn *badger.Txn) error {
 		for _, r := range batch.Requests {
 			for _, item := range r.Items {
-				// Check for duplicate SourceID
 				if item.SourceID != nil {
 					sourceKey := []byte("source:" + string(item.SourceID))
 					_, err := txn.Get(sourceKey)
 					if err == nil {
-						// Skip item - duplicate SourceID (idempotent)
 						continue
 					}
 					if !errors.Is(err, badger.ErrKeyNotFound) {
@@ -93,20 +81,10 @@ func (b *BadgerPartition) Produce(_ context.Context, batch types.ProduceBatch, n
 				item.ID = []byte(b.uid.String())
 				item.CreatedAt = now
 
-				// If the EnqueueAt is less than 100 milliseconds from now, we want to enqueue
-				// the item immediately. This avoids unnecessary work for something that will be moved into the
-				// queue less than a few milliseconds from now. Programmers may want to be "complete", so they may
-				// include an EnqueueAt time when producing items, which is set to now or near to now, due to clock
-				// drift between systems. Because of this, Querator may end up doing more work and be less efficient
-				// simply because of programmers who desire to completely fill out the pb.QueueProduceItem{} struct
-				// with every possible field, regardless of whether the field is needed.
-
-				// If EnqueueAt dates are in the past, enqueue the item instead of adding it as a scheduled item.
 				if item.EnqueueAt.Before(now.Add(time.Millisecond * 100)) {
 					item.EnqueueAt = clock.Time{}
 				}
 
-				// TODO: GetByPartition buffers from memory pool
 				var buf bytes.Buffer
 				if err := gob.NewEncoder(&buf).Encode(item); err != nil {
 					return errors.Errorf("during gob.Encode(): %w", err)
@@ -116,7 +94,6 @@ func (b *BadgerPartition) Produce(_ context.Context, batch types.ProduceBatch, n
 					return errors.Errorf("during Set(): %w", err)
 				}
 
-				// Add SourceID index if set
 				if item.SourceID != nil {
 					sourceKey := []byte("source:" + string(item.SourceID))
 					if err := txn.Set(sourceKey, item.ID); err != nil {
@@ -155,7 +132,6 @@ func (b *BadgerPartition) Lease(_ context.Context, batch types.LeaseBatch, opts 
 
 			key := iter.Item().Key()
 
-			// Skip secondary index keys (source:xxx)
 			if bytes.HasPrefix(key, []byte("source:")) {
 				continue
 			}
@@ -166,7 +142,7 @@ func (b *BadgerPartition) Lease(_ context.Context, batch types.LeaseBatch, opts 
 				return errors.Errorf("while getting value: %w", err)
 			}
 
-			item := new(types.Item) // TODO: memory pool
+			item := new(types.Item)
 			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(item); err != nil {
 				return errors.Errorf("during Decode(): %w", err)
 			}
@@ -175,7 +151,6 @@ func (b *BadgerPartition) Lease(_ context.Context, batch types.LeaseBatch, opts 
 				continue
 			}
 
-			// Skip scheduled items
 			if !item.EnqueueAt.IsZero() {
 				continue
 			}
@@ -185,11 +160,8 @@ func (b *BadgerPartition) Lease(_ context.Context, batch types.LeaseBatch, opts 
 			item.Attempts++
 			count++
 
-			// Assign the item to the next waiting lease in the batch,
-			// returns false if there are no more leases available to fill
 			if batchIter.Next(item) {
-				// If assignment was a success, then we put the updated item into the db
-				var buf bytes.Buffer // TODO: memory pool
+				var buf bytes.Buffer
 				if err := gob.NewEncoder(&buf).Encode(item); err != nil {
 					return errors.Errorf("during gob.Encode(): %w", err)
 				}
@@ -217,15 +189,10 @@ func (b *BadgerPartition) Complete(_ context.Context, batch types.CompleteBatch)
 
 	defer func() {
 		if !done {
-			// TODO: The /queue.complete request should not roll back item IDs that have been successfully marked as
-			//  completed if a subset of item IDs fail.
-			//  https://github.com/kapetan-io/querator/blob/main/doc/adr/0018-queue-complete-error-semantics.md
 			txn.Discard()
 		}
 	}()
 
-	// TODO: if any of the provided item IDs cannot be completed, the entire /queue.complete call should return an error
-	//  https://github.com/kapetan-io/querator/blob/main/doc/adr/0018-queue-complete-error-semantics.md
 	for _, req := range batch.Requests {
 		if err = b.completeItems(txn, req); err != nil {
 			return err
@@ -248,7 +215,6 @@ func (b *BadgerPartition) completeItems(txn *badger.Txn, req *types.CompleteRequ
 			return nil
 		}
 
-		// TODO: Test complete with id's that do not exist in the database
 		kvItem, err := txn.Get(id)
 		if err != nil {
 			req.Err = reply.NewInvalidOption("invalid storage id; '%s' does not exist", id)
@@ -261,7 +227,7 @@ func (b *BadgerPartition) completeItems(txn *badger.Txn, req *types.CompleteRequ
 			return nil
 		}
 
-		item := new(types.Item) // TODO: memory pool
+		item := new(types.Item)
 		if err = gob.NewDecoder(bytes.NewReader(v)).Decode(item); err != nil {
 			return errors.Errorf("during Decode(): %w", err)
 		}
@@ -336,7 +302,7 @@ func (b *BadgerPartition) retryItems(txn *badger.Txn, req *types.RetryRequest) e
 			return nil
 		}
 
-		item := new(types.Item) // TODO: memory pool
+		item := new(types.Item)
 		if err = gob.NewDecoder(bytes.NewReader(v)).Decode(item); err != nil {
 			return errors.Errorf("during Decode(): %w", err)
 		}
@@ -361,7 +327,6 @@ func (b *BadgerPartition) retryItems(txn *badger.Txn, req *types.RetryRequest) e
 		case !retryItem.RetryAt.IsZero():
 			now := clock.Now().UTC()
 			if retryItem.RetryAt.Before(now.Add(time.Millisecond * 100)) {
-				// Immediate retry: assign new KSUID and place at tail (ADR 0022)
 				item.IsLeased = false
 				item.LeaseDeadline = clock.Time{}
 				item.EnqueueAt = clock.Time{}
@@ -378,7 +343,6 @@ func (b *BadgerPartition) retryItems(txn *badger.Txn, req *types.RetryRequest) e
 					return errors.Errorf("during Delete(%s): %w", retryItem.ID, err)
 				}
 			} else {
-				// Schedule for future retry — position is irrelevant while scheduled
 				item.IsLeased = false
 				item.LeaseDeadline = clock.Time{}
 				item.EnqueueAt = retryItem.RetryAt
@@ -391,7 +355,6 @@ func (b *BadgerPartition) retryItems(txn *badger.Txn, req *types.RetryRequest) e
 				}
 			}
 		default:
-			// Immediate retry (no RetryAt): assign new KSUID and place at tail (ADR 0022)
 			item.IsLeased = false
 			item.LeaseDeadline = clock.Time{}
 			b.uid = b.uid.Next()
@@ -438,7 +401,6 @@ func (b *BadgerPartition) List(ctx context.Context, items *[]*types.Item, opts t
 		for ; iter.Valid() && ctx.Err() == nil; iter.Next() {
 			key := iter.Item().Key()
 
-			// Skip secondary index keys (source:xxx)
 			if bytes.HasPrefix(key, []byte("source:")) {
 				continue
 			}
@@ -449,12 +411,11 @@ func (b *BadgerPartition) List(ctx context.Context, items *[]*types.Item, opts t
 				return errors.Errorf("during GetByPartition value: %w", err)
 			}
 
-			item := new(types.Item) // TODO: memory pool
+			item := new(types.Item)
 			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(item); err != nil {
 				return errors.Errorf("during Decode(): %w", err)
 			}
 
-			// Skip scheduled items in the regular list
 			if !item.EnqueueAt.IsZero() {
 				continue
 			}
@@ -499,7 +460,6 @@ func (b *BadgerPartition) ListScheduled(ctx context.Context, items *[]*types.Ite
 		for ; iter.Valid() && ctx.Err() == nil; iter.Next() {
 			key := iter.Item().Key()
 
-			// Skip secondary index keys (source:xxx)
 			if bytes.HasPrefix(key, []byte("source:")) {
 				continue
 			}
@@ -515,7 +475,6 @@ func (b *BadgerPartition) ListScheduled(ctx context.Context, items *[]*types.Ite
 				return errors.Errorf("during Decode(): %w", err)
 			}
 
-			// Only return scheduled items (those with non-zero EnqueueAt)
 			if item.EnqueueAt.IsZero() {
 				continue
 			}
@@ -547,12 +506,10 @@ func (b *BadgerPartition) Add(_ context.Context, items []*types.Item, now clock.
 	return db.Update(func(txn *badger.Txn) error {
 
 		for _, item := range items {
-			// Check for duplicate SourceID
 			if item.SourceID != nil {
 				sourceKey := []byte("source:" + string(item.SourceID))
 				_, err := txn.Get(sourceKey)
 				if err == nil {
-					// Skip item - duplicate SourceID (idempotent)
 					continue
 				}
 				if !errors.Is(err, badger.ErrKeyNotFound) {
@@ -564,7 +521,6 @@ func (b *BadgerPartition) Add(_ context.Context, items []*types.Item, now clock.
 			item.ID = []byte(b.uid.String())
 			item.CreatedAt = now
 
-			// TODO: GetByPartition buffers from memory pool
 			var buf bytes.Buffer
 			if err := gob.NewEncoder(&buf).Encode(item); err != nil {
 				return errors.Errorf("during gob.Encode(): %w", err)
@@ -574,7 +530,6 @@ func (b *BadgerPartition) Add(_ context.Context, items []*types.Item, now clock.
 				return errors.Errorf("during Put(): %w", err)
 			}
 
-			// Add SourceID index if set
 			if item.SourceID != nil {
 				sourceKey := []byte("source:" + string(item.SourceID))
 				if err := txn.Set(sourceKey, item.ID); err != nil {
@@ -599,11 +554,9 @@ func (b *BadgerPartition) Delete(_ context.Context, ids []types.ItemID) error {
 				return reply.NewInvalidOption("invalid storage id; '%s': %s", id, err)
 			}
 
-			// Get the item to check for SourceID
 			kvItem, err := txn.Get(id)
 			if err != nil {
 				if errors.Is(err, badger.ErrKeyNotFound) {
-					// Item doesn't exist, nothing to delete
 					continue
 				}
 				return errors.Errorf("getting item for delete: %w", err)
@@ -617,7 +570,6 @@ func (b *BadgerPartition) Delete(_ context.Context, ids []types.ItemID) error {
 				return errors.Errorf("decoding item for delete: %w", err)
 			}
 
-			// Delete SourceID index if set
 			if item.SourceID != nil {
 				sourceKey := []byte("source:" + string(item.SourceID))
 				if err := txn.Delete(sourceKey); err != nil {
@@ -654,7 +606,6 @@ func (b *BadgerPartition) Clear(_ context.Context, req types.ClearRequest) error
 			var k, v []byte
 			k = iter.Item().KeyCopy(k)
 
-			// Skip secondary index keys (source:xxx)
 			if bytes.HasPrefix(k, []byte("source:")) {
 				continue
 			}
@@ -664,19 +615,17 @@ func (b *BadgerPartition) Clear(_ context.Context, req types.ClearRequest) error
 				return err
 			}
 
-			item := new(types.Item) // TODO: memory pool
+			item := new(types.Item)
 			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(item); err != nil {
 				return errors.Errorf("during Decode(): %w", err)
 			}
 
 			shouldDelete := false
 
-			// Clear scheduled items
 			if req.Scheduled && !item.EnqueueAt.IsZero() {
 				shouldDelete = true
 			}
 
-			// Clear queue items (those with EnqueueAt zero or in past)
 			if req.Queue && item.EnqueueAt.IsZero() {
 				if req.Destructive || !item.IsLeased {
 					shouldDelete = true
@@ -684,7 +633,6 @@ func (b *BadgerPartition) Clear(_ context.Context, req types.ClearRequest) error
 			}
 
 			if shouldDelete {
-				// Delete SourceID index if set
 				if item.SourceID != nil {
 					sourceKey := []byte("source:" + string(item.SourceID))
 					if err := txn.Delete(sourceKey); err != nil {
@@ -728,7 +676,6 @@ func (b *BadgerPartition) ScanForScheduled(_ context.Context, now clock.Time) it
 			for iter.Rewind(); iter.Valid(); iter.Next() {
 				key := iter.Item().Key()
 
-				// Skip secondary index keys (source:xxx)
 				if bytes.HasPrefix(key, []byte("source:")) {
 					continue
 				}
@@ -744,12 +691,10 @@ func (b *BadgerPartition) ScanForScheduled(_ context.Context, now clock.Time) it
 					return errors.Errorf("during Decode(): %w", err)
 				}
 
-				// Skip non-scheduled items
 				if item.EnqueueAt.IsZero() {
 					continue
 				}
 
-				// If the scheduled time has passed, yield an action to queue the item
 				if now.After(item.EnqueueAt) {
 					if !yield(types.Action{
 						Action:       types.ActionQueueScheduledItem,
@@ -785,7 +730,6 @@ func (b *BadgerPartition) ScanForActions(_ context.Context, now clock.Time) iter
 			for iter.Rewind(); iter.Valid(); iter.Next() {
 				key := iter.Item().Key()
 
-				// Skip secondary index keys (source:xxx)
 				if bytes.HasPrefix(key, []byte("source:")) {
 					continue
 				}
@@ -801,12 +745,10 @@ func (b *BadgerPartition) ScanForActions(_ context.Context, now clock.Time) iter
 					return errors.Errorf("during Decode(): %w", err)
 				}
 
-				// Skip scheduled items
 				if !item.EnqueueAt.IsZero() {
 					continue
 				}
 
-				// Is the leased item expired?
 				if item.IsLeased {
 					if now.After(item.LeaseDeadline) {
 						if !yield(types.Action{
@@ -831,7 +773,6 @@ func (b *BadgerPartition) ScanForActions(_ context.Context, now clock.Time) iter
 						continue
 					}
 				}
-				// Is the item expired?
 				if now.After(item.ExpireDeadline) {
 					if !yield(types.Action{
 						Action:       types.ActionItemExpired,
@@ -888,17 +829,12 @@ func (b *BadgerPartition) TakeAction(_ context.Context, batch types.LifeCycleBat
 						return err
 					}
 
-					// Update the item
 					item.LeaseDeadline = clock.Time{}
 					item.IsLeased = false
 
-					// Assign a new ID to the item so it sorts after all existing items,
-					// placing it at the tail of the queue to avoid head-of-line blocking.
-					// See docs/adr/0022-managing-item-lifecycles.md for an explanation.
 					b.uid = b.uid.Next()
 					item.ID = []byte(b.uid.String())
 
-					// Encode and store the updated item
 					var buf bytes.Buffer
 					if err := gob.NewEncoder(&buf).Encode(item); err != nil {
 						return err
@@ -908,7 +844,6 @@ func (b *BadgerPartition) TakeAction(_ context.Context, batch types.LifeCycleBat
 						return err
 					}
 
-					// Delete the old item
 					if err := txn.Delete(a.Item.ID); err != nil {
 						return err
 					}
@@ -919,7 +854,6 @@ func (b *BadgerPartition) TakeAction(_ context.Context, batch types.LifeCycleBat
 					}
 
 				case types.ActionQueueScheduledItem:
-					// Find the scheduled item and move it to the regular queue
 					item := new(types.Item)
 					kvItem, err := txn.Get(a.Item.ID)
 					if err != nil {
@@ -944,13 +878,11 @@ func (b *BadgerPartition) TakeAction(_ context.Context, batch types.LifeCycleBat
 						continue
 					}
 
-					// Clear the scheduled time and assign a new ID
 					item.EnqueueAt = clock.Time{}
 					b.uid = b.uid.Next()
 					newID := []byte(b.uid.String())
 					item.ID = newID
 
-					// Encode and store the updated item with new ID
 					var buf bytes.Buffer
 					if err := gob.NewEncoder(&buf).Encode(item); err != nil {
 						return err
@@ -960,12 +892,10 @@ func (b *BadgerPartition) TakeAction(_ context.Context, batch types.LifeCycleBat
 						return err
 					}
 
-					// Delete the old scheduled item
 					if err := txn.Delete(a.Item.ID); err != nil {
 						return err
 					}
 
-					// Tell the partition it gained a new un-leased item
 					state.UnLeased++
 
 				default:
@@ -993,7 +923,6 @@ func (b *BadgerPartition) LifeCycleInfo(_ context.Context, info *types.LifeCycle
 		for iter.Rewind(); iter.Valid(); iter.Next() {
 			key := iter.Item().Key()
 
-			// Skip secondary index keys (source:xxx)
 			if bytes.HasPrefix(key, []byte("source:")) {
 				continue
 			}
@@ -1009,7 +938,6 @@ func (b *BadgerPartition) LifeCycleInfo(_ context.Context, info *types.LifeCycle
 				return err
 			}
 
-			// Skip scheduled items
 			if !item.EnqueueAt.IsZero() {
 				continue
 			}
@@ -1048,7 +976,6 @@ func (b *BadgerPartition) Stats(_ context.Context, stats *types.PartitionStats, 
 		for iter.Rewind(); iter.Valid(); iter.Next() {
 			key := iter.Item().Key()
 
-			// Skip secondary index keys (source:xxx)
 			if bytes.HasPrefix(key, []byte("source:")) {
 				continue
 			}
@@ -1059,12 +986,11 @@ func (b *BadgerPartition) Stats(_ context.Context, stats *types.PartitionStats, 
 				return errors.Errorf("during GetByPartition value: %w", err)
 			}
 
-			item := new(types.Item) // TODO: memory pool
+			item := new(types.Item)
 			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(item); err != nil {
 				return errors.Errorf("during Decode(): %w", err)
 			}
 
-			// Count scheduled and do not include them in other stats
 			if !item.EnqueueAt.IsZero() {
 				stats.Scheduled++
 				continue
@@ -1128,10 +1054,6 @@ func (b *BadgerPartition) getDB() (*badger.DB, error) {
 	return db, nil
 }
 
-// ---------------------------------------------
-// Queues Implementation
-// ---------------------------------------------
-
 type BadgerQueues struct {
 	QueuesValidation
 	mu   sync.Mutex
@@ -1155,8 +1077,6 @@ func (b *BadgerQueues) getDB() (*badger.DB, error) {
 		return b.db, nil
 	}
 
-	// We store info about the queues in a single db file. We prefix it with `~` to make it
-	// impossible for someone to create a queue with the same name.
 	dir := filepath.Join(b.conf.StorageDir, fmt.Sprintf("~queue-storage-%s", bucketName))
 
 	opts := badger.DefaultOptions(dir)
@@ -1217,13 +1137,12 @@ func (b *BadgerQueues) Add(_ context.Context, info types.QueueInfo) error {
 
 	return db.Update(func(txn *badger.Txn) error {
 
-		// If the queue already exists in the store
 		_, err := txn.Get([]byte(info.Name))
 		if err == nil {
 			return reply.NewInvalidOption("invalid queue; '%s' already exists", info.Name)
 		}
 
-		var buf bytes.Buffer // TODO: memory pool
+		var buf bytes.Buffer
 		if err := gob.NewEncoder(&buf).Encode(info); err != nil {
 			return errors.Errorf("during gob.Encode(): %w", err)
 		}
@@ -1395,10 +1314,6 @@ func (l *badgerLogger) Debugf(f string, v ...interface{}) {
 	l.log.LogAttrs(context.Background(), LevelDebug, fmt.Sprintf(strings.Trim(f, "\n"), v...))
 }
 
-// ---------------------------------------------
-// Namespaces Implementation
-// ---------------------------------------------
-
 type BadgerNamespaces struct {
 	mu   sync.Mutex
 	conf BadgerConfig
@@ -1421,8 +1336,6 @@ func (b *BadgerNamespaces) getDB() (*badger.DB, error) {
 		return b.db, nil
 	}
 
-	// We store info about namespaces in a single db file. We prefix it with `~` to make it
-	// impossible for someone to create a namespace with the same name.
 	dir := filepath.Join(b.conf.StorageDir, fmt.Sprintf("~namespace-storage-%s", bucketName))
 
 	opts := badger.DefaultOptions(dir)
@@ -1481,7 +1394,6 @@ func (b *BadgerNamespaces) Add(_ context.Context, ns types.Namespace) error {
 	}
 
 	return db.Update(func(txn *badger.Txn) error {
-		// If the namespace already exists in the store
 		_, err := txn.Get([]byte(ns.Name))
 		if err == nil {
 			return types.NewErrNamespaceAlreadyExists(ns.Name)
@@ -1586,7 +1498,6 @@ func (b *BadgerNamespaces) Delete(_ context.Context, name string) error {
 	}
 
 	return db.Update(func(txn *badger.Txn) error {
-		// Check if namespace exists first
 		_, err := txn.Get([]byte(name))
 		if err != nil {
 			if errors.Is(err, badger.ErrKeyNotFound) {
@@ -1612,10 +1523,6 @@ func (b *BadgerNamespaces) Close(_ context.Context) error {
 	b.db = nil
 	return err
 }
-
-// ---------------------------------------------
-// Users Implementation
-// ---------------------------------------------
 
 type BadgerUsers struct {
 	mu   sync.Mutex
@@ -1697,7 +1604,6 @@ func (b *BadgerUsers) GetByUsername(_ context.Context, username string, user *ty
 	}
 
 	return db.View(func(txn *badger.Txn) error {
-		// First lookup the ID by username
 		kvItem, err := txn.Get([]byte("user-username:" + username))
 		if err != nil {
 			if errors.Is(err, badger.ErrKeyNotFound) {
@@ -1712,7 +1618,6 @@ func (b *BadgerUsers) GetByUsername(_ context.Context, username string, user *ty
 			return errors.Errorf("during ValueCopy(): %w", err)
 		}
 
-		// Now get the user by ID
 		kvItem, err = txn.Get([]byte("user:" + string(idBytes)))
 		if err != nil {
 			if errors.Is(err, badger.ErrKeyNotFound) {
@@ -1749,7 +1654,6 @@ func (b *BadgerUsers) Add(_ context.Context, user types.User) error {
 	}
 
 	return db.Update(func(txn *badger.Txn) error {
-		// Check if user ID already exists
 		_, err := txn.Get([]byte("user:" + user.ID))
 		if err == nil {
 			return types.NewErrUserAlreadyExists(user.ID)
@@ -1758,7 +1662,6 @@ func (b *BadgerUsers) Add(_ context.Context, user types.User) error {
 			return errors.Errorf("during Get(): %w", err)
 		}
 
-		// Check if username is taken
 		_, err = txn.Get([]byte("user-username:" + user.Username))
 		if err == nil {
 			return types.NewErrUsernameAlreadyTaken(user.Username)
@@ -1776,7 +1679,6 @@ func (b *BadgerUsers) Add(_ context.Context, user types.User) error {
 			return errors.Errorf("during Set(): %w", err)
 		}
 
-		// Set username index
 		if err := txn.Set([]byte("user-username:"+user.Username), []byte(user.ID)); err != nil {
 			return errors.Errorf("during Set(): %w", err)
 		}
@@ -1839,7 +1741,6 @@ func (b *BadgerUsers) Delete(_ context.Context, id string) error {
 	}
 
 	return db.Update(func(txn *badger.Txn) error {
-		// Get the user first to get the username for index cleanup
 		kvItem, err := txn.Get([]byte("user:" + id))
 		if err != nil {
 			if errors.Is(err, badger.ErrKeyNotFound) {
@@ -1859,12 +1760,10 @@ func (b *BadgerUsers) Delete(_ context.Context, id string) error {
 			return errors.Errorf("during Decode(): %w", err)
 		}
 
-		// Delete username index
 		if err := txn.Delete([]byte("user-username:" + user.Username)); err != nil {
 			return errors.Errorf("during Delete(): %w", err)
 		}
 
-		// Delete user
 		if err := txn.Delete([]byte("user:" + id)); err != nil {
 			return errors.Errorf("during Delete(): %w", err)
 		}
@@ -1882,10 +1781,6 @@ func (b *BadgerUsers) Close(_ context.Context) error {
 	b.db = nil
 	return err
 }
-
-// ---------------------------------------------
-// API Keys Implementation
-// ---------------------------------------------
 
 type BadgerAPIKeys struct {
 	mu   sync.Mutex
@@ -1967,7 +1862,6 @@ func (b *BadgerAPIKeys) GetByHash(_ context.Context, hash string, key *types.API
 	}
 
 	return db.View(func(txn *badger.Txn) error {
-		// First lookup the ID by hash
 		kvItem, err := txn.Get([]byte("apikey-hash:" + hash))
 		if err != nil {
 			if errors.Is(err, badger.ErrKeyNotFound) {
@@ -1982,7 +1876,6 @@ func (b *BadgerAPIKeys) GetByHash(_ context.Context, hash string, key *types.API
 			return errors.Errorf("during ValueCopy(): %w", err)
 		}
 
-		// Now get the key by ID
 		kvItem, err = txn.Get([]byte("apikey:" + string(idBytes)))
 		if err != nil {
 			if errors.Is(err, badger.ErrKeyNotFound) {
@@ -2019,7 +1912,6 @@ func (b *BadgerAPIKeys) Add(_ context.Context, key types.APIKey) error {
 	}
 
 	return db.Update(func(txn *badger.Txn) error {
-		// Check if key ID already exists
 		_, err := txn.Get([]byte("apikey:" + key.ID))
 		if err == nil {
 			return reply.NewInvalidOption("api key already exists")
@@ -2028,7 +1920,6 @@ func (b *BadgerAPIKeys) Add(_ context.Context, key types.APIKey) error {
 			return errors.Errorf("during Get(): %w", err)
 		}
 
-		// Check if hash is already taken
 		_, err = txn.Get([]byte("apikey-hash:" + key.KeyHash))
 		if err == nil {
 			return reply.NewInvalidOption("api key hash already exists")
@@ -2046,12 +1937,10 @@ func (b *BadgerAPIKeys) Add(_ context.Context, key types.APIKey) error {
 			return errors.Errorf("during Set(): %w", err)
 		}
 
-		// Set hash index
 		if err := txn.Set([]byte("apikey-hash:"+key.KeyHash), []byte(key.ID)); err != nil {
 			return errors.Errorf("during Set(): %w", err)
 		}
 
-		// Set user index (append key ID to list)
 		userKeyList := []byte("apikey-user:" + key.UserID)
 		existingIDs, err := b.getUserKeyIDs(txn, key.UserID)
 		if err != nil {
@@ -2205,7 +2094,6 @@ func (b *BadgerAPIKeys) Delete(_ context.Context, id string) error {
 	}
 
 	return db.Update(func(txn *badger.Txn) error {
-		// Get the key first for cleanup
 		kvItem, err := txn.Get([]byte("apikey:" + id))
 		if err != nil {
 			if errors.Is(err, badger.ErrKeyNotFound) {
@@ -2225,12 +2113,10 @@ func (b *BadgerAPIKeys) Delete(_ context.Context, id string) error {
 			return errors.Errorf("during Decode(): %w", err)
 		}
 
-		// Delete hash index
 		if err := txn.Delete([]byte("apikey-hash:" + key.KeyHash)); err != nil {
 			return errors.Errorf("during Delete(): %w", err)
 		}
 
-		// Update user index
 		ids, err := b.getUserKeyIDs(txn, key.UserID)
 		if err != nil {
 			return errors.Errorf("during getUserKeyIDs(): %w", err)
@@ -2255,7 +2141,6 @@ func (b *BadgerAPIKeys) Delete(_ context.Context, id string) error {
 			}
 		}
 
-		// Delete key
 		if err := txn.Delete([]byte("apikey:" + id)); err != nil {
 			return errors.Errorf("during Delete(): %w", err)
 		}
@@ -2279,7 +2164,6 @@ func (b *BadgerAPIKeys) DeleteByUser(_ context.Context, userID string) error {
 		}
 
 		for _, id := range ids {
-			// Get the key for hash cleanup
 			kvItem, err := txn.Get([]byte("apikey:" + id))
 			if err != nil {
 				if errors.Is(err, badger.ErrKeyNotFound) {
@@ -2299,17 +2183,14 @@ func (b *BadgerAPIKeys) DeleteByUser(_ context.Context, userID string) error {
 				return errors.Errorf("during Decode(): %w", err)
 			}
 
-			// Delete hash index
 			if err := txn.Delete([]byte("apikey-hash:" + key.KeyHash)); err != nil && !errors.Is(err, badger.ErrKeyNotFound) {
 				return errors.Errorf("during Delete(): %w", err)
 			}
-			// Delete key
 			if err := txn.Delete([]byte("apikey:" + id)); err != nil && !errors.Is(err, badger.ErrKeyNotFound) {
 				return errors.Errorf("during Delete(): %w", err)
 			}
 		}
 
-		// Delete user index
 		if err := txn.Delete([]byte("apikey-user:" + userID)); err != nil && !errors.Is(err, badger.ErrKeyNotFound) {
 			return errors.Errorf("during Delete(): %w", err)
 		}
@@ -2368,10 +2249,6 @@ func (b *BadgerAPIKeys) Close(_ context.Context) error {
 	return err
 }
 
-// ---------------------------------------------
-// Roles Implementation
-// ---------------------------------------------
-
 type BadgerRoles struct {
 	mu   sync.Mutex
 	conf BadgerConfig
@@ -2417,7 +2294,6 @@ func (b *BadgerRoles) Get(_ context.Context, roleName RoleName, role *types.Role
 	}
 
 	return db.View(func(txn *badger.Txn) error {
-		// First lookup the ID by namespace:name
 		indexKey := []byte("role-ns-name:" + namespace + ":" + name)
 		kvItem, err := txn.Get(indexKey)
 		if err != nil {
@@ -2433,7 +2309,6 @@ func (b *BadgerRoles) Get(_ context.Context, roleName RoleName, role *types.Role
 			return errors.Errorf("during ValueCopy(): %w", err)
 		}
 
-		// Now get the role by ID
 		kvItem, err = txn.Get([]byte("role:" + string(idBytes)))
 		if err != nil {
 			if errors.Is(err, badger.ErrKeyNotFound) {
@@ -2506,7 +2381,6 @@ func (b *BadgerRoles) Add(_ context.Context, role types.Role) error {
 	}
 
 	return db.Update(func(txn *badger.Txn) error {
-		// Check if role ID already exists
 		_, err := txn.Get([]byte("role:" + role.ID))
 		if err == nil {
 			return types.NewErrRoleAlreadyExists(role)
@@ -2515,7 +2389,6 @@ func (b *BadgerRoles) Add(_ context.Context, role types.Role) error {
 			return errors.Errorf("during Get(): %w", err)
 		}
 
-		// Check if role already exists by namespace:name
 		indexKey := []byte("role-ns-name:" + role.Namespace + ":" + role.Name)
 		_, err = txn.Get(indexKey)
 		if err == nil {
@@ -2525,18 +2398,15 @@ func (b *BadgerRoles) Add(_ context.Context, role types.Role) error {
 			return errors.Errorf("during uniqueness check: %w", err)
 		}
 
-		// Encode role
 		var buf bytes.Buffer
 		if err := gob.NewEncoder(&buf).Encode(role); err != nil {
 			return errors.Errorf("during gob.Encode(): %w", err)
 		}
 
-		// Store role
 		if err := txn.Set([]byte("role:"+role.ID), buf.Bytes()); err != nil {
 			return errors.Errorf("during Set(): %w", err)
 		}
 
-		// Set namespace:name index
 		if err := txn.Set(indexKey, []byte(role.ID)); err != nil {
 			return errors.Errorf("during Set(): %w", err)
 		}
@@ -2556,7 +2426,6 @@ func (b *BadgerRoles) Update(_ context.Context, role types.Role) error {
 	}
 
 	return db.Update(func(txn *badger.Txn) error {
-		// Get existing role
 		kvItem, err := txn.Get([]byte("role:" + role.ID))
 		if err != nil {
 			if errors.Is(err, badger.ErrKeyNotFound) {
@@ -2576,7 +2445,6 @@ func (b *BadgerRoles) Update(_ context.Context, role types.Role) error {
 			return errors.Errorf("during Decode(): %w", err)
 		}
 
-		// Update permissions only
 		existing.Permissions = role.Permissions
 
 		var buf bytes.Buffer
@@ -2622,7 +2490,6 @@ func (b *BadgerRoles) List(ctx context.Context, namespace string, roles *[]types
 				return errors.Errorf("during Decode(): %w", err)
 			}
 
-			// Filter by namespace if specified
 			if namespace != "" && role.Namespace != namespace {
 				continue
 			}
@@ -2650,7 +2517,6 @@ func (b *BadgerRoles) Delete(_ context.Context, id string) error {
 	}
 
 	return db.Update(func(txn *badger.Txn) error {
-		// Get role first for cleanup
 		kvItem, err := txn.Get([]byte("role:" + id))
 		if err != nil {
 			if errors.Is(err, badger.ErrKeyNotFound) {
@@ -2670,13 +2536,11 @@ func (b *BadgerRoles) Delete(_ context.Context, id string) error {
 			return errors.Errorf("during Decode(): %w", err)
 		}
 
-		// Delete namespace:name index
 		indexKey := []byte("role-ns-name:" + role.Namespace + ":" + role.Name)
 		if err := txn.Delete(indexKey); err != nil {
 			return errors.Errorf("during Delete(): %w", err)
 		}
 
-		// Delete role
 		if err := txn.Delete([]byte("role:" + id)); err != nil {
 			return errors.Errorf("during Delete(): %w", err)
 		}
@@ -2694,10 +2558,6 @@ func (b *BadgerRoles) Close(_ context.Context) error {
 	b.db = nil
 	return err
 }
-
-// ---------------------------------------------
-// RoleBindings Implementation
-// ---------------------------------------------
 
 type BadgerRoleBindings struct {
 	mu   sync.Mutex
@@ -2791,7 +2651,6 @@ func (b *BadgerRoleBindings) Add(_ context.Context, binding types.RoleBinding) e
 	}
 
 	return db.Update(func(txn *badger.Txn) error {
-		// Check if binding ID already exists
 		_, err := txn.Get([]byte("rolebinding:" + binding.ID))
 		if err == nil {
 			return types.NewErrRoleBindingAlreadyExists(binding)
@@ -2800,7 +2659,6 @@ func (b *BadgerRoleBindings) Add(_ context.Context, binding types.RoleBinding) e
 			return errors.Errorf("during Get(): %w", err)
 		}
 
-		// Check for duplicate (same user, namespace, role combination)
 		uniqueKey := []byte("rolebinding-unique:" + binding.UserID + ":" + binding.Namespace + ":" + binding.RoleID)
 		_, err = txn.Get(uniqueKey)
 		if err == nil {
@@ -2810,23 +2668,19 @@ func (b *BadgerRoleBindings) Add(_ context.Context, binding types.RoleBinding) e
 			return errors.Errorf("during uniqueness check: %w", err)
 		}
 
-		// Encode binding
 		var buf bytes.Buffer
 		if err := gob.NewEncoder(&buf).Encode(binding); err != nil {
 			return errors.Errorf("during gob.Encode(): %w", err)
 		}
 
-		// Store binding
 		if err := txn.Set([]byte("rolebinding:"+binding.ID), buf.Bytes()); err != nil {
 			return errors.Errorf("during Set(): %w", err)
 		}
 
-		// Set uniqueness index
 		if err := txn.Set(uniqueKey, []byte(binding.ID)); err != nil {
 			return errors.Errorf("during Set(): %w", err)
 		}
 
-		// Update user index
 		userIDs, err := b.getUserBindingIDs(txn, binding.UserID)
 		if err != nil {
 			return errors.Errorf("during getUserBindingIDs(): %w", err)
@@ -2840,7 +2694,6 @@ func (b *BadgerRoleBindings) Add(_ context.Context, binding types.RoleBinding) e
 			return errors.Errorf("during Set(): %w", err)
 		}
 
-		// Update role index
 		roleIDs, err := b.getRoleBindingIDs(txn, binding.RoleID)
 		if err != nil {
 			return errors.Errorf("during getRoleBindingIDs(): %w", err)
@@ -2933,7 +2786,6 @@ func (b *BadgerRoleBindings) List(ctx context.Context, namespace string, binding
 				return errors.Errorf("during Decode(): %w", err)
 			}
 
-			// Filter by namespace if specified
 			if namespace != "" && binding.Namespace != namespace {
 				continue
 			}
@@ -3130,7 +2982,6 @@ func (b *BadgerRoleBindings) Delete(_ context.Context, id string) error {
 	}
 
 	return db.Update(func(txn *badger.Txn) error {
-		// Get binding first for cleanup
 		kvItem, err := txn.Get([]byte("rolebinding:" + id))
 		if err != nil {
 			if errors.Is(err, badger.ErrKeyNotFound) {
@@ -3150,13 +3001,11 @@ func (b *BadgerRoleBindings) Delete(_ context.Context, id string) error {
 			return errors.Errorf("during Decode(): %w", err)
 		}
 
-		// Delete uniqueness index
 		uniqueKey := []byte("rolebinding-unique:" + binding.UserID + ":" + binding.Namespace + ":" + binding.RoleID)
 		if err := txn.Delete(uniqueKey); err != nil {
 			return errors.Errorf("during Delete(): %w", err)
 		}
 
-		// Update user index
 		userIDs, err := b.getUserBindingIDs(txn, binding.UserID)
 		if err != nil {
 			return errors.Errorf("during getUserBindingIDs(): %w", err)
@@ -3181,7 +3030,6 @@ func (b *BadgerRoleBindings) Delete(_ context.Context, id string) error {
 			}
 		}
 
-		// Update role index
 		roleIDs, err := b.getRoleBindingIDs(txn, binding.RoleID)
 		if err != nil {
 			return errors.Errorf("during getRoleBindingIDs(): %w", err)
@@ -3206,7 +3054,6 @@ func (b *BadgerRoleBindings) Delete(_ context.Context, id string) error {
 			}
 		}
 
-		// Delete binding
 		if err := txn.Delete([]byte("rolebinding:" + id)); err != nil {
 			return errors.Errorf("during Delete(): %w", err)
 		}
@@ -3230,7 +3077,6 @@ func (b *BadgerRoleBindings) DeleteByUser(_ context.Context, userID string) erro
 		}
 
 		for _, id := range ids {
-			// Get binding for cleanup
 			kvItem, err := txn.Get([]byte("rolebinding:" + id))
 			if err != nil {
 				if errors.Is(err, badger.ErrKeyNotFound) {
@@ -3250,13 +3096,11 @@ func (b *BadgerRoleBindings) DeleteByUser(_ context.Context, userID string) erro
 				return errors.Errorf("during Decode(): %w", err)
 			}
 
-			// Delete uniqueness index
 			uniqueKey := []byte("rolebinding-unique:" + binding.UserID + ":" + binding.Namespace + ":" + binding.RoleID)
 			if err := txn.Delete(uniqueKey); err != nil && !errors.Is(err, badger.ErrKeyNotFound) {
 				return errors.Errorf("during Delete(): %w", err)
 			}
 
-			// Update role index
 			roleIDs, err := b.getRoleBindingIDs(txn, binding.RoleID)
 			if err != nil {
 				return errors.Errorf("during getRoleBindingIDs(): %w", err)
@@ -3281,13 +3125,11 @@ func (b *BadgerRoleBindings) DeleteByUser(_ context.Context, userID string) erro
 				}
 			}
 
-			// Delete binding
 			if err := txn.Delete([]byte("rolebinding:" + id)); err != nil && !errors.Is(err, badger.ErrKeyNotFound) {
 				return errors.Errorf("during Delete(): %w", err)
 			}
 		}
 
-		// Delete user index
 		if err := txn.Delete([]byte("rolebinding-user:" + userID)); err != nil && !errors.Is(err, badger.ErrKeyNotFound) {
 			return errors.Errorf("during Delete(): %w", err)
 		}

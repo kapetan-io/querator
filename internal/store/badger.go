@@ -18,6 +18,7 @@ import (
 	"github.com/kapetan-io/querator/transport/reply"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/set"
+	"github.com/kapetan-io/tiger/assert"
 	"github.com/segmentio/ksuid"
 )
 
@@ -968,8 +969,7 @@ func (b *BadgerPartition) TakeAction(_ context.Context, batch types.LifeCycleBat
 					state.UnLeased++
 
 				default:
-					b.conf.Log.Warn("assertion failed; undefined action", "action",
-						fmt.Sprintf("0x%X", int(a.Action)))
+					assert.Unreachable(fmt.Sprintf("undefined action kind '0x%X'", int(a.Action)))
 				}
 			}
 		}
@@ -2509,7 +2509,7 @@ func (b *BadgerRoles) Add(_ context.Context, role types.Role) error {
 		// Check if role ID already exists
 		_, err := txn.Get([]byte("role:" + role.ID))
 		if err == nil {
-			return types.NewErrRoleAlreadyExists(role.Namespace, role.Name)
+			return types.NewErrRoleAlreadyExists(role)
 		}
 		if !errors.Is(err, badger.ErrKeyNotFound) {
 			return errors.Errorf("during Get(): %w", err)
@@ -2519,7 +2519,7 @@ func (b *BadgerRoles) Add(_ context.Context, role types.Role) error {
 		indexKey := []byte("role-ns-name:" + role.Namespace + ":" + role.Name)
 		_, err = txn.Get(indexKey)
 		if err == nil {
-			return types.NewErrRoleAlreadyExists(role.Namespace, role.Name)
+			return types.NewErrRoleAlreadyExists(role)
 		}
 		if !errors.Is(err, badger.ErrKeyNotFound) {
 			return errors.Errorf("during uniqueness check: %w", err)
@@ -2794,7 +2794,7 @@ func (b *BadgerRoleBindings) Add(_ context.Context, binding types.RoleBinding) e
 		// Check if binding ID already exists
 		_, err := txn.Get([]byte("rolebinding:" + binding.ID))
 		if err == nil {
-			return types.NewErrRoleBindingAlreadyExists(binding.UserID, binding.RoleID, binding.Namespace)
+			return types.NewErrRoleBindingAlreadyExists(binding)
 		}
 		if !errors.Is(err, badger.ErrKeyNotFound) {
 			return errors.Errorf("during Get(): %w", err)
@@ -2804,7 +2804,7 @@ func (b *BadgerRoleBindings) Add(_ context.Context, binding types.RoleBinding) e
 		uniqueKey := []byte("rolebinding-unique:" + binding.UserID + ":" + binding.Namespace + ":" + binding.RoleID)
 		_, err = txn.Get(uniqueKey)
 		if err == nil {
-			return types.NewErrRoleBindingAlreadyExists(binding.UserID, binding.RoleID, binding.Namespace)
+			return types.NewErrRoleBindingAlreadyExists(binding)
 		}
 		if !errors.Is(err, badger.ErrKeyNotFound) {
 			return errors.Errorf("during uniqueness check: %w", err)

@@ -55,23 +55,23 @@ func TestMetricsCollectorCalculatePercentiles(t *testing.T) {
 	collector.RecordLatency(400 * time.Millisecond)
 	collector.RecordLatency(500 * time.Millisecond)
 
-	p50, p95, p99, max := collector.CalculatePercentiles()
+	percentiles := collector.CalculatePercentiles()
 
-	assert.Equal(t, int64(300*time.Millisecond), p50)
-	assert.Equal(t, int64(500*time.Millisecond), p95)
-	assert.Equal(t, int64(500*time.Millisecond), p99)
-	assert.Equal(t, int64(500*time.Millisecond), max)
+	assert.Equal(t, int64(300*time.Millisecond), percentiles.P50)
+	assert.Equal(t, int64(500*time.Millisecond), percentiles.P95)
+	assert.Equal(t, int64(500*time.Millisecond), percentiles.P99)
+	assert.Equal(t, int64(500*time.Millisecond), percentiles.Max)
 }
 
 func TestMetricsCollectorCalculatePercentilesEmpty(t *testing.T) {
 	collector := NewMetricsCollector()
 
-	p50, p95, p99, max := collector.CalculatePercentiles()
+	percentiles := collector.CalculatePercentiles()
 
-	assert.Equal(t, int64(0), p50)
-	assert.Equal(t, int64(0), p95)
-	assert.Equal(t, int64(0), p99)
-	assert.Equal(t, int64(0), max)
+	assert.Equal(t, int64(0), percentiles.P50)
+	assert.Equal(t, int64(0), percentiles.P95)
+	assert.Equal(t, int64(0), percentiles.P99)
+	assert.Equal(t, int64(0), percentiles.Max)
 }
 
 func TestBenchmarkMetricsCalculateThroughput(t *testing.T) {
@@ -81,10 +81,10 @@ func TestBenchmarkMetricsCalculateThroughput(t *testing.T) {
 		Items:      5000,
 	}
 
-	opsPerSec, itemsPerSec := metrics.CalculateThroughput()
+	throughput := metrics.CalculateThroughput()
 
-	assert.Equal(t, 1000.0, opsPerSec)
-	assert.Equal(t, 5000.0, itemsPerSec)
+	assert.Equal(t, 1000.0, throughput.OpsPerSec)
+	assert.Equal(t, 5000.0, throughput.ItemsPerSec)
 }
 
 func TestBenchmarkMetricsCalculateThroughputZeroDuration(t *testing.T) {
@@ -94,10 +94,10 @@ func TestBenchmarkMetricsCalculateThroughputZeroDuration(t *testing.T) {
 		Items:      5000,
 	}
 
-	opsPerSec, itemsPerSec := metrics.CalculateThroughput()
+	throughput := metrics.CalculateThroughput()
 
-	assert.Equal(t, 0.0, opsPerSec)
-	assert.Equal(t, 0.0, itemsPerSec)
+	assert.Equal(t, 0.0, throughput.OpsPerSec)
+	assert.Equal(t, 0.0, throughput.ItemsPerSec)
 }
 
 func TestMetricsCollectorFinalize(t *testing.T) {
@@ -108,7 +108,15 @@ func TestMetricsCollectorFinalize(t *testing.T) {
 	var memStats runtime.MemStats
 	runtime.ReadMemStats(&memStats)
 
-	metrics := collector.Finalize(OpProduce, 1024, 10, 1, 0, 100, 1000, memStats)
+	metrics := collector.Finalize(FinalizeArgs{
+		Operation:   OpProduce,
+		PayloadSize: 1024,
+		BatchSize:   10,
+		Concurrency: 1,
+		QueueDepth:  0,
+		Operations:  100,
+		Items:       1000,
+	}, memStats)
 
 	assert.Equal(t, OpProduce, metrics.Operation)
 	assert.Equal(t, 1024, metrics.PayloadSize)
@@ -139,7 +147,8 @@ func TestFormatAsText(t *testing.T) {
 		},
 	}
 
-	text := FormatAsText(results)
+	text, err := FormatAsText(results)
+	require.NoError(t, err)
 
 	assert.Contains(t, text, "Operation")
 	assert.Contains(t, text, "produce")
@@ -192,7 +201,8 @@ func TestFormatAsCSV(t *testing.T) {
 		},
 	}
 
-	csv := FormatAsCSV(results)
+	csv, err := FormatAsCSV(results)
+	require.NoError(t, err)
 
 	lines := strings.Split(strings.TrimSpace(csv), "\n")
 	require.Len(t, lines, 2)

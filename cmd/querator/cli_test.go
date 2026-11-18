@@ -26,7 +26,7 @@ func TestProduceCommand(t *testing.T) {
 	}
 
 	// Test produce command
-	_, stderr, err := captureOutput(func() error {
+	out, err := captureOutput(t, func() error {
 		return main.RunProduce(testFlags, "test-queue")
 	})
 
@@ -44,7 +44,7 @@ func TestProduceCommand(t *testing.T) {
 	assert.NotEmpty(t, req.Body)
 
 	// Produce command doesn't print success messages, just verify no error occurred
-	assert.Empty(t, stderr)
+	assert.Empty(t, out.Stderr)
 }
 
 // TestLeaseCommand tests the lease command with mock server
@@ -62,7 +62,7 @@ func TestLeaseCommand(t *testing.T) {
 		BatchSize:    1,
 	}
 
-	stdout, _, err := captureOutput(func() error {
+	out, err := captureOutput(t, func() error {
 		return main.RunLease(testFlags, "test-queue")
 	})
 
@@ -80,7 +80,7 @@ func TestLeaseCommand(t *testing.T) {
 	assert.NotEmpty(t, req.Body)
 
 	// Verify JSON output format
-	assert.Contains(t, stdout, "{")
+	assert.Contains(t, out.Stdout, "{")
 }
 
 // TestCompleteCommand tests the complete command with mock server
@@ -97,7 +97,7 @@ func TestCompleteCommand(t *testing.T) {
 		Partition:       0,
 	}
 
-	_, stderr, err := captureOutput(func() error {
+	out, err := captureOutput(t, func() error {
 		return main.RunComplete(testFlags, "test-queue", testFlags.Partition, []string{"item1", "item2"})
 	})
 
@@ -115,7 +115,7 @@ func TestCompleteCommand(t *testing.T) {
 	assert.NotEmpty(t, req.Body)
 
 	// Verify success message was printed
-	assert.Contains(t, stderr, "Successfully completed 2 item")
+	assert.Contains(t, out.Stderr, "Successfully completed 2 item")
 }
 
 // TestCreateCommand tests the create command with mock server
@@ -132,7 +132,7 @@ func TestCreateCommand(t *testing.T) {
 		Partitions:         1,
 	}
 
-	_, stderr, err := captureOutput(func() error {
+	out, err := captureOutput(t, func() error {
 		return main.RunCreate(testFlags, "test-queue")
 	})
 
@@ -150,7 +150,7 @@ func TestCreateCommand(t *testing.T) {
 	assert.NotEmpty(t, req.Body)
 
 	// Verify success message was printed
-	assert.Contains(t, stderr, "Successfully created queue 'test-queue'")
+	assert.Contains(t, out.Stderr, "Successfully created queue 'test-queue'")
 }
 
 // TestListCommand tests the list command with mock server
@@ -166,7 +166,7 @@ func TestListCommand(t *testing.T) {
 		Limit:    100,
 	}
 
-	stdout, _, err := captureOutput(func() error {
+	out, err := captureOutput(t, func() error {
 		return main.RunList(testFlags)
 	})
 
@@ -181,7 +181,7 @@ func TestListCommand(t *testing.T) {
 	assert.Equal(t, "/v1/queues.list", req.Path)
 
 	// Verify JSON output format
-	assert.Contains(t, stdout, "test-queue-1")
+	assert.Contains(t, out.Stdout, "test-queue-1")
 }
 
 // TestUpdateCommand tests the update command with mock server
@@ -197,7 +197,7 @@ func TestUpdateCommand(t *testing.T) {
 	}
 
 	// Test update command
-	_, stderr, err := captureOutput(func() error {
+	out, err := captureOutput(t, func() error {
 		return main.RunUpdate(testFlags, "test-queue")
 	})
 
@@ -217,7 +217,7 @@ func TestUpdateCommand(t *testing.T) {
 	assert.NotEmpty(t, reqs[1].Body)
 
 	// Verify success message was printed
-	assert.Contains(t, stderr, "Successfully updated queue 'test-queue'")
+	assert.Contains(t, out.Stderr, "Successfully updated queue 'test-queue'")
 }
 
 // TestDeleteCommand tests the delete command with mock server
@@ -233,7 +233,7 @@ func TestDeleteCommand(t *testing.T) {
 		Force:    true,
 	}
 
-	_, stderr, err := captureOutput(func() error {
+	out, err := captureOutput(t, func() error {
 		return main.RunDelete(testFlags, "test-queue")
 	})
 
@@ -251,7 +251,7 @@ func TestDeleteCommand(t *testing.T) {
 	assert.NotEmpty(t, req.Body)
 
 	// Verify success message was printed
-	assert.Contains(t, stderr, "Successfully deleted queue 'test-queue'")
+	assert.Contains(t, out.Stderr, "Successfully deleted queue 'test-queue'")
 }
 
 // TestProduceCommandWithFlags tests the produce command with various flags
@@ -271,7 +271,7 @@ func TestProduceCommandWithFlags(t *testing.T) {
 	}
 
 	// Test produce command with flags
-	_, stderr, err := captureOutput(func() error {
+	out, err := captureOutput(t, func() error {
 		return main.RunProduce(testFlags, "test-queue")
 	})
 
@@ -289,7 +289,7 @@ func TestProduceCommandWithFlags(t *testing.T) {
 	assert.NotEmpty(t, req.Body)
 
 	// Should complete without error
-	assert.Empty(t, stderr)
+	assert.Empty(t, out.Stderr)
 }
 
 // TestLeaseCommandWithFlags tests the lease command with various flags
@@ -307,7 +307,7 @@ func TestLeaseCommandWithFlags(t *testing.T) {
 		LeaseTimeout: "45s",
 	}
 
-	stdout, _, err := captureOutput(func() error {
+	out, err := captureOutput(t, func() error {
 		return main.RunLease(testFlags, "test-queue")
 	})
 
@@ -325,7 +325,7 @@ func TestLeaseCommandWithFlags(t *testing.T) {
 	assert.NotEmpty(t, req.Body)
 
 	// Verify JSON output format
-	assert.Contains(t, stdout, "{")
+	assert.Contains(t, out.Stdout, "{")
 }
 
 // TestCreateCommandWithAllFlags tests the create command with all available flags
@@ -346,7 +346,7 @@ func TestCreateCommandWithAllFlags(t *testing.T) {
 		Endpoint:           ms.URL(),
 	}
 
-	_, stderr, err := captureOutput(func() error {
+	out, err := captureOutput(t, func() error {
 		return main.RunCreate(testFlags, "comprehensive-test-queue")
 	})
 
@@ -364,7 +364,7 @@ func TestCreateCommandWithAllFlags(t *testing.T) {
 	assert.NotEmpty(t, req.Body)
 
 	// Verify success message was printed with correct queue name
-	assert.Contains(t, stderr, "Successfully created queue 'comprehensive-test-queue'")
+	assert.Contains(t, out.Stderr, "Successfully created queue 'comprehensive-test-queue'")
 }
 
 // TestCompleteCommandWithFile tests the complete command with file input
@@ -381,8 +381,9 @@ func TestCompleteCommandWithFile(t *testing.T) {
 
 	// Write item IDs to file
 	itemIds := "item-1\nitem-2\nitem-3\n"
-	_, _ = tempFile.WriteString(itemIds)
-	_ = tempFile.Close()
+	_, err = tempFile.WriteString(itemIds)
+	require.NoError(t, err)
+	require.NoError(t, tempFile.Close())
 
 	// Test complete command with file input
 	testFlags := main.FlagParams{
@@ -392,7 +393,7 @@ func TestCompleteCommandWithFile(t *testing.T) {
 		Partition:       0,
 	}
 
-	_, stderr, err := captureOutput(func() error {
+	out, err := captureOutput(t, func() error {
 		return main.RunComplete(testFlags, "test-queue", testFlags.Partition, []string{})
 	})
 
@@ -410,7 +411,7 @@ func TestCompleteCommandWithFile(t *testing.T) {
 	assert.NotEmpty(t, req.Body)
 
 	// Verify success message for 3 items from file
-	assert.Contains(t, stderr, "Successfully completed 3 item")
+	assert.Contains(t, out.Stderr, "Successfully completed 3 item")
 }
 
 // TestListCommandWithPagination tests the list command with pagination flags
@@ -427,7 +428,7 @@ func TestListCommandWithPagination(t *testing.T) {
 		Limit:    10,
 	}
 
-	stdout, _, err := captureOutput(func() error {
+	out, err := captureOutput(t, func() error {
 		return main.RunList(testFlags)
 	})
 
@@ -445,7 +446,7 @@ func TestListCommandWithPagination(t *testing.T) {
 	assert.NotEmpty(t, req.Body)
 
 	// Verify JSON output format
-	assert.Contains(t, stdout, "test-queue-1")
+	assert.Contains(t, out.Stdout, "test-queue-1")
 }
 
 // TestMockServerCapturesMultipleRequests tests that mock server properly captures multiple sequential requests
@@ -456,7 +457,7 @@ func TestMockServerCapturesMultipleRequests(t *testing.T) {
 	ms.ClearRequests()
 
 	// Execute multiple commands
-	_, _, err1 := captureOutput(func() error {
+	_, err1 := captureOutput(t, func() error {
 		return main.RunProduce(
 			main.FlagParams{
 				Payload:  "test payload",
@@ -465,7 +466,7 @@ func TestMockServerCapturesMultipleRequests(t *testing.T) {
 			}, "queue-1")
 	})
 
-	_, _, err2 := captureOutput(func() error {
+	_, err2 := captureOutput(t, func() error {
 		return main.RunList(main.FlagParams{
 			Endpoint: ms.URL(),
 			Limit:    100,
@@ -476,7 +477,7 @@ func TestMockServerCapturesMultipleRequests(t *testing.T) {
 		Endpoint: ms.URL(),
 		Force:    true,
 	}
-	_, _, err3 := captureOutput(func() error {
+	_, err3 := captureOutput(t, func() error {
 		return main.RunDelete(testFlags3, "queue-1")
 	})
 
@@ -507,7 +508,7 @@ func TestMockServerClearRequests(t *testing.T) {
 		Endpoint: ms.URL(),
 		Timeout:  "30s",
 	}
-	_, _, err := captureOutput(func() error {
+	_, err := captureOutput(t, func() error {
 		return main.RunProduce(testFlags, "test-queue")
 	})
 
@@ -525,7 +526,7 @@ func TestMockServerClearRequests(t *testing.T) {
 	assert.Len(t, reqs, 0)
 
 	// Execute another command
-	_, _, err = captureOutput(func() error {
+	_, err = captureOutput(t, func() error {
 		return main.RunProduce(testFlags, "test-queue-2")
 	})
 
@@ -553,7 +554,7 @@ func TestMockServerGetLastRequest(t *testing.T) {
 		Endpoint: ms.URL(),
 		Timeout:  "30s",
 	}
-	_, _, err1 := captureOutput(func() error {
+	_, err1 := captureOutput(t, func() error {
 		return main.RunProduce(testFlags1, "queue-1")
 	})
 
@@ -562,7 +563,7 @@ func TestMockServerGetLastRequest(t *testing.T) {
 		Endpoint: ms.URL(),
 		Timeout:  "30s",
 	}
-	_, _, err2 := captureOutput(func() error {
+	_, err2 := captureOutput(t, func() error {
 		return main.RunProduce(testFlags2, "queue-2")
 	})
 
@@ -577,27 +578,39 @@ func TestMockServerGetLastRequest(t *testing.T) {
 	assert.Equal(t, "POST", lastReq.Method)
 }
 
-// Test helper to capture stdout/stderr
-func captureOutput(fn func() error) (stdout, stderr string, err error) {
+// output holds what a CLI command printed.
+type output struct {
+	Stdout string
+	Stderr string
+}
+
+func captureOutput(t *testing.T, fn func() error) (output, error) {
+	t.Helper()
 	oldStdout := os.Stdout
 	oldStderr := os.Stderr
 
-	stdoutR, stdoutW, _ := os.Pipe()
-	stderrR, stderrW, _ := os.Pipe()
+	stdoutR, stdoutW, err := os.Pipe()
+	require.NoError(t, err)
+	stderrR, stderrW, err := os.Pipe()
+	require.NoError(t, err)
 
 	os.Stdout = stdoutW
 	os.Stderr = stderrW
+	err = func() error {
+		defer func() {
+			os.Stdout = oldStdout
+			os.Stderr = oldStderr
+		}()
+		return fn()
+	}()
 
-	err = fn()
+	require.NoError(t, stdoutW.Close())
+	require.NoError(t, stderrW.Close())
 
-	_ = stdoutW.Close()
-	_ = stderrW.Close()
+	stdoutBytes, readErr := io.ReadAll(stdoutR)
+	require.NoError(t, readErr)
+	stderrBytes, readErr := io.ReadAll(stderrR)
+	require.NoError(t, readErr)
 
-	stdoutBytes, _ := io.ReadAll(stdoutR)
-	stderrBytes, _ := io.ReadAll(stderrR)
-
-	os.Stdout = oldStdout
-	os.Stderr = oldStderr
-
-	return string(stdoutBytes), string(stderrBytes), err
+	return output{Stdout: string(stdoutBytes), Stderr: string(stderrBytes)}, err
 }

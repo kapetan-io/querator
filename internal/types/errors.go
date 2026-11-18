@@ -4,11 +4,11 @@ import "github.com/kapetan-io/querator/transport/reply"
 
 // Kind constants for errors that must be sentinel-matched with errors.Is
 const (
-	KindNamespaceAlreadyExists   = "namespace.already_exists"
-	KindUserAlreadyExists        = "user.already_exists"
-	KindUsernameAlreadyTaken     = "user.username_taken"
-	KindRoleAlreadyExists        = "role.already_exists"
-	KindRoleBindingAlreadyExists = "role_binding.already_exists"
+	KindNamespaceAlreadyExists   reply.Kind = "namespace.already_exists"
+	KindUserAlreadyExists        reply.Kind = "user.already_exists"
+	KindUsernameAlreadyTaken     reply.Kind = "user.username_taken"
+	KindRoleAlreadyExists        reply.Kind = "role.already_exists"
+	KindRoleBindingAlreadyExists reply.Kind = "role_binding.already_exists"
 )
 
 // Sentinels for errors.Is matching — use these instead of calling constructors with empty strings.
@@ -65,12 +65,12 @@ func NewErrRoleNotExist(identifier string) *reply.ErrRequestFailed {
 	return reply.NewRequestFailed("role does not exist; '%s' was not found", identifier)
 }
 
-func NewErrRoleAlreadyExists(namespace, name string) *reply.ErrInvalidOption {
-	return reply.NewInvalidOptionKind(KindRoleAlreadyExists, "role already exists; '%s:%s' already exists", namespace, name)
+func NewErrRoleAlreadyExists(role Role) *reply.ErrInvalidOption {
+	return reply.NewInvalidOptionKind(KindRoleAlreadyExists, "role already exists; '%s:%s' already exists", role.Namespace, role.Name)
 }
 
-func NewErrRoleBindingAlreadyExists(userID, roleID, namespace string) *reply.ErrInvalidOption {
-	return reply.NewInvalidOptionKind(KindRoleBindingAlreadyExists, "role binding already exists; binding for user '%s' to role '%s' in namespace '%s' already exists", userID, roleID, namespace)
+func NewErrRoleBindingAlreadyExists(binding RoleBinding) *reply.ErrInvalidOption {
+	return reply.NewInvalidOptionKind(KindRoleBindingAlreadyExists, "role binding already exists; binding for user '%s' to role '%s' in namespace '%s' already exists", binding.UserID, binding.RoleID, binding.Namespace)
 }
 
 func NewErrRoleHasBindings(name string) *reply.ErrInvalidOption {

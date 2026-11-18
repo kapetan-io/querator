@@ -17,6 +17,8 @@ const (
 	// MaxKeyTagLength is the maximum allowed length for an API key tag segment.
 	MaxKeyTagLength = 16
 
+	entropyLength = 43
+
 	base62Alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 )
 
@@ -35,20 +37,14 @@ type GeneratedKey struct {
 	Key     string // Full API key to return to user (shown once)
 }
 
-func base62Encode(b []byte) string {
+func encodeEntropy(b []byte) string {
 	n := new(big.Int).SetBytes(b)
 	base := big.NewInt(62)
 	mod := new(big.Int)
-	digits := make([]byte, 0, 43)
-	for n.Sign() > 0 {
+	digits := make([]byte, entropyLength)
+	for i := len(digits) - 1; i >= 0; i-- {
 		n.DivMod(n, base, mod)
-		digits = append(digits, base62Alphabet[mod.Int64()])
-	}
-	for i, j := 0, len(digits)-1; i < j; i, j = i+1, j-1 {
-		digits[i], digits[j] = digits[j], digits[i]
-	}
-	for len(digits) < 43 {
-		digits = append([]byte{base62Alphabet[0]}, digits...)
+		digits[i] = base62Alphabet[mod.Int64()]
 	}
 	return string(digits)
 }
@@ -67,7 +63,7 @@ func GenerateAPIKey(tag string) (GeneratedKey, error) {
 		return GeneratedKey{}, fmt.Errorf("generating random bytes: %w", err)
 	}
 
-	entropy := base62Encode(randomBytes)
+	entropy := encodeEntropy(randomBytes)
 	fullKey := fmt.Sprintf("qtr-%s-%s", tag, entropy)
 	prefix := fmt.Sprintf("qtr-%s-%s", tag, entropy[:8])
 
@@ -93,7 +89,7 @@ func validateKeyTag(tag string) error {
 		return fmt.Errorf("invalid api key format; tag must be at most %d characters", MaxKeyTagLength)
 	}
 	for _, c := range tag {
-		if (c < '0' || c > '9') && (c < 'a' || c > 'z') {
+		if !isLowerAlphanumeric(c) {
 			return fmt.Errorf("invalid api key format; tag must be lowercase alphanumeric only")
 		}
 	}
@@ -120,8 +116,8 @@ func ValidateAPIKeyFormat(key string) error {
 	}
 
 	entropy := parts[2]
-	if len(entropy) < 43 {
-		return fmt.Errorf("invalid api key format; entropy must be at least 43 characters")
+	if len(entropy) < entropyLength {
+		return fmt.Errorf("invalid api key format; entropy must be at least %d characters", entropyLength)
 	}
 	for _, c := range entropy {
 		if c >= 128 || !base62Lookup[c] {
@@ -130,4 +126,11 @@ func ValidateAPIKeyFormat(key string) error {
 	}
 
 	return nil
+}
+
+func isLowerAlphanumeric(c rune) bool {
+	if c >= '0' && c <= '9' {
+		return true
+	}
+	return c >= 'a' && c <= 'z'
 }

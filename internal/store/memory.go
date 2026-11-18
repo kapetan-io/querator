@@ -15,6 +15,7 @@ import (
 	"github.com/kapetan-io/querator/transport/reply"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/set"
+	"github.com/kapetan-io/tiger/assert"
 	"github.com/segmentio/ksuid"
 )
 
@@ -553,8 +554,7 @@ func (m *MemoryPartition) TakeAction(_ context.Context, batch types.LifeCycleBat
 				// Tell the partition it gained a new un-leased item.
 				state.UnLeased++
 			default:
-				m.log.Warn("assertion failed; undefined action", "action",
-					fmt.Sprintf("0x%X", int(a.Action)))
+				assert.Unreachable(fmt.Sprintf("undefined action kind '0x%X'", int(a.Action)))
 			}
 		}
 	}
@@ -1416,11 +1416,11 @@ func (m *MemoryRoles) Add(_ context.Context, role types.Role) error {
 
 	key := role.Namespace + "\x00" + role.Name
 	if _, ok := m.byNamespaceName[key]; ok {
-		return types.NewErrRoleAlreadyExists(role.Namespace, role.Name)
+		return types.NewErrRoleAlreadyExists(role)
 	}
 
 	if _, ok := m.roles[role.ID]; ok {
-		return types.NewErrRoleAlreadyExists(role.Namespace, role.Name)
+		return types.NewErrRoleAlreadyExists(role)
 	}
 
 	m.roles[role.ID] = role
@@ -1579,11 +1579,11 @@ func (m *MemoryRoleBindings) Add(_ context.Context, binding types.RoleBinding) e
 	// Check for duplicate (same user, namespace, role combination)
 	uniqueKey := binding.UserID + "\x00" + binding.Namespace + "\x00" + binding.RoleID
 	if _, ok := m.byUserNamespaceRole[uniqueKey]; ok {
-		return types.NewErrRoleBindingAlreadyExists(binding.UserID, binding.RoleID, binding.Namespace)
+		return types.NewErrRoleBindingAlreadyExists(binding)
 	}
 
 	if _, ok := m.bindings[binding.ID]; ok {
-		return types.NewErrRoleBindingAlreadyExists(binding.UserID, binding.RoleID, binding.Namespace)
+		return types.NewErrRoleBindingAlreadyExists(binding)
 	}
 
 	m.bindings[binding.ID] = binding

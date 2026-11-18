@@ -560,6 +560,63 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 			}
 		})
 
+		t.Run("AlreadyExistsMessages", func(t *testing.T) {
+			d := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
+			defer d.Shutdown(t)
+			c, ctx := d.MustClient(), d.Context()
+
+			ns := random.String("ns-", 10)
+			err := c.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: ns})
+			require.NoError(t, err)
+
+			roleName := "dup-role-" + random.String("", 5)
+			var roleRes pb.RoleCreateResponse
+			err = c.RolesCreate(ctx, &pb.RoleCreateRequest{
+				Permissions: []string{auth.QueueList},
+				Namespace:   ns,
+				Name:        roleName,
+			}, &roleRes)
+			require.NoError(t, err)
+
+			err = c.RolesCreate(ctx, &pb.RoleCreateRequest{
+				Permissions: []string{auth.QueueList},
+				Namespace:   ns,
+				Name:        roleName,
+			}, &pb.RoleCreateResponse{})
+			require.Error(t, err)
+			var roleErr duh.Error
+			require.ErrorAs(t, err, &roleErr)
+			assert.Equal(t, duh.CodeBadRequest, roleErr.Code())
+			assert.Contains(t, roleErr.Message(),
+				fmt.Sprintf("role already exists; '%s:%s' already exists", ns, roleName))
+
+			var userRes pb.UserCreateResponse
+			err = c.UsersCreate(ctx, &pb.UserCreateRequest{
+				Username: "dup-binding-user-" + random.String("", 5),
+			}, &userRes)
+			require.NoError(t, err)
+
+			err = c.RoleBindingsCreate(ctx, &pb.RoleBindingCreateRequest{
+				Namespace: ns,
+				RoleName:  roleName,
+				UserId:    userRes.Id,
+			}, &pb.RoleBindingCreateResponse{})
+			require.NoError(t, err)
+
+			err = c.RoleBindingsCreate(ctx, &pb.RoleBindingCreateRequest{
+				Namespace: ns,
+				RoleName:  roleName,
+				UserId:    userRes.Id,
+			}, &pb.RoleBindingCreateResponse{})
+			require.Error(t, err)
+			var bindingErr duh.Error
+			require.ErrorAs(t, err, &bindingErr)
+			assert.Equal(t, duh.CodeBadRequest, bindingErr.Code())
+			assert.Contains(t, bindingErr.Message(), fmt.Sprintf(
+				"role binding already exists; binding for user '%s' to role '%s' in namespace '%s' already exists",
+				userRes.Id, roleRes.Id, ns))
+		})
+
 		t.Run("RolesUpdate", func(t *testing.T) {
 			t.Run("StandardRole", func(t *testing.T) {
 				storageConf := setup()

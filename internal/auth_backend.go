@@ -63,7 +63,8 @@ func (a *AuthBackend) Authenticate(ctx context.Context, token string) (auth.Prin
 // 1. Check API key scope: if scoped and scope != target namespace, only allow if target IS _system
 // 2. Check target namespace for permission (User has role in target NS)
 // 3. If not found and target != _system, check _system namespace (User has role in _system)
-func (a *AuthBackend) HasPermission(ctx context.Context, principal auth.Principal, targetNS string, perm string) (bool, error) {
+func (a *AuthBackend) HasPermission(ctx context.Context, principal auth.Principal, access auth.Access) (bool, error) {
+	targetNS, perm := access.Namespace, access.Permission
 	if principal.NamespaceScope != nil && *principal.NamespaceScope != targetNS {
 		// The scope does not match the target namespace. A scoped key is still allowed to
 		// exercise permissions it holds via _system role bindings when accessing _system

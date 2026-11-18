@@ -15,6 +15,7 @@ import (
 	"github.com/kapetan-io/querator/transport/reply"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/set"
+	"github.com/kapetan-io/tiger/assert"
 	"github.com/segmentio/ksuid"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -1483,10 +1484,7 @@ func (p *MongoPartition) TakeAction(ctx context.Context, batch types.LifeCycleBa
 				}
 
 			default:
-				if p.conf.Log != nil {
-					p.conf.Log.Warn("assertion failed; undefined action", "action",
-						fmt.Sprintf("0x%X", int(action.Action)))
-				}
+				assert.Unreachable(fmt.Sprintf("undefined action kind '0x%X'", int(action.Action)))
 			}
 		}
 	}

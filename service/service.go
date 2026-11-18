@@ -124,7 +124,7 @@ type namespacePermission struct {
 // authorize checks if the principal in context holds the namespacePermission
 func (s *Service) authorize(ctx context.Context, required namespacePermission) error {
 	principal := auth.PrincipalFromContext(ctx)
-	hasPermission, err := s.conf.Auth.HasPermission(ctx, principal, required.Namespace, required.Permission)
+	hasPermission, err := s.conf.Auth.HasPermission(ctx, principal, auth.Access(required))
 	if err != nil {
 		s.conf.Log.Error("authorization check failed", "error", err)
 		return reply.NewRequestFailed("authorization check failed")

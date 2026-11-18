@@ -3,11 +3,14 @@ package service_test
 import (
 	"context"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/internal/store"
+	"github.com/kapetan-io/querator/internal/types"
 	pb "github.com/kapetan-io/querator/proto"
 	svc "github.com/kapetan-io/querator/service"
 	"github.com/kapetan-io/tackle/clock"
@@ -527,4 +530,114 @@ func testShutdown(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		// Some requests succeeded before shutdown, others got shutdown errors
 		t.Logf("Results: %d succeeded, %d shutdown errors", successCount, shutdownErrCount)
 	})
+}
+
+// TestShutdownWithAdminRequestWaiting sits outside TestShutdown because it wraps the in-memory
+// partition store so a storage list can hold the request loop while other requests queue behind
+// it. When the loop is released, both the queued requests and the shutdown are ready and Go picks
+// one at random, so the scenario runs several times to reach the shutdown-first order.
+func TestShutdownWithAdminRequestWaiting(t *testing.T) {
+	const attempts = 10
+	for range attempts {
+		shutdownWithAdminRequestWaiting(t)
+	}
+}
+
+func shutdownWithAdminRequestWaiting(t *testing.T) {
+	const settle = 100 * clock.Millisecond
+	entered, release := make(chan struct{}), make(chan struct{})
+	var armed atomic.Bool
+
+	conf := setupMemoryStorage(store.Config{})
+	conf.PartitionStorage[0].PartitionStore = heldListStore{
+		PartitionStore: conf.PartitionStorage[0].PartitionStore,
+		hold: func(ctx context.Context) error {
+			if !armed.CompareAndSwap(true, false) {
+				return nil
+			}
+			close(entered)
+			select {
+			case <-release:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		},
+	}
+	d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+	c, ctx := d.MustClient(), d.Context()
+	var calls sync.WaitGroup
+	defer func() {
+		d.cancel()
+		calls.Wait()
+	}()
+
+	queueName := random.String("queue-", 10)
+	createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+		QueueName:           queueName,
+		LeaseTimeout:        "1m0s",
+		ExpireTimeout:       "24h0m0s",
+		RequestedPartitions: 1,
+	})
+	armed.Store(true)
+
+	var listErr, statsErr, produceErr, shutdownErr error
+	calls.Go(func() {
+		listErr = c.StorageItemsList(ctx, queueName, 0, &pb.StorageItemsListResponse{}, &querator.ListOptions{Limit: 10})
+	})
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		require.FailNow(t, "storage list never reached the partition")
+	}
+
+	// The loop is held, so the stats request waits in the queue ahead of the produce, and the
+	// shutdown waits behind both.
+	calls.Go(func() {
+		statsErr = c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &pb.QueueStatsResponse{})
+	})
+	clock.Sleep(settle)
+	calls.Go(func() {
+		produceErr = c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			QueueName:      queueName,
+			RequestTimeout: "5s",
+			Items:          produceRandomItems(1),
+		})
+	})
+	clock.Sleep(settle)
+	calls.Go(func() {
+		shutdownErr = d.d.Shutdown(ctx)
+	})
+	clock.Sleep(settle)
+	close(release)
+	calls.Wait()
+
+	require.NoError(t, listErr)
+	require.NoError(t, shutdownErr)
+	for _, err := range []error{statsErr, produceErr} {
+		if err != nil {
+			assert.ErrorContains(t, err, "queue is shutting down")
+		}
+	}
+}
+
+type heldListStore struct {
+	store.PartitionStore
+	hold func(context.Context) error
+}
+
+func (s heldListStore) Get(info types.PartitionInfo) store.Partition {
+	return heldListPartition{Partition: s.PartitionStore.Get(info), hold: s.hold}
+}
+
+type heldListPartition struct {
+	store.Partition
+	hold func(context.Context) error
+}
+
+func (p heldListPartition) List(ctx context.Context, items *[]*types.Item, opts types.ListOptions) error {
+	if err := p.hold(ctx); err != nil {
+		return err
+	}
+	return p.Partition.List(ctx, items, opts)
 }

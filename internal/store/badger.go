@@ -200,9 +200,6 @@ func (b *BadgerPartition) Lease(ctx context.Context, batch types.LeaseBatch, opt
 			}
 			break
 		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
 		return nil
 	})
 }
@@ -2427,8 +2424,8 @@ func (b *BadgerRoles) getDB() (*badger.DB, error) {
 	return db, nil
 }
 
-func (b *BadgerRoles) Get(_ context.Context, key RoleKey, role *types.Role) error {
-	namespace, name := key.Namespace, key.Name
+func (b *BadgerRoles) Get(_ context.Context, roleName RoleName, role *types.Role) error {
+	namespace, name := roleName.Namespace, roleName.Name
 	db, err := b.getDB()
 	if err != nil {
 		return err
@@ -2968,8 +2965,8 @@ func (b *BadgerRoleBindings) List(ctx context.Context, namespace string, binding
 	})
 }
 
-func (b *BadgerRoleBindings) ListByUser(_ context.Context, member NamespaceMember, bindings *[]types.RoleBinding, limit int) error {
-	userID, namespace := member.UserID, member.Namespace
+func (b *BadgerRoleBindings) ListByUser(_ context.Context, user UserInNamespace, bindings *[]types.RoleBinding, limit int) error {
+	userID, namespace := user.UserID, user.Namespace
 	db, err := b.getDB()
 	if err != nil {
 		return err
@@ -3052,8 +3049,8 @@ func (b *BadgerRoleBindings) ListByRole(_ context.Context, roleID string, bindin
 	})
 }
 
-func (b *BadgerRoleBindings) DeleteByUserAndRole(_ context.Context, key RoleBindingKey) error {
-	namespace, userID, roleID := key.Namespace, key.UserID, key.RoleID
+func (b *BadgerRoleBindings) DeleteByUserAndRole(_ context.Context, binding RoleForUser) error {
+	namespace, userID, roleID := binding.Namespace, binding.UserID, binding.RoleID
 	db, err := b.getDB()
 	if err != nil {
 		return err

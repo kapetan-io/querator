@@ -6,17 +6,17 @@ import (
 	"github.com/kapetan-io/querator/internal/types"
 )
 
-type RoleKey struct {
+type RoleName struct {
 	Namespace string
 	Name      string
 }
 
-type NamespaceMember struct {
+type UserInNamespace struct {
 	Namespace string
 	UserID    string
 }
 
-type RoleBindingKey struct {
+type RoleForUser struct {
 	Namespace string
 	UserID    string
 	RoleID    string
@@ -28,7 +28,7 @@ type RoleBindingKey struct {
 type Roles interface {
 	// Get fetches a Role from storage by namespace and name. Returns ErrRoleNotExist if the
 	// role requested does not exist.
-	Get(ctx context.Context, key RoleKey, role *types.Role) error
+	Get(ctx context.Context, roleName RoleName, role *types.Role) error
 
 	// GetByID fetches a Role from storage by ID. Returns ErrRoleNotExist if the
 	// role requested does not exist.
@@ -65,7 +65,7 @@ type RoleBindings interface {
 	List(ctx context.Context, namespace string, bindings *[]types.RoleBinding, opts types.ListOptions) error
 
 	// ListByUser returns role bindings for a user in a specific namespace, up to limit entries.
-	ListByUser(ctx context.Context, member NamespaceMember, bindings *[]types.RoleBinding, limit int) error
+	ListByUser(ctx context.Context, user UserInNamespace, bindings *[]types.RoleBinding, limit int) error
 
 	// ListByRole returns role bindings for a specific role, up to limit entries.
 	// If limit is 0, all bindings are returned.
@@ -73,7 +73,7 @@ type RoleBindings interface {
 
 	// DeleteByUserAndRole deletes the role binding identified by (namespace, userID, roleID).
 	// Returns ErrRoleBindingNotExist if no matching binding exists.
-	DeleteByUserAndRole(ctx context.Context, key RoleBindingKey) error
+	DeleteByUserAndRole(ctx context.Context, binding RoleForUser) error
 
 	// Delete deletes a role binding by ID. Returns ErrRoleBindingNotExist if the binding does not exist.
 	Delete(ctx context.Context, id string) error

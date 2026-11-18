@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/rand"
 	"slices"
+	"sync"
 	"testing"
 
 	"github.com/duh-rpc/duh-go"
@@ -1790,6 +1791,125 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			}
 			return len(refs) == 2 && slices.Contains(refs, "retry-me") && slices.Contains(refs, "cancelled")
 		}, 10*clock.Second, 100*clock.Millisecond)
+	})
+
+	t.Run("CompleteRequestsInOneBatch", func(t *testing.T) {
+		// Complete requests buffered while the queue is paused reach the partition as one batch.
+		// A request whose ids fail must get its own error without stopping the requests after it.
+		var queueName = random.String("queue-", 10)
+		d := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: setup()})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+		c, ctx := d.MustClient(), d.Context()
+
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			LeaseTimeout:        LeaseTimeout,
+			ExpireTimeout:       ExpireTimeout,
+			QueueName:           queueName,
+			RequestedPartitions: 1,
+		})
+
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			QueueName:      queueName,
+			RequestTimeout: "1m",
+			Items: []*pb.QueueProduceItem{
+				{Reference: "gone", Encoding: "text", Kind: "test", Bytes: []byte("payload")},
+				{Reference: "first", Encoding: "text", Kind: "test", Bytes: []byte("payload")},
+				{Reference: "last", Encoding: "text", Kind: "test", Bytes: []byte("payload")},
+			},
+		}))
+
+		var lease pb.QueueLeaseResponse
+		require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+			ClientId:       random.String("client-", 10),
+			RequestTimeout: "5s",
+			QueueName:      queueName,
+			BatchSize:      3,
+		}, &lease))
+		require.Len(t, lease.Items, 3)
+		require.Equal(t, "gone", lease.Items[0].Reference)
+		require.Equal(t, "first", lease.Items[1].Reference)
+		require.Equal(t, "last", lease.Items[2].Reference)
+
+		// Complete one item now, so its id no longer exists when the batch runs
+		gone := lease.Items[0].Id
+		require.NoError(t, c.QueueComplete(ctx, &pb.QueueCompleteRequest{
+			QueueName:      queueName,
+			Partition:      lease.Partition,
+			RequestTimeout: "1m",
+			Ids:            []string{gone},
+		}))
+
+		// An item that was never leased
+		notLeased := writeRandomItems(t, ctx, c, queueName, 1)
+		require.Len(t, notLeased, 1)
+
+		require.NoError(t, d.Service().PauseQueue(ctx, queueName))
+
+		requests := []*pb.QueueCompleteRequest{
+			{
+				QueueName:      queueName,
+				Partition:      lease.Partition,
+				RequestTimeout: "1m",
+				Ids:            []string{lease.Items[1].Id},
+			},
+			{
+				QueueName:      queueName,
+				Partition:      lease.Partition,
+				RequestTimeout: "1m",
+				Ids:            []string{gone},
+			},
+			{
+				QueueName:      queueName,
+				Partition:      lease.Partition,
+				RequestTimeout: "1m",
+				Ids:            []string{notLeased[0].Id},
+			},
+			{
+				QueueName:      queueName,
+				Partition:      lease.Partition,
+				RequestTimeout: "1m",
+				Ids:            []string{lease.Items[2].Id},
+			},
+		}
+
+		errs := make([]error, len(requests))
+		var wg sync.WaitGroup
+		for i := range requests {
+			wg.Go(func() {
+				errs[i] = c.QueueComplete(ctx, requests[i])
+			})
+		}
+
+		// Wait until every complete request is buffered in the paused queue
+		require.Eventually(t, func() bool {
+			var stats pb.QueueStatsResponse
+			if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats); err != nil {
+				return false
+			}
+			return len(stats.LogicalQueues) == 1 && int(stats.LogicalQueues[0].InFlight) == len(requests)
+		}, 10*clock.Second, 100*clock.Millisecond)
+
+		require.NoError(t, d.Service().ResumeQueue(ctx, queueName))
+		wg.Wait()
+
+		assert.NoError(t, errs[0])
+		var e duh.Error
+		require.True(t, errors.As(errs[1], &e))
+		assert.Contains(t, e.Message(), "invalid storage id; '"+gone+"' does not exist")
+		assert.Equal(t, duh.CodeBadRequest, e.Code())
+		require.True(t, errors.As(errs[2], &e))
+		assert.Contains(t, e.Message(), "item(s) cannot be completed; '"+notLeased[0].Id+"' is not marked as leased")
+		assert.Equal(t, duh.CodeBadRequest, e.Code())
+		assert.NoError(t, errs[3])
+
+		// Only the item that was never leased remains
+		var list pb.StorageItemsListResponse
+		require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, nil))
+		require.Len(t, list.Items, 1)
+		assert.Equal(t, notLeased[0].Id, list.Items[0].Id)
 	})
 
 	t.Run("Errors", func(t *testing.T) {

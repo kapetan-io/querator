@@ -98,7 +98,7 @@ func (a *AuthBackend) HasPermission(ctx context.Context, principal auth.Principa
 // checkPermissionInNamespace checks if a user has a specific permission in a namespace
 func (a *AuthBackend) checkPermissionInNamespace(ctx context.Context, userID, namespace, perm string) (bool, error) {
 	var bindings []types.RoleBinding
-	if err := a.roleBindings.ListByUser(ctx, store.NamespaceMember{Namespace: namespace, UserID: userID}, &bindings, maxRoleBindingsPerCheck); err != nil {
+	if err := a.roleBindings.ListByUser(ctx, store.UserInNamespace{Namespace: namespace, UserID: userID}, &bindings, maxRoleBindingsPerCheck); err != nil {
 		return false, err
 	}
 

@@ -396,7 +396,7 @@ func (p *PostgresQueues) List(ctx context.Context, queues *[]types.QueueInfo, op
 	}
 	defer rows.Close()
 
-	for rows.Next() && ctx.Err() == nil {
+	for ctx.Err() == nil && rows.Next() {
 		var info types.QueueInfo
 		var leaseNs, expireNs int64
 		var partitionInfoJSON []byte
@@ -765,7 +765,7 @@ func (p *PostgresPartition) Lease(ctx context.Context, batch types.LeaseBatch, o
 	defer rows.Close()
 
 	var items []types.Item
-	for rows.Next() && ctx.Err() == nil {
+	for ctx.Err() == nil && rows.Next() {
 		var item types.Item
 		var leaseDeadline, enqueueAt sql.NullTime
 		var sourceID sql.NullString
@@ -864,7 +864,7 @@ func (p *PostgresPartition) Complete(ctx context.Context, batch types.CompleteBa
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	for _, req := range batch.Requests {
-		if err := p.completeRequestItems(ctx, tx, req); err != nil {
+		if err := p.completeItems(ctx, tx, req); err != nil {
 			return err
 		}
 	}
@@ -894,7 +894,7 @@ func (p *PostgresPartition) Retry(ctx context.Context, batch types.RetryBatch) e
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	for _, req := range batch.Requests {
-		if err := p.retryRequestItems(ctx, tx, req); err != nil {
+		if err := p.retryItems(ctx, tx, req); err != nil {
 			return err
 		}
 	}
@@ -906,7 +906,7 @@ func (p *PostgresPartition) Retry(ctx context.Context, batch types.RetryBatch) e
 	return nil
 }
 
-func (p *PostgresPartition) completeRequestItems(ctx context.Context, tx pgx.Tx, req *types.CompleteRequest) error {
+func (p *PostgresPartition) completeItems(ctx context.Context, tx pgx.Tx, req *types.CompleteRequest) error {
 	for _, id := range req.Ids {
 		if err := p.validateID(id); err != nil {
 			req.Err = reply.NewInvalidOption("invalid storage id; '%s': %s", id, err)
@@ -941,7 +941,7 @@ func (p *PostgresPartition) completeRequestItems(ctx context.Context, tx pgx.Tx,
 	return nil
 }
 
-func (p *PostgresPartition) retryRequestItems(ctx context.Context, tx pgx.Tx, req *types.RetryRequest) error {
+func (p *PostgresPartition) retryItems(ctx context.Context, tx pgx.Tx, req *types.RetryRequest) error {
 	for _, retryItem := range req.Items {
 		if err := p.validateID(retryItem.ID); err != nil {
 			req.Err = reply.NewInvalidOption("invalid storage id; '%s': %s", retryItem.ID, err)
@@ -1090,7 +1090,7 @@ func (p *PostgresPartition) List(ctx context.Context, items *[]*types.Item, opts
 	}
 	defer rows.Close()
 
-	for rows.Next() && ctx.Err() == nil {
+	for ctx.Err() == nil && rows.Next() {
 		item := new(types.Item)
 		var leaseDeadline, enqueueAt sql.NullTime
 		var sourceID sql.NullString
@@ -1165,7 +1165,7 @@ func (p *PostgresPartition) ListScheduled(ctx context.Context, items *[]*types.I
 	}
 	defer rows.Close()
 
-	for rows.Next() && ctx.Err() == nil {
+	for ctx.Err() == nil && rows.Next() {
 		item := new(types.Item)
 		var leaseDeadline, enqueueAt sql.NullTime
 		var sourceID sql.NullString
@@ -1441,7 +1441,7 @@ func (p *PostgresPartition) ScanForScheduled(ctx context.Context, now clock.Time
 			}
 
 			var items []types.Item
-			for rows.Next() && ctx.Err() == nil {
+			for ctx.Err() == nil && rows.Next() {
 				var item types.Item
 				var leaseDeadline, expireDeadline sql.NullTime
 
@@ -1536,7 +1536,7 @@ func (p *PostgresPartition) ScanForActions(ctx context.Context, now clock.Time) 
 			}
 
 			var items []types.Item
-			for rows.Next() && ctx.Err() == nil {
+			for ctx.Err() == nil && rows.Next() {
 				var item types.Item
 				var leaseDeadline, expireDeadline, enqueueAt, createdAt sql.NullTime
 				var sourceID sql.NullString

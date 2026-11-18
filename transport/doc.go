@@ -22,7 +22,7 @@ limitations under the License.
 // that is not a POST. An authenticated POST to a path that is not an API path
 // gets a "no such method" error. A request carries its API key as
 // "Authorization: Bearer <key>"; a request without the header is passed to the
-// [auth.AuthBackend] with an empty token. When no AuthBackend is configured the
+// [auth.AuthBackend] with an empty API key. When no AuthBackend is configured the
 // handler uses [auth.NoOpAuthBackend], which allows every request.
 // MaxProduceSize defaults to 5 MB.
 //

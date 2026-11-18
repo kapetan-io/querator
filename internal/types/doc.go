@@ -44,6 +44,10 @@ limitations under the License.
 // PartitionCompleter lets a LifeCycleRequest carry the partition's storage without this
 // package importing the store package, which imports this one.
 //
+// Item.SourceID holds the ID an item had in its source queue. It is set when an item
+// moves to a dead letter queue, or carried in when an item is imported with one, and
+// is empty otherwise.
+//
 // # Errors
 //
 // The Kind constants and their Err sentinels exist for errors a caller must match with

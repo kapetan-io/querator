@@ -27,7 +27,8 @@ limitations under the License.
 // to be returned to the user once; the KeyHash from [HashAPIKey], which is what
 // gets stored; and a Prefix (qtr-<tag>- plus the first 8 entropy characters)
 // that is safe to display. [ValidateAPIKeyFormat] checks a key's shape before
-// any lookup.
+// any lookup. [KeyLength] is the number of random bytes in the secret part
+// of a key.
 //
 // # Permissions and roles
 //
@@ -36,14 +37,16 @@ limitations under the License.
 // [NamespaceOwnerPermissions] and [PublicViewerPermissions] return a new slice
 // on every call so a caller cannot change the canonical lists. [RoleAdmin],
 // [RoleNamespaceOwner] and [RolePublicViewer] are the standard roles;
-// [IsStandardRole] reports whether a name is one of them. [SystemNamespace] is
+// [IsStandardRole] reports whether a name is one of them. The role API cannot
+// modify or delete a standard role; the service writes their permissions from
+// the code at every start. [SystemNamespace] is
 // the reserved _system namespace.
 //
 // # Principals and backends
 //
-// An [AuthBackend] turns a token into a [Principal] and answers whether a
+// An [AuthBackend] turns an API key into a [Principal] and answers whether a
 // principal holds a permission in a namespace ([Access]). A backend may cache
-// the principal for a token; InvalidateUser and InvalidateKey drop cached
+// the principal for an API key; InvalidateUser and InvalidateKey drop cached
 // entries after a user or key changes. [NoOpAuthBackend] allows every request and is
 // the default when no backend is configured.
 //

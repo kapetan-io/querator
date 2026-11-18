@@ -19,7 +19,8 @@ limitations under the License.
 // response types live in the proto package.
 //
 // Build a ClientConfig and pass it to NewClient. Endpoint is required and has the
-// form <scheme>://<host>:<port>. The Client field is optional; set it to supply your own
+// form <scheme>://<host>:<port>, except with WithConn, which uses http://memory
+// because the connection is already open. The Client field is optional; set it to supply your own
 // *http.Client, for example one with a custom TLS config. When APIKey is set, the
 // Client sends it as a Bearer token on every request. WithNoTLS, WithTLS and
 // WithConn build a ClientConfig for a plain address, a TLS address, or an existing

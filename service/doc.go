@@ -19,15 +19,21 @@ limitations under the License.
 // transport.HTTPHandler decodes a request and calls the matching method, and
 // the daemon package wires the two together behind an HTTP server.
 //
-// New builds a Service from a Config and runs Bootstrap. Unset Config fields
-// take these defaults: Log is slog.Default(), Clock is the real clock (tests
-// pass a frozen one), ReadTimeout and WriteTimeout, the time a single batched
-// read or write to storage should take, are 3 seconds, and Auth is
-// auth.NoOpAuthBackend, which allows every request. Left at 0, the limits
-// MaxLeaseBatchSize, MaxProduceBatchSize and MaxCompleteBatchSize default to
-// 1,000 and MaxRequestsPerQueue (how many requests a queue holds before it
-// reports itself overloaded) to 100 when each logical queue starts.
-// MaxConcurrentRequests is read only by the daemon, as its connection limit.
+// New builds a Service from a Config and runs Bootstrap. StorageConfig holds
+// the storage backends for queues, partitions, namespaces and the auth records.
+// InstanceID names this Querator instance; the daemon uses it in its error
+// messages. Unset Config fields take these defaults: Log is slog.Default(),
+// Clock is the real clock (tests pass a frozen one), ReadTimeout and
+// WriteTimeout, the time a single batched read or write to storage should take,
+// are 3 seconds, and Auth is auth.NoOpAuthBackend, which allows every request.
+//
+// MaxLeaseBatchSize, MaxProduceBatchSize and MaxCompleteBatchSize are the most
+// items one lease request may ask for, one produce request may carry, and one
+// complete request may name; left at 0 each is 1,000. MaxRequestsPerQueue is
+// how many requests each logical queue holds before it reports itself
+// overloaded; left at 0 it is 100. These defaults are applied when each logical
+// queue starts. MaxConcurrentRequests is read only by the daemon, as its
+// connection limit.
 //
 // QueueProduce, QueueLease, QueueComplete and QueueRetry hand the request to a
 // logical queue and block until it answers or the context is canceled. They
@@ -43,20 +49,23 @@ limitations under the License.
 // QueuesCreate does not check that the queue's namespace exists, and the
 // namespace methods fail with "namespace storage not configured".
 //
-// Bootstrap runs on every start and creates each of the records below that is
-// missing. When namespace storage is configured it creates the _system
-// namespace. When Auth is not the NoOp backend and user, role and role binding
-// storage are all configured, it also creates the anonymous user, the standard
-// roles (Admin, NamespaceOwner, PublicViewer) and the anonymous to Admin role
-// binding described in ADR 0025, so a deleted anonymous to Admin binding is
-// created again on the next start. It writes these straight to storage because
-// the API methods cannot create them: NamespacesCreate rejects reserved
+// Bootstrap runs on every start. When namespace storage is configured it
+// creates the _system namespace if it is missing. When Auth is not the NoOp
+// backend and user, role and role binding storage are all configured, it also
+// creates the anonymous user if missing, writes the standard roles (Admin,
+// NamespaceOwner, PublicViewer), and creates the anonymous to Admin role
+// binding described in ADR 0025 if missing. A standard role that already exists
+// is overwritten with the permissions the code defines, so standard roles are
+// synced from the code at every start. A deleted anonymous to Admin binding is
+// created again on the next start. Bootstrap writes these straight to storage
+// because the API methods cannot create them: NamespacesCreate rejects reserved
 // namespace names, RolesCreate rejects standard role names, and UsersCreate
 // generates its own user ID, so it cannot create the anonymous user.
 //
 // PauseQueue and ResumeQueue hold and release a queue's produce, lease,
 // complete and retry requests so tests can simulate high contention; no API
-// endpoint calls them.
+// endpoint calls them. Storage requests and queue list, create, update and
+// delete requests are not held while a queue is paused.
 //
 // See docs/packages/service.md for why NamespacesDelete, UsersDelete and
 // APIKeysDelete read, check and delete records in the order they do.

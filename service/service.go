@@ -152,10 +152,7 @@ func (s *Service) QueueProduce(ctx context.Context, req *proto.QueueProduceReque
 		return err
 	}
 
-	proxy, logical := queue.GetNext()
-	if proxy != nil {
-		return proxy.QueueProduce(ctx, req)
-	}
+	logical := queue.GetNext()
 	if logical == nil {
 		return reply.NewRequestFailed("queue has no available partitions")
 	}
@@ -185,10 +182,7 @@ func (s *Service) QueueLease(ctx context.Context, req *proto.QueueLeaseRequest,
 		return err
 	}
 
-	proxy, logical := queue.GetNext()
-	if proxy != nil {
-		return proxy.QueueLease(ctx, req, res)
-	}
+	logical := queue.GetNext()
 	if logical == nil {
 		return reply.NewRequestFailed("queue has no available partitions")
 	}
@@ -231,13 +225,9 @@ func (s *Service) QueueComplete(ctx context.Context, req *proto.QueueCompleteReq
 		return err
 	}
 
-	proxy, logical, err := queue.GetByPartition(int(req.Partition))
+	logical, err := queue.GetByPartition(int(req.Partition))
 	if err != nil {
 		return err
-	}
-
-	if proxy != nil {
-		return proxy.QueueComplete(ctx, req)
 	}
 
 	var r types.CompleteRequest
@@ -263,13 +253,9 @@ func (s *Service) QueueRetry(ctx context.Context, req *proto.QueueRetryRequest) 
 		return err
 	}
 
-	proxy, logical, err := queue.GetByPartition(int(req.Partition))
+	logical, err := queue.GetByPartition(int(req.Partition))
 	if err != nil {
 		return err
-	}
-
-	if proxy != nil {
-		return proxy.QueueRetry(ctx, req)
 	}
 
 	var r types.RetryRequest
@@ -520,13 +506,9 @@ func (s *Service) storageItemsList(ctx context.Context, kind types.ListKind,
 		return err
 	}
 
-	proxy, logical, err := queue.GetByPartition(int(req.Partition))
+	logical, err := queue.GetByPartition(int(req.Partition))
 	if err != nil {
 		return err
-	}
-
-	if proxy != nil {
-		return proxy.StorageItemsList(ctx, req, res)
 	}
 
 	items := make([]*types.Item, 0, allocInt32(req.Limit))
@@ -562,13 +544,9 @@ func (s *Service) StorageItemsImport(ctx context.Context, req *proto.StorageItem
 		return err
 	}
 
-	proxy, logical, err := queue.GetByPartition(int(req.Partition))
+	logical, err := queue.GetByPartition(int(req.Partition))
 	if err != nil {
 		return err
-	}
-
-	if proxy != nil {
-		return proxy.StorageItemsImport(ctx, req, res)
 	}
 
 	items := make([]*types.Item, 0, len(req.Items))
@@ -599,13 +577,9 @@ func (s *Service) StorageItemsDelete(ctx context.Context, req *proto.StorageItem
 		return err
 	}
 
-	proxy, logical, err := queue.GetByPartition(int(req.Partition))
+	logical, err := queue.GetByPartition(int(req.Partition))
 	if err != nil {
 		return err
-	}
-
-	if proxy != nil {
-		return proxy.StorageItemsDelete(ctx, req)
 	}
 
 	ids := make([]types.ItemID, 0, len(req.Ids))

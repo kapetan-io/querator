@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"slices"
 	"sync"
 
 	"github.com/kapetan-io/querator/internal/types"
@@ -11,15 +12,14 @@ import (
 //  set to read only, in this case, it might be necessary to have multiple partitions
 //  with the same partition idx.
 
-// Queue is a collection of LogicalQueue and Remote instances which represent the current
+// Queue is a collection of Logical instances which represent the current
 // state of the partition distribution from the perspective of the current querator instance.
 type Queue struct {
 	info    types.QueueInfo
 	ordered []*Logical
 	logical []*Logical
 	mutex   sync.RWMutex
-	// remote  []Remote
-	idx int
+	idx     int
 }
 
 func NewQueue(info types.QueueInfo) *Queue {
@@ -46,15 +46,10 @@ func (q *Queue) AddLogical(ll ...*Logical) *Queue {
 	// Adds a pointer to q.ordered which is a list of logical pointers
 	// ordered by partition such that we can easily iterate through all
 	// the logical queues this queue has.
-skip:
 	for _, add := range ll {
-		for _, l := range q.ordered {
-			// If this logical already exists, skip
-			if l == add {
-				continue skip
-			}
+		if !slices.Contains(q.ordered, add) {
+			q.ordered = append(q.ordered, add)
 		}
-		q.ordered = append(q.ordered, add)
 	}
 	return q
 }
@@ -72,33 +67,31 @@ func (q *Queue) GetAll() []*Logical {
 	return results
 }
 
-func (q *Queue) GetNext() (Remote, *Logical) {
+func (q *Queue) GetNext() *Logical {
 	q.mutex.Lock()
 	defer q.mutex.Unlock()
 
 	if len(q.ordered) == 0 {
-		return nil, nil
+		return nil
 	}
 
 	l := q.ordered[q.idx]
 	q.idx = (q.idx + 1) % len(q.ordered)
 
-	return nil, l
+	return l
 }
 
-func (q *Queue) GetByPartition(partition int) (Remote, *Logical, error) {
+func (q *Queue) GetByPartition(partition int) (*Logical, error) {
 	defer q.mutex.RUnlock()
 	q.mutex.RLock()
 
 	if partition < 0 || partition >= len(q.logical) {
-		return nil, nil, reply.NewInvalidOption("partition is invalid; '%d' is not a valid partition", partition)
+		return nil, reply.NewInvalidOption("partition is invalid; '%d' is not a valid partition", partition)
 	}
 
 	if q.logical[partition] == nil {
-		// TODO: This is likely to not happen until we support the concept of 'remote'. We may need to remove this
-		//  check later.
-		return nil, nil, reply.NewInvalidOption("partition is invalid; '%d' has no valid logical queue", partition)
+		return nil, reply.NewInvalidOption("partition is invalid; '%d' has no valid logical queue", partition)
 	}
 
-	return nil, q.logical[partition], nil
+	return q.logical[partition], nil
 }

@@ -3,6 +3,8 @@ package internal
 import (
 	"context"
 	"log/slog"
+	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -11,7 +13,6 @@ import (
 	"github.com/kapetan-io/errors"
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
-	"github.com/kapetan-io/querator/proto"
 	"github.com/kapetan-io/querator/transport/reply"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/set"
@@ -25,19 +26,6 @@ type QueuesManagerConfig struct {
 	StorageConfig store.Config
 	LogicalConfig LogicalConfig
 	Log           *slog.Logger
-}
-
-// Remote represents a remote instance of querator. Implementations proxy requests to the remote instance
-type Remote interface {
-	QueueLease(ctx context.Context, req *proto.QueueLeaseRequest, res *proto.QueueLeaseResponse) error
-	QueueProduce(ctx context.Context, req *proto.QueueProduceRequest) error
-	QueueComplete(ctx context.Context, req *proto.QueueCompleteRequest) error
-	QueueRetry(ctx context.Context, req *proto.QueueRetryRequest) error
-	StorageItemsList(ctx context.Context, req *proto.StorageItemsListRequest,
-		res *proto.StorageItemsListResponse) error
-	StorageItemsImport(ctx context.Context, req *proto.StorageItemsImportRequest,
-		res *proto.StorageItemsImportResponse) error
-	StorageItemsDelete(ctx context.Context, req *proto.StorageItemsDeleteRequest) error
 }
 
 // QueuesManager manages queues in use, and information about that queue.
@@ -333,7 +321,7 @@ func (qm *QueuesManager) ProduceToQueue(ctx context.Context, queueName string, i
 		return errors.Errorf("failed to get queue '%s': %w", queueName, err)
 	}
 
-	_, logical := q.GetNext()
+	logical := q.GetNext()
 	if logical == nil {
 		return errors.Errorf("queue '%s' has no available partitions", queueName)
 	}
@@ -441,14 +429,16 @@ func (qm *QueuesManager) Shutdown(ctx context.Context) error {
 	qm.inShutdown.Store(true)
 	qm.mutex.Lock()
 	queues := make([]*Queue, 0, len(qm.queues))
-	for _, q := range qm.queues {
-		queues = append(queues, q)
+	for _, name := range slices.Sorted(maps.Keys(qm.queues)) {
+		queues = append(queues, qm.queues[name])
 	}
 	qm.mutex.Unlock()
 
-	wait := make(chan error, 1)
-	go func() {
-		var errs []error
+	var closing sync.WaitGroup
+	var errs []error
+	done := make(chan struct{})
+	closing.Go(func() {
+		defer close(done)
 		for _, q := range queues {
 			qm.log.LogAttrs(ctx, LevelDebugAll, "shutdown logical",
 				slog.Int("num_queues", len(queues)),
@@ -493,19 +483,18 @@ func (qm *QueuesManager) Shutdown(ctx context.Context) error {
 				errs = append(errs, err)
 			}
 		}
-		if len(errs) > 0 {
-			wait <- errs[0]
-			return
-		}
-		close(wait)
-	}()
+	})
 
 	select {
 	case <-ctx.Done():
 		qm.log.Warn("ctx cancelled while waiting for shutdown")
 		return errors.Wrap(ctx.Err())
-	case err := <-wait:
+	case <-done:
+		closing.Wait()
 		qm.log.LogAttrs(ctx, LevelDebugAll, "Shutdown complete")
-		return errors.Wrap(err)
+		if len(errs) > 0 {
+			return errors.Wrap(errs[0])
+		}
+		return nil
 	}
 }

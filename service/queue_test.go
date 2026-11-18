@@ -1793,6 +1793,121 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		}, 10*clock.Second, 100*clock.Millisecond)
 	})
 
+	t.Run("ContextCancelLease", func(t *testing.T) {
+		// A lease caller which cancels its context must be released while the queue is paused,
+		// even though its request is held in the request loop and never answered.
+		var queueName = random.String("queue-", 10)
+		d := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: setup()})
+		c, ctx := d.MustClient(), d.Context()
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			LeaseTimeout:        LeaseTimeout,
+			ExpireTimeout:       ExpireTimeout,
+			QueueName:           queueName,
+			RequestedPartitions: 1,
+		})
+
+		require.NoError(t, d.Service().PauseQueue(ctx, queueName))
+
+		cancelCtx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		var leaseErr error
+		duringCalls(cancel, func() {
+			require.Eventually(t, func() bool {
+				var stats pb.QueueStatsResponse
+				if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats); err != nil {
+					return false
+				}
+				return len(stats.LogicalQueues) == 1 && stats.LogicalQueues[0].InFlight == 1 &&
+					stats.LogicalQueues[0].LeaseWaiting == 1
+			}, 10*clock.Second, 100*clock.Millisecond)
+			cancel()
+		}, func() {
+			leaseErr = c.QueueLease(cancelCtx, &pb.QueueLeaseRequest{
+				ClientId:       random.String("client-", 10),
+				RequestTimeout: "1m",
+				QueueName:      queueName,
+				BatchSize:      1,
+			}, &pb.QueueLeaseResponse{})
+		})
+		require.ErrorContains(t, leaseErr, "context canceled")
+
+		// The server side of the lease must be released while the queue is still paused
+		require.Eventually(t, func() bool {
+			var stats pb.QueueStatsResponse
+			if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats); err != nil {
+				return false
+			}
+			return len(stats.LogicalQueues) == 1 && stats.LogicalQueues[0].InFlight == 0
+		}, 10*clock.Second, 100*clock.Millisecond)
+
+		require.NoError(t, d.Service().ResumeQueue(ctx, queueName))
+	})
+
+	t.Run("Pause/HoldsProduceUntilUnpaused", func(t *testing.T) {
+		var queueName = random.String("queue-", 10)
+		d := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: setup()})
+		c, ctx := d.MustClient(), d.Context()
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			LeaseTimeout:        LeaseTimeout,
+			ExpireTimeout:       ExpireTimeout,
+			QueueName:           queueName,
+			RequestedPartitions: 1,
+		})
+
+		// Un-pausing a queue which is not paused changes nothing
+		require.NoError(t, d.Service().ResumeQueue(ctx, queueName))
+
+		// A second pause is a no-op, so a single un-pause must resume the queue
+		require.NoError(t, d.Service().PauseQueue(ctx, queueName))
+		require.NoError(t, d.Service().PauseQueue(ctx, queueName))
+
+		produceCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+
+		var produceErr error
+		duringCalls(cancel, func() {
+			require.Eventually(t, func() bool {
+				var stats pb.QueueStatsResponse
+				if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats); err != nil {
+					return false
+				}
+				return len(stats.LogicalQueues) == 1 && stats.LogicalQueues[0].ProduceWaiting == 1
+			}, 10*clock.Second, 100*clock.Millisecond)
+
+			// Storage requests are still answered while paused, and the held produce is not yet written
+			var list pb.StorageItemsListResponse
+			require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, nil))
+			assert.Empty(t, list.Items)
+
+			require.NoError(t, d.Service().ResumeQueue(ctx, queueName))
+		}, func() {
+			produceErr = c.QueueProduce(produceCtx, &pb.QueueProduceRequest{
+				QueueName:      queueName,
+				RequestTimeout: "1m",
+				Items: []*pb.QueueProduceItem{
+					{Reference: "held", Encoding: "text", Kind: "test", Bytes: []byte("payload")},
+				},
+			})
+		})
+		require.NoError(t, produceErr)
+
+		var list pb.StorageItemsListResponse
+		require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, nil))
+		require.Len(t, list.Items, 1)
+		assert.Equal(t, "held", list.Items[0].Reference)
+	})
+
 	t.Run("CompleteRequestsInOneBatch", func(t *testing.T) {
 		// Complete requests buffered while the queue is paused reach the partition as one batch.
 		// A request whose ids fail must get its own error without stopping the requests after it.
@@ -3921,4 +4036,23 @@ func completeWhilePaused(ctx context.Context, c *querator.Client, requests []*pb
 	unpause()
 	wg.Wait()
 	return errs
+}
+
+// duringCalls starts each call in its own goroutine, runs during, then waits for every call to
+// return. If during exits early, as a failed require does, cancel releases the calls before the wait.
+func duringCalls(cancel context.CancelFunc, during func(), calls ...func()) {
+	var wg sync.WaitGroup
+	finished := false
+	defer func() {
+		if !finished {
+			cancel()
+			wg.Wait()
+		}
+	}()
+	for _, call := range calls {
+		wg.Go(call)
+	}
+	during()
+	wg.Wait()
+	finished = true
 }

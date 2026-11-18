@@ -3,8 +3,12 @@ package service_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -953,6 +957,45 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 		// goleak.VerifyNone (deferred in testAuth) verifies no goroutines leak.
 	})
 
+	t.Run("LastUsedFailureIsLogged", func(t *testing.T) {
+		// A store which cannot record when a key was last used must not fail authentication,
+		// and the operator must see the failure in the log.
+		storage := setup()
+		storage.APIKeys = &failingLastUsedKeys{APIKeys: storage.APIKeys}
+		var logs syncBuffer
+		logger := slog.New(slog.NewTextHandler(&logs, nil))
+
+		backend := internal.NewAuthBackend(internal.AuthBackendConfig{
+			RoleBindings: storage.RoleBindings,
+			APIKeys:      storage.APIKeys,
+			Users:        storage.Users,
+			Roles:        storage.Roles,
+			Log:          logger,
+		})
+
+		td := &testDaemon{}
+		td.ctx, td.cancel = context.WithTimeout(context.Background(), clock.Minute)
+		var err error
+		td.d, err = daemon.NewDaemon(td.ctx, daemon.Config{
+			Service:       svc.Config{StorageConfig: storage, Auth: backend, Log: logger},
+			AuthBackend:   backend,
+			ListenAddress: "localhost:0",
+		})
+		require.NoError(t, err)
+		d := &authTestDaemon{testDaemon: td, authBackend: backend}
+		defer d.Shutdown(t)
+
+		adminKey := createAdminUser(t, td.ctx, newClientWithAPIKey(t, d, ""))
+
+		var listRes pb.QueuesListResponse
+		require.NoError(t, newClientWithAPIKey(t, d, adminKey).QueuesList(td.ctx, &listRes, nil))
+
+		require.Eventually(t, func() bool {
+			return strings.Contains(logs.String(), "failed to record api key last used time") &&
+				strings.Contains(logs.String(), errLastUsedUnavailable.Error())
+		}, 5*clock.Second, 50*clock.Millisecond)
+	})
+
 	t.Run("Errors", func(t *testing.T) {
 		t.Run("MalformedAuthHeader", func(t *testing.T) {
 			d := newDaemonWithAuth(t, setup)
@@ -1581,4 +1624,33 @@ func CreateUserWithNamespacePermissions(t *testing.T, ctx context.Context, c *qu
 	require.NoError(t, err)
 
 	return keyRes.Key
+}
+
+var errLastUsedUnavailable = errors.New("last used store unavailable")
+
+// failingLastUsedKeys is an APIKeys store whose UpdateLastUsed always fails
+type failingLastUsedKeys struct {
+	store.APIKeys
+}
+
+func (f *failingLastUsedKeys) UpdateLastUsed(context.Context, string, clock.Time) error {
+	return errLastUsedUnavailable
+}
+
+// syncBuffer is a bytes.Buffer safe for the concurrent writes of a logger
+type syncBuffer struct {
+	buf bytes.Buffer
+	mu  sync.Mutex
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }

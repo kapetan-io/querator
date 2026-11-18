@@ -72,10 +72,10 @@ func (a *AuthBackend) HasPermission(ctx context.Context, principal auth.Principa
 		if targetNS != auth.SystemNamespace {
 			return false, nil
 		}
-		return a.checkPermissionInNamespace(ctx, principal.UserID, auth.SystemNamespace, perm)
+		return a.checkPermissionInNamespace(ctx, permissionCheckArgs{UserID: principal.UserID, Namespace: auth.SystemNamespace, Permission: perm})
 	}
 
-	hasPermission, err := a.checkPermissionInNamespace(ctx, principal.UserID, targetNS, perm)
+	hasPermission, err := a.checkPermissionInNamespace(ctx, permissionCheckArgs{UserID: principal.UserID, Namespace: targetNS, Permission: perm})
 	if err != nil {
 		return false, err
 	}
@@ -84,7 +84,7 @@ func (a *AuthBackend) HasPermission(ctx context.Context, principal auth.Principa
 	}
 
 	if targetNS != auth.SystemNamespace {
-		hasPermission, err = a.checkPermissionInNamespace(ctx, principal.UserID, auth.SystemNamespace, perm)
+		hasPermission, err = a.checkPermissionInNamespace(ctx, permissionCheckArgs{UserID: principal.UserID, Namespace: auth.SystemNamespace, Permission: perm})
 		if err != nil {
 			return false, err
 		}
@@ -96,10 +96,16 @@ func (a *AuthBackend) HasPermission(ctx context.Context, principal auth.Principa
 	return false, nil
 }
 
+type permissionCheckArgs struct {
+	UserID     string
+	Namespace  string
+	Permission string
+}
+
 // checkPermissionInNamespace checks if a user has a specific permission in a namespace
-func (a *AuthBackend) checkPermissionInNamespace(ctx context.Context, userID, namespace, perm string) (bool, error) {
+func (a *AuthBackend) checkPermissionInNamespace(ctx context.Context, check permissionCheckArgs) (bool, error) {
 	var bindings []types.RoleBinding
-	if err := a.roleBindings.ListByUser(ctx, store.UserInNamespace{Namespace: namespace, UserID: userID}, &bindings, maxRoleBindingsPerCheck); err != nil {
+	if err := a.roleBindings.ListByUser(ctx, store.UserInNamespace{Namespace: check.Namespace, UserID: check.UserID}, &bindings, maxRoleBindingsPerCheck); err != nil {
 		return false, err
 	}
 
@@ -118,7 +124,7 @@ func (a *AuthBackend) checkPermissionInNamespace(ctx context.Context, userID, na
 		}
 
 		for _, p := range role.Permissions {
-			if p == perm {
+			if p == check.Permission {
 				return true, nil
 			}
 		}

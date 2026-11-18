@@ -74,11 +74,12 @@ func TestPartitions(t *testing.T) {
 
 func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	defer goleak.VerifyNone(t, goleakOptions...)
-	d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+	d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
 	defer func() {
 		d.Shutdown(t)
 		tearDown()
 	}()
+	c, ctx := d.MustClient(), d.Context()
 
 	t.Run("TwoPartitions", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
@@ -393,9 +394,13 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			}))
 		}
 
-		// A single consumer reserving all items from all partitions
+		// A single consumer reserving all items from all partitions. Each lease returns at
+		// least one item, so 50 leases are always enough.
 		var count int
-		for count < 50 {
+		for range 50 {
+			if count >= 50 {
+				break
+			}
 			var resp pb.QueueLeaseResponse
 			require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
 				ClientId:       random.String("client-", 10),
@@ -405,6 +410,7 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			}, &resp))
 			count += len(resp.Items)
 		}
+		require.Equal(t, 50, count)
 		assertPartition(t, ctx, c, queueName, Partition{Partition: 0, Leased: 5, NotLeased: 0})
 		assertPartition(t, ctx, c, queueName, Partition{Partition: 1, Leased: 5, NotLeased: 0})
 		assertPartition(t, ctx, c, queueName, Partition{Partition: 2, Leased: 5, NotLeased: 0})
@@ -462,32 +468,34 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			},
 		}
 
-		leaseCh := make(chan []*pb.QueueLeaseResponse)
-		go func() {
-			leaseCh <- pauseAndLease(t, ctx, d.Service(), c, queueName, requests)
-		}()
+		var resp []*pb.QueueLeaseResponse
+		backgroundCall{
+			Call: func() {
+				resp = pauseAndLease(t, ctx, d.Service(), c, queueName, requests)
+			},
+			While: func() {
+				// Wait until the lease requests are all waiting
+				err := retry.On(ctx, RetryTenTimes, func(ctx context.Context, i int) error {
+					var resp pb.QueueStatsResponse
+					require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &resp))
+					if int(resp.LogicalQueues[0].LeaseWaiting) != len(requests) {
+						return fmt.Errorf("LeaseWaiting never reached expected %d", len(requests))
+					}
+					return nil
+				})
+				require.NoError(t, err)
 
-		// Wait until the lease requests are all waiting
-		err := retry.On(ctx, RetryTenTimes, func(ctx context.Context, i int) error {
-			var resp pb.QueueStatsResponse
-			require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &resp))
-			if int(resp.LogicalQueues[0].LeaseWaiting) != len(requests) {
-				return fmt.Errorf("LeaseWaiting never reached expected %d", len(requests))
-			}
-			return nil
-		})
-		require.NoError(t, err)
-
-		// Now produce 10 items
-		items := produceRandomItems(10)
-		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
-			Items:          items,
-			QueueName:      queueName,
-			RequestTimeout: "1m",
-		}))
+				// Now produce 10 items
+				items := produceRandomItems(10)
+				require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+					Items:          items,
+					QueueName:      queueName,
+					RequestTimeout: "1m",
+				}))
+			},
+		}.run()
 
 		// The 10 items produced are distributed amongst all the waiting lease requests.
-		resp := <-leaseCh
 		for _, r := range resp {
 			assert.Equal(t, 2, len(r.Items))
 		}
@@ -537,8 +545,9 @@ func TestPartitionPlacement(t *testing.T) {
 			Affinity:       1,
 		},
 	}
-	d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+	d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
 	defer d.Shutdown(t)
+	c, ctx := d.MustClient(), d.Context()
 
 	queueName := random.String("queue-", 10)
 	createQueueAndWait(t, ctx, c, &pb.QueueInfo{
@@ -650,8 +659,9 @@ func TestPartitionSpread(t *testing.T) {
 					Affinity:       affinity,
 				})
 			}
-			d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+			d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
 			defer d.Shutdown(t)
+			c, ctx := d.MustClient(), d.Context()
 
 			queueName := random.String("queue-", 10)
 			createQueueAndWait(t, ctx, c, &pb.QueueInfo{

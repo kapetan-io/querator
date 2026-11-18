@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"sync"
 	"testing"
 	"time"
 
@@ -58,8 +57,9 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 	defer goleak.VerifyNone(t, goleakOptions...)
 	t.Run("DefaultOpen", func(t *testing.T) {
 		t.Run("AllowsRequestsWithoutAPIKey", func(t *testing.T) {
-			d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
+			d := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
 			defer d.Shutdown(t)
+			c, ctx := d.MustClient(), d.Context()
 
 			// Without any auth backend configured (default NoOp), requests should succeed
 			var listRes pb.QueuesListResponse
@@ -68,8 +68,9 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 		})
 
 		t.Run("AllowsQueueOperationsWithoutAPIKey", func(t *testing.T) {
-			d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
+			d := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
 			defer d.Shutdown(t)
+			c, ctx := d.MustClient(), d.Context()
 
 			queueName := random.String("queue-", 10)
 
@@ -110,8 +111,9 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 
 	t.Run("Authentication", func(t *testing.T) {
 		t.Run("ValidAPIKey", func(t *testing.T) {
-			d, apiKey := newDaemonWithAuth(t, setup)
+			d := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
+			apiKey := d.AdminKey
 
 			// Create client with valid API key
 			c := newClientWithAPIKey(t, d, apiKey)
@@ -124,7 +126,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 		})
 
 		t.Run("InvalidAPIKey", func(t *testing.T) {
-			d, _ := newDaemonWithAuth(t, setup)
+			d := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
 
 			// Create client with invalid API key
@@ -141,7 +143,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 		})
 
 		t.Run("AnonymousAccessInOpenDoor", func(t *testing.T) {
-			d, _ := newDaemonWithAuth(t, setup)
+			d := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
 
 			// Create client without API key (anonymous)
@@ -155,8 +157,9 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 		})
 
 		t.Run("ExpiredAPIKey", func(t *testing.T) {
-			d, adminKey := newDaemonWithAuth(t, setup)
+			d := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
+			adminKey := d.AdminKey
 
 			ctx := d.Context()
 			adminClient := newClientWithAPIKey(t, d, adminKey)
@@ -200,8 +203,9 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 
 	t.Run("Authorization", func(t *testing.T) {
 		t.Run("HasPermission", func(t *testing.T) {
-			d, apiKey := newDaemonWithAuth(t, setup)
+			d := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
+			apiKey := d.AdminKey
 
 			c := newClientWithAPIKey(t, d, apiKey)
 			ctx := d.Context()
@@ -232,8 +236,9 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 		})
 
 		t.Run("LacksPermission", func(t *testing.T) {
-			d, adminKey := newDaemonWithAuth(t, setup)
+			d := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
+			adminKey := d.AdminKey
 
 			ctx := d.Context()
 			adminClient := newClientWithAPIKey(t, d, adminKey)
@@ -263,8 +268,9 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 		})
 
 		t.Run("StorageItemsDeleteRequiresClearPermission", func(t *testing.T) {
-			d, adminKey := newDaemonWithAuth(t, setup)
+			d := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
+			adminKey := d.AdminKey
 
 			ctx := d.Context()
 			adminClient := newClientWithAPIKey(t, d, adminKey)
@@ -320,8 +326,9 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 		})
 
 		t.Run("NamespaceScoping", func(t *testing.T) {
-			d, adminKey := newDaemonWithAuth(t, setup)
+			d := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
+			adminKey := d.AdminKey
 
 			ctx := d.Context()
 			adminClient := newClientWithAPIKey(t, d, adminKey)
@@ -369,8 +376,9 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 		})
 
 		t.Run("AdminCanUpdateQueue", func(t *testing.T) {
-			d, adminKey := newDaemonWithAuth(t, setup)
+			d := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
+			adminKey := d.AdminKey
 
 			ctx := d.Context()
 			c := newClientWithAPIKey(t, d, adminKey)
@@ -394,8 +402,9 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 		})
 
 		t.Run("AdminCanDeleteQueue", func(t *testing.T) {
-			d, adminKey := newDaemonWithAuth(t, setup)
+			d := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
+			adminKey := d.AdminKey
 
 			ctx := d.Context()
 			c := newClientWithAPIKey(t, d, adminKey)
@@ -418,8 +427,9 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 		})
 
 		t.Run("QueuesUpdateDenied", func(t *testing.T) {
-			d, adminKey := newDaemonWithAuth(t, setup)
+			d := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
+			adminKey := d.AdminKey
 
 			ctx := d.Context()
 			adminClient := newClientWithAPIKey(t, d, adminKey)
@@ -448,8 +458,9 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 		})
 
 		t.Run("QueuesDeleteDenied", func(t *testing.T) {
-			d, adminKey := newDaemonWithAuth(t, setup)
+			d := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
+			adminKey := d.AdminKey
 
 			ctx := d.Context()
 			adminClient := newClientWithAPIKey(t, d, adminKey)
@@ -477,8 +488,9 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 		})
 
 		t.Run("QueuesListNamespaceScoping", func(t *testing.T) {
-			d, adminKey := newDaemonWithAuth(t, setup)
+			d := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
+			adminKey := d.AdminKey
 
 			ctx := d.Context()
 			adminClient := newClientWithAPIKey(t, d, adminKey)
@@ -563,8 +575,9 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 		})
 
 		t.Run("SystemNamespaceCascade", func(t *testing.T) {
-			d, adminKey := newDaemonWithAuth(t, setup)
+			d := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
+			adminKey := d.AdminKey
 
 			ctx := d.Context()
 			adminClient := newClientWithAPIKey(t, d, adminKey)
@@ -602,8 +615,9 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 		// Issue 1: A namespace-scoped API key must still be able to exercise permissions
 		// granted via _system role bindings when the target namespace is _system directly.
 		t.Run("ScopedKeyWithSystemBindingCanAccessSystem", func(t *testing.T) {
-			d, adminKey := newDaemonWithAuth(t, setup)
+			d := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
+			adminKey := d.AdminKey
 
 			ctx := d.Context()
 			adminClient := newClientWithAPIKey(t, d, adminKey)
@@ -644,8 +658,9 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 		// Issue 3 regression: an unauthorized user must receive the same error code
 		// for both existing and nonexistent namespaces in RolesCreate (no namespace oracle).
 		t.Run("RolesCreateNoNamespaceOracle", func(t *testing.T) {
-			d, adminKey := newDaemonWithAuth(t, setup)
+			d := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
+			adminKey := d.AdminKey
 
 			ctx := d.Context()
 			adminClient := newClientWithAPIKey(t, d, adminKey)
@@ -685,8 +700,9 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 
 	t.Run("CacheInvalidation", func(t *testing.T) {
 		t.Run("DeletedAPIKeyDenied", func(t *testing.T) {
-			d, adminKey := newDaemonWithAuth(t, setup)
+			d := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
+			adminKey := d.AdminKey
 
 			ctx := d.Context()
 			adminClient := newClientWithAPIKey(t, d, adminKey)
@@ -728,8 +744,9 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 		})
 
 		t.Run("DeletedUserDenied", func(t *testing.T) {
-			d, adminKey := newDaemonWithAuth(t, setup)
+			d := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
+			adminKey := d.AdminKey
 
 			ctx := d.Context()
 			adminClient := newClientWithAPIKey(t, d, adminKey)
@@ -802,8 +819,9 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 		// A key that expires within the cache TTL window must be rejected after expiry even
 		// when the cache entry itself has not yet been evicted.
 		t.Run("CachedExpiredKeyRejected", func(t *testing.T) {
-			d, adminKey := newDaemonWithAuth(t, setup)
+			d := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
+			adminKey := d.AdminKey
 
 			ctx := d.Context()
 			adminClient := newClientWithAPIKey(t, d, adminKey)
@@ -851,8 +869,9 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 	})
 
 	t.Run("UserDeleteCascadeOrder", func(t *testing.T) {
-		d, adminKey := newDaemonWithAuth(t, setup)
+		d := newDaemonWithAuth(t, setup)
 		defer d.Shutdown(t)
+		adminKey := d.AdminKey
 
 		ctx := d.Context()
 		adminClient := newClientWithAPIKey(t, d, adminKey)
@@ -899,7 +918,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 	})
 
 	t.Run("DoubleClose", func(t *testing.T) {
-		d, _ := newDaemonWithAuth(t, setup)
+		d := newDaemonWithAuth(t, setup)
 
 		// First close via Shutdown (calls authBackend.Close())
 		d.authBackend.Close()
@@ -910,8 +929,9 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 	})
 
 	t.Run("ConcurrentAuthentication", func(t *testing.T) {
-		d, adminKey := newDaemonWithAuth(t, setup)
+		d := newDaemonWithAuth(t, setup)
 		defer d.Shutdown(t)
+		adminKey := d.AdminKey
 
 		ctx := d.Context()
 
@@ -924,15 +944,10 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 		}
 
 		// Authenticate all keys concurrently, triggering concurrent UpdateLastUsed goroutines
-		var wg sync.WaitGroup
-		for i := 0; i < numUsers; i++ {
-			wg.Go(func() {
-				c := newClientWithAPIKey(t, d, keys[i])
-				var listRes pb.QueuesListResponse
-				_ = c.QueuesList(ctx, &listRes, nil)
-			})
-		}
-		wg.Wait()
+		concurrently(len(keys), func(i int) {
+			var listRes pb.QueuesListResponse
+			assert.NoError(t, newClientWithAPIKey(t, d, keys[i]).QueuesList(ctx, &listRes, nil))
+		})
 
 		// Shutdown will call Close(), which waits for all UpdateLastUsed goroutines.
 		// goleak.VerifyNone (deferred in testAuth) verifies no goroutines leak.
@@ -940,7 +955,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 
 	t.Run("Errors", func(t *testing.T) {
 		t.Run("MalformedAuthHeader", func(t *testing.T) {
-			d, _ := newDaemonWithAuth(t, setup)
+			d := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
 
 			ctx := d.Context()
@@ -968,8 +983,9 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 
 	t.Run("Bootstrap", func(t *testing.T) {
 		t.Run("SystemNamespaceExists", func(t *testing.T) {
-			d, adminKey := newDaemonWithAuth(t, setup)
+			d := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
+			adminKey := d.AdminKey
 
 			c := newClientWithAPIKey(t, d, adminKey)
 			ctx := d.Context()
@@ -989,8 +1005,9 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 		})
 
 		t.Run("AnonymousUserExists", func(t *testing.T) {
-			d, adminKey := newDaemonWithAuth(t, setup)
+			d := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
+			adminKey := d.AdminKey
 
 			c := newClientWithAPIKey(t, d, adminKey)
 			ctx := d.Context()
@@ -1010,8 +1027,9 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 		})
 
 		t.Run("StandardRolesExist", func(t *testing.T) {
-			d, adminKey := newDaemonWithAuth(t, setup)
+			d := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
+			adminKey := d.AdminKey
 
 			c := newClientWithAPIKey(t, d, adminKey)
 			ctx := d.Context()
@@ -1042,8 +1060,9 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 		})
 
 		t.Run("AnonymousAdminBindingExists", func(t *testing.T) {
-			d, adminKey := newDaemonWithAuth(t, setup)
+			d := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
+			adminKey := d.AdminKey
 
 			c := newClientWithAPIKey(t, d, adminKey)
 			ctx := d.Context()
@@ -1078,8 +1097,9 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 		})
 
 		t.Run("SurvivesRestart", func(t *testing.T) {
-			d, adminKey := newDaemonWithAuth(t, setup)
+			d := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
+			adminKey := d.AdminKey
 
 			ctx := d.Context()
 			adminClient := newClientWithAPIKey(t, d, adminKey)
@@ -1123,7 +1143,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 
 	t.Run("OpenDoor", func(t *testing.T) {
 		t.Run("AnonymousCanCreateUser", func(t *testing.T) {
-			d, _ := newDaemonWithAuth(t, setup)
+			d := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
 
 			// Create an unauthenticated client (anonymous has Admin via bootstrap)
@@ -1139,7 +1159,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 		})
 
 		t.Run("AnonymousCanCreateAPIKey", func(t *testing.T) {
-			d, _ := newDaemonWithAuth(t, setup)
+			d := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
 
 			c := newClientWithAPIKey(t, d, "")
@@ -1163,7 +1183,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 		})
 
 		t.Run("AnonymousCanCreateQueue", func(t *testing.T) {
-			d, _ := newDaemonWithAuth(t, setup)
+			d := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
 
 			c := newClientWithAPIKey(t, d, "")
@@ -1179,8 +1199,9 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 		})
 
 		t.Run("RemovingAnonymousBindingClosesOpenDoor", func(t *testing.T) {
-			d, adminKey := newDaemonWithAuth(t, setup)
+			d := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
+			adminKey := d.AdminKey
 
 			ctx := d.Context()
 			adminClient := newClientWithAPIKey(t, d, adminKey)
@@ -1215,8 +1236,9 @@ func testAPIKeyTagCascade(t *testing.T, setup NewStorageFunc) {
 	t.Helper()
 	t.Run("KeyTagCascade", func(t *testing.T) {
 		t.Run("RequestKeyTagOverridesAll", func(t *testing.T) {
-			d, adminKey := newDaemonWithAuth(t, setup)
+			d := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
+			adminKey := d.AdminKey
 
 			c := newClientWithAPIKey(t, d, adminKey)
 			ctx := d.Context()
@@ -1248,8 +1270,9 @@ func testAPIKeyTagCascade(t *testing.T, setup NewStorageFunc) {
 		})
 
 		t.Run("NamespaceTagUsedWhenNoRequestTag", func(t *testing.T) {
-			d, adminKey := newDaemonWithAuth(t, setup)
+			d := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
+			adminKey := d.AdminKey
 
 			c := newClientWithAPIKey(t, d, adminKey)
 			ctx := d.Context()
@@ -1278,8 +1301,9 @@ func testAPIKeyTagCascade(t *testing.T, setup NewStorageFunc) {
 		})
 
 		t.Run("DefaultTagLiveWhenNoCascadeMatch", func(t *testing.T) {
-			d, adminKey := newDaemonWithAuth(t, setup)
+			d := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
+			adminKey := d.AdminKey
 
 			c := newClientWithAPIKey(t, d, adminKey)
 			ctx := d.Context()
@@ -1300,8 +1324,9 @@ func testAPIKeyTagCascade(t *testing.T, setup NewStorageFunc) {
 		})
 
 		t.Run("KeyTagValidationRejectsInvalidValues", func(t *testing.T) {
-			d, adminKey := newDaemonWithAuth(t, setup)
+			d := newDaemonWithAuth(t, setup)
 			defer d.Shutdown(t)
+			adminKey := d.AdminKey
 
 			c := newClientWithAPIKey(t, d, adminKey)
 			ctx := d.Context()
@@ -1354,6 +1379,8 @@ func testAPIKeyTagCascade(t *testing.T, setup NewStorageFunc) {
 type authTestDaemon struct {
 	*testDaemon
 	authBackend auth.AuthBackend
+	// AdminKey is the API key of an admin user created through the public API.
+	AdminKey string
 }
 
 func (a *authTestDaemon) Shutdown(t *testing.T) {
@@ -1362,10 +1389,10 @@ func (a *authTestDaemon) Shutdown(t *testing.T) {
 	a.testDaemon.Shutdown(t)
 }
 
-// newDaemonWithAuth creates a daemon with DefaultAuthBackend and returns the admin API key.
+// newDaemonWithAuth creates a daemon with DefaultAuthBackend and an admin user whose API key is in AdminKey.
 // Bootstrap runs automatically during service.New(), creating the _system namespace, anonymous
 // user, standard roles, and anonymous->Admin binding (Open Door mode).
-func newDaemonWithAuth(t *testing.T, setup NewStorageFunc) (*authTestDaemon, string) {
+func newDaemonWithAuth(t *testing.T, setup NewStorageFunc) *authTestDaemon {
 	t.Helper()
 
 	storageConf := setup()
@@ -1396,9 +1423,9 @@ func newDaemonWithAuth(t *testing.T, setup NewStorageFunc) (*authTestDaemon, str
 
 	// Use Open Door mode (anonymous has admin) to create admin credentials via the public API
 	anonClient := newClientWithAPIKey(t, atd, "")
-	adminKey := createAdminUser(t, td.ctx, anonClient)
+	atd.AdminKey = createAdminUser(t, td.ctx, anonClient)
 
-	return atd, adminKey
+	return atd
 }
 
 // newClientWithAPIKey creates a client with the specified API key

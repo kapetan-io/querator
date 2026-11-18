@@ -54,8 +54,9 @@ func TestPlacement(t *testing.T) {
 		} {
 			t.Run(test.name, func(t *testing.T) {
 				conf := memoryBackends(store.PartitionStorage{Name: "memory-0", Affinity: test.affinity})
-				d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+				d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
 				defer d.Shutdown(t)
+				c, ctx := d.MustClient(), d.Context()
 
 				name := random.String("queue-", 10)
 				err := c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -97,8 +98,9 @@ func TestPlacement(t *testing.T) {
 			ExpireTimeout:       10 * clock.Minute,
 			RequestedPartitions: 4,
 		}))
-		d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
 		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
 
 		err := c.QueueProduce(ctx, &pb.QueueProduceRequest{
 			QueueName:      name,

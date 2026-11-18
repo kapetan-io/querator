@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"testing"
+
 	"github.com/duh-rpc/duh-go"
 	"github.com/duh-rpc/duh-go/retry"
 	"github.com/kapetan-io/querator"
@@ -17,7 +19,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 	"google.golang.org/protobuf/types/known/timestamppb"
-	"testing"
 )
 
 func TestRetry(t *testing.T) {
@@ -79,11 +80,12 @@ func testRetry(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 	t.Run("QueueRetry", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
 		}()
+		c, ctx := d.MustClient(), d.Context()
 
 		// Create a queue
 		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
@@ -210,7 +212,7 @@ func testRetry(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer now.UnFreeze()
 
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 60*clock.Second, svc.Config{
+		d := newDaemon(t, 60*clock.Second, svc.Config{
 			StorageConfig: setup(),
 			Clock:         now,
 		})
@@ -218,6 +220,7 @@ func testRetry(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			d.Shutdown(t)
 			tearDown()
 		}()
+		c, ctx := d.MustClient(), d.Context()
 
 		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 			RequestedPartitions: 1,
@@ -320,7 +323,7 @@ func testRetry(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer now.UnFreeze()
 
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 60*clock.Second, svc.Config{
+		d := newDaemon(t, 60*clock.Second, svc.Config{
 			StorageConfig: setup(),
 			Clock:         now,
 		})
@@ -328,6 +331,7 @@ func testRetry(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			d.Shutdown(t)
 			tearDown()
 		}()
+		c, ctx := d.MustClient(), d.Context()
 
 		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 			RequestedPartitions: 1,
@@ -399,11 +403,12 @@ func testRetry(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 	t.Run("RetryMovesToTail", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
 		}()
+		c, ctx := d.MustClient(), d.Context()
 
 		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 			LeaseTimeout:        LeaseTimeout,
@@ -478,7 +483,7 @@ func testRetry(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer now.UnFreeze()
 
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 60*clock.Second, svc.Config{
+		d := newDaemon(t, 60*clock.Second, svc.Config{
 			StorageConfig: setup(),
 			Clock:         now,
 		})
@@ -486,6 +491,7 @@ func testRetry(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			d.Shutdown(t)
 			tearDown()
 		}()
+		c, ctx := d.MustClient(), d.Context()
 
 		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 			LeaseTimeout:        "300ms",
@@ -569,8 +575,9 @@ func testRetry(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		t.Run("QueueRetry", func(t *testing.T) {
 			var queueName = random.String("queue-", 10)
-			d, c, ctx := newDaemon(t, 5*clock.Second, svc.Config{StorageConfig: storage})
+			d := newDaemon(t, 5*clock.Second, svc.Config{StorageConfig: storage})
 			defer d.Shutdown(t)
+			c, ctx := d.MustClient(), d.Context()
 
 			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 				LeaseTimeout:        LeaseTimeout,
@@ -650,8 +657,9 @@ func testRetry(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		t.Run("RetryNotLeased", func(t *testing.T) {
 			var queueName = random.String("queue-", 10)
-			d, c, ctx := newDaemon(t, 5*clock.Second, svc.Config{StorageConfig: storage})
+			d := newDaemon(t, 5*clock.Second, svc.Config{StorageConfig: storage})
 			defer d.Shutdown(t)
+			c, ctx := d.MustClient(), d.Context()
 
 			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 				LeaseTimeout:        LeaseTimeout,

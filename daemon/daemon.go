@@ -39,7 +39,7 @@ import (
 type Daemon struct {
 	service  *service.Service
 	client   *querator.Client
-	servers  []*http.Server
+	server   *http.Server
 	wg       sync.WaitGroup
 	Listener net.Listener
 	conf     Config
@@ -64,6 +64,9 @@ func NewDaemon(ctx context.Context, conf Config) (*Daemon, error) {
 }
 
 func (d *Daemon) Start(ctx context.Context) error {
+	if d.server != nil {
+		return errors.New("daemon already started; call Shutdown before starting it again")
+	}
 	registry := prometheus.NewRegistry()
 
 	handler := transport.NewHTTPHandler(transport.HTTPHandlerConfig{
@@ -96,28 +99,20 @@ func (d *Daemon) Start(ctx context.Context) error {
 func (d *Daemon) Shutdown(ctx context.Context) error {
 
 	// See 0015-shutdown-errors.md for a discussion of shutdown operation
-	if err := d.service.Shutdown(ctx); err != nil {
-		return err
-	}
-	for _, srv := range d.servers {
+	err := d.service.Shutdown(ctx)
+	if srv := d.server; srv != nil {
+		d.server = nil
 		d.conf.Service.Log.LogAttrs(ctx, internal.LevelDebugAll, "Shutting down HTTP server", slog.String("address", srv.Addr))
-		_ = srv.Shutdown(ctx)
+		if srvErr := srv.Shutdown(ctx); srvErr != nil {
+			err = errors.Join(err, fmt.Errorf("while shutting down HTTP server %s: %w", srv.Addr, srvErr))
+		}
 		d.conf.Service.Log.Info("HTTP Server shutdown", "address", srv.Addr)
 	}
-	d.servers = nil
 
-	// Join the serve goroutines so Shutdown doesn't report done while listeners are still running
-	done := make(chan struct{})
-	go func() {
-		d.wg.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	// srv.Shutdown closes the listener before it waits on connections, so the Serve goroutine
+	// returns even when ctx expired. Join it so Shutdown doesn't report done while it still runs.
+	d.wg.Wait()
+	return err
 }
 
 func (d *Daemon) Service() *service.Service {
@@ -140,14 +135,12 @@ func (d *Daemon) Client() (*querator.Client, error) {
 		// Serve the server side of the pipe through the InMemoryListener
 		if inMemListener, ok := d.Listener.(*InMemoryListener); ok {
 			if err := inMemListener.ServeConn(serverConn); err != nil {
-				_ = clientConn.Close()
-				_ = serverConn.Close()
-				return nil, fmt.Errorf("failed to serve connection: %w", err)
+				return nil, errors.Join(fmt.Errorf("failed to serve connection: %w", err),
+					clientConn.Close(), serverConn.Close())
 			}
 		} else {
-			_ = clientConn.Close()
-			_ = serverConn.Close()
-			return nil, fmt.Errorf("InMemoryListener is enabled but listener is not of type *InMemoryListener")
+			return nil, errors.Join(errors.New("InMemoryListener is enabled but listener is not of type *InMemoryListener"),
+				clientConn.Close(), serverConn.Close())
 		}
 
 		// Create a new client using the client side of the pipe
@@ -184,6 +177,7 @@ func (d *Daemon) spawnHTTPS(ctx context.Context, mux http.Handler) error {
 	d.Listener = netutil.LimitListener(l, d.conf.Service.MaxConcurrentRequests)
 	srv.Addr = d.Listener.Addr().String()
 
+	d.server = srv
 	d.wg.Go(func() {
 		d.conf.Service.Log.Info("HTTPS Listening ...", "address", d.Listener.Addr().String())
 		if err := srv.ServeTLS(d.Listener, "", ""); err != nil {
@@ -196,8 +190,6 @@ func (d *Daemon) spawnHTTPS(ctx context.Context, mux http.Handler) error {
 	if err := duh.WaitForConnect(ctx, d.Listener.Addr().String(), d.conf.ClientTLS()); err != nil {
 		return err
 	}
-
-	d.servers = append(d.servers, srv)
 
 	return nil
 }
@@ -217,6 +209,7 @@ func (d *Daemon) spawnHTTP(ctx context.Context, h http.Handler) error {
 	d.Listener = netutil.LimitListener(l, d.conf.Service.MaxConcurrentRequests)
 	srv.Addr = d.Listener.Addr().String()
 
+	d.server = srv
 	d.wg.Go(func() {
 		if err := srv.Serve(d.Listener); err != nil {
 			if !errors.Is(err, http.ErrServerClosed) {
@@ -230,7 +223,6 @@ func (d *Daemon) spawnHTTP(ctx context.Context, h http.Handler) error {
 	}
 
 	d.conf.Service.Log.Info("HTTP Server Started", "address", d.Listener.Addr().String())
-	d.servers = append(d.servers, srv)
 	return nil
 }
 
@@ -243,6 +235,7 @@ func (d *Daemon) spawnInMemory(_ context.Context, h http.Handler) error {
 	d.Listener = NewInMemoryListener()
 	srv.Addr = d.Listener.Addr().String()
 
+	d.server = srv
 	d.wg.Go(func() {
 		if err := srv.Serve(d.Listener); err != nil {
 			if !errors.Is(err, http.ErrServerClosed) {
@@ -252,6 +245,5 @@ func (d *Daemon) spawnInMemory(_ context.Context, h http.Handler) error {
 	})
 
 	d.conf.Service.Log.Info("InMemory Server Started", "address", d.Listener.Addr().String())
-	d.servers = append(d.servers, srv)
 	return nil
 }

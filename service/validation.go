@@ -20,13 +20,20 @@ const (
 	defaultRequestTimeout = 5 * clock.Minute
 )
 
-func validateTag(field, value string) error {
-	if len(value) > auth.MaxKeyTagLength {
-		return reply.NewInvalidOption("%s is invalid; cannot be greater than %d characters", field, auth.MaxKeyTagLength)
+type keyTag struct {
+	Field string
+	Value string
+}
+
+func validateTag(tag keyTag) error {
+	if len(tag.Value) > auth.MaxKeyTagLength {
+		return reply.NewInvalidOption("%s is invalid; cannot be greater than %d characters", tag.Field, auth.MaxKeyTagLength)
 	}
-	for _, c := range value {
-		if (c < '0' || c > '9') && (c < 'a' || c > 'z') {
-			return reply.NewInvalidOption("%s is invalid; must be lowercase alphanumeric only", field)
+	for _, c := range tag.Value {
+		digit := c >= '0' && c <= '9'
+		lower := c >= 'a' && c <= 'z'
+		if !digit && !lower {
+			return reply.NewInvalidOption("%s is invalid; must be lowercase alphanumeric only", tag.Field)
 		}
 	}
 	return nil
@@ -168,11 +175,11 @@ func (s *Service) validateQueueRetryProto(in *proto.QueueRetryRequest, out *type
 			ID:   []byte(item.Id),
 			Dead: item.Dead,
 		}
-		
+
 		if item.RetryAt != nil {
 			retryItem.RetryAt = clock.Time(item.RetryAt.AsTime())
 		}
-		
+
 		out.Items = append(out.Items, retryItem)
 	}
 
@@ -225,7 +232,7 @@ func (s *Service) validateNamespaceProto(in *proto.NamespaceInfo, out *types.Nam
 		return err
 	}
 
-	if err := validateTag("api_key_tag", in.ApiKeyTag); err != nil {
+	if err := validateTag(keyTag{Field: "api_key_tag", Value: in.ApiKeyTag}); err != nil {
 		return err
 	}
 
@@ -286,7 +293,7 @@ func (s *Service) validateAPIKeyCreateProto(in *proto.APIKeyCreateRequest, out *
 	}
 
 	if in.KeyTag != "" {
-		if err := validateTag("key_tag", in.KeyTag); err != nil {
+		if err := validateTag(keyTag{Field: "key_tag", Value: in.KeyTag}); err != nil {
 			return err
 		}
 	}

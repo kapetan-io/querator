@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math/rand"
 	"slices"
-	"sync"
 	"testing"
 
 	"github.com/duh-rpc/duh-go"
@@ -82,11 +81,12 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 	t.Run("ProduceAndLease", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
 		}()
+		c, ctx := d.MustClient(), d.Context()
 
 		// Create a queue
 		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
@@ -169,11 +169,12 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 	t.Run("Produce", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
 		}()
+		c, ctx := d.MustClient(), d.Context()
 
 		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 			Reference:           "rainbow@dash.com",
@@ -356,7 +357,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer now.UnFreeze()
 
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 60*clock.Second, svc.Config{
+		d := newDaemon(t, 60*clock.Second, svc.Config{
 			StorageConfig: setup(),
 			Clock:         now,
 		})
@@ -364,6 +365,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			d.Shutdown(t)
 			tearDown()
 		}()
+		c, ctx := d.MustClient(), d.Context()
 
 		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 			RequestedPartitions: 1,
@@ -454,7 +456,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer now.UnFreeze()
 
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 60*clock.Second, svc.Config{
+		d := newDaemon(t, 60*clock.Second, svc.Config{
 			StorageConfig: setup(),
 			Clock:         now,
 		})
@@ -462,6 +464,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			d.Shutdown(t)
 			tearDown()
 		}()
+		c, ctx := d.MustClient(), d.Context()
 
 		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 			RequestedPartitions: 1,
@@ -534,7 +537,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer now.UnFreeze()
 
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 60*clock.Second, svc.Config{
+		d := newDaemon(t, 60*clock.Second, svc.Config{
 			StorageConfig: setup(),
 			Clock:         now,
 		})
@@ -542,6 +545,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			d.Shutdown(t)
 			tearDown()
 		}()
+		c, ctx := d.MustClient(), d.Context()
 
 		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 			RequestedPartitions: 1,
@@ -597,7 +601,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer now.UnFreeze()
 
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 60*clock.Second, svc.Config{
+		d := newDaemon(t, 60*clock.Second, svc.Config{
 			StorageConfig: setup(),
 			Clock:         now,
 		})
@@ -605,6 +609,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			d.Shutdown(t)
 			tearDown()
 		}()
+		c, ctx := d.MustClient(), d.Context()
 
 		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 			RequestedPartitions: 1,
@@ -660,7 +665,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer now.UnFreeze()
 
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 60*clock.Second, svc.Config{
+		d := newDaemon(t, 60*clock.Second, svc.Config{
 			StorageConfig: setup(),
 			Clock:         now,
 		})
@@ -668,6 +673,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			d.Shutdown(t)
 			tearDown()
 		}()
+		c, ctx := d.MustClient(), d.Context()
 
 		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 			RequestedPartitions: 1,
@@ -739,11 +745,12 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	t.Run("Lease", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
 		clientID := random.String("client-", 10)
-		d, c, ctx := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: setup()})
+		d := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: setup()})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
 		}()
+		c, ctx := d.MustClient(), d.Context()
 
 		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 			ExpireTimeout:       ExpireTimeout,
@@ -949,11 +956,12 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	t.Run("Complete", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
 		clientID := random.String("client-", 10)
-		d, c, ctx := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: setup()})
+		d := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: setup()})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
 		}()
+		c, ctx := d.MustClient(), d.Context()
 
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
 			LeaseTimeout:        LeaseTimeout,
@@ -1035,11 +1043,12 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	t.Run("Stats", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
 		clientID := random.String("client-", 10)
-		d, c, ctx := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: setup()})
+		d := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: setup()})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
 		}()
+		c, ctx := d.MustClient(), d.Context()
 
 		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 			LeaseTimeout:        LeaseTimeout,
@@ -1089,7 +1098,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer now.UnFreeze()
 
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 60*clock.Second, svc.Config{
+		d := newDaemon(t, 60*clock.Second, svc.Config{
 			StorageConfig: setup(),
 			Clock:         now,
 		})
@@ -1097,6 +1106,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			d.Shutdown(t)
 			tearDown()
 		}()
+		c, ctx := d.MustClient(), d.Context()
 
 		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 			RequestedPartitions: 1,
@@ -1158,11 +1168,12 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 	t.Run("QueueClear", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
 		}()
+		c, ctx := d.MustClient(), d.Context()
 
 		var leased []*pb.StorageItem
 		var list pb.StorageItemsListResponse
@@ -1234,7 +1245,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer nowSched.UnFreeze()
 
 		var scheduledQueueName = random.String("queue-", 10)
-		dSched, cSched, ctxSched := newDaemon(t, 60*clock.Second, svc.Config{
+		dSched := newDaemon(t, 60*clock.Second, svc.Config{
 			StorageConfig: setup(),
 			Clock:         nowSched,
 		})
@@ -1242,6 +1253,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			dSched.Shutdown(t)
 			tearDown()
 		}()
+		cSched, ctxSched := dSched.MustClient(), dSched.Context()
 
 		createQueueAndWait(t, ctxSched, cSched, &pb.QueueInfo{
 			RequestedPartitions: 1,
@@ -1326,7 +1338,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer nowCombined.UnFreeze()
 
 		var combinedQueueName = random.String("queue-", 10)
-		dCombined, cCombined, ctxCombined := newDaemon(t, 60*clock.Second, svc.Config{
+		dCombined := newDaemon(t, 60*clock.Second, svc.Config{
 			StorageConfig: setup(),
 			Clock:         nowCombined,
 		})
@@ -1334,6 +1346,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			dCombined.Shutdown(t)
 			tearDown()
 		}()
+		cCombined, ctxCombined := dCombined.MustClient(), dCombined.Context()
 
 		createQueueAndWait(t, ctxCombined, cCombined, &pb.QueueInfo{
 			RequestedPartitions: 1,
@@ -1414,11 +1427,12 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	t.Run("QueueReload", func(t *testing.T) {
 		t.Run("BasicReload", func(t *testing.T) {
 			var queueName = random.String("queue-", 10)
-			d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+			d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
 			defer func() {
 				d.Shutdown(t)
 				tearDown()
 			}()
+			c, ctx := d.MustClient(), d.Context()
 
 			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 				RequestedPartitions: 1,
@@ -1444,11 +1458,12 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		t.Run("ReloadPreservesItems", func(t *testing.T) {
 			var queueName = random.String("queue-", 10)
-			d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+			d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
 			defer func() {
 				d.Shutdown(t)
 				tearDown()
 			}()
+			c, ctx := d.MustClient(), d.Context()
 
 			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 				RequestedPartitions: 1,
@@ -1492,11 +1507,12 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		t.Run("StorageSyncAfterImport", func(t *testing.T) {
 			var queueName = random.String("queue-", 10)
-			d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+			d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
 			defer func() {
 				d.Shutdown(t)
 				tearDown()
 			}()
+			c, ctx := d.MustClient(), d.Context()
 
 			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 				RequestedPartitions: 1,
@@ -1564,11 +1580,12 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		t.Run("ReloadWithLeasedItems", func(t *testing.T) {
 			var queueName = random.String("queue-", 10)
-			d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+			d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
 			defer func() {
 				d.Shutdown(t)
 				tearDown()
 			}()
+			c, ctx := d.MustClient(), d.Context()
 
 			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 				RequestedPartitions: 1,
@@ -1637,11 +1654,12 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		// released even when the queue is stalled. The pause loop buffers hot requests
 		// without processing them, so only context cancellation can release the caller.
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: setup()})
+		d := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: setup()})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
 		}()
+		c, ctx := d.MustClient(), d.Context()
 
 		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 			LeaseTimeout:        LeaseTimeout,
@@ -1670,7 +1688,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		require.Len(t, lease.Items, 2)
 
 		// Pause the queue so hot requests are buffered but never processed
-		require.NoError(t, d.Service().PauseQueue(ctx, queueName, true))
+		require.NoError(t, d.Service().PauseQueue(ctx, queueName))
 
 		for _, test := range []struct {
 			Name string
@@ -1714,29 +1732,34 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				cancelCtx, cancel := context.WithCancel(context.Background())
 				defer cancel()
 
-				errCh := make(chan error, 1)
-				go func() {
-					errCh <- test.Call(cancelCtx)
-				}()
+				var callErr error
+				returned := make(chan struct{})
+				backgroundCall{
+					Call: func() {
+						callErr = test.Call(cancelCtx)
+						close(returned)
+					},
+					While: func() {
+						// Wait until the request is in flight inside the logical queue
+						require.Eventually(t, func() bool {
+							var stats pb.QueueStatsResponse
+							if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats); err != nil {
+								return false
+							}
+							return len(stats.LogicalQueues) == 1 && stats.LogicalQueues[0].InFlight == 1
+						}, 10*clock.Second, 100*clock.Millisecond)
 
-				// Wait until the request is in flight inside the logical queue
-				require.Eventually(t, func() bool {
-					var stats pb.QueueStatsResponse
-					if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats); err != nil {
-						return false
-					}
-					return len(stats.LogicalQueues) == 1 && stats.LogicalQueues[0].InFlight == 1
-				}, 10*clock.Second, 100*clock.Millisecond)
+						cancel()
 
-				cancel()
-
-				// The call must return promptly with the context error
-				select {
-				case err := <-errCh:
-					require.ErrorContains(t, err, "context canceled")
-				case <-clock.After(5 * clock.Second):
-					t.Fatal("call did not return after context cancellation")
-				}
+						// The call must return promptly with the context error
+						select {
+						case <-returned:
+						case <-clock.After(5 * clock.Second):
+							t.Fatal("call did not return after context cancellation")
+						}
+					},
+				}.run()
+				require.ErrorContains(t, callErr, "context canceled")
 
 				// The handler goroutine must be released while the queue is still paused
 				require.Eventually(t, func() bool {
@@ -1750,7 +1773,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		}
 
 		// Un-pause so the buffered requests drain and shutdown can proceed
-		require.NoError(t, d.Service().PauseQueue(ctx, queueName, false))
+		require.NoError(t, d.Service().ResumeQueue(ctx, queueName))
 
 		// The request loop still applies the buffered requests even though the callers
 		// are gone (see docs/adr/0009-client-timeouts.md): the complete removes one item,
@@ -1775,8 +1798,9 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		t.Run("QueueProduce", func(t *testing.T) {
 			var queueName = random.String("queue-", 10)
-			d, c, ctx := newDaemon(t, 5*clock.Second, svc.Config{StorageConfig: storage})
+			d := newDaemon(t, 5*clock.Second, svc.Config{StorageConfig: storage})
 			defer d.Shutdown(t)
+			c, ctx := d.MustClient(), d.Context()
 			maxItems := produceRandomItems(1_001)
 
 			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -1901,8 +1925,9 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		t.Run("QueueLease", func(t *testing.T) {
 			var queueName = random.String("queue-", 10)
 			var clientID = random.String("client-", 10)
-			d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: storage})
+			d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: storage})
 			defer d.Shutdown(t)
+			c, ctx := d.MustClient(), d.Context()
 
 			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
 				LeaseTimeout:        LeaseTimeout,
@@ -2022,47 +2047,49 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 			t.Run("DuplicateClientId", func(t *testing.T) {
 				clientID := random.String("client-", 10)
-				resultCh := make(chan error)
-				var wg sync.WaitGroup
-				wg.Go(func() {
-					var res pb.QueueLeaseResponse
-					resultCh <- c.QueueLease(ctx, &pb.QueueLeaseRequest{
-						QueueName:      queueName,
-						ClientId:       clientID,
-						RequestTimeout: "2s",
-						BatchSize:      1,
-					}, &res)
-				})
+				var waitingErr error
+				backgroundCall{
+					Call: func() {
+						var res pb.QueueLeaseResponse
+						waitingErr = c.QueueLease(ctx, &pb.QueueLeaseRequest{
+							QueueName:      queueName,
+							ClientId:       clientID,
+							RequestTimeout: "2s",
+							BatchSize:      1,
+						}, &res)
+					},
+					While: func() {
+						// Wait until there is one lease client blocking on the queue.
+						require.NoError(t, untilLeaseClientWaiting(t, c, queueName, 1))
 
-				// Wait until there is one lease client blocking on the queue.
-				require.NoError(t, untilLeaseClientWaiting(t, c, queueName, 1))
+						// Should fail immediately
+						var res pb.QueueLeaseResponse
+						err := c.QueueLease(ctx, &pb.QueueLeaseRequest{
+							QueueName:      queueName,
+							ClientId:       clientID,
+							RequestTimeout: "2s",
+							BatchSize:      1,
+						}, &res)
 
-				// Should fail immediately
-				var res pb.QueueLeaseResponse
-				err := c.QueueLease(ctx, &pb.QueueLeaseRequest{
-					QueueName:      queueName,
-					ClientId:       clientID,
-					RequestTimeout: "2s",
-					BatchSize:      1,
-				}, &res)
-
-				require.Error(t, err)
+						require.Error(t, err)
+						var e duh.Error
+						require.True(t, errors.As(err, &e))
+						assert.Equal(t, querator.MsgDuplicateClientID, e.Message())
+						assert.Equal(t, duh.CodeBadRequest, e.Code())
+					},
+				}.run()
+				require.Error(t, waitingErr)
 				var e duh.Error
-				require.True(t, errors.As(err, &e))
-				assert.Equal(t, querator.MsgDuplicateClientID, e.Message())
-				assert.Equal(t, duh.CodeBadRequest, e.Code())
-				err = <-resultCh
-				require.Error(t, err)
-				require.True(t, errors.As(err, &e))
+				require.True(t, errors.As(waitingErr, &e))
 				assert.Equal(t, querator.MsgRequestTimeout, e.Message())
 				assert.Equal(t, duh.CodeRetryRequest, e.Code())
-				wg.Wait()
 			})
 		})
 		t.Run("QueueComplete", func(t *testing.T) {
 			var queueName = random.String("queue-", 10)
-			d, c, ctx := newDaemon(t, 5*clock.Second, svc.Config{StorageConfig: storage})
+			d := newDaemon(t, 5*clock.Second, svc.Config{StorageConfig: storage})
 			defer d.Shutdown(t)
+			c, ctx := d.MustClient(), d.Context()
 
 			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 				LeaseTimeout:        LeaseTimeout,
@@ -2181,8 +2208,9 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		})
 
 		t.Run("QueueReload", func(t *testing.T) {
-			d, c, ctx := newDaemon(t, 5*clock.Second, svc.Config{StorageConfig: storage})
+			d := newDaemon(t, 5*clock.Second, svc.Config{StorageConfig: storage})
 			defer d.Shutdown(t)
+			c, ctx := d.MustClient(), d.Context()
 
 			t.Run("InvalidQueueName", func(t *testing.T) {
 				err := c.QueueReload(ctx, &pb.QueueReloadRequest{
@@ -2213,11 +2241,12 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer now.UnFreeze()
 
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup(), Clock: now})
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup(), Clock: now})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
 		}()
+		c, ctx := d.MustClient(), d.Context()
 
 		// Create a queue
 		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
@@ -2375,14 +2404,16 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		now.Freeze(clock.Now())
 		defer now.UnFreeze()
 
-		d, c, ctx := newDaemon(t, 60*clock.Second, svc.Config{
+		d := newDaemon(t, 60*clock.Second, svc.Config{
 			StorageConfig: setup(),
 			Clock:         now,
 		})
+
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
 		}()
+		c, ctx := d.MustClient(), d.Context()
 
 		t.Run("LeaseTimeoutRequeue", func(t *testing.T) {
 			queueName := random.String("queue-", 10)
@@ -2911,11 +2942,12 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 	t.Run("SourceID", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
 		}()
+		c, ctx := d.MustClient(), d.Context()
 
 		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 			LeaseTimeout:        LeaseTimeout,
@@ -3085,11 +3117,12 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 			var queueName = random.String("queue-", 10)
 			var dlqName = random.String("dlq-", 10)
-			d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup(), Clock: now})
+			d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup(), Clock: now})
 			defer func() {
 				d.Shutdown(t)
 				tearDown()
 			}()
+			c, ctx := d.MustClient(), d.Context()
 
 			// Create DLQ queue (no DLQ of its own)
 			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -3196,11 +3229,12 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 			var queueName = random.String("queue-", 10)
 			var dlqName = random.String("dlq-", 10)
-			d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup(), Clock: now})
+			d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup(), Clock: now})
 			defer func() {
 				d.Shutdown(t)
 				tearDown()
 			}()
+			c, ctx := d.MustClient(), d.Context()
 
 			// Create DLQ queue (no DLQ of its own)
 			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -3331,11 +3365,12 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			defer now.UnFreeze()
 
 			var queueName = random.String("queue-", 10)
-			d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup(), Clock: now})
+			d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup(), Clock: now})
 			defer func() {
 				d.Shutdown(t)
 				tearDown()
 			}()
+			c, ctx := d.MustClient(), d.Context()
 
 			// Create queue with no DLQ configured, max_attempts = 2, lease_timeout = 1m
 			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -3410,11 +3445,12 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		t.Run("Idempotency", func(t *testing.T) {
 			var dlqName = random.String("dlq-", 10)
-			d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+			d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
 			defer func() {
 				d.Shutdown(t)
 				tearDown()
 			}()
+			c, ctx := d.MustClient(), d.Context()
 
 			// Create DLQ queue
 			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -3491,11 +3527,12 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 				queueName := random.String("queue-", 10)
 				dlqName := random.String("dlq-", 10)
-				d, c, ctx := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: setup(), Clock: now})
+				d := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: setup(), Clock: now})
 				defer func() {
 					d.Shutdown(t)
 					tearDown()
 				}()
+				c, ctx := d.MustClient(), d.Context()
 
 				// Dead-letter queue with a long expiry so the dead-lettered item lingers.
 				createQueueAndWait(t, ctx, c, &pb.QueueInfo{
@@ -3518,44 +3555,46 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				// the dead-letter produce, not from a request timeout.
 				leaseCtx, leaseCancel := context.WithCancel(ctx)
 				defer leaseCancel()
-				type leaseResult struct {
-					resp *pb.QueueLeaseResponse
-					err  error
-				}
-				resultCh := make(chan leaseResult, 1)
-				go func() {
-					resp := &pb.QueueLeaseResponse{}
-					err := c.QueueLease(leaseCtx, &pb.QueueLeaseRequest{
-						QueueName:      dlqName,
-						RequestTimeout: "15m",
-						ClientId:       random.String("dlq-client-", 10),
-						BatchSize:      10,
-					}, resp)
-					resultCh <- leaseResult{resp: resp, err: err}
-				}()
-
-				// Wait until the consumer is registered as waiting on the dead-letter queue.
-				require.NoError(t, untilLeaseClientWaiting(t, c, dlqName, 1))
-
-				// Produce to the source queue, then expire it so the lifecycle dead-letters it.
-				require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
-					QueueName:      queueName,
-					RequestTimeout: "1m",
-					Items: []*pb.QueueProduceItem{
-						{Reference: "wake-test", Encoding: "text", Kind: "test", Bytes: []byte("payload")},
+				var (
+					leaseResp pb.QueueLeaseResponse
+					leaseErr  error
+				)
+				returned := make(chan struct{})
+				backgroundCall{
+					Call: func() {
+						leaseErr = c.QueueLease(leaseCtx, &pb.QueueLeaseRequest{
+							QueueName:      dlqName,
+							RequestTimeout: "15m",
+							ClientId:       random.String("dlq-client-", 10),
+							BatchSize:      10,
+						}, &leaseResp)
+						close(returned)
 					},
-				}))
-				now.Advance(2 * clock.Minute)
+					While: func() {
+						// Wait until the consumer is registered as waiting on the dead-letter queue.
+						require.NoError(t, untilLeaseClientWaiting(t, c, dlqName, 1))
 
-				// The blocked consumer must receive the dead-lettered item promptly (wall-clock).
-				select {
-				case res := <-resultCh:
-					require.NoError(t, res.err)
-					require.Len(t, res.resp.Items, 1)
-					assert.Equal(t, "wake-test", res.resp.Items[0].Reference)
-				case <-clock.After(10 * clock.Second):
-					t.Fatal("blocked dead-letter consumer was not woken after the item was dead-lettered")
-				}
+						// Produce to the source queue, then expire it so the lifecycle dead-letters it.
+						require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+							QueueName:      queueName,
+							RequestTimeout: "1m",
+							Items: []*pb.QueueProduceItem{
+								{Reference: "wake-test", Encoding: "text", Kind: "test", Bytes: []byte("payload")},
+							},
+						}))
+						now.Advance(2 * clock.Minute)
+
+						// The blocked consumer must receive the dead-lettered item promptly (wall-clock).
+						select {
+						case <-returned:
+						case <-clock.After(10 * clock.Second):
+							t.Fatal("blocked dead-letter consumer was not woken after the item was dead-lettered")
+						}
+					},
+				}.run()
+				require.NoError(t, leaseErr)
+				require.Len(t, leaseResp.Items, 1)
+				assert.Equal(t, "wake-test", leaseResp.Items[0].Reference)
 			})
 
 			// StatsReflectDeadLetteredItem: after an item is dead-lettered with no consumer
@@ -3571,11 +3610,12 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				const dlqExpire = "24h0m0s"
 				queueName := random.String("queue-", 10)
 				dlqName := random.String("dlq-", 10)
-				d, c, ctx := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: setup(), Clock: now})
+				d := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: setup(), Clock: now})
 				defer func() {
 					d.Shutdown(t)
 					tearDown()
 				}()
+				c, ctx := d.MustClient(), d.Context()
 
 				createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 					QueueName:           dlqName,
@@ -3648,7 +3688,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 				queueName := random.String("queue-", 10)
 				dlqName := random.String("dlq-", 10)
-				d, c, ctx := newDaemon(t, 30*clock.Second, svc.Config{
+				d := newDaemon(t, 30*clock.Second, svc.Config{
 					StorageConfig: setup(),
 					Clock:         now,
 					// Short write timeout so the produce to the paused dead-letter queue fails fast.
@@ -3658,6 +3698,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					d.Shutdown(t)
 					tearDown()
 				}()
+				c, ctx := d.MustClient(), d.Context()
 
 				// Dead-letter queue with a long expiry so the moved item never expires during the
 				// clock advance used to trigger the source's later pass.
@@ -3698,7 +3739,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				require.Len(t, lease.Items, 1)
 
 				// Pause the dead-letter queue so the internal produce cannot be applied.
-				require.NoError(t, d.Service().PauseQueue(ctx, dlqName, true))
+				require.NoError(t, d.Service().PauseQueue(ctx, dlqName))
 
 				// Expire the lease; the source lifecycle attempts to dead-letter the item but the
 				// paused dead-letter queue cannot confirm the produce, so the move fails.
@@ -3727,7 +3768,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 				// Un-pause the dead-letter queue, then advance the clock past the source item's
 				// ExpireDeadline to trigger a later lifecycle pass that moves the item.
-				require.NoError(t, d.Service().PauseQueue(ctx, dlqName, false))
+				require.NoError(t, d.Service().ResumeQueue(ctx, dlqName))
 				now.Advance(29 * clock.Minute)
 
 				// The item is moved exactly once: the dead-letter queue holds one copy (SourceID

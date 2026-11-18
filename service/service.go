@@ -116,10 +116,15 @@ func New(ctx context.Context, conf Config) (*Service, error) {
 	return s, nil
 }
 
-// authorize checks if the principal in context has the required permission in the namespace
-func (s *Service) authorize(ctx context.Context, namespace, permission string) error {
+type namespacePermission struct {
+	Namespace  string
+	Permission string
+}
+
+// authorize checks if the principal in context holds the namespacePermission
+func (s *Service) authorize(ctx context.Context, required namespacePermission) error {
 	principal := auth.PrincipalFromContext(ctx)
-	hasPermission, err := s.conf.Auth.HasPermission(ctx, principal, namespace, permission)
+	hasPermission, err := s.conf.Auth.HasPermission(ctx, principal, required.Namespace, required.Permission)
 	if err != nil {
 		s.conf.Log.Error("authorization check failed", "error", err)
 		return reply.NewRequestFailed("authorization check failed")
@@ -143,7 +148,7 @@ func (s *Service) QueueProduce(ctx context.Context, req *proto.QueueProduceReque
 		return err
 	}
 
-	if err := s.authorize(ctx, queue.Info().Namespace, auth.QueueProduce); err != nil {
+	if err := s.authorize(ctx, namespacePermission{Namespace: queue.Info().Namespace, Permission: auth.QueueProduce}); err != nil {
 		return err
 	}
 
@@ -176,7 +181,7 @@ func (s *Service) QueueLease(ctx context.Context, req *proto.QueueLeaseRequest,
 		return err
 	}
 
-	if err := s.authorize(ctx, queue.Info().Namespace, auth.QueueLease); err != nil {
+	if err := s.authorize(ctx, namespacePermission{Namespace: queue.Info().Namespace, Permission: auth.QueueLease}); err != nil {
 		return err
 	}
 
@@ -222,7 +227,7 @@ func (s *Service) QueueComplete(ctx context.Context, req *proto.QueueCompleteReq
 		return err
 	}
 
-	if err := s.authorize(ctx, queue.Info().Namespace, auth.QueueComplete); err != nil {
+	if err := s.authorize(ctx, namespacePermission{Namespace: queue.Info().Namespace, Permission: auth.QueueComplete}); err != nil {
 		return err
 	}
 
@@ -254,7 +259,7 @@ func (s *Service) QueueRetry(ctx context.Context, req *proto.QueueRetryRequest) 
 		return err
 	}
 
-	if err := s.authorize(ctx, queue.Info().Namespace, auth.QueueRetry); err != nil {
+	if err := s.authorize(ctx, namespacePermission{Namespace: queue.Info().Namespace, Permission: auth.QueueRetry}); err != nil {
 		return err
 	}
 
@@ -286,7 +291,7 @@ func (s *Service) QueueReload(ctx context.Context, req *proto.QueueReloadRequest
 		return err
 	}
 
-	if err := s.authorize(ctx, queue.Info().Namespace, auth.QueueUpdate); err != nil {
+	if err := s.authorize(ctx, namespacePermission{Namespace: queue.Info().Namespace, Permission: auth.QueueUpdate}); err != nil {
 		return err
 	}
 
@@ -312,7 +317,7 @@ func (s *Service) QueueClear(ctx context.Context, req *proto.QueueClearRequest) 
 		return err
 	}
 
-	if err := s.authorize(ctx, queue.Info().Namespace, auth.QueueClear); err != nil {
+	if err := s.authorize(ctx, namespacePermission{Namespace: queue.Info().Namespace, Permission: auth.QueueClear}); err != nil {
 		return err
 	}
 
@@ -334,9 +339,17 @@ func (s *Service) QueueClear(ctx context.Context, req *proto.QueueClearRequest) 
 	return nil
 }
 
-// PauseQueue is used to temporarily pause processing of queue requests to simulate various high contention scenarios
-// in testing; it is not exposed to the users via API calls.
-func (s *Service) PauseQueue(ctx context.Context, queueName string, pause bool) error {
+// PauseQueue and ResumeQueue temporarily pause and resume processing of queue requests to simulate various high
+// contention scenarios in testing; they are not exposed to the users via API calls.
+func (s *Service) PauseQueue(ctx context.Context, queueName string) error {
+	return s.applyPause(ctx, queueName, &types.PauseRequest{Pause: true})
+}
+
+func (s *Service) ResumeQueue(ctx context.Context, queueName string) error {
+	return s.applyPause(ctx, queueName, &types.PauseRequest{Pause: false})
+}
+
+func (s *Service) applyPause(ctx context.Context, queueName string, req *types.PauseRequest) error {
 	queue, err := s.queues.Get(ctx, queueName)
 	if err != nil {
 		return err
@@ -344,7 +357,7 @@ func (s *Service) PauseQueue(ctx context.Context, queueName string, pause bool) 
 
 	// Pause all the logical queues on this instance
 	for _, logical := range queue.GetAll() {
-		if err := logical.Pause(ctx, &types.PauseRequest{Pause: pause}); err != nil {
+		if err := logical.Pause(ctx, req); err != nil {
 			return err
 		}
 	}
@@ -368,7 +381,7 @@ func (s *Service) QueuesCreate(ctx context.Context, req *proto.QueueInfo) error 
 	}
 
 	info.Namespace = resolveNamespace(info.Namespace)
-	if err := s.authorize(ctx, info.Namespace, auth.QueueCreate); err != nil {
+	if err := s.authorize(ctx, namespacePermission{Namespace: info.Namespace, Permission: auth.QueueCreate}); err != nil {
 		return err
 	}
 
@@ -394,7 +407,7 @@ func (s *Service) QueuesList(ctx context.Context, req *proto.QueuesListRequest,
 	resp *proto.QueuesListResponse) error {
 
 	ns := resolveNamespace(req.Namespace)
-	if err := s.authorize(ctx, ns, auth.QueueList); err != nil {
+	if err := s.authorize(ctx, namespacePermission{Namespace: ns, Permission: auth.QueueList}); err != nil {
 		return err
 	}
 
@@ -432,7 +445,7 @@ func (s *Service) QueuesUpdate(ctx context.Context, req *proto.QueueInfo) error 
 		return err
 	}
 
-	if err := s.authorize(ctx, queue.Info().Namespace, auth.QueueUpdate); err != nil {
+	if err := s.authorize(ctx, namespacePermission{Namespace: queue.Info().Namespace, Permission: auth.QueueUpdate}); err != nil {
 		return err
 	}
 
@@ -452,7 +465,7 @@ func (s *Service) QueuesDelete(ctx context.Context, req *proto.QueuesDeleteReque
 		return err
 	}
 
-	if err := s.authorize(ctx, queue.Info().Namespace, auth.QueueDelete); err != nil {
+	if err := s.authorize(ctx, namespacePermission{Namespace: queue.Info().Namespace, Permission: auth.QueueDelete}); err != nil {
 		return err
 	}
 
@@ -468,7 +481,7 @@ func (s *Service) QueuesInfo(ctx context.Context, req *proto.QueuesInfoRequest, 
 		return err
 	}
 
-	if err := s.authorize(ctx, queue.Info().Namespace, auth.QueueStats); err != nil {
+	if err := s.authorize(ctx, namespacePermission{Namespace: queue.Info().Namespace, Permission: auth.QueueStats}); err != nil {
 		return err
 	}
 
@@ -503,7 +516,7 @@ func (s *Service) storageItemsList(ctx context.Context, kind types.ListKind,
 		return err
 	}
 
-	if err := s.authorize(ctx, queue.Info().Namespace, auth.QueueStats); err != nil {
+	if err := s.authorize(ctx, namespacePermission{Namespace: queue.Info().Namespace, Permission: auth.QueueStats}); err != nil {
 		return err
 	}
 
@@ -545,7 +558,7 @@ func (s *Service) StorageItemsImport(ctx context.Context, req *proto.StorageItem
 		return err
 	}
 
-	if err := s.authorize(ctx, queue.Info().Namespace, auth.QueueProduce); err != nil {
+	if err := s.authorize(ctx, namespacePermission{Namespace: queue.Info().Namespace, Permission: auth.QueueProduce}); err != nil {
 		return err
 	}
 
@@ -582,7 +595,7 @@ func (s *Service) StorageItemsDelete(ctx context.Context, req *proto.StorageItem
 		return err
 	}
 
-	if err := s.authorize(ctx, queue.Info().Namespace, auth.QueueClear); err != nil {
+	if err := s.authorize(ctx, namespacePermission{Namespace: queue.Info().Namespace, Permission: auth.QueueClear}); err != nil {
 		return err
 	}
 
@@ -614,7 +627,7 @@ func (s *Service) QueueStats(ctx context.Context, req *proto.QueueStatsRequest,
 		return err
 	}
 
-	if err := s.authorize(ctx, queue.Info().Namespace, auth.QueueStats); err != nil {
+	if err := s.authorize(ctx, namespacePermission{Namespace: queue.Info().Namespace, Permission: auth.QueueStats}); err != nil {
 		return err
 	}
 
@@ -707,7 +720,7 @@ func (s *Service) NamespacesCreate(ctx context.Context, req *proto.NamespaceInfo
 		return err
 	}
 
-	if err := s.authorize(ctx, auth.SystemNamespace, auth.NamespaceCreate); err != nil {
+	if err := s.authorize(ctx, namespacePermission{Namespace: auth.SystemNamespace, Permission: auth.NamespaceCreate}); err != nil {
 		return err
 	}
 
@@ -734,7 +747,7 @@ func (s *Service) NamespacesUpdate(ctx context.Context, req *proto.NamespaceInfo
 		return err
 	}
 
-	if err := s.authorize(ctx, auth.SystemNamespace, auth.NamespaceUpdate); err != nil {
+	if err := s.authorize(ctx, namespacePermission{Namespace: auth.SystemNamespace, Permission: auth.NamespaceUpdate}); err != nil {
 		return err
 	}
 
@@ -755,7 +768,7 @@ func (s *Service) NamespacesList(ctx context.Context, req *proto.NamespacesListR
 		req.Limit = DefaultListLimit
 	}
 
-	if err := s.authorize(ctx, auth.SystemNamespace, auth.NamespaceList); err != nil {
+	if err := s.authorize(ctx, namespacePermission{Namespace: auth.SystemNamespace, Permission: auth.NamespaceList}); err != nil {
 		return err
 	}
 
@@ -788,7 +801,7 @@ func (s *Service) NamespacesDelete(ctx context.Context, req *proto.NamespacesDel
 		return err
 	}
 
-	if err := s.authorize(ctx, auth.SystemNamespace, auth.NamespaceDelete); err != nil {
+	if err := s.authorize(ctx, namespacePermission{Namespace: auth.SystemNamespace, Permission: auth.NamespaceDelete}); err != nil {
 		return err
 	}
 
@@ -844,7 +857,7 @@ func (s *Service) UsersCreate(ctx context.Context, req *proto.UserCreateRequest,
 		return err
 	}
 
-	if err := s.authorize(ctx, auth.SystemNamespace, auth.UserCreate); err != nil {
+	if err := s.authorize(ctx, namespacePermission{Namespace: auth.SystemNamespace, Permission: auth.UserCreate}); err != nil {
 		return err
 	}
 
@@ -870,7 +883,7 @@ func (s *Service) UsersList(ctx context.Context, req *proto.UsersListRequest,
 		req.Limit = DefaultListLimit
 	}
 
-	if err := s.authorize(ctx, auth.SystemNamespace, auth.UserList); err != nil {
+	if err := s.authorize(ctx, namespacePermission{Namespace: auth.SystemNamespace, Permission: auth.UserList}); err != nil {
 		return err
 	}
 
@@ -899,7 +912,7 @@ func (s *Service) UsersDelete(ctx context.Context, req *proto.UsersDeleteRequest
 		return reply.NewRequestFailed("api key storage not configured")
 	}
 
-	if err := s.authorize(ctx, auth.SystemNamespace, auth.UserDelete); err != nil {
+	if err := s.authorize(ctx, namespacePermission{Namespace: auth.SystemNamespace, Permission: auth.UserDelete}); err != nil {
 		return err
 	}
 
@@ -939,7 +952,7 @@ func (s *Service) APIKeysCreate(ctx context.Context, req *proto.APIKeyCreateRequ
 		return err
 	}
 
-	if err := s.authorize(ctx, auth.SystemNamespace, auth.APIKeyCreate); err != nil {
+	if err := s.authorize(ctx, namespacePermission{Namespace: auth.SystemNamespace, Permission: auth.APIKeyCreate}); err != nil {
 		return err
 	}
 
@@ -996,7 +1009,7 @@ func (s *Service) APIKeysList(ctx context.Context, req *proto.APIKeysListRequest
 		req.Limit = DefaultListLimit
 	}
 
-	if err := s.authorize(ctx, auth.SystemNamespace, auth.APIKeyList); err != nil {
+	if err := s.authorize(ctx, namespacePermission{Namespace: auth.SystemNamespace, Permission: auth.APIKeyList}); err != nil {
 		return err
 	}
 
@@ -1027,7 +1040,7 @@ func (s *Service) APIKeysDelete(ctx context.Context, req *proto.APIKeysDeleteReq
 		return reply.NewRequestFailed("api key storage not configured")
 	}
 
-	if err := s.authorize(ctx, auth.SystemNamespace, auth.APIKeyDelete); err != nil {
+	if err := s.authorize(ctx, namespacePermission{Namespace: auth.SystemNamespace, Permission: auth.APIKeyDelete}); err != nil {
 		return err
 	}
 
@@ -1064,7 +1077,7 @@ func (s *Service) RolesCreate(ctx context.Context, req *proto.RoleCreateRequest,
 		return err
 	}
 
-	if err := s.authorize(ctx, role.Namespace, auth.RoleCreate); err != nil {
+	if err := s.authorize(ctx, namespacePermission{Namespace: role.Namespace, Permission: auth.RoleCreate}); err != nil {
 		return err
 	}
 
@@ -1101,7 +1114,7 @@ func (s *Service) RolesList(ctx context.Context, req *proto.RolesListRequest,
 	}
 
 	ns := resolveNamespace(req.Namespace)
-	if err := s.authorize(ctx, ns, auth.RoleList); err != nil {
+	if err := s.authorize(ctx, namespacePermission{Namespace: ns, Permission: auth.RoleList}); err != nil {
 		return err
 	}
 
@@ -1130,7 +1143,7 @@ func (s *Service) RolesUpdate(ctx context.Context, req *proto.RoleUpdateRequest)
 		return err
 	}
 
-	if err := s.authorize(ctx, role.Namespace, auth.RoleUpdate); err != nil {
+	if err := s.authorize(ctx, namespacePermission{Namespace: role.Namespace, Permission: auth.RoleUpdate}); err != nil {
 		return err
 	}
 
@@ -1161,7 +1174,7 @@ func (s *Service) RolesDelete(ctx context.Context, req *proto.RolesDeleteRequest
 	}
 
 	ns := resolveNamespace(req.Namespace)
-	if err := s.authorize(ctx, ns, auth.RoleDelete); err != nil {
+	if err := s.authorize(ctx, namespacePermission{Namespace: ns, Permission: auth.RoleDelete}); err != nil {
 		return err
 	}
 
@@ -1213,7 +1226,7 @@ func (s *Service) RoleBindingsCreate(ctx context.Context, req *proto.RoleBinding
 		return err
 	}
 
-	if err := s.authorize(ctx, binding.Namespace, auth.RoleBindingCreate); err != nil {
+	if err := s.authorize(ctx, namespacePermission{Namespace: binding.Namespace, Permission: auth.RoleBindingCreate}); err != nil {
 		return err
 	}
 
@@ -1252,7 +1265,7 @@ func (s *Service) RoleBindingsList(ctx context.Context, req *proto.RoleBindingsL
 	}
 
 	ns := resolveNamespace(req.Namespace)
-	if err := s.authorize(ctx, ns, auth.RoleBindingList); err != nil {
+	if err := s.authorize(ctx, namespacePermission{Namespace: ns, Permission: auth.RoleBindingList}); err != nil {
 		return err
 	}
 
@@ -1283,7 +1296,7 @@ func (s *Service) RoleBindingsDelete(ctx context.Context, req *proto.RoleBinding
 	}
 
 	ns := resolveNamespace(req.Namespace)
-	if err := s.authorize(ctx, ns, auth.RoleBindingDelete); err != nil {
+	if err := s.authorize(ctx, namespacePermission{Namespace: ns, Permission: auth.RoleBindingDelete}); err != nil {
 		return err
 	}
 

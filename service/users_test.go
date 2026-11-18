@@ -48,8 +48,9 @@ func TestUsers(t *testing.T) {
 func testUsers(t *testing.T, setup NewStorageFunc) {
 	// Happy Path: User and APIKey CRUD
 	t.Run("UserCreateAndList", func(t *testing.T) {
-		d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
+		d := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
 		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
 
 		// Create a user
 		var createRes pb.UserCreateResponse
@@ -69,8 +70,9 @@ func testUsers(t *testing.T, setup NewStorageFunc) {
 	})
 
 	t.Run("UserDelete", func(t *testing.T) {
-		d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
+		d := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
 		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
 
 		// Create a user
 		var createRes pb.UserCreateResponse
@@ -92,8 +94,9 @@ func testUsers(t *testing.T, setup NewStorageFunc) {
 	})
 
 	t.Run("APIKeyCreateAndList", func(t *testing.T) {
-		d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
+		d := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
 		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
 
 		// Create a user first
 		var userRes pb.UserCreateResponse
@@ -124,8 +127,9 @@ func testUsers(t *testing.T, setup NewStorageFunc) {
 	})
 
 	t.Run("APIKeyListByUser", func(t *testing.T) {
-		d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
+		d := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
 		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
 
 		// Create two users
 		var user1Res pb.UserCreateResponse
@@ -165,8 +169,9 @@ func testUsers(t *testing.T, setup NewStorageFunc) {
 	})
 
 	t.Run("APIKeyDelete", func(t *testing.T) {
-		d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
+		d := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
 		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
 
 		// Create a user
 		var userRes pb.UserCreateResponse
@@ -195,8 +200,9 @@ func testUsers(t *testing.T, setup NewStorageFunc) {
 	})
 
 	t.Run("UserDeleteCascadeAPIKeys", func(t *testing.T) {
-		d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
+		d := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
 		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
 
 		// Create a user
 		var userRes pb.UserCreateResponse
@@ -232,8 +238,9 @@ func testUsers(t *testing.T, setup NewStorageFunc) {
 	})
 
 	t.Run("UserDeleteCascadeBoth", func(t *testing.T) {
-		d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
+		d := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
 		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
 
 		ns := random.String("ns-", 10)
 		err := c.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: ns})
@@ -296,8 +303,9 @@ func testUsers(t *testing.T, setup NewStorageFunc) {
 	})
 
 	t.Run("UsersListPagination", func(t *testing.T) {
-		d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
+		d := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
 		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
 
 		// Create 10 users
 		const numUsers = 10
@@ -325,8 +333,9 @@ func testUsers(t *testing.T, setup NewStorageFunc) {
 	})
 
 	t.Run("APIKeysListPagination", func(t *testing.T) {
-		d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
+		d := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
 		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
 
 		// Create a user
 		var userRes pb.UserCreateResponse
@@ -365,8 +374,9 @@ func testUsers(t *testing.T, setup NewStorageFunc) {
 	t.Run("Errors", func(t *testing.T) {
 		t.Run("UsersCreate", func(t *testing.T) {
 			t.Run("EmptyUsername", func(t *testing.T) {
-				d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
+				d := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
 				defer d.Shutdown(t)
+				c, ctx := d.MustClient(), d.Context()
 
 				var res pb.UserCreateResponse
 				err := c.UsersCreate(ctx, &pb.UserCreateRequest{
@@ -379,8 +389,9 @@ func testUsers(t *testing.T, setup NewStorageFunc) {
 			})
 
 			t.Run("DuplicateUsername", func(t *testing.T) {
-				d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
+				d := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
 				defer d.Shutdown(t)
+				c, ctx := d.MustClient(), d.Context()
 
 				username := "duplicate-user-" + random.String("", 5)
 
@@ -405,8 +416,9 @@ func testUsers(t *testing.T, setup NewStorageFunc) {
 
 		t.Run("UsersDelete", func(t *testing.T) {
 			t.Run("NotExist", func(t *testing.T) {
-				d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
+				d := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
 				defer d.Shutdown(t)
+				c, ctx := d.MustClient(), d.Context()
 
 				err := c.UsersDelete(ctx, &pb.UsersDeleteRequest{
 					Id: "non-existent-id",
@@ -420,8 +432,9 @@ func testUsers(t *testing.T, setup NewStorageFunc) {
 
 		t.Run("APIKeysCreate", func(t *testing.T) {
 			t.Run("EmptyUserID", func(t *testing.T) {
-				d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
+				d := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
 				defer d.Shutdown(t)
+				c, ctx := d.MustClient(), d.Context()
 
 				var res pb.APIKeyCreateResponse
 				err := c.APIKeysCreate(ctx, &pb.APIKeyCreateRequest{
@@ -435,8 +448,9 @@ func testUsers(t *testing.T, setup NewStorageFunc) {
 			})
 
 			t.Run("UserNotExist", func(t *testing.T) {
-				d, c, ctx := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
+				d := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
 				defer d.Shutdown(t)
+				c, ctx := d.MustClient(), d.Context()
 
 				var res pb.APIKeyCreateResponse
 				err := c.APIKeysCreate(ctx, &pb.APIKeyCreateRequest{
@@ -453,8 +467,9 @@ func testUsers(t *testing.T, setup NewStorageFunc) {
 }
 
 func TestUsersContext(t *testing.T) {
-	d, c, _ := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setupMemoryStorage(store.Config{})})
+	d := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setupMemoryStorage(store.Config{})})
 	defer d.Shutdown(t)
+	c := d.MustClient()
 
 	t.Run("CancelledContext", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())

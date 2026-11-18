@@ -135,23 +135,31 @@ func (s *sharedPostgresContainer) Stop(ctx context.Context) error {
 	return nil
 }
 
-func (s *sharedPostgresContainer) CreateDatabase(ctx context.Context) (dsn string, dbName string, err error) {
-	dbName = fmt.Sprintf("querator_test_%d", s.dbCounter.Add(1))
+// testDatabase is a database created in the shared postgres container for one test.
+type testDatabase struct {
+	DSN  string
+	Name string
+}
+
+func (s *sharedPostgresContainer) CreateDatabase(ctx context.Context) (testDatabase, error) {
+	dbName := fmt.Sprintf("querator_test_%d", s.dbCounter.Add(1))
 	adminDSN := fmt.Sprintf("postgres://postgres:postgres@%s:%s/postgres?sslmode=disable", s.host, s.port)
 
 	conn, err := pgx.Connect(ctx, adminDSN)
 	if err != nil {
-		return "", "", fmt.Errorf("connect to postgres db: %w", err)
+		return testDatabase{}, fmt.Errorf("connect to postgres db: %w", err)
 	}
 	defer func() { _ = conn.Close(ctx) }()
 
 	_, err = conn.Exec(ctx, fmt.Sprintf("CREATE DATABASE %s", pgx.Identifier{dbName}.Sanitize()))
 	if err != nil {
-		return "", "", fmt.Errorf("create database %s: %w", dbName, err)
+		return testDatabase{}, fmt.Errorf("create database %s: %w", dbName, err)
 	}
 
-	dsn = fmt.Sprintf("postgres://postgres:postgres@%s:%s/%s?sslmode=disable", s.host, s.port, dbName)
-	return dsn, dbName, nil
+	return testDatabase{
+		DSN:  fmt.Sprintf("postgres://postgres:postgres@%s:%s/%s?sslmode=disable", s.host, s.port, dbName),
+		Name: dbName,
+	}, nil
 }
 
 func (s *sharedPostgresContainer) DropDatabase(ctx context.Context, dbName string) error {
@@ -239,7 +247,7 @@ func (td *testDaemon) Service() *svc.Service {
 	return td.d.Service()
 }
 
-func newDaemon(t *testing.T, duration clock.Duration, conf svc.Config) (*testDaemon, *querator.Client, context.Context) {
+func newDaemon(t *testing.T, duration clock.Duration, conf svc.Config) *testDaemon {
 	t.Helper()
 
 	set.Default(&conf.Log, log)
@@ -252,7 +260,7 @@ func newDaemon(t *testing.T, duration clock.Duration, conf svc.Config) (*testDae
 		ListenAddress: "localhost:0",
 	})
 	require.NoError(t, err)
-	return td, td.d.MustClient(), td.ctx
+	return td
 }
 
 // ---------------------------------------------------------------------
@@ -314,15 +322,15 @@ func (p *postgresTestSetup) Setup(conf store.PostgresConfig) store.Config {
 		panic(fmt.Sprintf("failed to get shared postgres container: %v", err))
 	}
 
-	dsn, dbName, err := container.CreateDatabase(context.Background())
+	database, err := container.CreateDatabase(context.Background())
 	if err != nil {
 		panic(fmt.Sprintf("failed to create test database: %v", err))
 	}
 
-	p.dsn = dsn
-	p.dbName = dbName
+	p.dsn = database.DSN
+	p.dbName = database.Name
 
-	conf.ConnectionString = dsn
+	conf.ConnectionString = database.DSN
 	conf.Log = log
 	conf.MaxConns = 10
 
@@ -503,17 +511,31 @@ func produceRandomItems(count int) []*pb.QueueProduceItem {
 	return items
 }
 
-func compareStorageItem(t *testing.T, l *pb.StorageItem, r *pb.StorageItem) {
-	t.Helper()
-	require.Equal(t, l.Id, r.Id)
-	require.Equal(t, l.IsLeased, r.IsLeased)
-	require.Equal(t, l.ExpireDeadline.AsTime(), r.ExpireDeadline.AsTime())
-	require.Equal(t, l.LeaseDeadline.AsTime(), r.LeaseDeadline.AsTime())
-	require.Equal(t, l.Attempts, r.Attempts)
-	require.Equal(t, l.Reference, r.Reference)
-	require.Equal(t, l.Encoding, r.Encoding)
-	require.Equal(t, l.Kind, r.Kind)
-	require.Equal(t, l.Payload, r.Payload)
+// storageItemFields holds the StorageItem fields tests compare, so require.Equal can compare two items.
+type storageItemFields struct {
+	Id             string
+	IsLeased       bool
+	ExpireDeadline time.Time
+	LeaseDeadline  time.Time
+	Attempts       int32
+	Reference      string
+	Encoding       string
+	Kind           string
+	Payload        string
+}
+
+func storageItemFieldsOf(item *pb.StorageItem) storageItemFields {
+	return storageItemFields{
+		Id:             item.Id,
+		IsLeased:       item.IsLeased,
+		ExpireDeadline: item.ExpireDeadline.AsTime(),
+		LeaseDeadline:  item.LeaseDeadline.AsTime(),
+		Attempts:       item.Attempts,
+		Reference:      item.Reference,
+		Encoding:       item.Encoding,
+		Kind:           item.Kind,
+		Payload:        string(item.Payload),
+	}
 }
 
 //nolint:unparam // conf param kept for consistency with other setup functions
@@ -612,18 +634,22 @@ func pauseAndLease(t *testing.T, ctx context.Context, s *svc.Service, c *querato
 	t.Helper()
 
 	// Pause processing of the queue for testing
-	require.NoError(t, s.PauseQueue(ctx, name, true))
+	require.NoError(t, s.PauseQueue(ctx, name))
 
 	responses := make([]*pb.QueueLeaseResponse, len(requests))
 	for i := range responses {
 		responses[i] = &pb.QueueLeaseResponse{}
 	}
 
+	// Cancelling leaseCtx ends any lease request still waiting once the wait below times out.
+	leaseCtx, cancelLeases := context.WithCancel(ctx)
+	defer cancelLeases()
+
 	var wg sync.WaitGroup
 
 	for i := range requests {
 		wg.Go(func() {
-			if err := c.QueueLease(ctx, requests[i], responses[i]); err != nil {
+			if err := c.QueueLease(leaseCtx, requests[i], responses[i]); err != nil {
 				var d duh.Error
 				if errors.As(err, &d) {
 					if d.Code() == duh.CodeRetryRequest {
@@ -654,22 +680,41 @@ func pauseAndLease(t *testing.T, ctx context.Context, s *svc.Service, c *querato
 	}
 
 	// Unpause processing of the queue to allow the leases to be filled.
-	require.NoError(t, s.PauseQueue(ctx, name, false))
+	require.NoError(t, s.ResumeQueue(ctx, name))
 
 	// Wait for each request to complete
-	done := make(chan struct{})
-
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-	case <-clock.After(5 * clock.Second):
+	timer := clock.AfterFunc(5*clock.Second, cancelLeases)
+	wg.Wait()
+	if !timer.Stop() {
 		t.Fatalf("timed out waiting for distribution of requests")
 	}
 	return responses
+}
+
+// backgroundCall runs Call in its own goroutine while While runs on the calling goroutine, so
+// While can drive the system and use require. When While returns normally, run waits for Call;
+// when While fails the test, run does not. The Go and Wait sit in a named method because Tiger
+// does not credit a Wait inside a t.Run literal (ENG-762).
+type backgroundCall struct {
+	Call  func()
+	While func()
+}
+
+func (b backgroundCall) run() {
+	var wg sync.WaitGroup
+	wg.Go(b.Call)
+	b.While()
+	wg.Wait()
+}
+
+// concurrently calls work once for each index in [0, count), each call in its own goroutine,
+// and returns once every call has returned.
+func concurrently(count int, work func(i int)) {
+	var wg sync.WaitGroup
+	for i := range count {
+		wg.Go(func() { work(i) })
+	}
+	wg.Wait()
 }
 
 func untilLeaseClientWaiting(t *testing.T, c *querator.Client, queueName string, numWaiting int) error {
@@ -688,14 +733,25 @@ func untilLeaseClientWaiting(t *testing.T, c *querator.Client, queueName string,
 	})
 }
 
-func compareQueueInfo(t *testing.T, expected *pb.QueueInfo, actual *pb.QueueInfo) {
-	t.Helper()
-	require.Equal(t, expected.QueueName, actual.QueueName)
-	require.Equal(t, expected.ExpireTimeout, actual.ExpireTimeout)
-	require.Equal(t, expected.LeaseTimeout, actual.LeaseTimeout)
-	require.Equal(t, expected.MaxAttempts, actual.MaxAttempts)
-	require.Equal(t, expected.DeadQueue, actual.DeadQueue)
-	require.Equal(t, expected.Reference, actual.Reference)
+// queueInfoFields holds the QueueInfo fields tests compare, so require.Equal can compare two queues.
+type queueInfoFields struct {
+	QueueName     string
+	ExpireTimeout string
+	LeaseTimeout  string
+	MaxAttempts   int32
+	DeadQueue     string
+	Reference     string
+}
+
+func queueInfoFieldsOf(info *pb.QueueInfo) queueInfoFields {
+	return queueInfoFields{
+		QueueName:     info.QueueName,
+		ExpireTimeout: info.ExpireTimeout,
+		LeaseTimeout:  info.LeaseTimeout,
+		MaxAttempts:   info.MaxAttempts,
+		DeadQueue:     info.DeadQueue,
+		Reference:     info.Reference,
+	}
 }
 
 type Pair struct {

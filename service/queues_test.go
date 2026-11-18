@@ -79,11 +79,12 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 	t.Run("CRUD", func(t *testing.T) {
 		conf := setup()
-		d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
 		}()
+		c, ctx := d.MustClient(), d.Context()
 
 		t.Run("Create", func(t *testing.T) {
 			var queueName = random.String("queue-", 10)
@@ -521,11 +522,12 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	})
 
 	t.Run("List", func(t *testing.T) {
-		d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
 		}()
+		c, ctx := d.MustClient(), d.Context()
 
 		queues := createRandomQueues(t, ctx, c, 50)
 
@@ -538,30 +540,30 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			require.NoError(t, c.QueuesList(ctx, &more, &querator.ListOptions{Limit: 20_000}))
 			assert.Equal(t, 50, len(more.Items))
 
-			compareQueueInfo(t, queues[0], more.Items[0])
-			compareQueueInfo(t, queues[50-1], more.Items[len(more.Items)-1])
+			require.Equal(t, queueInfoFieldsOf(queues[0]), queueInfoFieldsOf(more.Items[0]))
+			require.Equal(t, queueInfoFieldsOf(queues[50-1]), queueInfoFieldsOf(more.Items[len(more.Items)-1]))
 		})
 		t.Run("LessThanAvailable", func(t *testing.T) {
 			var less pb.QueuesListResponse
 			require.NoError(t, c.QueuesList(ctx, &less, &querator.ListOptions{Limit: 30}))
 			assert.Equal(t, 30, len(less.Items))
 
-			compareQueueInfo(t, queues[0], less.Items[0])
-			compareQueueInfo(t, queues[30-1], less.Items[len(less.Items)-1])
+			require.Equal(t, queueInfoFieldsOf(queues[0]), queueInfoFieldsOf(less.Items[0]))
+			require.Equal(t, queueInfoFieldsOf(queues[30-1]), queueInfoFieldsOf(less.Items[len(less.Items)-1]))
 		})
 		t.Run("GetOne", func(t *testing.T) {
 			var one pb.QueuesListResponse
 			require.NoError(t, c.QueuesList(ctx, &one, &querator.ListOptions{Pivot: queues[20].QueueName, Limit: 1}))
 			assert.Equal(t, 1, len(one.Items))
 
-			compareQueueInfo(t, queues[20], one.Items[len(one.Items)-1])
+			require.Equal(t, queueInfoFieldsOf(queues[20]), queueInfoFieldsOf(one.Items[len(one.Items)-1]))
 		})
 		t.Run("First", func(t *testing.T) {
 			var first pb.QueuesListResponse
 			require.NoError(t, c.QueuesList(ctx, &first, &querator.ListOptions{Limit: 1}))
 			assert.Equal(t, 1, len(first.Items))
 
-			compareQueueInfo(t, queues[0], first.Items[len(first.Items)-1])
+			require.Equal(t, queueInfoFieldsOf(queues[0]), queueInfoFieldsOf(first.Items[len(first.Items)-1]))
 		})
 		t.Run("WithPivot", func(t *testing.T) {
 			name := queues[20].QueueName
@@ -570,24 +572,24 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			require.NoError(t, err)
 
 			assert.Equal(t, 10, len(pivot.Items))
-			compareQueueInfo(t, queues[20], pivot.Items[0])
+			require.Equal(t, queueInfoFieldsOf(queues[20]), queueInfoFieldsOf(pivot.Items[0]))
 			for i := range pivot.Items {
-				compareQueueInfo(t, queues[i+20], pivot.Items[i])
+				require.Equal(t, queueInfoFieldsOf(queues[i+20]), queueInfoFieldsOf(pivot.Items[i]))
 			}
 			t.Run("PageThroughItems", func(t *testing.T) {
 				name := queues[0].QueueName
 				var page pb.QueuesListResponse
 				err := c.QueuesList(ctx, &page, &querator.ListOptions{Pivot: name, Limit: 10})
 				require.NoError(t, err)
-				compareQueueInfo(t, queues[0], page.Items[0])
-				compareQueueInfo(t, queues[9], page.Items[9])
+				require.Equal(t, queueInfoFieldsOf(queues[0]), queueInfoFieldsOf(page.Items[0]))
+				require.Equal(t, queueInfoFieldsOf(queues[9]), queueInfoFieldsOf(page.Items[9]))
 
 				t.Run("PageIncludesPivot", func(t *testing.T) {
 					name = queues[9].QueueName
 					err = c.QueuesList(ctx, &page, &querator.ListOptions{Pivot: name, Limit: 10})
 					require.NoError(t, err)
-					compareQueueInfo(t, queues[9], page.Items[0])
-					compareQueueInfo(t, queues[18], page.Items[9])
+					require.Equal(t, queueInfoFieldsOf(queues[9]), queueInfoFieldsOf(page.Items[0]))
+					require.Equal(t, queueInfoFieldsOf(queues[18]), queueInfoFieldsOf(page.Items[9]))
 				})
 			})
 		})
@@ -615,11 +617,12 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 	t.Run("Errors", func(t *testing.T) {
 		conf := setup()
-		d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
 		}()
+		c, ctx := d.MustClient(), d.Context()
 
 		var queueName = random.String("queue-", 10)
 		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -1155,14 +1158,16 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		now.Freeze(clock.Now())
 		defer now.UnFreeze()
 
-		d, c, ctx := newDaemon(t, 60*clock.Second, svc.Config{
+		d := newDaemon(t, 60*clock.Second, svc.Config{
 			StorageConfig: setup(),
 			Clock:         now,
 		})
+
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
 		}()
+		c, ctx := d.MustClient(), d.Context()
 
 		t.Run("MaxAttempts", func(t *testing.T) {
 			// Baseline test to verify lifecycle works (mirrors MaxAttemptsWithDLQ)

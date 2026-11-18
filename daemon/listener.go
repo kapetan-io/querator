@@ -25,8 +25,12 @@ func (l *InMemoryListener) ServeConn(conn net.Conn) error {
 		return net.ErrClosed
 	}
 
-	l.connCh <- conn
-	return nil
+	select {
+	case l.connCh <- conn:
+		return nil
+	case <-l.closed:
+		return net.ErrClosed
+	}
 }
 
 func (l *InMemoryListener) Accept() (net.Conn, error) {

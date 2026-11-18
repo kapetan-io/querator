@@ -3,7 +3,6 @@ package service_test
 import (
 	"context"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -70,7 +69,8 @@ func testShutdown(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		storage := setup()
 
 		// First daemon: produce items
-		d1, c1, ctx1 := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: storage})
+		d1 := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: storage})
+		c1, ctx1 := d1.MustClient(), d1.Context()
 		createQueueAndWait(t, ctx1, c1, &pb.QueueInfo{
 			QueueName:           queueName,
 			LeaseTimeout:        "1m0s",
@@ -87,11 +87,12 @@ func testShutdown(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		d1.Shutdown(t)
 
 		// Second daemon: verify items persisted
-		d2, c2, ctx2 := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: storage})
+		d2 := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: storage})
 		defer func() {
 			d2.Shutdown(t)
 			tearDown()
 		}()
+		c2, ctx2 := d2.MustClient(), d2.Context()
 
 		var listResp pb.StorageItemsListResponse
 		require.NoError(t, c2.StorageItemsList(ctx2, queueName, 0, &listResp, &querator.ListOptions{Limit: 100}))
@@ -105,7 +106,8 @@ func testShutdown(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		storage := setup()
 
 		// First daemon: produce and lease items
-		d1, c1, ctx1 := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: storage})
+		d1 := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: storage})
+		c1, ctx1 := d1.MustClient(), d1.Context()
 		createQueueAndWait(t, ctx1, c1, &pb.QueueInfo{
 			QueueName:           queueName,
 			LeaseTimeout:        "1m0s",
@@ -131,11 +133,12 @@ func testShutdown(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		d1.Shutdown(t)
 
 		// Second daemon: verify items still exist in storage (leased state persists)
-		d2, c2, ctx2 := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: storage})
+		d2 := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: storage})
 		defer func() {
 			d2.Shutdown(t)
 			tearDown()
 		}()
+		c2, ctx2 := d2.MustClient(), d2.Context()
 
 		// Items should still exist in storage - use StorageItemsList to verify persistence
 		// regardless of lease state (which requires lifecycle loop to process)
@@ -151,7 +154,8 @@ func testShutdown(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		storage := setup()
 
 		// First daemon: produce, lease, partially complete
-		d1, c1, ctx1 := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: storage})
+		d1 := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: storage})
+		c1, ctx1 := d1.MustClient(), d1.Context()
 		createQueueAndWait(t, ctx1, c1, &pb.QueueInfo{
 			QueueName:           queueName,
 			LeaseTimeout:        "1m0s",
@@ -189,11 +193,12 @@ func testShutdown(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		d1.Shutdown(t)
 
 		// Second daemon: verify only uncompleted items remain in storage
-		d2, c2, ctx2 := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: storage})
+		d2 := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: storage})
 		defer func() {
 			d2.Shutdown(t)
 			tearDown()
 		}()
+		c2, ctx2 := d2.MustClient(), d2.Context()
 
 		// Use StorageItemsList to verify completed items were removed from storage
 		// This doesn't depend on lifecycle loop timing
@@ -209,8 +214,10 @@ func testShutdown(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		storage := setup()
 		defer tearDown()
 
-		d, c, ctx := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: storage})
+		d := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: storage})
+
 		defer d.cancel()
+		c, ctx := d.MustClient(), d.Context()
 
 		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 			QueueName:           queueName,
@@ -219,7 +226,7 @@ func testShutdown(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			RequestedPartitions: 1,
 		})
 
-		require.NoError(t, d.Service().PauseQueue(ctx, queueName, true))
+		require.NoError(t, d.Service().PauseQueue(ctx, queueName))
 
 		// Shutdown must complete while the queue is paused
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -232,8 +239,10 @@ func testShutdown(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		storage := setup()
 		defer tearDown()
 
-		d, c, ctx := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: storage})
+		d := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: storage})
+
 		defer d.cancel()
+		c, ctx := d.MustClient(), d.Context()
 
 		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 			QueueName:           queueName,
@@ -242,35 +251,40 @@ func testShutdown(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			RequestedPartitions: 1,
 		})
 
-		require.NoError(t, d.Service().PauseQueue(ctx, queueName, true))
+		require.NoError(t, d.Service().PauseQueue(ctx, queueName))
 
-		produceErr := make(chan error, 1)
-		go func() {
-			produceErr <- c.QueueProduce(ctx, &pb.QueueProduceRequest{
-				QueueName:      queueName,
-				RequestTimeout: "20s",
-				Items:          produceRandomItems(1),
-			})
-		}()
+		var produceErr error
+		returned := make(chan struct{})
+		backgroundCall{
+			Call: func() {
+				produceErr = c.QueueProduce(ctx, &pb.QueueProduceRequest{
+					QueueName:      queueName,
+					RequestTimeout: "20s",
+					Items:          produceRandomItems(1),
+				})
+				close(returned)
+			},
+			While: func() {
+				// Wait until the paused request loop has consumed the produce request
+				require.Eventually(t, func() bool {
+					var resp pb.QueueStatsResponse
+					require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &resp))
+					return resp.LogicalQueues[0].ProduceWaiting == 1
+				}, 10*time.Second, 100*time.Millisecond)
 
-		// Wait until the paused request loop has consumed the produce request
-		require.Eventually(t, func() bool {
-			var resp pb.QueueStatsResponse
-			require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &resp))
-			return resp.LogicalQueues[0].ProduceWaiting == 1
-		}, 10*time.Second, 100*time.Millisecond)
+				// Shutdown must complete while the queue is paused with a waiting producer
+				shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				require.NoError(t, d.d.Shutdown(shutdownCtx))
 
-		// Shutdown must complete while the queue is paused with a waiting producer
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		require.NoError(t, d.d.Shutdown(shutdownCtx))
-
-		select {
-		case err := <-produceErr:
-			require.Error(t, err)
-		case <-time.After(5 * time.Second):
-			t.Fatal("produce request did not return after shutdown")
-		}
+				select {
+				case <-returned:
+				case <-time.After(5 * time.Second):
+					t.Fatal("produce request did not return after shutdown")
+				}
+			},
+		}.run()
+		require.Error(t, produceErr)
 	})
 
 	t.Run("ShutdownDuringUnpauseDrain", func(t *testing.T) {
@@ -278,8 +292,10 @@ func testShutdown(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		storage := setup()
 		defer tearDown()
 
-		d, c, ctx := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: storage})
+		d := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: storage})
+
 		defer d.cancel()
+		c, ctx := d.MustClient(), d.Context()
 
 		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 			QueueName:           queueName,
@@ -288,47 +304,53 @@ func testShutdown(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			RequestedPartitions: 1,
 		})
 
-		require.NoError(t, d.Service().PauseQueue(ctx, queueName, true))
+		require.NoError(t, d.Service().PauseQueue(ctx, queueName))
 
 		// Buffer enough produce requests that the un-pause drain takes long enough
 		// for Shutdown to land while the request loop is still mid-request.
 		const numProducers = 10
 		const numItems = 1_000
-		produceErr := make(chan error, numProducers)
-		for i := 0; i < numProducers; i++ {
-			go func() {
-				produceErr <- c.QueueProduce(ctx, &pb.QueueProduceRequest{
-					QueueName:      queueName,
-					RequestTimeout: "20s",
-					Items:          produceRandomItems(numItems),
+		produceErrs := make([]error, numProducers)
+		returned := make(chan struct{})
+		backgroundCall{
+			Call: func() {
+				concurrently(numProducers, func(i int) {
+					produceErrs[i] = c.QueueProduce(ctx, &pb.QueueProduceRequest{
+						QueueName:      queueName,
+						RequestTimeout: "20s",
+						Items:          produceRandomItems(numItems),
+					})
 				})
-			}()
-		}
+				close(returned)
+			},
+			While: func() {
+				require.Eventually(t, func() bool {
+					var resp pb.QueueStatsResponse
+					require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &resp))
+					return resp.LogicalQueues[0].ProduceWaiting == numProducers
+				}, 10*time.Second, 100*time.Millisecond)
 
-		require.Eventually(t, func() bool {
-			var resp pb.QueueStatsResponse
-			require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &resp))
-			return resp.LogicalQueues[0].ProduceWaiting == numProducers
-		}, 10*time.Second, 100*time.Millisecond)
+				// ResumeQueue returns as soon as the loop accepts the resume; the loop
+				// then applies the buffered requests to storage before it selects again.
+				require.NoError(t, d.Service().ResumeQueue(ctx, queueName))
 
-		// PauseQueue(false) returns as soon as the loop accepts the un-pause; the loop
-		// then applies the buffered requests to storage before it selects again.
-		require.NoError(t, d.Service().PauseQueue(ctx, queueName, false))
+				// Shutdown must be delivered to the loop after the drain instead of the loop
+				// exiting on the shutdown flag alone and leaving the partitions open.
+				shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				require.NoError(t, d.d.Shutdown(shutdownCtx))
 
-		// Shutdown must be delivered to the loop after the drain instead of the loop
-		// exiting on the shutdown flag alone and leaving the partitions open.
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		require.NoError(t, d.d.Shutdown(shutdownCtx))
+				select {
+				case <-returned:
+				case <-time.After(5 * time.Second):
+					t.Fatal("produce requests did not return after shutdown")
+				}
+			},
+		}.run()
 
 		// The drain completed before shutdown was handled, so every producer succeeded
-		for i := 0; i < numProducers; i++ {
-			select {
-			case err := <-produceErr:
-				require.NoError(t, err)
-			case <-time.After(5 * time.Second):
-				t.Fatal("produce request did not return after shutdown")
-			}
+		for _, err := range produceErrs {
+			require.NoError(t, err)
 		}
 	})
 
@@ -338,7 +360,8 @@ func testShutdown(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer tearDown()
 
 		// Use a shorter context since this test explicitly triggers shutdown
-		d, c, ctx := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: storage})
+		d := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: storage})
+		c, ctx := d.MustClient(), d.Context()
 		// Ensure cleanup even if test fails early - use fresh context since d.ctx may be canceled
 		defer func() {
 			cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -354,41 +377,41 @@ func testShutdown(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		})
 
 		const numRequests = 20
-		var wg sync.WaitGroup
 		results := make([]error, numRequests)
-
-		// Launch concurrent requests
-		for i := 0; i < numRequests; i++ {
-			wg.Go(func() {
-				results[i] = c.QueueProduce(ctx, &pb.QueueProduceRequest{
-					QueueName:      queueName,
-					RequestTimeout: "5s",
-					Items:          produceRandomItems(1),
-				})
-			})
-		}
-
-		// Let some requests start
-		time.Sleep(10 * time.Millisecond)
-
-		// Trigger shutdown while requests are in flight - don't use d.Shutdown(t)
-		// because that will fail if the context times out during shutdown
-		_ = d.d.Shutdown(d.ctx)
-		d.cancel()
-
-		// Wait for all requests to complete
 		done := make(chan struct{})
-		go func() {
-			wg.Wait()
-			close(done)
-		}()
 
-		select {
-		case <-done:
-			// All requests completed - good
-		case <-time.After(5 * time.Second):
-			t.Fatal("requests did not complete within timeout - possible hang")
-		}
+		backgroundCall{
+			// Launch concurrent requests
+			Call: func() {
+				concurrently(numRequests, func(i int) {
+					results[i] = c.QueueProduce(ctx, &pb.QueueProduceRequest{
+						QueueName:      queueName,
+						RequestTimeout: "5s",
+						Items:          produceRandomItems(1),
+					})
+				})
+				close(done)
+			},
+			While: func() {
+				// Let some requests start
+				time.Sleep(10 * time.Millisecond)
+
+				// Trigger shutdown while requests are in flight - don't use d.Shutdown(t)
+				// because that will fail if the context times out during shutdown
+				if err := d.d.Shutdown(d.ctx); err != nil {
+					t.Logf("shutdown while requests are in flight: %v", err)
+				}
+				d.cancel()
+
+				// Wait for all requests to complete
+				select {
+				case <-done:
+					// All requests completed - good
+				case <-time.After(5 * time.Second):
+					t.Fatal("requests did not complete within timeout - possible hang")
+				}
+			},
+		}.run()
 
 		// Verify at least some requests received shutdown errors
 		shutdownErrCount := 0

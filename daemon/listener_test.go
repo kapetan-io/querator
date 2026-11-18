@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/kapetan-io/querator/daemon"
@@ -21,11 +22,16 @@ func TestInMemoryListener(t *testing.T) {
 	listener := daemon.NewInMemoryListener()
 	server := &http.Server{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			_, _ = fmt.Fprintf(w, "Hello, %s!", r.URL.Path[1:])
+			_, err := fmt.Fprintf(w, "Hello, %s!", r.URL.Path[1:])
+			assert.NoError(t, err)
 		}),
 	}
-	go func() { _ = server.Serve(listener) }()
-	defer func() { _ = server.Close() }()
+	var serving sync.WaitGroup
+	serving.Go(func() {
+		assert.ErrorIs(t, server.Serve(listener), http.ErrServerClosed)
+	})
+	defer serving.Wait()
+	defer func() { assert.NoError(t, server.Close()) }()
 
 	clientCount := 3
 	var wg sync.WaitGroup
@@ -33,20 +39,24 @@ func TestInMemoryListener(t *testing.T) {
 		wg.Go(func() {
 			// Each client gets its own net.Pipe
 			serverConn, clientConn := net.Pipe()
-			_ = listener.ServeConn(serverConn)
+			if !assert.NoError(t, listener.ServeConn(serverConn)) {
+				return
+			}
 
 			// Custom DialContext returns the clientConn for this request
 			dialOnce := sync.Once{}
 
-			client := &http.Client{
-				Transport: &http.Transport{
-					DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-						var c net.Conn
-						dialOnce.Do(func() { c = clientConn })
-						return c, nil
-					},
+			transport := &http.Transport{
+				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+					var c net.Conn
+					dialOnce.Do(func() { c = clientConn })
+					return c, nil
 				},
-				Timeout: 2 * time.Second,
+			}
+			defer transport.CloseIdleConnections()
+			client := &http.Client{
+				Transport: transport,
+				Timeout:   2 * time.Second,
 			}
 
 			url := fmt.Sprintf("http://inmemory/client%d", i)
@@ -56,15 +66,18 @@ func TestInMemoryListener(t *testing.T) {
 				return
 			}
 			defer func() { _ = resp.Body.Close() }()
-			body, _ := io.ReadAll(resp.Body)
+			body, err := io.ReadAll(resp.Body)
+			if !assert.NoError(t, err) {
+				return
+			}
 			expected := fmt.Sprintf("Hello, client%d!", i)
 			if !strings.Contains(string(body), expected) {
 				t.Errorf("client %d got unexpected body: %q", i, body)
 			}
 		})
 	}
+	// The deferred server.Close closes the listener, so Serve reports ErrServerClosed.
 	wg.Wait()
-	_ = listener.Close()
 }
 
 func TestDaemonInMemoryListener(t *testing.T) {
@@ -111,4 +124,26 @@ func TestDaemonInMemoryListener(t *testing.T) {
 		// Verify we got an empty list
 		assert.Nil(t, resp.Items)
 	}
+}
+
+func TestInMemoryListenerServeConnAfterClose(t *testing.T) {
+	synctest.Test(t, serveConnAfterClose)
+}
+
+// serveConnAfterClose runs in a synctest bubble, so synctest.Wait returns only once ServeConn is blocked.
+func serveConnAfterClose(t *testing.T) {
+	listener := daemon.NewInMemoryListener()
+	serverConn, clientConn := net.Pipe()
+	defer func() { _ = clientConn.Close() }()
+	defer func() { _ = serverConn.Close() }()
+
+	// Nothing calls Accept, so ServeConn blocks until Close releases it.
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		assert.ErrorIs(t, listener.ServeConn(serverConn), net.ErrClosed)
+	})
+	defer wg.Wait()
+	synctest.Wait()
+
+	require.NoError(t, listener.Close())
 }

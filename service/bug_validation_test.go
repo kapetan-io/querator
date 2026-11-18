@@ -55,11 +55,12 @@ func testBugValidation(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	// "_system" for authorization but info.Namespace is never updated. The queue is
 	// stored with Namespace: "" instead of Namespace: "_system".
 	t.Run("QueuesCreateEmptyNamespace", func(t *testing.T) {
-		d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
 		}()
+		c, ctx := d.MustClient(), d.Context()
 
 		queueName := random.String("queue-", 10)
 
@@ -94,11 +95,12 @@ func testBugValidation(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	// SourceID should succeed, but currently the old index entry remains and the
 	// second import is silently dropped as a duplicate.
 	t.Run("SourceIDCleanedUpOnComplete", func(t *testing.T) {
-		d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
 		}()
+		c, ctx := d.MustClient(), d.Context()
 
 		queueName := random.String("queue-", 10)
 		createQueueAndWait(t, ctx, c, &pb.QueueInfo{

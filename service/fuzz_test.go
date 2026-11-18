@@ -1,23 +1,56 @@
 package service_test
 
 import (
-	"context"
 	"fmt"
+	"maps"
+	"slices"
+	"strings"
 	"testing"
-	"time"
-	"unicode/utf8"
 
+	"github.com/duh-rpc/duh-go"
 	"github.com/kapetan-io/querator"
-	"github.com/kapetan-io/querator/daemon"
+	"github.com/kapetan-io/querator/internal"
 	"github.com/kapetan-io/querator/internal/store"
 	pb "github.com/kapetan-io/querator/proto"
 	svc "github.com/kapetan-io/querator/service"
+	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/random"
-	"github.com/kapetan-io/tackle/set"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/proto"
 )
+
+// Fuzz inputs are mapped into these ranges so every input runs. 100 items of at most
+// 16 KiB plus three 256 byte fields stay well under the 5 MB produce payload limit, and
+// 100 is under the default produce and lease batch limits of 1,000.
+const (
+	fuzzItemsMax   = 100
+	fuzzBatchMax   = 100
+	fuzzPayloadMax = 16 * 1024
+	fuzzFieldMax   = 256
+)
+
+// Each line fails to compile if a server limit drops below the fuzz range above, because a
+// negative constant can't convert to uint.
+const (
+	_ = uint(internal.DefaultMaxProduceBatchSize - fuzzItemsMax)
+	_ = uint(internal.DefaultMaxLeaseBatchSize - fuzzBatchMax)
+	// 64 bytes per item covers the reference suffix and protobuf framing.
+	_ = uint(5*duh.MegaByte - fuzzItemsMax*(fuzzPayloadMax+3*fuzzFieldMax+64))
+)
+
+// fuzzLimit is the upper end of the range fuzzRange maps a fuzz input onto. It is its own type
+// so fuzzRange's two arguments can't be swapped.
+type fuzzLimit int
+
+// fuzzRange maps any n onto 1..limit, leaving n unchanged when it is already in that range.
+func fuzzRange(n int, limit fuzzLimit) int {
+	return ((n-1)%int(limit)+int(limit))%int(limit) + 1
+}
+
+// fuzzField truncates s to fuzzFieldMax bytes and replaces invalid UTF-8 with '?'.
+func fuzzField(s string) string {
+	return strings.ToValidUTF8(s[:min(len(s), fuzzFieldMax)], "?")
+}
 
 // FuzzQueueInvariant tests the core queue property: all produced items must be
 // accounted for through their lifecycle (produced -> leased -> completed),
@@ -32,15 +65,16 @@ func FuzzQueueInvariant(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, itemCount, batchSize int,
 		payload []byte, encoding, kind, reference string) {
-		// Ensure valid input for each field
-		if !utf8.ValidString(encoding) || !utf8.ValidString(kind) || !utf8.ValidString(reference) ||
-			itemCount < 1 || batchSize < 1 || len(payload) < 1 {
-			t.Skip()
-		}
-		d, c, ctx := newFuzzDaemon(t, svc.Config{
+		itemCount = fuzzRange(itemCount, fuzzItemsMax)
+		batchSize = fuzzRange(batchSize, fuzzBatchMax)
+		payload = payload[:min(len(payload), fuzzPayloadMax)]
+		encoding, kind, reference = fuzzField(encoding), fuzzField(kind), fuzzField(reference)
+
+		d := newDaemon(t, 10*clock.Second, svc.Config{
 			StorageConfig: setupMemoryStorage(store.Config{}),
 		})
 		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
 
 		queueName := fmt.Sprintf("fuzz-%d-%s", itemCount, random.Alpha("", 10))
 		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
@@ -67,19 +101,8 @@ func FuzzQueueInvariant(f *testing.F) {
 			})
 		}
 
-		// Ensure the total produce payload does not exceed querator limits
-		payload, err := proto.Marshal(&pb.QueueProduceRequest{
-			QueueName:      queueName,
-			Items:          items,
-			RequestTimeout: "5s",
-		})
-		require.NoError(t, err)
-		if len(payload) >= 5_000_000 {
-			t.Skip()
-		}
-
 		// Produce all items
-		err = c.QueueProduce(ctx, &pb.QueueProduceRequest{
+		err := c.QueueProduce(ctx, &pb.QueueProduceRequest{
 			QueueName:      queueName,
 			Items:          items,
 			RequestTimeout: "5s",
@@ -96,7 +119,11 @@ func FuzzQueueInvariant(f *testing.F) {
 		leasedItems := make(map[string]*pb.QueueLeaseItem)
 		totalLeased := 0
 
-		for totalLeased < itemCount {
+		// Each pass leases at least one item or breaks, so itemCount passes are enough.
+		for range itemCount {
+			if totalLeased == itemCount {
+				break
+			}
 			var lease pb.QueueLeaseResponse
 			err := c.QueueLease(ctx, &pb.QueueLeaseRequest{
 				ClientId:       fmt.Sprintf("client-%d", totalLeased),
@@ -128,18 +155,18 @@ func FuzzQueueInvariant(f *testing.F) {
 		assert.Equal(t, len(produced), len(leasedItems), "All produced items should be leased")
 
 		// Verify all produced references were leased
-		for ref := range produced {
+		for _, ref := range slices.Sorted(maps.Keys(produced)) {
 			_, exists := leasedItems[ref]
 			assert.True(t, exists, "Produced item %s was not leased", ref)
 		}
 
 		// Complete all leased items
 		completedCount := 0
-		for _, item := range leasedItems {
+		for _, ref := range slices.Sorted(maps.Keys(leasedItems)) {
 			err := c.QueueComplete(ctx, &pb.QueueCompleteRequest{
 				QueueName:      queueName,
 				RequestTimeout: "5s",
-				Ids:            []string{item.Id},
+				Ids:            []string{leasedItems[ref].Id},
 			})
 			require.NoError(t, err)
 			completedCount++
@@ -167,20 +194,4 @@ func FuzzQueueInvariant(f *testing.F) {
 		err = c.QueuesDelete(ctx, &pb.QueuesDeleteRequest{QueueName: queueName})
 		require.NoError(t, err)
 	})
-}
-
-func newFuzzDaemon(t *testing.T, conf svc.Config) (*testDaemon, *querator.Client, context.Context) {
-	t.Helper()
-
-	set.Default(&conf.Log, log)
-	td := &testDaemon{}
-	var err error
-
-	td.ctx, td.cancel = context.WithTimeout(context.Background(), 10*time.Second)
-	td.d, err = daemon.NewDaemon(td.ctx, daemon.Config{
-		ListenAddress: "localhost:0",
-		Service:       conf,
-	})
-	require.NoError(t, err)
-	return td, td.d.MustClient(), td.ctx
 }

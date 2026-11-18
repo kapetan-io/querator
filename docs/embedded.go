@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"os/signal"
 	"syscall"
 	"time"
@@ -41,8 +42,8 @@ func main() {
 // Run starts an embedded daemon, produces, leases and completes items, then serves until
 // ctx is cancelled and shuts the daemon down before it returns.
 func Run(ctx context.Context) (err error) {
-	// Create daemon with default config (localhost:2319, in-memory storage)
-	d, err := daemon.NewDaemon(ctx, daemon.Config{})
+	// Create daemon with in-memory storage, listening on QUERATOR_ADDRESS or localhost:2319
+	d, err := daemon.NewDaemon(ctx, daemon.Config{ListenAddress: os.Getenv("QUERATOR_ADDRESS")})
 	if err != nil {
 		return fmt.Errorf("failed to create daemon: %w", err)
 	}

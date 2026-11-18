@@ -42,6 +42,7 @@ func TestEmbeddedShutsDownDaemonOnInterrupt(t *testing.T) {
 
 	var output lockedBuffer
 	cmd := exec.CommandContext(ctx, binary)
+	cmd.Env = append(os.Environ(), "QUERATOR_ADDRESS=localhost:0")
 	cmd.Stdout = &output
 	cmd.Stderr = &output
 	require.NoError(t, cmd.Start())

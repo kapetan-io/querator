@@ -354,7 +354,7 @@ paths:
                         lease_timeout: 60m
                         expire_timeout: 24h
                         max_attempts: 20
-                        requested_partitions: 1025
+                        requested_partitions: 100
           headers: {}
       security: []
   /v1/queues.create:
@@ -1311,10 +1311,13 @@ components:
             violations are included as attempts
         requested_partitions:
           type: integer
+          minimum: 1
+          maximum: 1024
           description: >-
             The number of partitions this queue has requested. This might be
             different than the number of currently active partitions as the
-            system grows or contracts the number of partitions.
+            system grows or contracts the number of partitions. Creating a
+            queue with more than 1024 partitions is rejected.
         partitions:
           type: array
           description: >-

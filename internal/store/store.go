@@ -97,11 +97,14 @@ func CanPlacePartitions(backends []PartitionStorage) bool {
 	return false
 }
 
-func PlacePartitions(backends []PartitionStorage, info types.QueueInfo) []types.PartitionInfo {
+func PlacePartitions(backends []PartitionStorage, info types.QueueInfo) ([]types.PartitionInfo, error) {
+	if info.RequestedPartitions > maxQueuePartitions {
+		return nil, reply.NewInvalidOption("partitions is invalid; cannot be greater than %d", maxQueuePartitions)
+	}
 	var placed []types.PartitionInfo
 	info.PartitionInfo = nil
 	for idx, count := range assignPartitions(backends, info.RequestedPartitions) {
-		for i := 0; i < count; i++ {
+		for i := 0; i < min(count, maxQueuePartitions); i++ {
 			placed = append(placed, types.PartitionInfo{
 				StorageName:  backends[idx].Name,
 				PartitionNum: len(placed),
@@ -109,7 +112,7 @@ func PlacePartitions(backends []PartitionStorage, info types.QueueInfo) []types.
 			})
 		}
 	}
-	return placed
+	return placed, nil
 }
 
 func assignPartitions(backends []PartitionStorage, totalPartitions int) []int {

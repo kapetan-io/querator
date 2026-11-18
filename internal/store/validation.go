@@ -13,6 +13,7 @@ var ErrEmptyQueueName = reply.NewInvalidOption("queue name is invalid; queue nam
 
 const maxReferenceLength = 2_000
 const maxQueueNameLength = 512
+const maxQueuePartitions = 1_024
 const maxInt16 = 65536
 
 type QueuesValidation struct{}

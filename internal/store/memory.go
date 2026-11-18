@@ -1410,11 +1410,11 @@ func (m *MemoryRoles) Add(_ context.Context, role types.Role) error {
 
 	key := role.Namespace + "\x00" + role.Name
 	if _, ok := m.byNamespaceName[key]; ok {
-		return types.NewErrRoleAlreadyExists(role.Namespace, role.Name)
+		return types.NewErrRoleAlreadyExists(role)
 	}
 
 	if _, ok := m.roles[role.ID]; ok {
-		return types.NewErrRoleAlreadyExists(role.Namespace, role.Name)
+		return types.NewErrRoleAlreadyExists(role)
 	}
 
 	m.roles[role.ID] = role
@@ -1573,11 +1573,11 @@ func (m *MemoryRoleBindings) Add(_ context.Context, binding types.RoleBinding) e
 	// Check for duplicate (same user, namespace, role combination)
 	uniqueKey := binding.UserID + "\x00" + binding.Namespace + "\x00" + binding.RoleID
 	if _, ok := m.byUserNamespaceRole[uniqueKey]; ok {
-		return types.NewErrRoleBindingAlreadyExists(binding.UserID, binding.RoleID, binding.Namespace)
+		return types.NewErrRoleBindingAlreadyExists(binding)
 	}
 
 	if _, ok := m.bindings[binding.ID]; ok {
-		return types.NewErrRoleBindingAlreadyExists(binding.UserID, binding.RoleID, binding.Namespace)
+		return types.NewErrRoleBindingAlreadyExists(binding)
 	}
 
 	m.bindings[binding.ID] = binding

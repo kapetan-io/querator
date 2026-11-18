@@ -119,7 +119,7 @@ func New(ctx context.Context, conf Config) (*Service, error) {
 // authorize checks if the principal in context has the required permission in the namespace
 func (s *Service) authorize(ctx context.Context, namespace, permission string) error {
 	principal := auth.PrincipalFromContext(ctx)
-	hasPermission, err := s.conf.Auth.HasPermission(ctx, principal, namespace, permission)
+	hasPermission, err := s.conf.Auth.HasPermission(ctx, principal, auth.Access{Namespace: namespace, Permission: permission})
 	if err != nil {
 		s.conf.Log.Error("authorization check failed", "error", err)
 		return reply.NewRequestFailed("authorization check failed")

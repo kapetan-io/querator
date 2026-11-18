@@ -7,13 +7,18 @@ type AuthBackend interface {
 	// Authenticate validates a token and returns the principal
 	Authenticate(ctx context.Context, token string) (Principal, error)
 	// HasPermission checks if a principal has a permission in a namespace
-	HasPermission(ctx context.Context, principal Principal, targetNS string, perm string) (bool, error)
+	HasPermission(ctx context.Context, principal Principal, access Access) (bool, error)
 	// InvalidateUser removes all cached entries for a user
 	InvalidateUser(userID string)
 	// InvalidateKey removes a cached entry by key hash
 	InvalidateKey(keyHash string)
 	// Close releases any resources
 	Close()
+}
+
+type Access struct {
+	Namespace  string
+	Permission string
 }
 
 // NoOpAuthBackend is an AuthBackend that always allows access (default open)
@@ -27,7 +32,7 @@ func (n *NoOpAuthBackend) Authenticate(_ context.Context, _ string) (Principal, 
 }
 
 // HasPermission always returns true
-func (n *NoOpAuthBackend) HasPermission(_ context.Context, _ Principal, _ string, _ string) (bool, error) {
+func (n *NoOpAuthBackend) HasPermission(_ context.Context, _ Principal, _ Access) (bool, error) {
 	return true, nil
 }
 

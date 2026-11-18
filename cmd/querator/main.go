@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"fmt"
 	"os"
 
@@ -73,7 +74,7 @@ to interact with a running Querator instance via its HTTP API.`,
 	}
 
 	root.PersistentFlags().StringVar(&flags.Endpoint, "endpoint",
-		getEnv("QUERATOR_ENDPOINT", "http://localhost:2319"),
+		cmp.Or(os.Getenv("QUERATOR_ENDPOINT"), "http://localhost:2319"),
 		"Querator server endpoint for API calls")
 
 	// ======== Version =========
@@ -92,6 +93,10 @@ to interact with a running Querator instance via its HTTP API.`,
 	// Queue Commands
 	root.AddCommand(produceCommand)
 	root.AddCommand(leaseCommand)
+	if err := completeCommand.MarkFlagRequired("partition"); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
 	root.AddCommand(completeCommand)
 
 	// Queue Management Commands
@@ -104,11 +109,4 @@ to interact with a running Querator instance via its HTTP API.`,
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
-}
-
-func getEnv(envVar, defaultValue string) string {
-	if value := os.Getenv(envVar); value != "" {
-		return value
-	}
-	return defaultValue
 }

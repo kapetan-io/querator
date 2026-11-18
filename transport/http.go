@@ -22,7 +22,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/duh-rpc/duh-go"
@@ -572,11 +574,11 @@ func (h *HTTPHandler) ReplyError(w http.ResponseWriter, r *http.Request, err err
 	// TODO: Extract error.Fields and add them to the log fields
 
 	safe := make(http.Header, len(r.Header))
-	for k, v := range r.Header {
+	for _, k := range slices.Sorted(maps.Keys(r.Header)) {
 		if strings.EqualFold(k, "Authorization") || strings.EqualFold(k, "Cookie") {
 			safe[k] = []string{"[REDACTED]"}
 		} else {
-			safe[k] = v
+			safe[k] = r.Header[k]
 		}
 	}
 

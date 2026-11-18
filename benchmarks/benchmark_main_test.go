@@ -13,22 +13,22 @@ import (
 
 func BenchmarkProduceOperations(b *testing.B) {
 	tests := []struct {
+		name        string
 		payloadSize PayloadSize
 		batchSize   int
 	}{
-		{Payload100B, 1},
-		{Payload100B, 10},
-		{Payload100B, 100},
-		{Payload1KB, 1},
-		{Payload1KB, 10},
-		{Payload1KB, 100},
-		{Payload10KB, 1},
-		{Payload10KB, 10},
+		{"payload=100/batch=1", Payload100B, 1},
+		{"payload=100/batch=10", Payload100B, 10},
+		{"payload=100/batch=100", Payload100B, 100},
+		{"payload=1024/batch=1", Payload1KB, 1},
+		{"payload=1024/batch=10", Payload1KB, 10},
+		{"payload=1024/batch=100", Payload1KB, 100},
+		{"payload=10240/batch=1", Payload10KB, 1},
+		{"payload=10240/batch=10", Payload10KB, 10},
 	}
 
 	for _, test := range tests {
-		name := fmt.Sprintf("payload=%d/batch=%d", test.payloadSize, test.batchSize)
-		b.Run(name, func(b *testing.B) {
+		b.Run(test.name, func(b *testing.B) {
 			ctx := context.Background()
 			d, err := daemon.NewDaemon(ctx, daemon.Config{
 				ListenAddress: "localhost:0",
@@ -65,23 +65,23 @@ func BenchmarkProduceOperations(b *testing.B) {
 
 func BenchmarkLeaseOperations(b *testing.B) {
 	tests := []struct {
+		name        string
 		payloadSize PayloadSize
 		batchSize   int
 		queueDepth  int
 	}{
-		{Payload100B, 1, 1000},
-		{Payload100B, 10, 1000},
-		{Payload100B, 100, 1000},
-		{Payload1KB, 1, 1000},
-		{Payload1KB, 10, 1000},
-		{Payload1KB, 100, 1000},
-		{Payload10KB, 1, 500},
-		{Payload10KB, 10, 500},
+		{"payload=100/batch=1", Payload100B, 1, 1000},
+		{"payload=100/batch=10", Payload100B, 10, 1000},
+		{"payload=100/batch=100", Payload100B, 100, 1000},
+		{"payload=1024/batch=1", Payload1KB, 1, 1000},
+		{"payload=1024/batch=10", Payload1KB, 10, 1000},
+		{"payload=1024/batch=100", Payload1KB, 100, 1000},
+		{"payload=10240/batch=1", Payload10KB, 1, 500},
+		{"payload=10240/batch=10", Payload10KB, 10, 500},
 	}
 
 	for _, test := range tests {
-		name := fmt.Sprintf("payload=%d/batch=%d", test.payloadSize, test.batchSize)
-		b.Run(name, func(b *testing.B) {
+		b.Run(test.name, func(b *testing.B) {
 			ctx := context.Background()
 			d, err := daemon.NewDaemon(ctx, daemon.Config{
 				ListenAddress: "localhost:0",
@@ -213,17 +213,17 @@ func BenchmarkCompleteOperations(b *testing.B) {
 
 func BenchmarkFullWorkflow(b *testing.B) {
 	configs := []struct {
+		name        string
 		payloadSize PayloadSize
 		batchSize   int
 	}{
-		{Payload1KB, 10},
-		{Payload1KB, 100},
-		{Payload10KB, 10},
+		{"payload=1024/batch=10", Payload1KB, 10},
+		{"payload=1024/batch=100", Payload1KB, 100},
+		{"payload=10240/batch=10", Payload10KB, 10},
 	}
 
 	for _, config := range configs {
-		name := fmt.Sprintf("payload=%d/batch=%d", config.payloadSize, config.batchSize)
-		b.Run(name, func(b *testing.B) {
+		b.Run(config.name, func(b *testing.B) {
 			ctx := context.Background()
 			d, err := daemon.NewDaemon(ctx, daemon.Config{
 				ListenAddress: "localhost:0",
@@ -287,19 +287,19 @@ func BenchmarkFullWorkflow(b *testing.B) {
 
 func BenchmarkThroughput(b *testing.B) {
 	configs := []struct {
+		name        string
 		payloadSize PayloadSize
 		batchSize   int
 	}{
-		{Payload1KB, 10},
-		{Payload1KB, 100},
-		{Payload1KB, 1000},
-		{Payload10KB, 10},
-		{Payload10KB, 100},
+		{"payload=1024/batch=10", Payload1KB, 10},
+		{"payload=1024/batch=100", Payload1KB, 100},
+		{"payload=1024/batch=1000", Payload1KB, 1000},
+		{"payload=10240/batch=10", Payload10KB, 10},
+		{"payload=10240/batch=100", Payload10KB, 100},
 	}
 
 	for _, config := range configs {
-		name := fmt.Sprintf("payload=%d/batch=%d", config.payloadSize, config.batchSize)
-		b.Run(name, func(b *testing.B) {
+		b.Run(config.name, func(b *testing.B) {
 			ctx := context.Background()
 			d, err := daemon.NewDaemon(ctx, daemon.Config{
 				ListenAddress: "localhost:0",

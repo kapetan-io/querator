@@ -63,32 +63,38 @@ const (
 )
 
 type BenchmarkMetrics struct {
-	LatencyMaxNs    int64
-	LatencyP99Ns    int64
-	LatencyP95Ns    int64
-	LatencyP50Ns    int64
-	BytesPerOp      uint64
-	AllocsPerOp     uint64
-	DurationNs      int64
-	Concurrency     int
-	PayloadSize     int
-	QueueDepth      int
-	BatchSize       int
-	Operations      int
-	Items           int
-	Operation       OperationType
+	LatencyMaxNs int64
+	LatencyP99Ns int64
+	LatencyP95Ns int64
+	LatencyP50Ns int64
+	BytesPerOp   uint64
+	AllocsPerOp  uint64
+	DurationNs   int64
+	Concurrency  int
+	PayloadSize  int
+	QueueDepth   int
+	BatchSize    int
+	Operations   int
+	Items        int
+	Operation    OperationType
 }
 
-func (m *BenchmarkMetrics) CalculateThroughput() (opsPerSec, itemsPerSec float64) {
+// Throughput is the rate a benchmark run completed operations and items.
+type Throughput struct {
+	OpsPerSec   float64
+	ItemsPerSec float64
+}
+
+func (m *BenchmarkMetrics) CalculateThroughput() Throughput {
 	if m.DurationNs == 0 {
-		return 0, 0
+		return Throughput{}
 	}
 
 	durationSec := float64(m.DurationNs) / float64(time.Second)
-	opsPerSec = float64(m.Operations) / durationSec
-	itemsPerSec = float64(m.Items) / durationSec
-
-	return opsPerSec, itemsPerSec
+	return Throughput{
+		OpsPerSec:   float64(m.Operations) / durationSec,
+		ItemsPerSec: float64(m.Items) / durationSec,
+	}
 }
 
 type MetricsCollector struct {
@@ -107,9 +113,17 @@ func (c *MetricsCollector) RecordLatency(d time.Duration) {
 	c.latencies = append(c.latencies, d.Nanoseconds())
 }
 
-func (c *MetricsCollector) CalculatePercentiles() (p50, p95, p99, max int64) {
+// Percentiles are latencies in nanoseconds at the 50th, 95th and 99th percentile, plus the slowest.
+type Percentiles struct {
+	P50 int64
+	P95 int64
+	P99 int64
+	Max int64
+}
+
+func (c *MetricsCollector) CalculatePercentiles() Percentiles {
 	if len(c.latencies) == 0 {
-		return 0, 0, 0, 0
+		return Percentiles{}
 	}
 
 	sorted := make([]int64, len(c.latencies))
@@ -117,32 +131,43 @@ func (c *MetricsCollector) CalculatePercentiles() (p50, p95, p99, max int64) {
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
 
 	n := len(sorted)
-	p50 = sorted[n*50/100]
-	p95 = sorted[n*95/100]
-	p99 = sorted[n*99/100]
-	max = sorted[n-1]
-
-	return p50, p95, p99, max
+	return Percentiles{
+		P50: sorted[n*50/100],
+		P95: sorted[n*95/100],
+		P99: sorted[n*99/100],
+		Max: sorted[n-1],
+	}
 }
 
-func (c *MetricsCollector) Finalize(operation OperationType, payloadSize, batchSize, concurrency, queueDepth, operations, items int, memStats runtime.MemStats) BenchmarkMetrics {
-	p50, p95, p99, max := c.CalculatePercentiles()
+// FinalizeArgs describes the benchmark run a MetricsCollector measured.
+type FinalizeArgs struct {
+	Operation   OperationType
+	PayloadSize int
+	BatchSize   int
+	Concurrency int
+	QueueDepth  int
+	Operations  int
+	Items       int
+}
+
+func (c *MetricsCollector) Finalize(run FinalizeArgs, memStats runtime.MemStats) BenchmarkMetrics {
+	percentiles := c.CalculatePercentiles()
 
 	return BenchmarkMetrics{
-		LatencyMaxNs:    max,
-		LatencyP99Ns:    p99,
-		LatencyP95Ns:    p95,
-		LatencyP50Ns:    p50,
-		BytesPerOp:      memStats.TotalAlloc,
-		AllocsPerOp:     memStats.Mallocs,
-		DurationNs:      time.Since(c.startTime).Nanoseconds(),
-		Concurrency:     concurrency,
-		PayloadSize:     payloadSize,
-		QueueDepth:      queueDepth,
-		BatchSize:       batchSize,
-		Operations:      operations,
-		Items:           items,
-		Operation:       operation,
+		LatencyMaxNs: percentiles.Max,
+		LatencyP99Ns: percentiles.P99,
+		LatencyP95Ns: percentiles.P95,
+		LatencyP50Ns: percentiles.P50,
+		BytesPerOp:   memStats.TotalAlloc,
+		AllocsPerOp:  memStats.Mallocs,
+		DurationNs:   time.Since(c.startTime).Nanoseconds(),
+		Concurrency:  run.Concurrency,
+		PayloadSize:  run.PayloadSize,
+		QueueDepth:   run.QueueDepth,
+		BatchSize:    run.BatchSize,
+		Operations:   run.Operations,
+		Items:        run.Items,
+		Operation:    run.Operation,
 	}
 }
 
@@ -160,7 +185,10 @@ func WriteBenchmarkResults(results []BenchmarkMetrics, format OutputFormat, file
 
 	switch format {
 	case FormatText:
-		content = FormatAsText(results)
+		content, err = FormatAsText(results)
+		if err != nil {
+			return err
+		}
 	case FormatJSON:
 		var jsonBytes []byte
 		jsonBytes, err = FormatAsJSON(results)
@@ -169,7 +197,10 @@ func WriteBenchmarkResults(results []BenchmarkMetrics, format OutputFormat, file
 		}
 		content = string(jsonBytes)
 	case FormatCSV:
-		content = FormatAsCSV(results)
+		content, err = FormatAsCSV(results)
+		if err != nil {
+			return err
+		}
 	default:
 		return fmt.Errorf("unknown format: %s", format)
 	}
@@ -177,16 +208,18 @@ func WriteBenchmarkResults(results []BenchmarkMetrics, format OutputFormat, file
 	return os.WriteFile(filename, []byte(content), 0644)
 }
 
-func FormatAsText(results []BenchmarkMetrics) string {
+func FormatAsText(results []BenchmarkMetrics) (string, error) {
 	var buf strings.Builder
 	w := tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)
 
-	_, _ = fmt.Fprintln(w, "Operation\tPayload\tBatch\tConcur\tDepth\tOps\tItems\tOps/sec\tItems/sec\tP50(ms)\tP95(ms)\tP99(ms)\tMax(ms)")
+	if _, err := fmt.Fprintln(w, "Operation\tPayload\tBatch\tConcur\tDepth\tOps\tItems\tOps/sec\tItems/sec\tP50(ms)\tP95(ms)\tP99(ms)\tMax(ms)"); err != nil {
+		return "", err
+	}
 
 	for _, r := range results {
-		opsPerSec, itemsPerSec := r.CalculateThroughput()
+		throughput := r.CalculateThroughput()
 
-		_, _ = fmt.Fprintf(w, "%s\t%d\t%d\t%d\t%d\t%d\t%d\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\n",
+		if _, err := fmt.Fprintf(w, "%s\t%d\t%d\t%d\t%d\t%d\t%d\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\n",
 			r.Operation,
 			r.PayloadSize,
 			r.BatchSize,
@@ -194,17 +227,21 @@ func FormatAsText(results []BenchmarkMetrics) string {
 			r.QueueDepth,
 			r.Operations,
 			r.Items,
-			opsPerSec,
-			itemsPerSec,
+			throughput.OpsPerSec,
+			throughput.ItemsPerSec,
 			float64(r.LatencyP50Ns)/1e6,
 			float64(r.LatencyP95Ns)/1e6,
 			float64(r.LatencyP99Ns)/1e6,
 			float64(r.LatencyMaxNs)/1e6,
-		)
+		); err != nil {
+			return "", err
+		}
 	}
 
-	_ = w.Flush()
-	return buf.String()
+	if err := w.Flush(); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
 }
 
 func FormatAsJSON(results []BenchmarkMetrics) ([]byte, error) {
@@ -226,7 +263,7 @@ func GenerateSummary(results []BenchmarkMetrics) string {
 	var slowestLatency int64
 
 	for _, r := range results {
-		opsPerSec, _ := r.CalculateThroughput()
+		opsPerSec := r.CalculateThroughput().OpsPerSec
 		if opsPerSec > maxThroughput {
 			maxThroughput = opsPerSec
 			maxThroughputOp = fmt.Sprintf("%s (payload=%d, batch=%d, concurrency=%d)", r.Operation, r.PayloadSize, r.BatchSize, r.Concurrency)
@@ -245,8 +282,7 @@ func GenerateSummary(results []BenchmarkMetrics) string {
 	concurrencyScaling := make(map[int]float64)
 	for _, r := range results {
 		if r.Operation == OpProduce && r.PayloadSize == 1024 && r.BatchSize == 10 {
-			opsPerSec, _ := r.CalculateThroughput()
-			concurrencyScaling[r.Concurrency] = opsPerSec
+			concurrencyScaling[r.Concurrency] = r.CalculateThroughput().OpsPerSec
 		}
 	}
 
@@ -272,21 +308,18 @@ func PrintSummary(results []BenchmarkMetrics) {
 	fmt.Println(GenerateSummary(results))
 }
 
-func FormatAsCSV(results []BenchmarkMetrics) string {
-	var buf strings.Builder
-	w := csv.NewWriter(&buf)
-
-	_ = w.Write([]string{
+func FormatAsCSV(results []BenchmarkMetrics) (string, error) {
+	records := [][]string{{
 		"operation", "payload_size", "batch_size", "concurrency", "queue_depth",
 		"operations", "items", "ops_per_sec", "items_per_sec",
 		"p50_ns", "p95_ns", "p99_ns", "max_ns",
 		"bytes_per_op", "allocs_per_op", "duration_ns",
-	})
+	}}
 
 	for _, r := range results {
-		opsPerSec, itemsPerSec := r.CalculateThroughput()
+		throughput := r.CalculateThroughput()
 
-		_ = w.Write([]string{
+		records = append(records, []string{
 			string(r.Operation),
 			fmt.Sprintf("%d", r.PayloadSize),
 			fmt.Sprintf("%d", r.BatchSize),
@@ -294,8 +327,8 @@ func FormatAsCSV(results []BenchmarkMetrics) string {
 			fmt.Sprintf("%d", r.QueueDepth),
 			fmt.Sprintf("%d", r.Operations),
 			fmt.Sprintf("%d", r.Items),
-			fmt.Sprintf("%.2f", opsPerSec),
-			fmt.Sprintf("%.2f", itemsPerSec),
+			fmt.Sprintf("%.2f", throughput.OpsPerSec),
+			fmt.Sprintf("%.2f", throughput.ItemsPerSec),
 			fmt.Sprintf("%d", r.LatencyP50Ns),
 			fmt.Sprintf("%d", r.LatencyP95Ns),
 			fmt.Sprintf("%d", r.LatencyP99Ns),
@@ -306,6 +339,9 @@ func FormatAsCSV(results []BenchmarkMetrics) string {
 		})
 	}
 
-	w.Flush()
-	return buf.String()
+	var buf strings.Builder
+	if err := csv.NewWriter(&buf).WriteAll(records); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
 }

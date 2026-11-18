@@ -15,6 +15,7 @@ import (
 	"github.com/kapetan-io/querator/transport/reply"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/set"
+	"github.com/kapetan-io/tiger/assert"
 	"github.com/segmentio/ksuid"
 )
 
@@ -547,8 +548,7 @@ func (m *MemoryPartition) TakeAction(_ context.Context, batch types.LifeCycleBat
 				// Tell the partition it gained a new un-leased item.
 				state.UnLeased++
 			default:
-				m.log.Warn("assertion failed; undefined action", "action",
-					fmt.Sprintf("0x%X", int(a.Action)))
+				assert.Unreachable(fmt.Sprintf("undefined action kind '0x%X'", int(a.Action)))
 			}
 		}
 	}

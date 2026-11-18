@@ -13,6 +13,7 @@ import (
 	"time"
 
 	pb "github.com/kapetan-io/querator/proto"
+	tigerassert "github.com/kapetan-io/tiger/assert"
 )
 
 const benchmarkSeed = 12345
@@ -171,7 +172,7 @@ func WriteBenchmarkResults(results []BenchmarkMetrics, format OutputFormat, file
 	case FormatCSV:
 		content = FormatAsCSV(results)
 	default:
-		return fmt.Errorf("unknown format: %s", format)
+		tigerassert.Unreachable(fmt.Sprintf("unknown format: %s", format))
 	}
 
 	return os.WriteFile(filename, []byte(content), 0644)

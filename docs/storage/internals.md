@@ -23,8 +23,8 @@ request loop, and the lock keeps them safe if a caller moves off it.
 
 **Storage is contacted lazily.** `PartitionStore.Get` returns a `Partition` without an error and
 without touching storage. The first call that needs the data creates tables, collections or
-connections ([ADR 0021](../adr/0021-storage-lazy-initialization.md)). `Queues`, `Namespaces`,
-`Roles` and `RoleBindings` follow the same rule.
+connections ([ADR 0021](../adr/0021-storage-lazy-initialization.md)). The metadata stores
+(`Queues`, `Namespaces`, `Users`, `APIKeys`, `Roles` and `RoleBindings`) follow the same rule.
 
 **An error from `Complete` or `Retry` fails the whole batch.** When the backend returns an error,
 the logical queue marks every request in the batch for retry, and the client retries it. Each
@@ -60,6 +60,10 @@ every item for lease and expiry work. Both scans stop at the first error they yi
   an item by `Complete`, `Delete` or `Clear` frees its `SourceID` again. On InMemory and Badger, a
   lifecycle delete through `TakeAction` does not (ENG-777).
 - `LifeCycleInfo` leaves `NextLeaseExpiry` or `NextExpireDeadline` zero when there is none.
+- `PlacePartitions` returns no partitions when every backend's affinity is 0 or less. Its callers
+  check `CanPlacePartitions` first, so a queue that requests partitions always gets them. The
+  `QueuesManager` refuses to create a queue, and the daemon refuses a configured queue with no
+  partitions listed, when no backend can take one.
 - `Queues.Get` returns `ErrQueueNotExist` for a missing queue, which the `QueuesManager` checks
   for. `Queues.Delete` of a missing queue succeeds.
 
@@ -89,6 +93,11 @@ item into the queue by its ID alone does not need the rest of the item in the `A
 `TakeAction` may either insert the item it is given or update the stored item in place, whichever
 the data store does best.
 
+**`Stats` counts a due scheduled item as ready.** Postgres and MongoDB count an item as active,
+and so in `Total`, when it has no `EnqueueAt` or its `EnqueueAt` has passed, even before the
+lifecycle moves it into the queue. InMemory and Badger count every item with an `EnqueueAt` as
+scheduled until it moves.
+
 ## Timestamps are stored at microsecond precision
 
 Postgres `TIMESTAMPTZ` keeps microseconds, so the Postgres backend truncates every timestamp to
@@ -116,6 +125,9 @@ The MongoDB client manager holds its lock across the connect retry loop. The dri
 on the server while holding the lock. It still sleeps between attempts when `Connect` itself
 returns an error. The backend stays lazy ([ADR 0021](../adr/0021-storage-lazy-initialization.md))
 because the client is created on first use, not when the config is built.
+
+Postgres and MongoDB read `ScanForActions` and `ScanForScheduled` results a page at a time,
+`ScanBatchSize` items per page, 1,000 by default.
 
 ## Badger
 

@@ -1889,7 +1889,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats); err != nil {
 				return false
 			}
-			return len(stats.LogicalQueues) == 1 && int(stats.LogicalQueues[0].InFlight) == len(requests)
+			return len(stats.LogicalQueues) == 1 && int(stats.LogicalQueues[0].CompleteWaiting) == len(requests)
 		}, 10*clock.Second, 100*clock.Millisecond)
 
 		require.NoError(t, d.Service().ResumeQueue(ctx, queueName))

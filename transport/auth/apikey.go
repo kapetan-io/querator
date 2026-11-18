@@ -10,11 +10,8 @@ import (
 )
 
 const (
-	// KeyLength is the total number of random bytes in the secret key
-	KeyLength = 32
-	// DefaultKeyTag is the fallback tag used when no tag is supplied at any cascade level
-	DefaultKeyTag = "live"
-	// MaxKeyTagLength is the maximum allowed length for an API key tag segment.
+	KeyLength       = 32
+	DefaultKeyTag   = "live"
 	MaxKeyTagLength = 16
 
 	entropyLength = 43
@@ -30,11 +27,10 @@ func init() {
 	}
 }
 
-// GeneratedKey contains the components of a newly generated API key
 type GeneratedKey struct {
-	KeyHash string // SHA256 hash of the full key (for storage)
-	Prefix  string // qtr-[tag]- plus first 8 entropy chars (for display)
-	Key     string // Full API key to return to user (shown once)
+	KeyHash string
+	Prefix  string
+	Key     string
 }
 
 func encodeEntropy(b []byte) string {
@@ -74,13 +70,11 @@ func GenerateAPIKey(tag string) (GeneratedKey, error) {
 	}, nil
 }
 
-// HashAPIKey creates a SHA256 hash of an API key for storage
 func HashAPIKey(key string) string {
 	hash := sha256.Sum256([]byte(key))
 	return base64.RawURLEncoding.EncodeToString(hash[:])
 }
 
-// validateKeyTag checks that a tag is lowercase alphanumeric and at most MaxKeyTagLength characters
 func validateKeyTag(tag string) error {
 	if len(tag) == 0 {
 		return fmt.Errorf("invalid api key format; tag cannot be empty")
@@ -96,7 +90,6 @@ func validateKeyTag(tag string) error {
 	return nil
 }
 
-// ValidateAPIKeyFormat checks if an API key has the correct qtr-[tag]-[entropy] format
 func ValidateAPIKeyFormat(key string) error {
 	if key == "" {
 		return fmt.Errorf("api key cannot be empty")

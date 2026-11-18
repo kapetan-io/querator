@@ -46,7 +46,6 @@ func RunUpdate(flags FlagParams, queueName string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// First get the current queue info
 	var currentQueue proto.QueueInfo
 	infoReq := &proto.QueuesInfoRequest{
 		QueueName: queueName,
@@ -56,7 +55,6 @@ func RunUpdate(flags FlagParams, queueName string) error {
 		return fmt.Errorf("failed to get current queue info: %w", err)
 	}
 
-	// Start with current values
 	req := &proto.QueueInfo{
 		QueueName:           currentQueue.QueueName,
 		LeaseTimeout:        currentQueue.LeaseTimeout,
@@ -67,7 +65,6 @@ func RunUpdate(flags FlagParams, queueName string) error {
 		RequestedPartitions: currentQueue.RequestedPartitions,
 	}
 
-	// Update only the fields that have non-default values
 	leaseTimeoutSet := flags.LeaseTimeoutUpdate != ""
 	expireTimeoutSet := flags.ExpireTimeoutUpdate != ""
 	maxAttemptsSet := flags.MaxAttemptsUpdate != 0
@@ -78,8 +75,6 @@ func RunUpdate(flags FlagParams, queueName string) error {
 	if leaseTimeoutSet {
 		req.LeaseTimeout = flags.LeaseTimeoutUpdate
 
-		// If lease-timeout is updated but expire-timeout is not explicitly set,
-		// recalculate expire-timeout as 60x the new lease-timeout
 		if !expireTimeoutSet {
 			leaseTimeout, err := time.ParseDuration(flags.LeaseTimeoutUpdate)
 			if err != nil {
@@ -106,7 +101,6 @@ func RunUpdate(flags FlagParams, queueName string) error {
 		req.RequestedPartitions = flags.PartitionsUpdate
 	}
 
-	// Check if any flags were actually set
 	if !leaseTimeoutSet && !expireTimeoutSet && !maxAttemptsSet &&
 		!deadQueueSet && !referenceSet && !partitionsSet {
 		return fmt.Errorf("no update flags provided (use --help to see available options)")

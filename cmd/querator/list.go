@@ -48,7 +48,6 @@ func RunList(flags FlagParams) error {
 		return fmt.Errorf("failed to list queues: %w", err)
 	}
 
-	// Convert to JSON for output
 	output := struct {
 		Queues []*proto.QueueInfo `json:"queues"`
 		Count  int                `json:"count"`
@@ -61,8 +60,6 @@ func RunList(flags FlagParams) error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal response: %w", err)
 	}
-
-	// TODO: Support table output for queue listing
 
 	fmt.Println(string(jsonBytes))
 

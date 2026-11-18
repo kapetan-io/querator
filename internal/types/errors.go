@@ -2,7 +2,6 @@ package types
 
 import "github.com/kapetan-io/querator/transport/reply"
 
-// Kind constants for errors that must be sentinel-matched with errors.Is
 const (
 	KindNamespaceAlreadyExists   reply.Kind = "namespace.already_exists"
 	KindUserAlreadyExists        reply.Kind = "user.already_exists"
@@ -11,7 +10,6 @@ const (
 	KindRoleBindingAlreadyExists reply.Kind = "role_binding.already_exists"
 )
 
-// Sentinels for errors.Is matching — use these instead of calling constructors with empty strings.
 var (
 	ErrNamespaceAlreadyExists   = reply.NewInvalidOptionKind(KindNamespaceAlreadyExists, "")
 	ErrUserAlreadyExists        = reply.NewInvalidOptionKind(KindUserAlreadyExists, "")
@@ -19,8 +17,6 @@ var (
 	ErrRoleAlreadyExists        = reply.NewInvalidOptionKind(KindRoleAlreadyExists, "")
 	ErrRoleBindingAlreadyExists = reply.NewInvalidOptionKind(KindRoleBindingAlreadyExists, "")
 )
-
-// Namespace errors
 
 func NewErrNamespaceNotExist(name string) *reply.ErrRequestFailed {
 	return reply.NewRequestFailed("namespace does not exist; '%s' was not found", name)
@@ -38,8 +34,6 @@ func NewErrNamespaceReserved(name string) *reply.ErrInvalidOption {
 	return reply.NewInvalidOption("namespace name is reserved; '%s' names starting with '_' are reserved", name)
 }
 
-// User errors
-
 func NewErrUserNotExist(identifier string) *reply.ErrRequestFailed {
 	return reply.NewRequestFailed("user does not exist; '%s' was not found", identifier)
 }
@@ -52,14 +46,11 @@ func NewErrUsernameAlreadyTaken(username string) *reply.ErrInvalidOption {
 	return reply.NewInvalidOptionKind(KindUsernameAlreadyTaken, "username is already taken; '%s' is already taken", username)
 }
 
-// API Key errors — kept as static sentinels for security (no details)
 var (
 	ErrAPIKeyNotExist = reply.NewUnauthorized("api key does not exist")
 	ErrAPIKeyExpired  = reply.NewUnauthorized("api key has expired")
 	ErrAPIKeyInvalid  = reply.NewUnauthorized("api key is invalid")
 )
-
-// Role errors
 
 func NewErrRoleNotExist(identifier string) *reply.ErrRequestFailed {
 	return reply.NewRequestFailed("role does not exist; '%s' was not found", identifier)
@@ -84,8 +75,6 @@ func NewErrRoleIsStandard(name string) *reply.ErrInvalidOption {
 func NewErrRoleBindingNotExist(id string) *reply.ErrRequestFailed {
 	return reply.NewRequestFailed("role binding does not exist; '%s' was not found", id)
 }
-
-// Namespace auth resource errors
 
 func NewErrNamespaceHasRoles(name string) *reply.ErrInvalidOption {
 	return reply.NewInvalidOption("namespace has roles; '%s' has roles, delete roles first", name)

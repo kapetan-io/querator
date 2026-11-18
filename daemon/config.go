@@ -23,28 +23,15 @@ import (
 )
 
 type Config struct {
-	// Explicit composition instead of embedding
 	Service service.Config
 
-	// TLS is the TLS config used for public server and clients
-	TLS *duh.TLSConfig
-	// ListenAddress is the address:port that Querator will listen on for public HTTP requests
+	TLS           *duh.TLSConfig
 	ListenAddress string
 
-	// MaxProducePayloadSize is the maximum size in bytes Querator will read from a client
-	// during the `/queue.produce` request. The Maximum size includes the entire payload for a
-	// single `/queue.produce` request including the size of all fields in the marshalled protobuf.
-	// The default size is 5MB.
 	MaxProducePayloadSize int64
 
-	// InMemoryListener is true if daemon should ignore ListenAddress and use net.Pipe to listen for
-	// and handle new connections. When true, calls to Daemon.Client() and Daemon.MustClient() will return
-	// a new instance of the client bound to the client portion of a net.Pipe. This is useful for testing
-	// querator where access to the loop back is not allowed, or when using testing/synctest
 	InMemoryListener bool
 
-	// AuthBackend is the authentication and authorization backend.
-	// If nil, defaults to NoOpAuthBackend which allows all requests (open access).
 	AuthBackend auth.AuthBackend
 }
 
@@ -80,16 +67,12 @@ func (c *Config) SetDefaults() {
 		},
 	})
 
-	// Default to NoOp auth (open access for internal deployments)
 	set.Default(&c.AuthBackend, auth.AuthBackend(&auth.NoOpAuthBackend{}))
 
-	// Bridge: ensure service layer uses the same auth backend as the transport
 	if c.Service.Auth == nil {
 		c.Service.Auth = c.AuthBackend
 	}
 }
-
-// YAML config file types
 
 type File struct {
 	Address          string             `yaml:"address"`
@@ -110,8 +93,6 @@ type Logging struct {
 	Handler string `yaml:"handler"`
 }
 
-// QueueStorage selects the backend that stores queue metadata. Exactly one backend section
-// (memory, badger, mongo, or postgres) may be set. When none is set, the in-memory backend is used.
 type QueueStorage struct {
 	Memory   *MemoryConfig   `yaml:"memory"`
 	Badger   *BadgerConfig   `yaml:"badger"`
@@ -119,8 +100,6 @@ type QueueStorage struct {
 	Postgres *PostgresConfig `yaml:"postgres"`
 }
 
-// PartitionStorage selects the backend for a named partition store. Exactly one backend section
-// (memory, badger, mongo, or postgres) must be set.
 type PartitionStorage struct {
 	Name     string          `yaml:"name"`
 	Affinity int             `yaml:"affinity"`
@@ -130,11 +109,8 @@ type PartitionStorage struct {
 	Postgres *PostgresConfig `yaml:"postgres"`
 }
 
-// MemoryConfig configures the in-memory backend. It accepts no options; select it with an empty
-// mapping (`memory: {}`).
 type MemoryConfig struct{}
 
-// BadgerConfig configures the BadgerDB backend.
 type BadgerConfig struct {
 	StorageDir string `yaml:"storage-dir"`
 }
@@ -146,7 +122,6 @@ func (c BadgerConfig) validate() error {
 	return nil
 }
 
-// MongoConfig configures the MongoDB backend.
 type MongoConfig struct {
 	ConnectionString string `yaml:"connection-string"`
 	Database         string `yaml:"database"`
@@ -160,7 +135,6 @@ func (c MongoConfig) validate() error {
 	return nil
 }
 
-// PostgresConfig configures the PostgreSQL backend.
 type PostgresConfig struct {
 	ConnectionString string `yaml:"connection-string"`
 	MaxConns         int32  `yaml:"max-conns"`
@@ -191,9 +165,6 @@ type Partition struct {
 	StorageName string `yaml:"storage-name"`
 }
 
-// ReadConfig decodes a Querator YAML config from r with strict field checking enabled. Unknown or
-// misspelled keys — including a config option placed under the wrong backend — are reported as an
-// error instead of being silently ignored.
 func ReadConfig(r io.Reader) (File, error) {
 	dec := yaml.NewDecoder(r)
 	dec.KnownFields(true)
@@ -282,8 +253,6 @@ type backends struct {
 	Postgres bool
 }
 
-// selected returns the one backend set, "" when none is set, or an error naming section when more
-// than one is set.
 func (b backends) selected(section string) (string, error) {
 	var names []string
 	if b.Memory {
@@ -416,7 +385,6 @@ func setupQueueStorage(ctx context.Context, file File, conf *Config) error {
 	}
 
 	for _, queue := range file.Queues {
-		// A queue already in the store is left alone, so a restart on affinity-0 backends still starts
 		var stored types.QueueInfo
 		if err := conf.Service.StorageConfig.Queues.Get(ctx, queue.Name, &stored); err == nil {
 			continue
@@ -452,7 +420,6 @@ func setupQueueStorage(ctx context.Context, file File, conf *Config) error {
 func setupAuthBackend(file File, conf *Config) error {
 	switch strings.ToLower(file.AuthBackend.Driver) {
 	case "", "none":
-		// NoOp auth (open access) — applied in SetDefaults
 	case "internal":
 		conf.AuthBackend = internal.NewAuthBackend(internal.AuthBackendConfig{
 			RoleBindings: conf.Service.StorageConfig.RoleBindings,

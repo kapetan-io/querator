@@ -6,7 +6,6 @@ import (
 	pb "github.com/kapetan-io/querator/proto"
 )
 
-// QueueOps handles high-frequency queue operations
 type QueueOps interface {
 	QueueProduce(context.Context, *pb.QueueProduceRequest) error
 	QueueLease(context.Context, *pb.QueueLeaseRequest, *pb.QueueLeaseResponse) error
@@ -17,7 +16,6 @@ type QueueOps interface {
 	QueueReload(context.Context, *pb.QueueReloadRequest) error
 }
 
-// QueueAdmin handles queue lifecycle management
 type QueueAdmin interface {
 	QueuesCreate(context.Context, *pb.QueueInfo) error
 	QueuesList(context.Context, *pb.QueuesListRequest, *pb.QueuesListResponse) error
@@ -26,7 +24,6 @@ type QueueAdmin interface {
 	QueuesInfo(context.Context, *pb.QueuesInfoRequest, *pb.QueueInfo) error
 }
 
-// StorageInspector handles direct storage access
 type StorageInspector interface {
 	StorageItemsList(context.Context, *pb.StorageItemsListRequest, *pb.StorageItemsListResponse) error
 	StorageItemsImport(context.Context, *pb.StorageItemsImportRequest, *pb.StorageItemsImportResponse) error
@@ -34,7 +31,6 @@ type StorageInspector interface {
 	StorageScheduledList(context.Context, *pb.StorageItemsListRequest, *pb.StorageItemsListResponse) error
 }
 
-// NamespaceAdmin handles namespace lifecycle management
 type NamespaceAdmin interface {
 	NamespacesCreate(context.Context, *pb.NamespaceInfo) error
 	NamespacesUpdate(context.Context, *pb.NamespaceInfo) error
@@ -42,21 +38,18 @@ type NamespaceAdmin interface {
 	NamespacesDelete(context.Context, *pb.NamespacesDeleteRequest) error
 }
 
-// UsersAdmin handles user lifecycle management
 type UsersAdmin interface {
 	UsersCreate(context.Context, *pb.UserCreateRequest, *pb.UserCreateResponse) error
 	UsersList(context.Context, *pb.UsersListRequest, *pb.UsersListResponse) error
 	UsersDelete(context.Context, *pb.UsersDeleteRequest) error
 }
 
-// APIKeysAdmin handles API key lifecycle management
 type APIKeysAdmin interface {
 	APIKeysCreate(context.Context, *pb.APIKeyCreateRequest, *pb.APIKeyCreateResponse) error
 	APIKeysList(context.Context, *pb.APIKeysListRequest, *pb.APIKeysListResponse) error
 	APIKeysDelete(context.Context, *pb.APIKeysDeleteRequest) error
 }
 
-// RolesAdmin handles role lifecycle management
 type RolesAdmin interface {
 	RolesCreate(context.Context, *pb.RoleCreateRequest, *pb.RoleCreateResponse) error
 	RolesList(context.Context, *pb.RolesListRequest, *pb.RolesListResponse) error
@@ -64,14 +57,12 @@ type RolesAdmin interface {
 	RolesDelete(context.Context, *pb.RolesDeleteRequest) error
 }
 
-// RoleBindingsAdmin handles role binding lifecycle management
 type RoleBindingsAdmin interface {
 	RoleBindingsCreate(context.Context, *pb.RoleBindingCreateRequest, *pb.RoleBindingCreateResponse) error
 	RoleBindingsList(context.Context, *pb.RoleBindingsListRequest, *pb.RoleBindingsListResponse) error
 	RoleBindingsDelete(context.Context, *pb.RoleBindingDeleteRequest) error
 }
 
-// Service combines all interfaces for backward compatibility
 type Service interface {
 	QueueOps
 	QueueAdmin

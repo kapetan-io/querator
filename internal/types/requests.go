@@ -14,111 +14,62 @@ const (
 	UnSet = -1
 )
 
-// TODO(thrawn01): Consider creating a pool of Request structs and Item to avoid GC
-
 type LeaseRequest struct {
-	// The number of items requested from the queue.
-	NumRequested int // TODO: Rename the protobuf variable this maps too
-	// How long the caller expects Lease() to block before returning
-	// if no items are available to be leased. Max duration is 5 minutes.
+	NumRequested   int
 	RequestTimeout clock.Duration
-	// The id of the client
-	ClientID string
-	// The context of the requesting client
-	Context context.Context
+	ClientID       string
+	Context        context.Context
 
-	// The result of the lease
-	Items []*Item
-	// The partition the leased items are from
+	Items     []*Item
 	Partition int
 
-	// The RequestDeadline calculated from RequestTimeout
 	RequestDeadline clock.Time
-	// Used to wait for this request to complete
-	ReadyCh chan struct{}
-	// The error to be returned to the caller
-	Err error
+	ReadyCh         chan struct{}
+	Err             error
 }
 
 type ProduceRequest struct {
-	// How long the caller expects Produce() to block before returning
-	RequestTimeout clock.Duration
-	// The context of the requesting client
-	Context context.Context
-	// The items to produce
-	Items []*Item
-	// The RequestDeadline calculated from RequestTimeout
+	RequestTimeout  clock.Duration
+	Context         context.Context
+	Items           []*Item
 	RequestDeadline clock.Time
-	// Used to wait for this request to complete
-	ReadyCh chan struct{}
-	// The error to be returned to the caller
-	Err error
-	// True if the Request was assigned a partition
-	Assigned bool
+	ReadyCh         chan struct{}
+	Err             error
+	Assigned        bool
 }
 
 type CompleteRequest struct {
-	// How long the caller expects Complete() to block before returning
-	RequestTimeout clock.Duration
-	// The context of the requesting client
-	Context context.Context
-	// Partition is the partition the complete request is for
-	Partition int
-	// The ids to mark as complete
-	Ids [][]byte
-	// The RequestDeadline calculated from RequestTimeout
+	RequestTimeout  clock.Duration
+	Context         context.Context
+	Partition       int
+	Ids             [][]byte
 	RequestDeadline clock.Time
-	// Used to wait for this request to complete
-	ReadyCh chan struct{}
-	// The error to be returned to the caller
-	Err error
+	ReadyCh         chan struct{}
+	Err             error
 }
 
 type RetryRequest struct {
-	// How long the caller expects Retry() to block before returning
-	RequestTimeout clock.Duration
-	// The context of the requesting client
-	Context context.Context
-	// Partition is the partition the retry request is for
-	Partition int
-	// The retry items with their retry timestamps and dead flags
-	Items []RetryItem
-	// The RequestDeadline calculated from RequestTimeout
+	RequestTimeout  clock.Duration
+	Context         context.Context
+	Partition       int
+	Items           []RetryItem
 	RequestDeadline clock.Time
-	// Used to wait for this request to complete
-	ReadyCh chan struct{}
-	// The error to be returned to the caller
-	Err error
+	ReadyCh         chan struct{}
+	Err             error
 }
 
 type RetryItem struct {
-	// The item id to retry
-	ID []byte
-	// The timestamp when the item should be retried
+	ID      []byte
 	RetryAt clock.Time
-	// If true, item goes to dead letter queue regardless of retry timestamp
-	Dead bool
+	Dead    bool
 }
 type ReloadRequest struct {
-	// Partitions is a list of partitions to reload
 	Partitions []int
 }
 
 type ClearRequest struct {
-	// Scheduled indicates any 'scheduled' items in the queue will be
-	// cleared. If true, any items scheduled to be enqueued at a future date
-	// will be removed. This includes items scheduled for retry.
-	Scheduled bool
-	// Queue indicates any items currently waiting in the FIFO queue will
-	// clear. If true, any items in the queue which have NOT been leased
-	// will be removed.
-	Queue bool
-	// Destructive indicates the Scheduled,Queue operations should be
-	// destructive in that all data regardless of status will be removed.
-	// For example, if used with ClearRequest.Queue = true, then ALL items
-	// in the queue regardless of lease status will be removed. This means
-	// that clients who currently have ownership of those items will not be able
-	// to "complete" those items, as querator will have no knowledge of those items.
+	Scheduled   bool
+	Queue       bool
 	Destructive bool
 }
 
@@ -128,10 +79,8 @@ type PauseRequest struct {
 
 type ShutdownRequest struct {
 	Context context.Context
-	// Used to wait for this request to complete
 	ReadyCh chan struct{}
-	// The error to be returned to the caller
-	Err error
+	Err     error
 }
 
 type ListOptions struct {
@@ -141,47 +90,26 @@ type ListOptions struct {
 }
 
 type LogicalStats struct {
-	// ProduceWaiting is the number of `/queue.produce` requests currently waiting
-	// to be processed by the sync loop
-	ProduceWaiting int
-	// LeaseWaiting is the number of `/queue.lease` requests currently waiting
-	// to be processed by the sync loop
-	LeaseWaiting int
-	// CompleteWaiting is the number of `/queue.complete` requests currently waiting
-	// to be processed by the sync loop
+	ProduceWaiting  int
+	LeaseWaiting    int
 	CompleteWaiting int
-	// InFlight is the number of requests currently in flight
-	InFlight int
+	InFlight        int
 
 	Partitions []PartitionStats
 }
 
 type PartitionStats struct {
-	// Partition is the partition these stats are for
-	Partition int
-	// Total is the number of items in the queue
-	Total int
-	// NumLeased is the number of items in the queue that are in leased state
-	NumLeased int
-	// Failures is the number of failures the partition has encountered
-	Failures int
-	// AverageAge is the average age of all items in the queue
-	AverageAge clock.Duration
-	// AverageLeasedAge is the average age of leased items in the queue
+	Partition        int
+	Total            int
+	NumLeased        int
+	Failures         int
+	AverageAge       clock.Duration
 	AverageLeasedAge clock.Duration
-	// Scheduled is the total number of scheduled items in the partition
-	Scheduled int
-	// UnLeased is the count of un-leased items the Logical believes are available in the
-	// partition, sourced from in-memory PartitionState. Pairs with the storage-derived Total;
-	// divergence indicates in-memory accounting drift.
-	UnLeased int
-	// NextLifecycleRun is the duration until the partition's lifecycle/GC routine next runs,
-	// sourced from in-memory PartitionLifecycleState.
+	Scheduled        int
+	UnLeased         int
 	NextLifecycleRun clock.Duration
 }
 
-// PartitionCompleter is an interface for completing items in a partition.
-// It is used to avoid import cycles between types and store packages.
 type PartitionCompleter interface {
 	Complete(ctx context.Context, batch CompleteBatch) error
 }
@@ -191,6 +119,5 @@ type LifeCycleRequest struct {
 	Actions          []Action
 	PartitionNum     int
 	PartitionInfo    PartitionInfo
-	PartitionStorage PartitionCompleter // The storage partition for completing items
+	PartitionStorage PartitionCompleter
 }
-

@@ -36,11 +36,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// TODO: Document pause in OpenAPI, "Pauses queue processing such that requests to produce, lease,
-//  retry and complete are all paused. While a queue is on pause, Querator will queue those requests
-//  until the pause is lifted". /v1/queue API requests can still timeout
-//  NOTE: This does not effect /v1/storage/ or /v1/queue.list,create,delete,update API requests.
-
 const (
 	RPCQueueProduce  = "/v1/queue.produce"
 	RPCQueueLease    = "/v1/queue.lease"
@@ -57,24 +52,9 @@ const (
 	RPCQueuesDelete    = "/v1/queues.delete"
 	RPCQueuesUpdate    = "/v1/queues.update"
 
-	// TODO: Document the /storage/queue.list endpoint. The results include the pivot intentionally. Clients who
-	//  wish to iterate through all the items page by page should account for this. Also clients must check if the
-	//  pivot is the first item, because if the pivot is missing from the data store the API will return the next
-	//  item after the pivot. This is an extremely efficient way to iterate through a SQL RDBMS `primary_key > pivot`
-	//
-	// DOC: If the pivot does not exist when calling StoreItemsList(), the endpoint will return
-	// the nearest next item in the list to the pivot provided. It is up to the caller to verify the list of
-	// items returned begins with the id specified in the pivot. This allows users to iterate through a constantly
-	// moving list without constantly running into "pivot not found" errors.
-
-	// TODO: We should define a maximum payload size and now allow clients to send or receive larger than expected
-	//   payloads. I think DUH should do this for us when via duh.ReadRequest(r, &req, maxSize)
-
 	RPCStorageItemsList   = "/v1/storage/items.list"
 	RPCStorageItemsImport = "/v1/storage/items.import"
 	RPCStorageItemsDelete = "/v1/storage/items.delete"
-
-	// TODO: Add this endpoint to openapi.yaml
 
 	RPCStorageScheduledList     = "/v1/storage/scheduled.list"
 	RPCStorageScheduledQueueAdd = "/v1/storage/scheduled.add"
@@ -112,7 +92,6 @@ type HTTPHandler struct {
 	log            *slog.Logger
 }
 
-// HTTPHandlerConfig configures the HTTPHandler
 type HTTPHandlerConfig struct {
 	MaxProduceSize int64
 	AuthBackend    auth.AuthBackend
@@ -142,7 +121,6 @@ func NewHTTPHandler(conf HTTPHandlerConfig) *HTTPHandler {
 	}
 }
 
-// authenticate extracts and validates credentials from the request
 func (h *HTTPHandler) authenticate(ctx context.Context, r *http.Request) (context.Context, error) {
 	authHeader := r.Header.Get("Authorization")
 	if authHeader == "" {
@@ -191,9 +169,6 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.ReplyError(w, r, err)
 		return
 	}
-
-	// TODO: Implement a custom duh.Reply method to capture internal errors and log them
-	//  instead of returning them to the caller.
 
 	switch r.URL.Path {
 	case RPCQueueProduce:
@@ -355,10 +330,6 @@ func (h *HTTPHandler) QueueRetry(ctx context.Context, w http.ResponseWriter, r *
 	}
 	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
 }
-
-// -------------------------------------------------
-// API to manage lists of queues
-// -------------------------------------------------
 
 func (h *HTTPHandler) QueuesCreate(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req pb.QueueInfo
@@ -555,12 +526,10 @@ func (h *HTTPHandler) Health(ctx context.Context, w http.ResponseWriter, r *http
 	}
 }
 
-// Describe fetches prometheus metrics to be registered
 func (h *HTTPHandler) Describe(ch chan<- *prometheus.Desc) {
 	h.duration.Describe(ch)
 }
 
-// Collect fetches metrics from the server for use by prometheus
 func (h *HTTPHandler) Collect(ch chan<- prometheus.Metric) {
 	h.duration.Collect(ch)
 }
@@ -571,7 +540,6 @@ func (h *HTTPHandler) ReplyError(w http.ResponseWriter, r *http.Request, err err
 		duh.Reply(w, r, re.Code(), re.ProtoMessage())
 		return
 	}
-	// TODO: Extract error.Fields and add them to the log fields
 
 	safe := make(http.Header, len(r.Header))
 	for _, k := range slices.Sorted(maps.Keys(r.Header)) {
@@ -591,10 +559,6 @@ func (h *HTTPHandler) ReplyError(w http.ResponseWriter, r *http.Request, err err
 	)
 	duh.ReplyWithCode(w, r, duh.CodeInternalError, nil, "Internal Error")
 }
-
-// -------------------------------------------------
-// Namespace Management API
-// -------------------------------------------------
 
 func (h *HTTPHandler) NamespacesCreate(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req pb.NamespaceInfo
@@ -653,10 +617,6 @@ func (h *HTTPHandler) NamespacesDelete(ctx context.Context, w http.ResponseWrite
 	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
 }
 
-// -------------------------------------------------
-// User Management API
-// -------------------------------------------------
-
 func (h *HTTPHandler) UsersCreate(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req pb.UserCreateRequest
 	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
@@ -701,10 +661,6 @@ func (h *HTTPHandler) UsersDelete(ctx context.Context, w http.ResponseWriter, r 
 	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
 }
 
-// -------------------------------------------------
-// API Key Management API
-// -------------------------------------------------
-
 func (h *HTTPHandler) APIKeysCreate(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req pb.APIKeyCreateRequest
 	if err := duh.ReadRequest(r, &req, 256*duh.Kilobyte); err != nil {
@@ -748,10 +704,6 @@ func (h *HTTPHandler) APIKeysDelete(ctx context.Context, w http.ResponseWriter, 
 	}
 	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
 }
-
-// -------------------------------------------------
-// Role Management API
-// -------------------------------------------------
 
 func (h *HTTPHandler) RolesCreate(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req pb.RoleCreateRequest
@@ -810,10 +762,6 @@ func (h *HTTPHandler) RolesDelete(ctx context.Context, w http.ResponseWriter, r 
 	}
 	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
 }
-
-// -------------------------------------------------
-// Role Binding Management API
-// -------------------------------------------------
 
 func (h *HTTPHandler) RoleBindingsCreate(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req pb.RoleBindingCreateRequest

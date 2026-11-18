@@ -1,6 +1,5 @@
 package types
 
-// Batch is a batch of requests structs
 type Batch[T any] struct {
 	Requests []*T
 }
@@ -12,10 +11,7 @@ func (r *Batch[T]) Add(req *T) {
 	r.Requests = append(r.Requests, req)
 }
 
-// Remove removes the request from the batch
 func (r *Batch[T]) Remove(req *T) {
-	// Filter in place algorithm. Removes the request and moves all
-	// items up the slice then resizes the slice
 	n := 0
 	for _, i := range r.Requests {
 		if i != req {
@@ -42,7 +38,6 @@ func (r *ProduceBatch) Add(req *ProduceRequest) {
 }
 
 func (r *ProduceBatch) Reset() {
-	// Remove all requests that have Assigned == true
 	n := 0
 	for _, req := range r.Requests {
 		if !req.Assigned {
@@ -53,9 +48,6 @@ func (r *ProduceBatch) Reset() {
 	r.Requests = r.Requests[:n]
 }
 
-// LeaseBatch is a batch of lease requests. It is unique from other Batch requests
-// in that each request must be unique.
-// TODO(thrawn01): An array of requests might not be the most efficient, perhaps a SkipList
 type LeaseBatch struct {
 	Requests       []*LeaseRequest
 	TotalRequested int
@@ -71,18 +63,12 @@ func (r *LeaseBatch) Add(req *LeaseRequest) {
 	r.Requests = append(r.Requests, req)
 }
 
-// MarkNil marks the request as nil. See FilterNils for explanation
 func (r *LeaseBatch) MarkNil(idx int) {
 	r.TotalRequested -= r.Requests[idx].NumRequested
 	r.Requests[idx] = nil
 }
 
-// FilterNils filters out any nils in the Batch by using a filter in place algorithm which
-// resizes the slice without altering the capacity. We filter out nils as it's more efficient
-// and safer to mark requests as nil during iteration, then clean up the nils after.
 func (r *LeaseBatch) FilterNils() {
-	// Filter in place algorithm. Removes the request and moves all
-	// items up the slice then resizes the slice
 	n := 0
 	for _, i := range r.Requests {
 		if i != nil {
@@ -97,7 +83,6 @@ func (r *LeaseBatch) Iterator() LeaseBatchIterator {
 	return LeaseBatchIterator{b: r}
 }
 
-// LeaseBatchIterator distributes items to the requests in the batch in an iterative fashion
 type LeaseBatchIterator struct {
 	b   *LeaseBatch
 	pos int
@@ -105,11 +90,9 @@ type LeaseBatchIterator struct {
 
 func (it *LeaseBatchIterator) Next(item *Item) bool {
 	reqCount := len(it.b.Requests)
-	// Find the next request in the batch which has not met its NumRequested limit
 	for count := reqCount; count > 0; count-- {
 		var request = it.b.Requests[it.pos]
 
-		// If we encounter a nil or a request that has met its NumRequested limit, then we skip it
 		if request == nil || len(request.Items) >= request.NumRequested {
 			it.pos = (it.pos + 1) % reqCount
 			continue
@@ -122,7 +105,6 @@ func (it *LeaseBatchIterator) Next(item *Item) bool {
 	return false
 }
 
-// CompleteBatch is a batch of complete requests
 type CompleteBatch struct {
 	Requests []*CompleteRequest
 }
@@ -149,7 +131,6 @@ func (b *CompleteBatch) Reset() {
 	b.Requests = b.Requests[:0]
 }
 
-// RetryBatch is a batch of retry requests
 type RetryBatch struct {
 	Requests []*RetryRequest
 }
@@ -176,7 +157,6 @@ func (b *RetryBatch) Reset() {
 	b.Requests = b.Requests[:0]
 }
 
-// LifeCycleBatch is a batch of lifecycle requests
 type LifeCycleBatch struct {
 	Requests []*LifeCycleRequest
 }

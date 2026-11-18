@@ -39,10 +39,7 @@ func main() {
 	}
 }
 
-// Run starts an embedded daemon, produces, leases and completes items, then serves until
-// ctx is cancelled and shuts the daemon down before it returns.
 func Run(ctx context.Context) (err error) {
-	// Create daemon with in-memory storage, listening on QUERATOR_ADDRESS or localhost:2319
 	d, err := daemon.NewDaemon(ctx, daemon.Config{ListenAddress: os.Getenv("QUERATOR_ADDRESS")})
 	if err != nil {
 		return fmt.Errorf("failed to create daemon: %w", err)
@@ -56,12 +53,10 @@ func Run(ctx context.Context) (err error) {
 		}
 	}()
 
-	// Get client for interacting with the embedded daemon
 	client := d.MustClient()
 
 	log.Printf("Querator daemon started on %s", d.Listener.Addr().String())
 
-	// Create a queue
 	queueName := "example-queue"
 	err = client.QueuesCreate(ctx, &pb.QueueInfo{
 		QueueName:           queueName,
@@ -76,7 +71,6 @@ func Run(ctx context.Context) (err error) {
 	}
 	log.Printf("Created queue: %s", queueName)
 
-	// Produce some items to the queue
 	err = client.QueueProduce(ctx, &pb.QueueProduceRequest{
 		QueueName:      queueName,
 		RequestTimeout: "30s",
@@ -98,7 +92,6 @@ func Run(ctx context.Context) (err error) {
 	}
 	log.Println("Produced 2 items to queue")
 
-	// Lease items from the queue
 	var leaseResp pb.QueueLeaseResponse
 	err = client.QueueLease(ctx, &pb.QueueLeaseRequest{
 		QueueName:      queueName,
@@ -112,19 +105,16 @@ func Run(ctx context.Context) (err error) {
 
 	log.Printf("Leased %d items from queue", len(leaseResp.Items))
 
-	// Process the leased items
 	var itemIds []string
 	for _, item := range leaseResp.Items {
 		log.Printf("Processing item %s: kind=%s, payload=%s",
 			item.Id, item.Kind, string(item.Bytes))
 
-		// Simulate some work
 		time.Sleep(100 * time.Millisecond)
 
 		itemIds = append(itemIds, item.Id)
 	}
 
-	// Complete the processed items
 	if len(itemIds) > 0 {
 		err = client.QueueComplete(ctx, &pb.QueueCompleteRequest{
 			QueueName:      queueName,
@@ -140,7 +130,6 @@ func Run(ctx context.Context) (err error) {
 
 	log.Println("Example completed successfully. Press Ctrl+C to shutdown.")
 
-	// Keep the daemon running until shutdown signal
 	<-ctx.Done()
 	return nil
 }

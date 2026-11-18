@@ -15,19 +15,12 @@ import (
 	protobuf "google.golang.org/protobuf/proto"
 )
 
-// MockServer captures HTTP requests for testing CLI commands.
-// This mock server implementation provides a better testing approach compared to
-// running full querator instances. It captures all requests sent by CLI commands
-// and returns appropriate mock responses, allowing tests to verify that CLI
-// commands send correct API requests without requiring a full server setup.
-// TODO: Remove this and prefer starting a REAL querator instance
 type MockServer struct {
 	server   *httptest.Server
 	mu       sync.RWMutex
 	requests []CapturedRequest
 }
 
-// CapturedRequest stores details about an HTTP request
 type CapturedRequest struct {
 	Method  string
 	Path    string
@@ -35,7 +28,6 @@ type CapturedRequest struct {
 	Body    []byte
 }
 
-// NewMockServer creates a new mock server for testing
 func NewMockServer() *MockServer {
 	ms := &MockServer{
 		requests: make([]CapturedRequest, 0),
@@ -48,24 +40,20 @@ func NewMockServer() *MockServer {
 	return ms
 }
 
-// URL returns the mock server's URL
 func (ms *MockServer) URL() string {
 	return ms.server.URL
 }
 
-// Close shuts down the mock server
 func (ms *MockServer) Close() {
 	ms.server.Close()
 }
 
-// GetRequests returns all captured requests
 func (ms *MockServer) GetRequests() []CapturedRequest {
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
 	return append([]CapturedRequest(nil), ms.requests...)
 }
 
-// GetLastRequest returns the most recent request
 func (ms *MockServer) GetLastRequest() *CapturedRequest {
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
@@ -75,23 +63,19 @@ func (ms *MockServer) GetLastRequest() *CapturedRequest {
 	return &ms.requests[len(ms.requests)-1]
 }
 
-// ClearRequests clears all captured requests
 func (ms *MockServer) ClearRequests() {
 	ms.mu.Lock()
 	defer ms.mu.Unlock()
 	ms.requests = ms.requests[:0]
 }
 
-// handleRequest captures all incoming requests and returns appropriate responses
 func (ms *MockServer) handleRequest(w http.ResponseWriter, r *http.Request) {
-	// Read the request body
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "Failed to read body", http.StatusBadRequest)
 		return
 	}
 
-	// Capture the request
 	captured := CapturedRequest{
 		Method:  r.Method,
 		Path:    r.URL.Path,
@@ -103,11 +87,9 @@ func (ms *MockServer) handleRequest(w http.ResponseWriter, r *http.Request) {
 	ms.requests = append(ms.requests, captured)
 	ms.mu.Unlock()
 
-	// Return appropriate responses based on the endpoint
 	ms.respondToRequest(w, r, captured)
 }
 
-// respondToRequest provides mock responses for different endpoints
 func (ms *MockServer) respondToRequest(w http.ResponseWriter, r *http.Request, req CapturedRequest) {
 	w.Header().Set("Content-Type", duh.ContentTypeProtoBuf)
 
@@ -142,7 +124,7 @@ func (ms *MockServer) handleQueueLease(w http.ResponseWriter, _ CapturedRequest)
 	resp := &proto.QueueLeaseResponse{
 		QueueName: "test-queue",
 		Partition: 0,
-		Items:     []*proto.QueueLeaseItem{}, // Empty for testing
+		Items:     []*proto.QueueLeaseItem{},
 	}
 	ms.writeProtoResponse(w, resp)
 }
@@ -196,7 +178,6 @@ func (ms *MockServer) writeProtoResponse(w http.ResponseWriter, msg interface{})
 	var data []byte
 	var err error
 
-	// Handle protobuf messages
 	if protoMsg, ok := msg.(protobuf.Message); ok {
 		data, err = protobuf.Marshal(protoMsg)
 	} else {

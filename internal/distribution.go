@@ -1,14 +1,12 @@
 package internal
 
 import (
-	"cmp"
 	"context"
 	"log/slog"
 	"slices"
 	"time"
 
 	"github.com/kapetan-io/querator/internal/store"
-	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/transport/reply"
 )
 
@@ -128,14 +126,16 @@ func (l *Logical) assignProduceRequests(state *QueueState) {
 			slog.Int("partition", state.Partitions[0].Info.PartitionNum),
 			slog.Int("items", len(req.Items)))
 
-		// partition sorting ensures that the first partition is the best candidate for producing items
-		if state.Partitions[0].State.Status != types.PartitionAvailable {
-			l.log.Warn("no healthy partitions, produce request not assigned",
+		partitionState := state.Partitions[0].State
+		if partitionState.Failures != 0 || partitionState.ShouldDrain == true {
+			// If the chosen sorted partition has failed, then all partitions have failed, as
+			// partition sorting ensures failed partitions are sorted last.
+			l.log.Warn("no healthy partitions or partitions marked for draining, produce request not assigned",
 				"num_items", len(req.Items))
 			return
 		}
 
-		// Preform Opportunistic Partition Distribution
+		// Perform Opportunistic Partition Distribution
 		// See docs/adr/0019-partition-items-distribution.md for details
 		state.Partitions[0].Produce(req)
 		sortPartitionsByLoad(state.Partitions)
@@ -148,11 +148,11 @@ func (l *Logical) assignLeaseRequests(state *QueueState) {
 		if req == nil {
 			continue
 		}
-		// Perform a reverse search through state.Partitions finding the first partition where p.State.Status is Available or Draining.
+
+		// Perform a reverse search through state.Partitions finding the first partition where p.State.Failures == 0
 		var assigned *Partition
 		for i := len(state.Partitions) - 1; i >= 0; i-- {
-			partitionStatus := state.Partitions[i].State.Status
-			if partitionStatus == types.PartitionAvailable || partitionStatus == types.PartitionDraining {
+			if state.Partitions[i].State.Failures == 0 {
 				assigned = state.Partitions[i]
 				break
 			}
@@ -189,15 +189,14 @@ nextRequest:
 		for i, p := range state.Partitions {
 			// Assign the complete request to the partition if found
 			if req.Partition == p.Info.PartitionNum {
-				if p.State.Status == types.PartitionAvailable || p.State.Status == types.PartitionDraining {
-					state.Partitions[i].CompleteRequests.Add(req)
-					found = true
-					break
+				if p.State.Failures != 0 {
+					req.Err = reply.NewRetryRequest("partition not available;"+
+						" partition '%d' is failing, retry again", req.Partition)
+					continue nextRequest
 				}
-
-				req.Err = reply.NewRetryRequest("partition not available;"+
-					" partition '%d' is failing, retry again", req.Partition)
-				continue nextRequest
+				state.Partitions[i].CompleteRequests.Add(req)
+				found = true
+				break
 			}
 		}
 		if !found {
@@ -217,15 +216,13 @@ nextRequest:
 		for i, p := range state.Partitions {
 			// Assign the retry request to the partition if found
 			if req.Partition == p.Info.PartitionNum {
-				if p.State.Status == types.PartitionAvailable || p.State.Status == types.PartitionDraining {
-					state.Partitions[i].RetryRequests.Add(req)
-					found = true
-					break
+				if p.State.Failures != 0 {
+					req.Err = reply.NewRetryRequest("partition not available;"+
+						" partition '%d' is failing, retry again", req.Partition)
+					continue nextRequest
 				}
-
-				req.Err = reply.NewRetryRequest("partition not available;"+
-					" partition '%d' is failing, retry again", req.Partition)
-				continue nextRequest
+				state.Partitions[i].RetryRequests.Add(req)
+				found = true
 			}
 		}
 		if !found {
@@ -235,15 +232,30 @@ nextRequest:
 	}
 }
 
-// sortPartitionsByLoad sorts partitions by status rank (ascending) then failures (ascending) then UnLeased (ascending)
+// sortPartitionsByLoad sorts partitions by failures (ascending) then UnLeased (ascending)
 // This implements the Opportunistic Distribution algorithm - see docs/adr/0019-partition-items-distribution.md
 func sortPartitionsByLoad(partitions []*Partition) {
 	slices.SortFunc(partitions, func(a, b *Partition) int {
-		return cmp.Or(
-			cmp.Compare(types.StatusRank[a.State.Status], types.StatusRank[b.State.Status]),
-			cmp.Compare(a.State.Failures, b.State.Failures),
-			cmp.Compare(a.State.UnLeased, b.State.UnLeased),
-		)
+		// Ensure failed Partitions are sorted last
+		if a.State.Failures < b.State.Failures {
+			return -1
+		}
+		if a.State.Failures > b.State.Failures {
+			return +1
+		}
+		if !a.State.ShouldDrain && b.State.ShouldDrain {
+			return -1
+		}
+		if a.State.ShouldDrain && !b.State.ShouldDrain {
+			return +1
+		}
+		if a.State.UnLeased < b.State.UnLeased {
+			return -1
+		}
+		if a.State.UnLeased > b.State.UnLeased {
+			return +1
+		}
+		return 0
 	})
 }
 

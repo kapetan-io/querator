@@ -31,7 +31,6 @@ func (l *Logical) runLifecycle(state *QueueState) {
 			retryIn := lifecycleBackOff.Next(partition.Lifecycle.Failures)
 			partition.Lifecycle.NextLifecycleRun = now.Add(retryIn)
 			partition.State.Failures = partition.Lifecycle.Failures
-			partition.State.Status = types.PartitionError
 
 			l.log.Warn("lifecycle scan failed; retrying...",
 				"partition", partition.Info.PartitionNum,
@@ -134,7 +133,6 @@ func (l *Logical) runLifecycle(state *QueueState) {
 			retryIn := lifecycleBackOff.Next(partition.Lifecycle.Failures)
 			partition.Lifecycle.NextLifecycleRun = now.Add(retryIn)
 			partition.State.Failures = partition.Lifecycle.Failures
-			partition.State.Status = types.PartitionError
 
 			l.log.Warn("lifecycle info failed; retrying...",
 				"partition", partition.Info.PartitionNum,
@@ -267,7 +265,6 @@ func (l *Logical) recoverPartition(partition *Partition, now clock.Time) bool {
 		retryIn := lifecycleBackOff.Next(partition.Lifecycle.Failures)
 		partition.Lifecycle.NextLifecycleRun = now.Add(retryIn)
 		partition.State.Failures = partition.Lifecycle.Failures
-		partition.State.Status = types.PartitionError
 
 		l.log.Warn("recover partition attempt failed; retrying...",
 			"partition", partition.Info.PartitionNum,
@@ -287,7 +284,6 @@ func (l *Logical) recoverPartition(partition *Partition, now clock.Time) bool {
 
 	partition.Lifecycle.Failures = 0
 	partition.State.Failures = 0
-	partition.State.Status = types.PartitionAvailable
 	partition.State.UnLeased = stats.Total - stats.NumLeased
 	partition.State.NumLeased = stats.NumLeased
 

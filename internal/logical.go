@@ -616,11 +616,9 @@ func (l *Logical) prepareQueueState(state *QueueState) {
 				"partition", p.Info().PartitionNum,
 				"error", err)
 			partition.State.Failures = 1
-			partition.State.Status = types.PartitionError
 			partition.Lifecycle.Failures = 1
 		} else {
 			partition.State.Failures = 0
-			partition.State.Status = types.PartitionAvailable
 			partition.State.UnLeased = stats.Total - stats.NumLeased
 			partition.State.NumLeased = stats.NumLeased
 		}

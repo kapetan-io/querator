@@ -20,6 +20,6 @@ type PartitionState struct {
 	// used to notify LifeCycle of changes to the partition made by this partition
 	// as a hint for when an action might be needed on items in the partition.
 	MostRecentDeadline clock.Time // TODO: Ensure this gets sent to LifeCycle
-	// Status is the current status of the partition.
-	Status PartitionStatus
+	// ShouldDrain is set by the operator to indicate that the partition should be drained.
+	ShouldDrain bool
 }

@@ -40,7 +40,6 @@ func (p *Partition) Reset() {
 	p.CompleteRequests.Reset()
 	p.RetryRequests.Reset()
 	p.LifeCycleRequests.Reset()
-	p.estimatedLeases = 0
 }
 
 func (p *Partition) Produce(req *types.ProduceRequest) {

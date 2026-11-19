@@ -723,9 +723,14 @@ func (p *MongoPartition) Lease(ctx context.Context, batch types.LeaseBatch, opts
 		return nil
 	}
 
-	if _, err := coll.BulkWrite(ctx, models, options.BulkWrite().SetOrdered(false)); err != nil {
+	result, err := coll.BulkWrite(ctx, models, options.BulkWrite().SetOrdered(false))
+	if err != nil {
 		batch.Unassign(unsavedLeases(err, placed))
 		return errors.Errorf("update leased items: %w", err)
+	}
+	if result.MatchedCount != int64(len(models)) {
+		batch.Unassign(placed)
+		return errors.Errorf("update leased items: matched %d of %d items", result.MatchedCount, len(models))
 	}
 	return nil
 }

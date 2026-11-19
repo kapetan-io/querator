@@ -513,8 +513,10 @@ func testLinearizability(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				stallerWg.Done()
 
 				// Wait for lease to expire, plus buffer for lifecycle to process.
-				leaseDeadline := time.Now().Add(leaseTimeout)
-				time.Sleep(leaseTimeout + 100*time.Millisecond)
+				// The server's deadline, not a local clock read after a slow reply, so the
+				// recorded expiry never starts after a consumer legitimately re-leases the item.
+				leaseDeadline := lease.Items[0].LeaseDeadline.AsTime()
+				time.Sleep(time.Until(leaseDeadline) + 100*time.Millisecond)
 
 				mu.Lock()
 				history = append(history, porcupine.Operation{

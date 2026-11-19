@@ -2,8 +2,10 @@ package daemon_test
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"os"
 	"strings"
 	"testing"
@@ -12,6 +14,7 @@ import (
 	"github.com/kapetan-io/querator/daemon"
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
+	pb "github.com/kapetan-io/querator/proto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -492,4 +495,108 @@ func TestApplyConfigFilePlacesUnlistedPartitions(t *testing.T) {
 		require.Len(t, info.PartitionInfo, 1)
 		assert.Equal(t, "mem-02", info.PartitionInfo[0].StorageName)
 	})
+}
+
+func TestAffinityFromYAML(t *testing.T) {
+	ctx := context.Background()
+	const template = `
+partition-storage:
+  - name: mem-00
+    memory: {}
+    affinity: %s
+  - name: mem-01
+    memory: {}
+    affinity: %s
+queue-storage:
+  memory: {}
+queues:
+  - name: queue-1
+    requested-partitions: 4
+    lease-timeout: 1m
+    expire-timeout: 1h
+`
+	// Loads the YAML into a running daemon and reads each partition's backend from /queues.info.
+	spread := func(t *testing.T, first, second string) (map[string]int, error) {
+		t.Helper()
+		file, err := daemon.ReadConfig(strings.NewReader(fmt.Sprintf(template, first, second)))
+		require.NoError(t, err)
+		conf := daemon.Config{InMemoryListener: true}
+		if err := daemon.ApplyConfigFile(ctx, &conf, file, io.Discard); err != nil {
+			return nil, err
+		}
+		d, err := daemon.NewDaemon(ctx, conf)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = d.Shutdown(ctx) }()
+
+		var info pb.QueueInfo
+		require.NoError(t, d.MustClient().QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: "queue-1"}, &info))
+		counts := map[string]int{}
+		for _, p := range info.Partitions {
+			counts[p.StorageName]++
+		}
+		return counts, nil
+	}
+
+	for _, test := range []struct {
+		name     string
+		first    string
+		second   string
+		expected map[string]int
+	}{
+		{name: "Fractions", first: "0.5", second: "1.5", expected: map[string]int{"mem-00": 1, "mem-01": 3}},
+		{name: "WholeNumbers", first: "1", second: "3", expected: map[string]int{"mem-00": 1, "mem-01": 3}},
+		{name: "Zero", first: "0", second: "1", expected: map[string]int{"mem-01": 4}},
+		{name: "Negative", first: "-1", second: "1", expected: map[string]int{"mem-01": 4}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			counts, err := spread(t, test.first, test.second)
+			require.NoError(t, err)
+			assert.Equal(t, test.expected, counts)
+		})
+	}
+
+	for _, test := range []struct {
+		name  string
+		value string
+	}{
+		{name: "NaN", value: ".nan"},
+		{name: "PositiveInfinity", value: ".inf"},
+		{name: "NegativeInfinity", value: "-.inf"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := spread(t, "1", test.value)
+			require.ErrorContains(t, err, "partition storage 'mem-01' affinity must be a finite number")
+		})
+	}
+}
+
+func TestDaemonRefusesUnusableAffinity(t *testing.T) {
+	ctx := context.Background()
+	for _, test := range []struct {
+		name       string
+		affinities []float64
+		wantErr    string
+	}{
+		{name: "NaN", affinities: []float64{1, math.NaN()}, wantErr: "partition storage 'mem-01' affinity must be a finite number"},
+		{name: "PositiveInfinity", affinities: []float64{math.Inf(1), math.Inf(1)}, wantErr: "partition storage 'mem-00' affinity must be a finite number"},
+		{name: "NegativeInfinity", affinities: []float64{1, math.Inf(-1)}, wantErr: "partition storage 'mem-01' affinity must be a finite number"},
+		{name: "SumOverflows", affinities: []float64{1e308, 1e308, 1}, wantErr: "sum of partition storage affinities is too large"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			conf := daemon.Config{InMemoryListener: true}
+			conf.Service.StorageConfig.Queues = store.NewMemoryQueues(slog.Default())
+			for i, affinity := range test.affinities {
+				conf.Service.StorageConfig.PartitionStorage = append(conf.Service.StorageConfig.PartitionStorage,
+					store.PartitionStorage{
+						Name:           fmt.Sprintf("mem-%02d", i),
+						Affinity:       affinity,
+						PartitionStore: store.NewMemoryPartitionStore(store.Config{}, slog.Default()),
+					})
+			}
+			_, err := daemon.NewDaemon(ctx, conf)
+			require.ErrorContains(t, err, test.wantErr)
+		})
+	}
 }

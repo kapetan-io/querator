@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"strings"
 	"time"
 
@@ -102,7 +103,7 @@ type QueueStorage struct {
 
 type PartitionStorage struct {
 	Name     string          `yaml:"name"`
-	Affinity int             `yaml:"affinity"`
+	Affinity float64         `yaml:"affinity"`
 	Memory   *MemoryConfig   `yaml:"memory"`
 	Badger   *BadgerConfig   `yaml:"badger"`
 	Mongo    *MongoConfig    `yaml:"mongo"`
@@ -291,6 +292,9 @@ func setupPartitionStorage(file File, d *Config) error {
 		if name == "" {
 			return fmt.Errorf("%s must define exactly one backend (memory, badger, mongo, postgres)", section)
 		}
+		if math.IsNaN(ps.Affinity) || math.IsInf(ps.Affinity, 0) {
+			return fmt.Errorf("%s affinity must be a finite number, got %v", section, ps.Affinity)
+		}
 
 		var s store.PartitionStore
 		switch name {
@@ -330,7 +334,7 @@ func setupPartitionStorage(file File, d *Config) error {
 
 		d.Service.StorageConfig.PartitionStorage = append(d.Service.StorageConfig.PartitionStorage, store.PartitionStorage{
 			Name:           ps.Name,
-			Affinity:       float64(ps.Affinity),
+			Affinity:       ps.Affinity,
 			PartitionStore: s,
 		})
 	}

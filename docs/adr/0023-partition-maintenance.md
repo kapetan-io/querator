@@ -24,8 +24,8 @@ operations. This is considered the "normal" operating state for the partition.
 If a partition is marked as "Error" this means there was some issue with the underlying storage
 such that the partition is unavailable for interaction. When in this state the Logical Queue's
 lifecycle will continually attempt to recover the partition into an "Available" state, with
-back-off. Today this is the partition's failure count (`PartitionState.Failures != 0`); no separate
-state value exists.
+back-off. A partition is in this state while its failure count is not zero
+(`PartitionState.Failures != 0`). There is no separate state value.
 
 ### Draining
 If a partition is marked as "Draining" the partition refuses production of new items into the partition,

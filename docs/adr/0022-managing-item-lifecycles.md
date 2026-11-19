@@ -4,8 +4,7 @@ Date: 2024-10-04
 
 ## Status
 
-Accepted. Amended 2026-11: the life cycle runs on the Logical Queue's request loop, one page at a
-time. It no longer has its own Go routine. See "Revision" at the end.
+Accepted
 
 ## Context
 
@@ -163,12 +162,3 @@ I consider the Order of Operation problem distinct from the FIFO (First In, Firs
 it might seem that a FIFO solution addresses this issue, but due to the impossibility of achieving Exactly
 One Delivery (EOD), any FIFO system will eventually violate the Order of Operation. Therefore, Querator is
 not currently designed to solve the Order of Operation problem.
-
-## Revision
-
-2026-11: This ADR originally (2024-10-04) put the life cycle in a separate Go routine per
-partition which only read the partition and delegated writes to the Logical Queue. The life cycle
-was moved onto the Logical Queue's request loop in December 2025 (PR #44, "Logical Queue
-Simplification") to remove one Go routine per partition and the hand-off between the two. That
-change read the whole partition in one call on the request loop, which held up every request on
-the queue while it ran. This revision records the move and bounds each run to one page (ENG-784).

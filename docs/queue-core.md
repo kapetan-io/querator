@@ -142,9 +142,7 @@ partitions it can miss an item that came due in another one (ENG-792).
 Items reach a dead-letter queue when they expire or reach `MaxAttempts`.
 
 * The source items are deleted only after the dead-letter queue's loop confirms the produce
-  (delete-after-confirm), so an item is not lost between the two queues. A failed storage write in
-  the dead-letter queue is still confirmed as success today, so the source items are deleted and
-  lost (ENG-771).
+  (delete-after-confirm), so an item is not lost between the two queues.
 * A dead-letter queue whose request channel is full answers at once with an overloaded error
   instead of making the source queue wait. A saturated dead-letter queue never stalls the source
   queue's loop. The source item stays where it is and the lifecycle runs again with back-off.

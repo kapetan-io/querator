@@ -2186,6 +2186,133 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer tearDown()
 
 		t.Run("QueueProduce", func(t *testing.T) {
+			t.Run("WriteFails", func(t *testing.T) {
+				faulty, failing := failingProduceStorage(storage)
+				d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: faulty})
+				defer d.Shutdown(t)
+				c, ctx := d.MustClient(), d.Context()
+
+				queueName := random.String("queue-", 10)
+				createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+					LeaseTimeout:        LeaseTimeout,
+					ExpireTimeout:       ExpireTimeout,
+					QueueName:           queueName,
+					RequestedPartitions: 1,
+				})
+
+				failing.Store(true)
+				err := c.QueueProduce(ctx, &pb.QueueProduceRequest{
+					QueueName:      queueName,
+					RequestTimeout: "5s",
+					Items:          produceRandomItems(3),
+				})
+				require.Error(t, err)
+				var e duh.Error
+				require.True(t, errors.As(err, &e))
+				assert.Equal(t, "internal error, try your request again", e.Message())
+				assert.Equal(t, duh.CodeRetryRequest, e.Code())
+
+				var list pb.StorageItemsListResponse
+				require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, nil))
+				assert.Empty(t, list.Items)
+
+				var stats pb.QueueStatsResponse
+				require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats))
+				assert.Equal(t, int32(0), stats.LogicalQueues[0].Partitions[0].UnLeased)
+
+				// A produce after storage recovers counts only its own items, so the failed write left nothing in un_leased.
+				failing.Store(false)
+				require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+					QueueName:      queueName,
+					RequestTimeout: "5s",
+					Items:          produceRandomItems(2),
+				}))
+				require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, nil))
+				assert.Len(t, list.Items, 2)
+				require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats))
+				assert.Equal(t, int32(2), stats.LogicalQueues[0].Partitions[0].UnLeased)
+			})
+
+			t.Run("WriteFailsForEveryRequestInBatch", func(t *testing.T) {
+				faulty, failing := failingProduceStorage(storage)
+				d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: faulty})
+				defer d.Shutdown(t)
+				c, ctx := d.MustClient(), d.Context()
+
+				queueName := random.String("queue-", 10)
+				createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+					LeaseTimeout:        LeaseTimeout,
+					ExpireTimeout:       ExpireTimeout,
+					QueueName:           queueName,
+					RequestedPartitions: 1,
+				})
+				require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+					QueueName:      queueName,
+					RequestTimeout: "5s",
+					Items:          produceRandomItems(4),
+				}))
+
+				// Requests held while the queue is paused reach the partition in one pass, so the
+				// lease counts the items of the failed write as un-leased before that write fails.
+				failing.Store(true)
+				require.NoError(t, d.Service().PauseQueue(ctx, queueName))
+
+				callCtx, cancel := context.WithCancel(ctx)
+				defer cancel()
+
+				var produceErrs [2]error
+				var lease pb.QueueLeaseResponse
+				var leaseErr error
+				duringCalls(cancel, func() {
+					require.Eventually(t, func() bool {
+						var stats pb.QueueStatsResponse
+						if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats); err != nil {
+							return false
+						}
+						return len(stats.LogicalQueues) == 1 &&
+							stats.LogicalQueues[0].ProduceWaiting == 2 &&
+							stats.LogicalQueues[0].LeaseWaiting == 1
+					}, 5*clock.Second, 20*clock.Millisecond)
+					require.NoError(t, d.Service().ResumeQueue(ctx, queueName))
+				}, func() {
+					produceErrs[0] = c.QueueProduce(callCtx, &pb.QueueProduceRequest{
+						QueueName:      queueName,
+						RequestTimeout: "1m",
+						Items:          produceRandomItems(2),
+					})
+				}, func() {
+					produceErrs[1] = c.QueueProduce(callCtx, &pb.QueueProduceRequest{
+						QueueName:      queueName,
+						RequestTimeout: "1m",
+						Items:          produceRandomItems(3),
+					})
+				}, func() {
+					leaseErr = c.QueueLease(callCtx, &pb.QueueLeaseRequest{
+						ClientId:       random.String("client-", 10),
+						RequestTimeout: "1m",
+						QueueName:      queueName,
+						BatchSize:      6,
+					}, &lease)
+				})
+
+				for _, err := range produceErrs {
+					var e duh.Error
+					require.True(t, errors.As(err, &e))
+					assert.Equal(t, duh.CodeRetryRequest, e.Code())
+				}
+				require.NoError(t, leaseErr)
+				assert.Len(t, lease.Items, 4)
+
+				var list pb.StorageItemsListResponse
+				require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, nil))
+				assert.Len(t, list.Items, 4)
+
+				var stats pb.QueueStatsResponse
+				require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats))
+				assert.Equal(t, int32(0), stats.LogicalQueues[0].Partitions[0].UnLeased)
+				assert.Equal(t, int32(4), stats.LogicalQueues[0].Partitions[0].TotalLeased)
+			})
+
 			var queueName = random.String("queue-", 10)
 			d := newDaemon(t, 5*clock.Second, svc.Config{StorageConfig: storage})
 			defer d.Shutdown(t)
@@ -2594,6 +2721,67 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					}
 				})
 			}
+		})
+
+		t.Run("DeadLetterMove", func(t *testing.T) {
+			t.Run("WriteFailsKeepsItemUntilRetried", func(t *testing.T) {
+				now := clock.NewProvider()
+				now.Freeze(clock.Now())
+				defer now.UnFreeze()
+
+				faulty, failing := failingProduceStorage(storage)
+				d := newDaemon(t, 20*clock.Second, svc.Config{StorageConfig: faulty, Clock: now})
+				defer d.Shutdown(t)
+				c, ctx := d.MustClient(), d.Context()
+
+				queueName := random.String("queue-", 10)
+				dlqName := random.String("dlq-", 10)
+				createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+					QueueName:           dlqName,
+					LeaseTimeout:        "1m0s",
+					ExpireTimeout:       ExpireTimeout,
+					RequestedPartitions: 1,
+				})
+				createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+					QueueName:           queueName,
+					LeaseTimeout:        "1m0s",
+					ExpireTimeout:       ExpireTimeout,
+					MaxAttempts:         1,
+					DeadQueue:           dlqName,
+					RequestedPartitions: 1,
+				})
+				require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+					QueueName:      queueName,
+					RequestTimeout: "5s",
+					Items:          []*pb.QueueProduceItem{{Reference: "dead", Bytes: []byte("x")}},
+				}))
+				require.Equal(t, "dead", leaseOne(t, ctx, c, queueName).Reference)
+
+				// The dead letter queue's storage refuses the write, so the move must not delete the source item.
+				failing.Store(true)
+				now.Advance(2 * clock.Minute)
+				waitForLifecycleRun(t, ctx, c, queueName)
+				assert.True(t, isLeased(t, ctx, c, queueName, "dead"))
+
+				var resp pb.StorageItemsListResponse
+				require.NoError(t, c.StorageItemsList(ctx, dlqName, 0, &resp, nil))
+				assert.Empty(t, resp.Items)
+
+				// A later lifecycle run moves the item once the dead letter queue's storage accepts writes.
+				failing.Store(false)
+				now.Advance(5 * clock.Second)
+				require.Eventually(t, func() bool {
+					var resp pb.StorageItemsListResponse
+					if err := c.StorageItemsList(ctx, queueName, 0, &resp, nil); err != nil {
+						return false
+					}
+					return len(resp.Items) == 0
+				}, 5*clock.Second, 20*clock.Millisecond)
+
+				require.NoError(t, c.StorageItemsList(ctx, dlqName, 0, &resp, nil))
+				require.Len(t, resp.Items, 1)
+				assert.Equal(t, "dead", resp.Items[0].Reference)
+			})
 		})
 
 		t.Run("QueueReload", func(t *testing.T) {

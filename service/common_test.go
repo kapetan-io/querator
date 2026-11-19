@@ -24,6 +24,7 @@ import (
 	"github.com/kapetan-io/querator/daemon"
 	"github.com/kapetan-io/querator/internal"
 	"github.com/kapetan-io/querator/internal/store"
+	"github.com/kapetan-io/querator/internal/types"
 	pb "github.com/kapetan-io/querator/proto"
 	svc "github.com/kapetan-io/querator/service"
 	"github.com/kapetan-io/tackle/clock"
@@ -874,4 +875,44 @@ func waitForLifecycleRun(t *testing.T, ctx context.Context, c *querator.Client, 
 		next, err := clock.ParseDuration(stats.LogicalQueues[0].Partitions[0].NextLifecycleRun)
 		return err == nil && next > 0
 	}, 5*clock.Second, 20*clock.Millisecond)
+}
+
+// ---------------------------------------------------------------------
+// Partition storage fault injection
+// ---------------------------------------------------------------------
+
+var errProduceWriteFailed = errors.New("injected produce write failure")
+
+// failingProduceStorage wraps every partition backend in conf so that, while the returned flag is set,
+// each partition's Produce fails without writing anything. Everything else reaches the real backend.
+func failingProduceStorage(conf store.Config) (store.Config, *atomic.Bool) {
+	failing := &atomic.Bool{}
+	wrapped := make([]store.PartitionStorage, len(conf.PartitionStorage))
+	for i, ps := range conf.PartitionStorage {
+		ps.PartitionStore = faultyPartitionStore{PartitionStore: ps.PartitionStore, failing: failing}
+		wrapped[i] = ps
+	}
+	conf.PartitionStorage = wrapped
+	return conf, failing
+}
+
+type faultyPartitionStore struct {
+	store.PartitionStore
+	failing *atomic.Bool
+}
+
+func (f faultyPartitionStore) Get(info types.PartitionInfo) store.Partition {
+	return faultyPartition{Partition: f.PartitionStore.Get(info), failing: f.failing}
+}
+
+type faultyPartition struct {
+	store.Partition
+	failing *atomic.Bool
+}
+
+func (f faultyPartition) Produce(ctx context.Context, batch types.ProduceBatch, now clock.Time) error {
+	if f.failing.Load() {
+		return errProduceWriteFailed
+	}
+	return f.Partition.Produce(ctx, batch, now)
 }

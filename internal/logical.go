@@ -67,6 +67,8 @@ var (
 	}
 )
 
+const lifecycleBackOffAttemptLimit = 32
+
 type LogicalConfig struct {
 	types.QueueInfo
 

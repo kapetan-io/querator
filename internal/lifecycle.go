@@ -28,7 +28,7 @@ func (l *Logical) runLifecycle(state *QueueState) {
 		cancel()
 		if err != nil {
 			partition.Lifecycle.Failures++
-			retryIn := lifecycleBackOff.Next(partition.Lifecycle.Failures)
+			retryIn := lifecycleBackOff.Next(min(partition.Lifecycle.Failures, lifecycleBackOffAttemptLimit))
 			partition.Lifecycle.NextLifecycleRun = now.Add(retryIn)
 			partition.State.Failures = partition.Lifecycle.Failures
 			l.log.Warn("lifecycle scan failed; retrying...",
@@ -127,7 +127,7 @@ func (l *Logical) runLifecycle(state *QueueState) {
 		cancel()
 		if err != nil {
 			partition.Lifecycle.Failures++
-			retryIn := lifecycleBackOff.Next(partition.Lifecycle.Failures)
+			retryIn := lifecycleBackOff.Next(min(partition.Lifecycle.Failures, lifecycleBackOffAttemptLimit))
 			partition.Lifecycle.NextLifecycleRun = now.Add(retryIn)
 			partition.State.Failures = partition.Lifecycle.Failures
 			l.log.Warn("lifecycle info failed; retrying...",
@@ -288,7 +288,7 @@ func (l *Logical) recoverPartition(partition *Partition, now clock.Time) bool {
 
 	if err := partition.Store.Stats(ctx, &stats, now); err != nil {
 		partition.Lifecycle.Failures++
-		retryIn := lifecycleBackOff.Next(partition.Lifecycle.Failures)
+		retryIn := lifecycleBackOff.Next(min(partition.Lifecycle.Failures, lifecycleBackOffAttemptLimit))
 		partition.Lifecycle.NextLifecycleRun = now.Add(retryIn)
 		partition.State.Failures = partition.Lifecycle.Failures
 		l.log.Warn("recover partition attempt failed; retrying...",

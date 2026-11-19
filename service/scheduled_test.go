@@ -22,10 +22,10 @@ func TestScheduled(t *testing.T) {
 	mongo := mongoTestSetup{}
 
 	for _, tc := range []struct {
-		Setup      NewStorageFunc
-		TearDown   func()
-		Name       string
-		Persistent bool
+		Setup    NewStorageFunc
+		TearDown func()
+		Name     string
+		Lifetime storageLifetime
 	}{
 		{
 			Name: "InMemory",
@@ -42,7 +42,7 @@ func TestScheduled(t *testing.T) {
 			TearDown: func() {
 				badgerdb.Teardown()
 			},
-			Persistent: true,
+			Lifetime: outlivesDaemon,
 		},
 		{
 			Name: "PostgreSQL",
@@ -52,7 +52,7 @@ func TestScheduled(t *testing.T) {
 			TearDown: func() {
 				postgres.Teardown()
 			},
-			Persistent: true,
+			Lifetime: outlivesDaemon,
 		},
 		{
 			Name: "MongoDB",
@@ -62,16 +62,25 @@ func TestScheduled(t *testing.T) {
 			TearDown: func() {
 				mongo.Teardown()
 			},
-			Persistent: true,
+			Lifetime: outlivesDaemon,
 		},
 	} {
 		t.Run(tc.Name, func(t *testing.T) {
-			testScheduled(t, tc.Setup, tc.TearDown, tc.Persistent)
+			testScheduled(t, tc.Setup, tc.TearDown, tc.Lifetime)
 		})
 	}
 }
 
-func testScheduled(t *testing.T, setup NewStorageFunc, tearDown func(), persistent bool) {
+// storageLifetime says whether a backend's items are still in storage when a new daemon starts on
+// the same storage config.
+type storageLifetime bool
+
+const (
+	endsWithDaemon storageLifetime = false
+	outlivesDaemon storageLifetime = true
+)
+
+func testScheduled(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime storageLifetime) {
 	defer goleak.VerifyNone(t, goleakOptions...)
 
 	t.Run("EveryScheduledItemIsEnqueued", func(t *testing.T) {
@@ -100,7 +109,7 @@ func testScheduled(t *testing.T, setup NewStorageFunc, tearDown func(), persiste
 
 		for _, ref := range []string{"first", "second", "third"} {
 			now.Advance(clock.Minute)
-			untilEnqueued(t, ctx, c, queueName, ref)
+			untilEnqueued(t, ctx, c, queueName, itemReference(ref))
 			assert.Equal(t, ref, leaseAndComplete(t, ctx, c, queueName))
 		}
 	})
@@ -235,13 +244,13 @@ func testScheduled(t *testing.T, setup NewStorageFunc, tearDown func(), persiste
 
 		for _, ref := range []string{"first", "second"} {
 			now.Advance(clock.Minute)
-			untilEnqueued(t, ctx, c, queueName, ref)
+			untilEnqueued(t, ctx, c, queueName, itemReference(ref))
 			assert.Equal(t, ref, leaseAndComplete(t, ctx, c, queueName))
 		}
 	})
 
 	t.Run("ScheduledItemsInStorageAreEnqueuedAfterRestart", func(t *testing.T) {
-		if !persistent {
+		if lifetime == endsWithDaemon {
 			t.Skip("storage does not outlive the daemon")
 		}
 		now := clock.NewProvider()
@@ -345,14 +354,9 @@ func leaseAndComplete(t *testing.T, ctx context.Context, c *querator.Client, que
 // untilEnqueued waits until the item is listed un-leased. StorageItemsList omits scheduled
 // items, so a listed item has been enqueued. A lease request against a frozen clock blocks
 // instead of failing, so this polls storage.
-func untilEnqueued(t *testing.T, ctx context.Context, c *querator.Client, queueName, ref string) {
+func untilEnqueued(t *testing.T, ctx context.Context, c *querator.Client, queueName string, ref itemReference) {
 	t.Helper()
 	require.Eventually(t, func() bool {
-		var resp pb.StorageItemsListResponse
-		if err := c.StorageItemsList(ctx, queueName, 0, &resp, nil); err != nil {
-			return false
-		}
-		item := findInStorageList(ref, &resp)
-		return item != nil && !item.IsLeased
+		return isUnLeased(ctx, c, queueName, ref)
 	}, 3*clock.Second, 50*clock.Millisecond)
 }

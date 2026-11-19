@@ -141,6 +141,12 @@ run, because a dead-letter move can block for `WriteTimeout`.
   is copied to `State.Failures`, and takes the partition out of request distribution until
   `recoverPartition` succeeds. An unfinished run leaves `State.Failures` alone, because the fault may
   lie with the dead-letter queue and the partition can still serve requests.
+* `Failures` is capped differently from `UnfinishedRuns` and `ScheduledFailures`. Queue stats report
+  it as the total number of failures, so it keeps counting while the partition keeps failing, and
+  the back-off is given at most `lifecycleBackOffAttemptLimit` (32) attempts instead. Past about 58
+  attempts `IntervalBackOff.Next` overflows its conversion to a `Duration`. On amd64 the overflow
+  is negative and `Next` returns its 500ms minimum, so an uncapped partition that kept failing
+  would go back to running every 500ms.
 * Each retry against a dead-letter queue that hangs blocks the source queue's loop for up to
   `WriteTimeout`, once per back-off interval, for as long as it hangs.
 * Each run again with back-off scans the partition in `ScanForActions` and sends every dead item

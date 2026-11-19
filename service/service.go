@@ -42,32 +42,18 @@ const (
 )
 
 type Config struct {
-	// Log is the logging implementation used by this Querator instance
-	Log *slog.Logger
-	// StorageConfig is the configured storage backends
-	StorageConfig store.Config
-	// Auth is the authentication/authorization backend (optional, defaults to NoOp)
-	Auth auth.AuthBackend
-	// InstanceID is a unique id for this instance of Querator
-	InstanceID string
-	// WriteTimeout The time it should take for a single batched write to complete
-	WriteTimeout clock.Duration
-	// ReadTimeout The time it should take for a single batched read to complete
-	ReadTimeout clock.Duration
-	// MaxLeaseBatchSize is the maximum number of items a client can request in a single lease request
-	MaxLeaseBatchSize int
-	// MaxProduceBatchSize is the maximum number of items a client can produce in a single produce request
-	MaxProduceBatchSize int
-	// MaxCompleteBatchSize is the maximum number of ids a client can mark complete in a single complete request
-	MaxCompleteBatchSize int
-	// MaxRequestsPerQueue is the maximum number of client requests a queue can handle before it returns an
-	// queue overloaded message
-	MaxRequestsPerQueue int
-	// MaxConcurrentConnections is the maximum number of connections allowed. Default is 1,000
+	Log                   *slog.Logger
+	StorageConfig         store.Config
+	Auth                  auth.AuthBackend
+	InstanceID            string
+	WriteTimeout          clock.Duration
+	ReadTimeout           clock.Duration
+	MaxLeaseBatchSize     int
+	MaxProduceBatchSize   int
+	MaxCompleteBatchSize  int
+	MaxRequestsPerQueue   int
 	MaxConcurrentRequests int
-	// Clock is a time provider used to preform time related calculations. It is configurable so that it can
-	// be overridden for testing.
-	Clock *clock.Provider
+	Clock                 *clock.Provider
 }
 
 type Service struct {
@@ -80,9 +66,6 @@ func New(ctx context.Context, conf Config) (*Service, error) {
 	set.Default(&conf.Log, slog.Default())
 	set.Default(&conf.ReadTimeout, 3*time.Second)
 	set.Default(&conf.WriteTimeout, 3*time.Second)
-
-	// TODO: The queue store should also know if the config provided is valid, IE: does every partition
-	//  storage name exist in the config? If not, then it's a bad config and Querator should not start.
 
 	qm, err := internal.NewQueuesManager(internal.QueuesManagerConfig{
 		LogicalConfig: internal.LogicalConfig{
@@ -101,7 +84,6 @@ func New(ctx context.Context, conf Config) (*Service, error) {
 		return nil, err
 	}
 
-	// Default to NoOp auth if not provided (standalone service usage without daemon)
 	set.Default(&conf.Auth, auth.AuthBackend(&auth.NoOpAuthBackend{}))
 
 	s := &Service{
@@ -121,7 +103,6 @@ type namespacePermission struct {
 	Permission string
 }
 
-// authorize checks if the principal in context holds the namespacePermission
 func (s *Service) authorize(ctx context.Context, required namespacePermission) error {
 	principal := auth.PrincipalFromContext(ctx)
 	hasPermission, err := s.conf.Auth.HasPermission(ctx, principal, auth.Access(required))
@@ -162,7 +143,6 @@ func (s *Service) QueueProduce(ctx context.Context, req *proto.QueueProduceReque
 		return err
 	}
 
-	// Produce will block until success, context cancel or timeout
 	if err := logical.Produce(ctx, &r); err != nil {
 		return err
 	}
@@ -192,7 +172,6 @@ func (s *Service) QueueLease(ctx context.Context, req *proto.QueueLeaseRequest,
 		return err
 	}
 
-	// Lease will block until success, context cancel or timeout
 	if err := logical.Lease(ctx, &r); err != nil {
 		return err
 	}
@@ -235,7 +214,6 @@ func (s *Service) QueueComplete(ctx context.Context, req *proto.QueueCompleteReq
 		return err
 	}
 
-	// Complete will block until success, context cancel or timeout
 	if err := logical.Complete(ctx, &r); err != nil {
 		return err
 	}
@@ -263,7 +241,6 @@ func (s *Service) QueueRetry(ctx context.Context, req *proto.QueueRetryRequest) 
 		return err
 	}
 
-	// Retry will block until success, context cancel or timeout
 	if err := logical.Retry(ctx, &r); err != nil {
 		return err
 	}
@@ -281,15 +258,12 @@ func (s *Service) QueueReload(ctx context.Context, req *proto.QueueReloadRequest
 		return err
 	}
 
-	// Clear all the logical queues on this instance
 	for _, logical := range queue.GetAll() {
 		r := types.ReloadRequest{
 			Partitions: make([]int, 0),
 		}
 
 		if err := logical.ReloadPartitions(ctx, &r); err != nil {
-			// If a logical queue goes away while we are clearing
-			// return the error to the client, so they know the clear request didn't complete.
 			return err
 		}
 	}
@@ -307,7 +281,6 @@ func (s *Service) QueueClear(ctx context.Context, req *proto.QueueClearRequest) 
 		return err
 	}
 
-	// Clear all the logical queues on this instance
 	for _, logical := range queue.GetAll() {
 		r := types.ClearRequest{
 			Destructive: req.Destructive,
@@ -316,8 +289,6 @@ func (s *Service) QueueClear(ctx context.Context, req *proto.QueueClearRequest) 
 		}
 
 		if err := logical.Clear(ctx, &r); err != nil {
-			// If a logical queue goes away while we are clearing
-			// return the error to the client, so they know the clear request didn't complete.
 			return err
 		}
 	}
@@ -325,8 +296,6 @@ func (s *Service) QueueClear(ctx context.Context, req *proto.QueueClearRequest) 
 	return nil
 }
 
-// PauseQueue and ResumeQueue temporarily pause and resume processing of queue requests to simulate various high
-// contention scenarios in testing; they are not exposed to the users via API calls.
 func (s *Service) PauseQueue(ctx context.Context, queueName string) error {
 	return s.applyPause(ctx, queueName, &types.PauseRequest{Pause: true})
 }
@@ -341,7 +310,6 @@ func (s *Service) applyPause(ctx context.Context, queueName string, req *types.P
 		return err
 	}
 
-	// Pause all the logical queues on this instance
 	for _, logical := range queue.GetAll() {
 		if err := logical.Pause(ctx, req); err != nil {
 			return err
@@ -350,10 +318,6 @@ func (s *Service) applyPause(ctx context.Context, queueName string, req *types.P
 
 	return nil
 }
-
-// -------------------------------------------------
-// API to manage lists of queues
-// -------------------------------------------------
 
 func (s *Service) QueuesCreate(ctx context.Context, req *proto.QueueInfo) error {
 	if err := validateQueueName(req.QueueName); err != nil {
@@ -371,9 +335,6 @@ func (s *Service) QueuesCreate(ctx context.Context, req *proto.QueueInfo) error 
 		return err
 	}
 
-	// Verify the namespace exists when namespace storage is configured.
-	// The nil guard is intentional: namespace storage is optional, and deployments
-	// that omit it skip namespace validation by design.
 	if s.conf.StorageConfig.Namespaces != nil {
 		var namespace types.Namespace
 		if err := s.conf.StorageConfig.Namespaces.Get(ctx, info.Namespace, &namespace); err != nil {
@@ -475,10 +436,6 @@ func (s *Service) QueuesInfo(ctx context.Context, req *proto.QueuesInfoRequest, 
 	*resp = *info.ToProto(resp)
 	return nil
 }
-
-// -------------------------------------------------
-// API to inspect queue storage
-// -------------------------------------------------
 
 func (s *Service) StorageItemsList(ctx context.Context, req *proto.StorageItemsListRequest,
 	res *proto.StorageItemsListResponse) error {
@@ -674,14 +631,9 @@ func (s *Service) Health(ctx context.Context) (*transport.HealthResponse, error)
 }
 
 func (s *Service) Shutdown(ctx context.Context) error {
-	// See 0015-shutdown-errors.md for a discussion of shutdown operation
 	s.conf.Auth.Close()
 	return s.queues.Shutdown(ctx)
 }
-
-// -------------------------------------------------
-// Namespace Management API
-// -------------------------------------------------
 
 func (s *Service) NamespacesCreate(ctx context.Context, req *proto.NamespaceInfo) error {
 	if s.conf.StorageConfig.Namespaces == nil {
@@ -783,8 +735,6 @@ func (s *Service) NamespacesDelete(ctx context.Context, req *proto.NamespacesDel
 		return types.NewErrNamespaceReserved(req.Name)
 	}
 
-	// Bindings are checked before roles so users get actionable errors:
-	// delete bindings first, then roles, then namespace.
 	var bindings []types.RoleBinding
 	if err := s.conf.StorageConfig.RoleBindings.List(ctx, req.Name, &bindings, types.ListOptions{Limit: 1}); err != nil {
 		return err
@@ -814,10 +764,6 @@ func (s *Service) NamespacesDelete(ctx context.Context, req *proto.NamespacesDel
 	}
 	return nil
 }
-
-// -------------------------------------------------
-// User Management API
-// -------------------------------------------------
 
 func (s *Service) UsersCreate(ctx context.Context, req *proto.UserCreateRequest,
 	resp *proto.UserCreateResponse) error {
@@ -890,8 +836,6 @@ func (s *Service) UsersDelete(ctx context.Context, req *proto.UsersDeleteRequest
 		return err
 	}
 
-	// Delete the user record first so authentication fails immediately regardless
-	// of orphaned dependents. Then clean up dependents as best-effort.
 	if err := s.conf.StorageConfig.Users.Delete(ctx, req.Id); err != nil {
 		return err
 	}
@@ -906,10 +850,6 @@ func (s *Service) UsersDelete(ctx context.Context, req *proto.UsersDeleteRequest
 	}
 	return errors.Join(errs...)
 }
-
-// -------------------------------------------------
-// API Key Management API
-// -------------------------------------------------
 
 func (s *Service) APIKeysCreate(ctx context.Context, req *proto.APIKeyCreateRequest,
 	resp *proto.APIKeyCreateResponse) error {
@@ -930,7 +870,6 @@ func (s *Service) APIKeysCreate(ctx context.Context, req *proto.APIKeyCreateRequ
 		return err
 	}
 
-	// Verify the user exists
 	var user types.User
 	if err := s.conf.StorageConfig.Users.Get(ctx, key.UserID, &user); err != nil {
 		return err
@@ -1018,7 +957,6 @@ func (s *Service) APIKeysDelete(ctx context.Context, req *proto.APIKeysDeleteReq
 		return err
 	}
 
-	// Fetch the key before deleting so we can invalidate the cache
 	var key types.APIKey
 	if err := s.conf.StorageConfig.APIKeys.Get(ctx, req.Id, &key); err != nil {
 		return err
@@ -1031,10 +969,6 @@ func (s *Service) APIKeysDelete(ctx context.Context, req *proto.APIKeysDeleteReq
 	s.conf.Auth.InvalidateKey(key.KeyHash)
 	return nil
 }
-
-// -------------------------------------------------
-// Role Management API
-// -------------------------------------------------
 
 func (s *Service) RolesCreate(ctx context.Context, req *proto.RoleCreateRequest,
 	resp *proto.RoleCreateResponse) error {
@@ -1055,12 +989,10 @@ func (s *Service) RolesCreate(ctx context.Context, req *proto.RoleCreateRequest,
 		return err
 	}
 
-	// Check if this is a standard role name that cannot be created
 	if auth.IsStandardRole(role.Name) {
 		return types.NewErrRoleIsStandard(role.Name)
 	}
 
-	// Verify the namespace exists
 	var ns types.Namespace
 	if err := s.conf.StorageConfig.Namespaces.Get(ctx, role.Namespace, &ns); err != nil {
 		return err
@@ -1121,13 +1053,11 @@ func (s *Service) RolesUpdate(ctx context.Context, req *proto.RoleUpdateRequest)
 		return err
 	}
 
-	// Get the existing role
 	var existing types.Role
 	if err := s.conf.StorageConfig.Roles.Get(ctx, store.RoleName{Namespace: role.Namespace, Name: role.Name}, &existing); err != nil {
 		return err
 	}
 
-	// Check if this is a standard role that cannot be updated
 	if auth.IsStandardRole(existing.Name) {
 		return types.NewErrRoleIsStandard(existing.Name)
 	}
@@ -1152,18 +1082,15 @@ func (s *Service) RolesDelete(ctx context.Context, req *proto.RolesDeleteRequest
 		return err
 	}
 
-	// Get the role first to check standard role and get ID
 	var role types.Role
 	if err := s.conf.StorageConfig.Roles.Get(ctx, store.RoleName{Namespace: ns, Name: req.Name}, &role); err != nil {
 		return err
 	}
 
-	// Check if this is a standard role that cannot be deleted
 	if auth.IsStandardRole(role.Name) {
 		return types.NewErrRoleIsStandard(role.Name)
 	}
 
-	// Check if role has bindings
 	var bindings []types.RoleBinding
 	if err := s.conf.StorageConfig.RoleBindings.ListByRole(ctx, role.ID, &bindings, 1); err != nil {
 		return err
@@ -1177,10 +1104,6 @@ func (s *Service) RolesDelete(ctx context.Context, req *proto.RolesDeleteRequest
 	}
 	return nil
 }
-
-// -------------------------------------------------
-// Role Binding Management API
-// -------------------------------------------------
 
 func (s *Service) RoleBindingsCreate(ctx context.Context, req *proto.RoleBindingCreateRequest,
 	resp *proto.RoleBindingCreateResponse) error {
@@ -1204,13 +1127,11 @@ func (s *Service) RoleBindingsCreate(ctx context.Context, req *proto.RoleBinding
 		return err
 	}
 
-	// Verify the role exists in the namespace
 	var role types.Role
 	if err := s.conf.StorageConfig.Roles.Get(ctx, store.RoleName{Namespace: req.Namespace, Name: req.RoleName}, &role); err != nil {
 		return err
 	}
 
-	// Verify the user exists
 	var user types.User
 	if err := s.conf.StorageConfig.Users.Get(ctx, binding.UserID, &user); err != nil {
 		return err
@@ -1274,7 +1195,6 @@ func (s *Service) RoleBindingsDelete(ctx context.Context, req *proto.RoleBinding
 		return err
 	}
 
-	// Get the role first to obtain its ID
 	var role types.Role
 	if err := s.conf.StorageConfig.Roles.Get(ctx, store.RoleName{Namespace: ns, Name: req.RoleName}, &role); err != nil {
 		return err
@@ -1286,21 +1206,13 @@ func (s *Service) RoleBindingsDelete(ctx context.Context, req *proto.RoleBinding
 	return nil
 }
 
-// -------------------------------------------------
-// Bootstrap
-// -------------------------------------------------
-
-// Bootstrap idempotently creates the _system namespace, anonymous user, standard roles,
-// and anonymous->Admin role binding. Safe to call on every startup.
 func (s *Service) Bootstrap(ctx context.Context) error {
-	// Always ensure the _system namespace exists when namespace storage is configured
 	if s.conf.StorageConfig.Namespaces != nil {
 		if err := s.bootstrapSystemNamespace(ctx); err != nil {
 			return err
 		}
 	}
 
-	// Skip auth bootstrapping when auth is disabled (NoOp) or auth storage backends are not configured
 	if _, ok := s.conf.Auth.(*auth.NoOpAuthBackend); ok {
 		return nil
 	}
@@ -1321,8 +1233,6 @@ func (s *Service) Bootstrap(ctx context.Context) error {
 	return nil
 }
 
-// bootstrapSystemNamespace creates the _system namespace directly in storage,
-// bypassing NamespacesCreate which rejects reserved namespace names.
 func (s *Service) bootstrapSystemNamespace(ctx context.Context) error {
 	err := s.conf.StorageConfig.Namespaces.Add(ctx, types.Namespace{
 		Name:      auth.SystemNamespace,
@@ -1334,7 +1244,6 @@ func (s *Service) bootstrapSystemNamespace(ctx context.Context) error {
 	return nil
 }
 
-// bootstrapAnonymousUser creates the anonymous user directly in storage.
 func (s *Service) bootstrapAnonymousUser(ctx context.Context) error {
 	now := s.conf.Clock.Now().UTC()
 	err := s.conf.StorageConfig.Users.Add(ctx, types.User{
@@ -1349,8 +1258,6 @@ func (s *Service) bootstrapAnonymousUser(ctx context.Context) error {
 	return nil
 }
 
-// bootstrapStandardRoles creates standard roles (Admin, NamespaceOwner, PublicViewer)
-// directly in storage, bypassing RolesCreate which rejects standard role names.
 func (s *Service) bootstrapStandardRoles(ctx context.Context) error {
 	now := s.conf.Clock.Now().UTC()
 	roles := []types.Role{
@@ -1390,10 +1297,7 @@ func (s *Service) bootstrapStandardRoles(ctx context.Context) error {
 	return nil
 }
 
-// bootstrapAnonymousAdminBinding creates the anonymous->Admin role binding in _system,
-// enabling Open Door mode where unauthenticated requests have admin privileges.
 func (s *Service) bootstrapAnonymousAdminBinding(ctx context.Context) error {
-	// Look up the Admin role to get its ID
 	var adminRole types.Role
 	if err := s.conf.StorageConfig.Roles.Get(ctx, store.RoleName{Namespace: auth.SystemNamespace, Name: auth.RoleAdmin}, &adminRole); err != nil {
 		return err

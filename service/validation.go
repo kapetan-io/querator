@@ -12,11 +12,10 @@ import (
 )
 
 const (
-	maxTimeoutLength   = 15
-	maxQueueNameLength = 512
-	defaultAllocation  = 512  // 1<<9
-	maxAllocation      = 2048 // 1<<11
-	// defaultRequestTimeout is used as a fallback for requests that lack an explicit timeout field.
+	maxTimeoutLength      = 15
+	maxQueueNameLength    = 512
+	defaultAllocation     = 512
+	maxAllocation         = 2048
 	defaultRequestTimeout = 5 * clock.Minute
 )
 
@@ -39,8 +38,6 @@ func validateTag(tag keyTag) error {
 	return nil
 }
 
-// validateNamespaceName validates the namespace name format.
-// This validation happens at the service layer to protect downstream systems.
 func validateNamespaceName(name string) error {
 	const maxNamespaceNameLength = 256
 
@@ -67,8 +64,6 @@ func validateNamespaceName(name string) error {
 	return nil
 }
 
-// validateQueueName validates the queue name format.
-// This validation happens at the service layer to protect downstream systems.
 func validateQueueName(name string) error {
 	if len(name) > maxQueueNameLength {
 		return reply.NewInvalidOption("queue name is invalid; cannot be greater than '%d' characters", maxQueueNameLength)
@@ -109,7 +104,6 @@ func (s *Service) validateQueueProduceProto(in *proto.QueueProduceRequest, out *
 	}
 
 	for _, item := range in.Items {
-		// TODO: From Memory Pool
 		qi := new(types.Item)
 		qi.Encoding = item.Encoding
 		qi.Kind = item.Kind
@@ -144,11 +138,6 @@ func (s *Service) validateQueueLeaseProto(in *proto.QueueLeaseRequest, out *type
 func (s *Service) validateQueueCompleteProto(in *proto.QueueCompleteRequest, out *types.CompleteRequest) error {
 	var err error
 
-	// TODO: Move this into Queue.Complete()
-	// if strings.TrimSpace(in.QueueName) == "" {
-	// 	return reply.NewInvalidOption("'queue_name' cannot be empty")
-	// }
-
 	if in.RequestTimeout != "" {
 		out.RequestTimeout, err = clock.ParseDuration(in.RequestTimeout)
 		if err != nil {
@@ -166,8 +155,6 @@ func (s *Service) validateQueueCompleteProto(in *proto.QueueCompleteRequest, out
 }
 
 func (s *Service) validateQueueRetryProto(in *proto.QueueRetryRequest, out *types.RetryRequest) error {
-	// Note: RequestTimeout field is not defined in proto, using default timeout
-	// TODO: Add RequestTimeout field to QueueRetryRequest proto definition
 	out.RequestTimeout = defaultRequestTimeout
 
 	for _, item := range in.Items {

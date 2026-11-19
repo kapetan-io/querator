@@ -18,9 +18,6 @@ import (
 	"net/http"
 )
 
-// Version is the current version of Querator, set at build time via ldflags:
-//
-//	go build -ldflags "-X github.com/kapetan-io/querator.Version=1.0.0"
 var Version = "dev-build"
 
 const (
@@ -38,12 +35,9 @@ type ListOptions struct {
 }
 
 type ClientConfig struct {
-	// Users can provide their own http client with TLS config if needed
-	Client *http.Client
-	// The address of endpoint in the format `<scheme>://<host>:<port>`
+	Client   *http.Client
 	Endpoint string
-	// APIKey is the API key used for authentication (sent as Bearer token)
-	APIKey string
+	APIKey   string
 }
 
 type Client struct {
@@ -51,7 +45,6 @@ type Client struct {
 	conf   ClientConfig
 }
 
-// NewClient creates a new instance of the Gubernator user client
 func NewClient(conf ClientConfig) (*Client, error) {
 	set.Default(&conf.Client, &http.Client{
 		Transport: &http.Transport{
@@ -123,10 +116,6 @@ func (c *Client) QueueReload(ctx context.Context, req *pb.QueueReloadRequest) er
 	return c.do(ctx, doArgs{Path: transport.RPCQueueReload, Request: req, Reply: &v1.Reply{}})
 }
 
-// -------------------------------------------------
-// API to manage lists of queues
-// -------------------------------------------------
-
 func (c *Client) QueuesCreate(ctx context.Context, req *pb.QueueInfo) error {
 	return c.do(ctx, doArgs{Path: transport.RPCQueuesCreate, Request: req, Reply: &v1.Reply{}})
 }
@@ -153,15 +142,6 @@ func (c *Client) QueuesInfo(ctx context.Context, req *pb.QueuesInfoRequest, res 
 	return c.do(ctx, doArgs{Path: transport.RPCQueuesInfo, Request: req, Reply: res})
 }
 
-// TODO: Write an iterator we can use to iterate through list APIs
-// TODO(scheduled): Listing enqueued items should NOT include scheduled items
-
-// StorageItemsList lists current items in the queue.
-// # NOTE
-// If the pivot does not exist when calling StorageItemsList(), the endpoint will return the
-// nearest next item in the list to the pivot provided. It is up to the caller to verify the
-// list of items returned begins with the id specified in the pivot. This allows users to iterate
-// through a constantly moving list without constantly running into "pivot not found" errors.
 func (c *Client) StorageItemsList(ctx context.Context, name string, partition int, res *pb.StorageItemsListResponse,
 	opts *ListOptions) error {
 
@@ -181,12 +161,6 @@ func (c *Client) StorageItemsList(ctx context.Context, name string, partition in
 	})
 }
 
-// StorageScheduledList lists scheduled items in the partition.
-// # NOTE
-// If the pivot does not exist when calling StorageScheduledList(), the endpoint will return the
-// nearest next item in the list to the pivot provided. It is up to the caller to verify the
-// list of items returned begins with the id specified in the pivot. This allows users to iterate
-// through a constantly moving list without constantly running into "pivot not found" errors.
 func (c *Client) StorageScheduledList(ctx context.Context, name string, partition int, res *pb.StorageItemsListResponse,
 	opts *ListOptions) error {
 
@@ -220,7 +194,6 @@ func (c *Client) QueueStats(ctx context.Context, req *pb.QueueStatsRequest,
 	return c.do(ctx, doArgs{Path: transport.RPCQueueStats, Request: req, Reply: res})
 }
 
-// WithNoTLS returns ClientConfig suitable for use with NON-TLS clients
 func WithNoTLS(address string) ClientConfig {
 	return ClientConfig{
 		Endpoint: fmt.Sprintf("http://%s", address),
@@ -235,7 +208,6 @@ func WithNoTLS(address string) ClientConfig {
 	}
 }
 
-// WithTLS returns ClientConfig suitable for use with TLS clients
 func WithTLS(tls *tls.Config, address string) ClientConfig {
 	return ClientConfig{
 		Endpoint: fmt.Sprintf("https://%s", address),
@@ -251,7 +223,6 @@ func WithTLS(tls *tls.Config, address string) ClientConfig {
 	}
 }
 
-// WithConn returns ClientConfig suitable for use with a custom net.Conn connection
 func WithConn(conn net.Conn) ClientConfig {
 	return ClientConfig{
 		Endpoint: "http://memory",
@@ -281,10 +252,6 @@ func CollectIDs[S ~[]E, E ItemsWithIDs](items S) []string {
 	return result
 }
 
-// -------------------------------------------------
-// Namespace Management API
-// -------------------------------------------------
-
 func (c *Client) NamespacesCreate(ctx context.Context, req *pb.NamespaceInfo) error {
 	return c.do(ctx, doArgs{Path: transport.RPCNamespacesCreate, Request: req, Reply: &v1.Reply{}})
 }
@@ -306,10 +273,6 @@ func (c *Client) NamespacesDelete(ctx context.Context, req *pb.NamespacesDeleteR
 	return c.do(ctx, doArgs{Path: transport.RPCNamespacesDelete, Request: req, Reply: &v1.Reply{}})
 }
 
-// -------------------------------------------------
-// User Management API
-// -------------------------------------------------
-
 func (c *Client) UsersCreate(ctx context.Context, req *pb.UserCreateRequest,
 	res *pb.UserCreateResponse) error {
 	return c.do(ctx, doArgs{Path: transport.RPCUsersCreate, Request: req, Reply: res})
@@ -327,10 +290,6 @@ func (c *Client) UsersList(ctx context.Context, res *pb.UsersListResponse, opts 
 func (c *Client) UsersDelete(ctx context.Context, req *pb.UsersDeleteRequest) error {
 	return c.do(ctx, doArgs{Path: transport.RPCUsersDelete, Request: req, Reply: &v1.Reply{}})
 }
-
-// -------------------------------------------------
-// API Key Management API
-// -------------------------------------------------
 
 func (c *Client) APIKeysCreate(ctx context.Context, req *pb.APIKeyCreateRequest,
 	res *pb.APIKeyCreateResponse) error {
@@ -362,10 +321,6 @@ func (c *Client) APIKeysDelete(ctx context.Context, req *pb.APIKeysDeleteRequest
 	return c.do(ctx, doArgs{Path: transport.RPCAPIKeysDelete, Request: req, Reply: &v1.Reply{}})
 }
 
-// -------------------------------------------------
-// Role Management API
-// -------------------------------------------------
-
 func (c *Client) RolesCreate(ctx context.Context, req *pb.RoleCreateRequest,
 	res *pb.RoleCreateResponse) error {
 	return c.do(ctx, doArgs{Path: transport.RPCRolesCreate, Request: req, Reply: res})
@@ -390,10 +345,6 @@ func (c *Client) RolesUpdate(ctx context.Context, req *pb.RoleUpdateRequest) err
 func (c *Client) RolesDelete(ctx context.Context, req *pb.RolesDeleteRequest) error {
 	return c.do(ctx, doArgs{Path: transport.RPCRolesDelete, Request: req, Reply: &v1.Reply{}})
 }
-
-// -------------------------------------------------
-// Role Binding Management API
-// -------------------------------------------------
 
 func (c *Client) RoleBindingsCreate(ctx context.Context, req *pb.RoleBindingCreateRequest,
 	res *pb.RoleBindingCreateResponse) error {

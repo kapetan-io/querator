@@ -98,8 +98,6 @@ func (d *Daemon) Start(ctx context.Context) error {
 }
 
 func (d *Daemon) Shutdown(ctx context.Context) error {
-
-	// See 0015-shutdown-errors.md for a discussion of shutdown operation
 	err := d.service.Shutdown(ctx)
 	if srv := d.server; srv != nil {
 		d.server = nil
@@ -110,8 +108,6 @@ func (d *Daemon) Shutdown(ctx context.Context) error {
 		d.conf.Service.Log.Info("HTTP Server shutdown", "address", srv.Addr)
 	}
 
-	// srv.Shutdown closes the listener before it waits on connections, so the Serve goroutine
-	// returns even when ctx expired. Join it so Shutdown doesn't report done while it still runs.
 	d.wg.Wait()
 	return err
 }
@@ -128,10 +124,8 @@ func (d *Daemon) MustClient() *querator.Client {
 
 func (d *Daemon) Client() (*querator.Client, error) {
 	if d.conf.InMemoryListener {
-		// Create a new net.Pipe for each client connection
 		clientConn, serverConn := net.Pipe()
 
-		// Serve the server side of the pipe through the InMemoryListener
 		if inMemListener, ok := d.Listener.(*InMemoryListener); ok {
 			if err := inMemListener.ServeConn(serverConn); err != nil {
 				return nil, errors.Join(fmt.Errorf("failed to serve connection: %w", err),
@@ -142,11 +136,9 @@ func (d *Daemon) Client() (*querator.Client, error) {
 				clientConn.Close(), serverConn.Close())
 		}
 
-		// Create a new client using the client side of the pipe
 		return querator.NewClient(querator.WithConn(clientConn))
 	}
 
-	// Original logic for non-InMemoryListener clients
 	var err error
 	if d.client != nil {
 		return d.client, nil
@@ -204,7 +196,6 @@ func (d *Daemon) spawnHTTP(ctx context.Context, h http.Handler) error {
 	if err != nil {
 		return fmt.Errorf("while starting HTTP listener: %w", err)
 	}
-	// Limit the number of concurrent connections allowed to avoid abusing our resources.
 	d.Listener = netutil.LimitListener(l, d.conf.Service.MaxConcurrentRequests)
 	srv.Addr = d.Listener.Addr().String()
 

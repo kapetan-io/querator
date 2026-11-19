@@ -12,15 +12,12 @@ import (
 var flags FlagParams
 
 type FlagParams struct {
-	// Global Flags
 	Endpoint string
 
-	// Server Flags
 	ConfigFile string
 	Address    string
 	LogLevel   string
 
-	// Produce Flags
 	Payload   string
 	Encoding  string
 	Kind      string
@@ -28,17 +25,14 @@ type FlagParams struct {
 	EnqueueAt string
 	Timeout   string
 
-	// Lease Flags
 	ClientId     string
 	BatchSize    int32
 	LeaseTimeout string
 
-	// Complete Flags
 	File            string
 	CompleteTimeout string
 	Partition       int32
 
-	// Create Flags
 	LeaseTimeoutCreate string
 	ExpireTimeout      string
 	MaxAttempts        int32
@@ -46,11 +40,9 @@ type FlagParams struct {
 	ReferenceCreate    string
 	Partitions         int32
 
-	// List Flags
 	Limit int32
 	Pivot string
 
-	// Update Flags
 	LeaseTimeoutUpdate  string
 	ExpireTimeoutUpdate string
 	MaxAttemptsUpdate   int32
@@ -58,7 +50,6 @@ type FlagParams struct {
 	ReferenceUpdate     string
 	PartitionsUpdate    int32
 
-	// Delete Flags
 	Force bool
 }
 
@@ -77,7 +68,6 @@ to interact with a running Querator instance via its HTTP API.`,
 		cmp.Or(os.Getenv("QUERATOR_ENDPOINT"), "http://localhost:2319"),
 		"Querator server endpoint for API calls")
 
-	// ======== Version =========
 	root.AddCommand(&cobra.Command{
 		Use:   "version",
 		Short: "Print the version number",
@@ -87,10 +77,8 @@ to interact with a running Querator instance via its HTTP API.`,
 		},
 	})
 
-	// Server
 	root.AddCommand(serverCommand)
 
-	// Queue Commands
 	root.AddCommand(produceCommand)
 	root.AddCommand(leaseCommand)
 	if err := completeCommand.MarkFlagRequired("partition"); err != nil {
@@ -99,7 +87,6 @@ to interact with a running Querator instance via its HTTP API.`,
 	}
 	root.AddCommand(completeCommand)
 
-	// Queue Management Commands
 	root.AddCommand(createCommand)
 	root.AddCommand(listCommand)
 	root.AddCommand(UpdateCommand)

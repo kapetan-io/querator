@@ -8,9 +8,6 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// -------------------------------------------------
-
-// ErrRequestFailed is used to tell the client that the request was valid, but it failed for some reason.
 type ErrRequestFailed struct {
 	msg string
 }
@@ -51,9 +48,6 @@ func (e *ErrRequestFailed) Message() string {
 
 var _ duh.Error = &ErrRequestFailed{}
 
-// -------------------------------------------------
-
-// ErrInvalidOption is used to indicate an option provided was invalid for some reason
 type ErrInvalidOption struct {
 	msg string
 }
@@ -94,10 +88,6 @@ func (e *ErrInvalidOption) Message() string {
 
 var _ duh.Error = &ErrInvalidOption{}
 
-// -------------------------------------------------
-
-// ErrRetryRequest is used to tell the client that the request was valid, the server did not encounter a failure, but
-// the request did not succeed. The client should retry
 type ErrRetryRequest struct {
 	msg string
 }
@@ -138,9 +128,6 @@ func (e *ErrRetryRequest) Message() string {
 
 var _ duh.Error = &ErrRetryRequest{}
 
-// -------------------------------------------------
-
-// ErrConflict is used to indicate there was a conflict
 type ErrConflict struct {
 	msg string
 }

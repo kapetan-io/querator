@@ -53,7 +53,6 @@ func RunProduce(flags FlagParams, queueName string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	// Get payload from stdin or flag
 	var payload []byte
 	if flags.Payload != "" {
 		payload = []byte(flags.Payload)
@@ -64,7 +63,6 @@ func RunProduce(flags FlagParams, queueName string) error {
 		}
 	}
 
-	// Parse enqueue time if provided
 	var enqueueAt *timestamppb.Timestamp
 	if flags.EnqueueAt != "" {
 		t, err := time.Parse(time.RFC3339, flags.EnqueueAt)

@@ -6,7 +6,6 @@ import (
 	"sync/atomic"
 )
 
-// InMemoryListener is intended to be used with testing/synctest
 type InMemoryListener struct {
 	closed   chan struct{}
 	connCh   chan net.Conn

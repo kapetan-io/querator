@@ -14,19 +14,23 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Command quickstart validates the Querator quick start documentation
+// Quickstart validates the Querator quick start documentation
 // by starting docker-compose, checking health, and performing basic queue operations.
+//
+// The test queue is reused when it already exists, so the check can run
+// again against an instance a previous run left behind.
 //
 // Usage:
 //
-//	go run quickstart.go [flags]
+//	go run ./cmd/quickstart [flags]
 //
 // Flags:
 //
-//	--endpoint string   Querator endpoint (default "http://localhost:2319")
-//	--skip-docker       Skip docker compose up/down (use existing instance)
-//	--cleanup           Run docker compose down after tests
-//	--verbose           Print detailed output
+//	--endpoint string          Querator endpoint (default "http://localhost:2319")
+//	--skip-docker              Skip docker compose up/down (use existing instance)
+//	--cleanup                  Run docker compose down after tests
+//	--verbose                  Print detailed output
+//	--health-timeout duration  Timeout for health check (default 1m0s)
 package main
 
 import (
@@ -266,7 +270,6 @@ func runQueueWorkflow(ctx context.Context, client *querator.Client) error {
 		RequestedPartitions: 1,
 	})
 	if err != nil {
-		// Queue may already exist from previous run - that's OK
 		if strings.Contains(err.Error(), "already exists") {
 			printCheck(fmt.Sprintf("Queue %q already exists (reusing)", queueName))
 		} else {

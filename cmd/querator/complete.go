@@ -57,7 +57,6 @@ func RunComplete(flags FlagParams, queueName string, partition int32, cmdLineIds
 
 	var ids []string
 
-	// Read IDs from file if specified
 	if flags.File != "" {
 		file, err := os.Open(flags.File)
 		if err != nil {
@@ -77,7 +76,6 @@ func RunComplete(flags FlagParams, queueName string, partition int32, cmdLineIds
 			}
 		}
 	} else {
-		// Use command line IDs
 		if len(cmdLineIds) == 0 {
 			return fmt.Errorf("no item IDs provided (use command line arguments or --file)")
 		}

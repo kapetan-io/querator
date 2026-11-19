@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sync"
 	"testing"
 
 	"github.com/duh-rpc/duh-go"
@@ -353,6 +354,39 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				assert.Equal(t, info.Reference, stored.Reference)
 				assert.Equal(t, info.RequestedPartitions, stored.RequestedPartitions)
 				assert.Equal(t, info.UpdatedAt.AsTime(), stored.UpdatedAt.AsTime())
+			})
+
+			t.Run("InfoDuringUpdate", func(t *testing.T) {
+				const updates = 20
+				queueName := random.String("queue-", 10)
+				require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+					QueueName:           queueName,
+					LeaseTimeout:        "1m",
+					ExpireTimeout:       "10m",
+					RequestedPartitions: 1,
+				}))
+
+				var wg sync.WaitGroup
+				wg.Go(func() {
+					for i := range updates {
+						assert.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+							QueueName: queueName,
+							Reference: fmt.Sprintf("reference-%d", i),
+						}))
+					}
+				})
+				wg.Go(func() {
+					for range updates {
+						var info pb.QueueInfo
+						assert.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &info))
+						assert.Equal(t, queueName, info.QueueName)
+					}
+				})
+				wg.Wait()
+
+				var info pb.QueueInfo
+				require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &info))
+				assert.Equal(t, fmt.Sprintf("reference-%d", updates-1), info.Reference)
 			})
 
 			t.Run("PartialUpdateLeasesWithKeptLeaseTimeout", func(t *testing.T) {

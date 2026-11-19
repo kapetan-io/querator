@@ -22,10 +22,9 @@ not safe for concurrent use, and backends lean on this. MongoDB deduplicates `So
 followed by an insert, and Badger advances its item ID generator without a lock. Code that calls the
 item methods from a second goroutine breaks both.
 
-**`Info` and `UpdateQueueInfo` must be safe for concurrent use.** `UpdateQueueInfo` hands the
-partition the queue's full record after an update, and the new settings must take effect at once.
-Every caller runs on the logical queue's own request loop now, and the rule keeps them safe if a
-caller moves off it.
+**`Info` and `UpdateQueueInfo` must be safe for concurrent use.** `UpdateQueueInfo` applies queue
+settings a user changed, which must take effect at once. Every caller runs on the logical queue's
+own request loop now, and the rule keeps them safe if a caller moves off it.
 
 **Storage is contacted lazily.** Handing out a `Partition` never touches storage or fails. The first
 call that needs the data creates tables, collections or connections

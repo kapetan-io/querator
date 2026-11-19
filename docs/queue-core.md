@@ -206,12 +206,6 @@ repeated name would open some partitions on the wrong backend.
 A queue stored with no partitions has nothing to run, so it has no Logical Queue. It refuses
 produce, lease, complete and retry, and can still be inspected and deleted.
 
-An update is applied to the stored queue record. A loaded queue holds its own copy of that record,
-and so do its Logical Queues and their partitions, so an update must hand every copy the updated
-record, never the update request. The request has no namespace, which authorization checks read,
-and an unset lease timeout in it is zero. A copy left behind serves old settings to `/queues.info`,
-to `querator update`, which sends back what it read, and to the dead-letter checks.
-
 ## Clearing a queue
 
 The Logical Queue holds no cached items, so clearing a queue clears storage only. If it ever caches

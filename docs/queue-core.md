@@ -124,13 +124,15 @@ reading storage on every run.
 
 Each run reads one page of one partition and acts on it, and the next run continues the pass from
 the last item read. Requests that wait on the queue are served between pages, so a large partition
-never holds the loop for longer than one page. A pass stops at the item that was last when it
-began, so items produced during the pass wait for the next one. A deadline the pass cannot read,
-such as a lease granted on an item before the pivot or an item the pass requeues past its last
-item, sets when the next pass starts, so it is not missed. This holds when a write fails partway
-too, because the actions before the failure stay committed. A retry carries no expire deadline, so
-an immediate retry of an item the pass has not read yet starts the next pass as soon as this one
-ends. What counts as immediate must match the rule storage uses to move a retry to the tail.
+never holds the loop for longer than one page. A pass stops at the item that was last when it began,
+so items produced during the pass wait for the next one. A deadline the pass cannot read, such as a
+lease granted on an item before the pivot or an item the pass requeues past its last item, sets when
+the next pass starts, so it is not missed. This holds when a write fails partway too, because the
+actions before the failure stay committed. Storage does not say which actions committed, so a
+scheduled write that keeps failing with an expired item on its page starts a pass each time it
+fails, and most of those passes find nothing to do. A retry carries no expire deadline, so an
+immediate retry of an item the pass has not read yet starts the next pass as soon as this one ends.
+What counts as immediate must match the rule storage uses to move a retry to the tail.
 
 A pass that is mid-way is always due, so the request loop must not wait on a timer between pages,
 and requests, shutdown and request timeouts must get their turn between pages. Otherwise they wait

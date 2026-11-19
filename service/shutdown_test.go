@@ -451,6 +451,81 @@ func testShutdown(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		}
 	})
 
+	t.Run("ShutdownAnswersStatsRequestsWaitingBehindDrain", func(t *testing.T) {
+		queueName := random.String("queue-", 10)
+		storage := setup()
+		defer tearDown()
+
+		d := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: storage})
+		defer d.cancel()
+		c, ctx := d.MustClient(), d.Context()
+
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			QueueName:           queueName,
+			LeaseTimeout:        "1m0s",
+			ExpireTimeout:       "24h0m0s",
+			RequestedPartitions: 1,
+		})
+
+		require.NoError(t, d.Service().PauseQueue(ctx, queueName))
+
+		const numProducers = 10
+		const numStats = 8
+		statsErrs := make([]error, numStats)
+		produceDone := make(chan struct{})
+		statsDone := make(chan struct{})
+		statsCtx, cancelStats := context.WithTimeout(ctx, 30*time.Second)
+		defer cancelStats()
+
+		go func() {
+			defer close(produceDone)
+			concurrently(numProducers, func(int) {
+				_ = c.QueueProduce(ctx, &pb.QueueProduceRequest{
+					QueueName:      queueName,
+					RequestTimeout: "20s",
+					Items:          produceRandomItems(1_000),
+				})
+			})
+		}()
+
+		require.Eventually(t, func() bool {
+			var resp pb.QueueStatsResponse
+			require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &resp))
+			return resp.LogicalQueues[0].ProduceWaiting == numProducers
+		}, 10*time.Second, 100*time.Millisecond)
+
+		// The loop applies the buffered produces after the resume is accepted, so stats
+		// requests sent now wait in the request channel behind that work.
+		require.NoError(t, d.Service().ResumeQueue(ctx, queueName))
+		go func() {
+			defer close(statsDone)
+			concurrently(numStats, func(i int) {
+				statsErrs[i] = c.QueueStats(statsCtx, &pb.QueueStatsRequest{QueueName: queueName},
+					&pb.QueueStatsResponse{})
+			})
+		}()
+
+		// Stats has no observable "queued" state, so give the requests time to reach the channel.
+		time.Sleep(300 * time.Millisecond)
+
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		require.NoError(t, d.d.Shutdown(shutdownCtx))
+
+		select {
+		case <-statsDone:
+		case <-time.After(5 * time.Second):
+			t.Fatal("stats requests did not return after shutdown")
+		}
+		<-produceDone
+
+		for _, err := range statsErrs {
+			if err != nil {
+				assert.ErrorContains(t, err, "is shutting down")
+			}
+		}
+	})
+
 	t.Run("ShutdownDuringActiveRequests", func(t *testing.T) {
 		queueName := random.String("queue-", 10)
 		storage := setup()

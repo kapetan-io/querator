@@ -176,9 +176,9 @@ commits the leases it already assigned, returns nil, and the next lease resumes 
 `Produce` that uses up the whole `WriteTimeout` leaves `Lease` nothing, as it does on Postgres and
 MongoDB, whose lease query fails on the ended context. A lease request that got nothing keeps
 waiting as it does on an empty queue, until the logical queue handles another produce, lease,
-complete or retry request, finishes a lifecycle or scheduled run, or the request times out. A lone consumer on a quiet queue can therefore
-get "no items are in the queue" while free items wait past the pivot, and each new lease gets
-further.
+complete or retry request, finishes a lifecycle or scheduled run, or the request times out. A
+lone consumer on a quiet queue can therefore get "no items are in the queue" while free items wait
+past the pivot, and each new lease gets further.
 
 **A lease too big for one transaction saves what fits.** Badger refuses a write that would take a
 transaction past its size limit (`ErrTxnTooBig`) without adding it, so `Lease` takes that item back

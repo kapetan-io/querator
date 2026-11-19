@@ -3,7 +3,9 @@ package service_test
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -96,6 +98,94 @@ func testBadgerLease(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			}
 		}
 		assert.Greater(t, leases, 1)
+		assert.Equal(t, want, got)
+
+		var list pb.StorageItemsListResponse
+		require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list,
+			&querator.ListOptions{Limit: numItems}))
+		require.Len(t, list.Items, numItems)
+		for _, item := range list.Items {
+			assert.True(t, item.IsLeased)
+		}
+	})
+
+	t.Run("WaitingLeasesTooBigForOneTransaction", func(t *testing.T) {
+		const (
+			numRequests = 10
+			numPerReq   = 100
+			numItems    = numRequests * numPerReq
+			payloadSize = 20_000
+			numClients  = 10
+			maxRounds   = 20
+		)
+		var queueName = random.String("queue-", 10)
+		d := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: setup()})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+		c, ctx := d.MustClient(), d.Context()
+
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			LeaseTimeout:        LeaseTimeout,
+			ExpireTimeout:       ExpireTimeout,
+			QueueName:           queueName,
+			RequestedPartitions: 1,
+		})
+
+		payload := []byte(strings.Repeat("x", payloadSize))
+		var want []string
+		for r := range numRequests {
+			items := make([]*pb.QueueProduceItem, 0, numPerReq)
+			for i := range numPerReq {
+				ref := fmt.Sprintf("R%03d", r*numPerReq+i)
+				want = append(want, ref)
+				items = append(items, &pb.QueueProduceItem{Reference: ref, Bytes: payload})
+			}
+			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+				QueueName:      queueName,
+				RequestTimeout: "1m",
+				Items:          items,
+			}))
+		}
+
+		// Ten consumers lease 100 large items each at once, together about 20MB, more than
+		// BadgerDB writes in one transaction. Every item a consumer receives must be leased
+		// in storage, and every item must reach exactly one consumer.
+		var got []string
+		for range maxRounds {
+			var wg sync.WaitGroup
+			leases := make([]pb.QueueLeaseResponse, numClients)
+			errs := make([]error, numClients)
+			for i := range numClients {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					errs[i] = c.QueueLease(ctx, &pb.QueueLeaseRequest{
+						ClientId:       random.String("client-", 10),
+						RequestTimeout: "1s",
+						QueueName:      queueName,
+						BatchSize:      numPerReq,
+					}, &leases[i])
+				}()
+			}
+			wg.Wait()
+			for i := range numClients {
+				if errs[i] != nil {
+					var e duh.Error
+					require.True(t, errors.As(errs[i], &e))
+					require.Equal(t, querator.MsgRequestTimeout, e.Message())
+					continue
+				}
+				for _, item := range leases[i].Items {
+					got = append(got, item.Reference)
+				}
+			}
+			if len(got) >= numItems {
+				break
+			}
+		}
+		slices.Sort(got)
 		assert.Equal(t, want, got)
 
 		var list pb.StorageItemsListResponse

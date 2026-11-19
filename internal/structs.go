@@ -47,6 +47,17 @@ func (s *PartitionLifecycleState) RunScheduledBy(at clock.Time) bool {
 	return false
 }
 
+func (s *PartitionLifecycleState) RunDue(now clock.Time) bool {
+	return passDue(&s.ActionPass, s.NextLifecycleRun.Sub(now)) || passDue(&s.ScheduledPass, s.NextScheduledRun.Sub(now))
+}
+
+func passDue(pass *LifecyclePass, untilRun clock.Duration) bool {
+	if pass.Scan.MidPass() {
+		return untilRun <= 0
+	}
+	return untilRun < 0
+}
+
 func (s *PartitionLifecycleState) ItemMoved(id types.ItemID) {
 	if s.ActionPass.Scan.Unread(id) {
 		s.ActionPass.Moved = true

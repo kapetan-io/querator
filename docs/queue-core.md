@@ -137,7 +137,9 @@ What counts as immediate must match the rule storage uses to move a retry to the
 A pass that is mid-way is always due, so the request loop must not wait on a timer between pages,
 and requests, shutdown and request timeouts must get their turn between pages. Otherwise they wait
 until the pass ends, because Go's `select` gives a ready timer no lower priority than a waiting
-request.
+request. A new pass is due only once its time has passed, not when it equals the current time. Tests
+that freeze the clock rely on this, because a queue's first lifecycle run must wait for the clock to
+move.
 
 A pass that leaves due work undone runs again with back-off. That covers a dead-letter move or a
 lifecycle action (`TakeAction`) that failed. An item stuck in a failed move is due on every pass,

@@ -242,7 +242,7 @@ func (l *Logical) enqueueScheduled(partition *Partition, now clock.Time) error {
 func (l *Logical) timedRunDue(state *QueueState) bool {
 	now := l.conf.Clock.Now().UTC()
 	for _, p := range state.Partitions {
-		if !p.Lifecycle.NextLifecycleRun.After(now) || !p.Lifecycle.NextScheduledRun.After(now) {
+		if p.Lifecycle.RunDue(now) {
 			return true
 		}
 	}

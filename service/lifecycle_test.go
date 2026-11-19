@@ -406,6 +406,11 @@ func testLifecycle(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 			second := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: conf, Clock: now})
 			defer second.Shutdown(t)
 			c, ctx = second.MustClient(), second.Context()
+
+			// The restarted queue loads on its first request, and its first lifecycle run waits for
+			// the clock to move.
+			nextLifecycleRun(t, ctx, c, queueName)
+			now.Advance(clock.Millisecond)
 			assert.Len(t, leaseUpTo(t, ctx, c, queueName, largePartition), largePartition)
 		})
 	}

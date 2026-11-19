@@ -256,10 +256,7 @@ func (qm *QueuesManager) LifeCycle(ctx context.Context, req *types.LifeCycleRequ
 	}
 
 	if err := deleteDeadItems(ctx, req); err != nil {
-		qm.log.Error("failed to delete items from source partition after DLQ produce",
-			"source_queue", queueInfo.Name,
-			"partition", req.PartitionNum,
-			"error", err)
+		return errors.Errorf("failed to delete items from source partition after DLQ produce: %w", err)
 	}
 
 	return nil

@@ -122,7 +122,7 @@ reset, so expiry is noticed on time without scanning storage on every pass. `run
 A lifecycle run that leaves due work undone runs again with back-off. That covers a dead-letter move
 or a `TakeAction` that failed, and a deadline from `LifeCycleInfo` still at or before now after the
 run, which is how an item stuck in a failed move stops hiding later deadlines. The next run is the
-earlier of the next future deadline and the back-off (`lifecycleBackOff`, 500ms rising to 5s), and a
+earlier of the next future deadline and the back-off (`lifecycleBackOff`, 750ms rising to 5s), and a
 move that keeps failing tries again every 5s forever. The back-off is measured from the end of the
 run, because a dead-letter move can block for `WriteTimeout`.
 
@@ -158,9 +158,9 @@ Items reach a dead-letter queue when they expire or reach `MaxAttempts`.
   the source partition needs.
 * The source items are deleted through `TakeAction` with `ActionDeleteItem`, not `Complete`.
   `Complete` refuses an item that is not leased, and an item can expire without ever being leased.
-* If deleting the source items fails after a confirmed move, `LifeCycle` logs the error and returns
-  success. The items are already in the dead-letter queue. A later lifecycle run finds the source
-  items again and the dead-letter queue drops the duplicate by `SourceID`.
+* If deleting the source items fails after a confirmed move, `LifeCycle` returns the error, so the
+  lifecycle runs again with back-off. The items are already in the dead-letter queue. The next run
+  finds the source items again and the dead-letter queue drops the duplicate by `SourceID`.
 
 `validateDeadQueue` checks the name's format before it looks the queue up, because the lookup
 (`QueuesManager.get`) loads the queue from storage and can start a Logical Queue for it. Besides the

@@ -58,7 +58,7 @@ preformed will be delegated to the logical queue or queues manager.
 
 If moving an item to the dead letter or writing an action fails, or a deadline is still at or
 before now after the life cycle has run, the life cycle runs again for that partition with
-back-off (500ms rising to 5s, then every 5s until it succeeds). The partition is not marked
+back-off (750ms rising to 5s, then every 5s until it succeeds). The partition is not marked
 faulty and stays in the request distribution, since the fault may lie with the dead letter queue.
 
 ### Life Cycle per partition

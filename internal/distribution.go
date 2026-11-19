@@ -258,9 +258,7 @@ func (l *Logical) applyToPartitions(state *QueueState) {
 					unstored += len(req.Items)
 					req.Err = ErrInternalRetry
 				}
-				overLeased := max(0, unstored-p.State.UnLeased)
-				p.State.UnLeased -= unstored - overLeased
-				p.State.NumLeased -= overLeased
+				p.State.UnLeased -= unstored
 			} else {
 				p.State.MostRecentDeadline = l.conf.Clock.Now().UTC().Add(l.conf.ExpireTimeout)
 				if l.notifyScheduled(p) {

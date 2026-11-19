@@ -86,7 +86,10 @@ the estimate storage did not lease is given back, on a successful write as well 
 Otherwise a failed lease write moves the counts for items nobody leased, and a lease request that
 keeps waiting moves them again on later passes. When a write's outcome is unknown, the whole
 estimate is given back although storage may show some of those items as leased, so the un-leased
-count overstates until the partition is next recounted from storage.
+count overstates until the partition is next recounted from storage. A failed produce in the same
+pass takes all its items out of the un-leased count, even those the lease estimate already counted
+as leased. The estimate gives those back when storage answers the lease, so the produce must not
+give them back as well.
 
 Produce assignment assumes the list of partitions is sorted with failed partitions last, and checks
 only the first. A partition that fails while it is first stays first until an assigned lease or a

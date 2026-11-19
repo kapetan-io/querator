@@ -881,19 +881,23 @@ func waitForLifecycleRun(t *testing.T, ctx context.Context, c *querator.Client, 
 // Partition storage fault injection
 // ---------------------------------------------------------------------
 
-var errProduceWriteFailed = errors.New("injected produce write failure")
+var (
+	errProduceWriteFailed = errors.New("injected produce write failure")
+	errLeaseWriteFailed   = errors.New("injected lease write failure")
+)
 
-// produceFault makes partition storage refuse produce writes on demand. While failing is set,
-// every partition that Wrap's config hands out fails Produce without writing anything. Every
-// other call reaches the real backend.
-type produceFault struct {
-	failing atomic.Bool
+// partitionFault makes partition storage refuse produce or lease writes on demand. While
+// failingProduce or failingLease is set, every partition that Wrap's config hands out fails
+// that call without writing anything. Every other call reaches the real backend.
+type partitionFault struct {
+	failingProduce atomic.Bool
+	failingLease   atomic.Bool
 }
 
-func (f *produceFault) Wrap(conf store.Config) store.Config {
+func (f *partitionFault) Wrap(conf store.Config) store.Config {
 	wrapped := make([]store.PartitionStorage, len(conf.PartitionStorage))
 	for i, ps := range conf.PartitionStorage {
-		ps.PartitionStore = faultyPartitionStore{PartitionStore: ps.PartitionStore, failing: &f.failing}
+		ps.PartitionStore = faultyPartitionStore{PartitionStore: ps.PartitionStore, fault: f}
 		wrapped[i] = ps
 	}
 	conf.PartitionStorage = wrapped
@@ -902,21 +906,28 @@ func (f *produceFault) Wrap(conf store.Config) store.Config {
 
 type faultyPartitionStore struct {
 	store.PartitionStore
-	failing *atomic.Bool
+	fault *partitionFault
 }
 
 func (f faultyPartitionStore) Get(info types.PartitionInfo) store.Partition {
-	return faultyPartition{Partition: f.PartitionStore.Get(info), failing: f.failing}
+	return faultyPartition{Partition: f.PartitionStore.Get(info), fault: f.fault}
 }
 
 type faultyPartition struct {
 	store.Partition
-	failing *atomic.Bool
+	fault *partitionFault
 }
 
 func (f faultyPartition) Produce(ctx context.Context, batch types.ProduceBatch, now clock.Time) error {
-	if f.failing.Load() {
+	if f.fault.failingProduce.Load() {
 		return errProduceWriteFailed
 	}
 	return f.Partition.Produce(ctx, batch, now)
+}
+
+func (f faultyPartition) Lease(ctx context.Context, batch types.LeaseBatch, opts store.LeaseOptions) error {
+	if f.fault.failingLease.Load() {
+		return errLeaseWriteFailed
+	}
+	return f.Partition.Lease(ctx, batch, opts)
 }

@@ -31,9 +31,10 @@ type leaseFault struct {
 	Close  func(t *testing.T)
 }
 
-// TestLeaseWriteFailure holds lease tests that need the database itself to refuse the
-// lease write, a fault the client cannot cause. They run against PostgreSQL and MongoDB,
-// where a test can add a rule to the table or collection.
+// TestLeaseWriteFailure checks that each backend takes back the items whose lease it did not
+// save. The database itself must refuse part of the write, so the tests run only against
+// PostgreSQL and MongoDB, where a test can add a rule to the table or collection. How the
+// queue treats a failed lease write on every backend is tested under QueueLeaseWriteFails.
 func TestLeaseWriteFailure(t *testing.T) {
 	defer goleak.VerifyNone(t, goleakOptions...)
 
@@ -70,63 +71,6 @@ func TestLeaseWriteFailure(t *testing.T) {
 
 			fault.Allow(t)
 			assert.Equal(t, []string{"A", "B"}, leaseAndCompleteReferences(t, ctx, c, queueName))
-		})
-
-		t.Run("LaterPassAnswersWaitingLease", func(t *testing.T) {
-			postgres := postgresTestSetup{}
-			d := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: postgres.Setup(store.PostgresConfig{})})
-			defer func() {
-				d.Shutdown(t)
-				postgres.Teardown()
-			}()
-			c, ctx := d.MustClient(), d.Context()
-			queueName := produceLeaseFaultItems(t, ctx, c)
-			fault := postgresLeaseFault(t, ctx, postgres.dsn)
-			defer fault.Close(t)
-
-			fault.Refuse(t)
-			var lease pb.QueueLeaseResponse
-			var leaseErr error
-			backgroundCall{
-				Call: func() {
-					leaseErr = c.QueueLease(ctx, &pb.QueueLeaseRequest{
-						ClientId:       random.String("client-", 10),
-						RequestTimeout: "10s",
-						QueueName:      queueName,
-						BatchSize:      2,
-					}, &lease)
-				},
-				While: func() {
-					// The failed pass leaves the request waiting with nothing saved.
-					require.NoError(t, untilLeaseClientWaiting(t, c, queueName, 1))
-					assert.False(t, isLeased(t, ctx, c, queueName, "A"))
-					assert.False(t, isLeased(t, ctx, c, queueName, "B"))
-
-					// Resuming runs another pass that tries the waiting request again and fails
-					// again, and neither pass moves the counts.
-					require.NoError(t, d.Service().PauseQueue(ctx, queueName))
-					require.NoError(t, d.Service().ResumeQueue(ctx, queueName))
-					require.NoError(t, untilLeaseClientWaiting(t, c, queueName, 1))
-					assert.Equal(t, leaseCounts{UnLeased: 2, TotalLeased: 0}, partitionLeaseCounts(t, ctx, c, queueName))
-
-					// A produce runs a later pass, which answers the waiting request.
-					fault.Allow(t)
-					require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
-						QueueName:      queueName,
-						RequestTimeout: "5s",
-						Items:          []*pb.QueueProduceItem{{Reference: "C", Bytes: []byte("c")}},
-					}))
-				},
-			}.run()
-			require.NoError(t, leaseErr)
-
-			var references []string
-			for _, item := range lease.Items {
-				references = append(references, item.Reference)
-				assert.True(t, isLeased(t, ctx, c, queueName, itemReference(item.Reference)))
-			}
-			assert.Equal(t, []string{"A", "B"}, references)
-			assert.False(t, isLeased(t, ctx, c, queueName, "C"))
 		})
 
 		t.Run("CommitFails", func(t *testing.T) {
@@ -180,62 +124,6 @@ func TestLeaseWriteFailure(t *testing.T) {
 			_, err = conn.Exec(ctx, `DROP TRIGGER refuse_lease_b ON `+name)
 			require.NoError(t, err)
 			assert.Equal(t, []string{"A", "B"}, leaseAndCompleteReferences(t, ctx, c, queueName))
-		})
-
-		t.Run("SeveralWaitingLeases", func(t *testing.T) {
-			postgres := postgresTestSetup{}
-			d := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: postgres.Setup(store.PostgresConfig{})})
-			defer func() {
-				d.Shutdown(t)
-				postgres.Teardown()
-			}()
-			c, ctx := d.MustClient(), d.Context()
-			queueName := produceLeaseFaultItems(t, ctx, c)
-			fault := postgresLeaseFault(t, ctx, postgres.dsn)
-			defer fault.Close(t)
-
-			fault.Refuse(t)
-			require.NoError(t, d.Service().PauseQueue(ctx, queueName))
-			leases := make([]pb.QueueLeaseResponse, 2)
-			errs := make([]error, 2)
-			backgroundCall{
-				Call: func() {
-					concurrently(2, func(i int) {
-						errs[i] = c.QueueLease(ctx, &pb.QueueLeaseRequest{
-							ClientId:       random.String("client-", 10),
-							RequestTimeout: "10s",
-							QueueName:      queueName,
-							BatchSize:      1,
-						}, &leases[i])
-					})
-				},
-				While: func() {
-					require.NoError(t, untilLeaseClientWaiting(t, c, queueName, 2))
-					// Resuming runs one pass that places A on one request and B on the other.
-					// The transaction saves neither, so both requests keep waiting.
-					require.NoError(t, d.Service().ResumeQueue(ctx, queueName))
-					require.NoError(t, untilLeaseClientWaiting(t, c, queueName, 2))
-					assert.False(t, isLeased(t, ctx, c, queueName, "A"))
-					assert.False(t, isLeased(t, ctx, c, queueName, "B"))
-
-					fault.Allow(t)
-					require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
-						QueueName:      queueName,
-						RequestTimeout: "5s",
-						Items:          []*pb.QueueProduceItem{{Reference: "C", Bytes: []byte("c")}},
-					}))
-				},
-			}.run()
-
-			var references []string
-			for i := range leases {
-				require.NoError(t, errs[i])
-				require.Len(t, leases[i].Items, 1)
-				references = append(references, leases[i].Items[0].Reference)
-				assert.True(t, isLeased(t, ctx, c, queueName, itemReference(leases[i].Items[0].Reference)))
-			}
-			slices.Sort(references)
-			assert.Equal(t, []string{"A", "B"}, references)
 		})
 	})
 

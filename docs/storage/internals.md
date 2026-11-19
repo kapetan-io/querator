@@ -46,10 +46,12 @@ a storage failure.
 **A lease spreads items across every waiting request.** Available items are shared evenly among the
 lease requests in the batch, so one consumer does not take them all.
 
-**A failed `Lease` hands out nothing.** Items are placed on their requests before the write commits,
-so a backend whose write fails must take them back off before it returns the error. Otherwise a
-consumer receives an item whose lease was not saved. Badger keeps this rule. PostgreSQL and MongoDB
-break it (ENG-815).
+**A failed `Lease` hands out no item whose lease was not saved.** Items are placed on their
+requests before the write commits, so a backend whose write fails must take back off every item
+whose lease it did not save before it returns the error. A backend that cannot tell whether a write
+applied, such as a commit that loses its connection, takes the items back too. An item whose lease
+did save then stays leased with no consumer until the lease expires, and that lease counts as one
+of its attempts. That is safe; handing out an item whose lease did not save is not.
 
 **Scheduled items have their own scan.** Scheduled items run on their own timer, and a separate scan
 lets the logical queue check them without walking every item for lease and expiry work.
@@ -145,6 +147,13 @@ does not cover follow.
 
 **An empty lease batch skips the query.** MongoDB reads a limit of 0 as "no limit", unlike SQL
 `LIMIT 0`, so a lease with nothing requested would otherwise read the whole collection.
+
+**A lease write that fails part way hands out only the items it saved.** The lease updates run
+as one unordered bulk write, so some can apply while others fail. Only the items a write error
+names are taken back off their requests. Any other failure, a write concern error included, takes
+every item back, since the writes may or may not have applied. An update that matches no document
+raises no error, so a lease whose updates matched fewer items than it placed, counting the ones a
+write error names, also takes every item back.
 
 **`Retry` reads the whole document before it writes.** It must tell a missing or scheduled item,
 both reported as "does not exist", apart from one that is not leased, and an immediate retry

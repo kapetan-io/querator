@@ -695,6 +695,7 @@ func (p *MongoPartition) Lease(ctx context.Context, batch types.LeaseBatch, opts
 
 	batchIter := batch.Iterator()
 	var models []mongo.WriteModel
+	var placed []*types.Item
 
 	for i := range docs {
 		item := *docs[i].toItem()
@@ -708,6 +709,7 @@ func (p *MongoPartition) Lease(ctx context.Context, batch types.LeaseBatch, opts
 		if !batchIter.Next(itemPtr) {
 			break
 		}
+		placed = append(placed, itemPtr)
 
 		models = append(models, mongo.NewUpdateOneModel().
 			SetFilter(bson.M{"_id": string(item.ID), "is_leased": false}).
@@ -721,10 +723,34 @@ func (p *MongoPartition) Lease(ctx context.Context, batch types.LeaseBatch, opts
 		return nil
 	}
 
-	if _, err := coll.BulkWrite(ctx, models, options.BulkWrite().SetOrdered(false)); err != nil {
+	result, err := coll.BulkWrite(ctx, models, options.BulkWrite().SetOrdered(false))
+	if err != nil {
+		batch.Unassign(unsavedLeases(err, result, placed))
 		return errors.Errorf("update leased items: %w", err)
 	}
+	if result.MatchedCount != int64(len(models)) {
+		batch.Unassign(placed)
+		return errors.Errorf("update leased items: matched %d of %d items", result.MatchedCount, len(models))
+	}
 	return nil
+}
+
+func unsavedLeases(err error, result *mongo.BulkWriteResult, placed []*types.Item) []*types.Item {
+	var bulk mongo.BulkWriteException
+	if !errors.As(err, &bulk) || bulk.WriteConcernError != nil || len(bulk.WriteErrors) == 0 {
+		return placed
+	}
+	if result == nil || result.MatchedCount+int64(len(bulk.WriteErrors)) < int64(len(placed)) {
+		return placed
+	}
+	unsaved := make([]*types.Item, 0, len(bulk.WriteErrors))
+	for _, writeErr := range bulk.WriteErrors {
+		if writeErr.Index < 0 || writeErr.Index >= len(placed) {
+			return placed
+		}
+		unsaved = append(unsaved, placed[writeErr.Index])
+	}
+	return unsaved
 }
 
 func (p *MongoPartition) Complete(ctx context.Context, batch types.CompleteBatch) error {

@@ -195,7 +195,7 @@ func (b *BadgerPartition) leaseItems(ctx context.Context, txn *badger.Txn, batch
 
 		if err := txn.Set(item.ID, buf.Bytes()); err != nil {
 			if errors.Is(err, badger.ErrTxnTooBig) {
-				unassign(batch, item)
+				batch.Unassign([]*types.Item{item})
 				break
 			}
 			return nil, errors.Errorf("during Put(): %w", err)
@@ -206,15 +206,6 @@ func (b *BadgerPartition) leaseItems(ctx context.Context, txn *badger.Txn, batch
 		return iter.Item().KeyCopy(nil), nil
 	}
 	return sourcePrefix, nil
-}
-
-func unassign(batch types.LeaseBatch, item *types.Item) {
-	for _, r := range batch.Requests {
-		if r != nil && len(r.Items) != 0 && r.Items[len(r.Items)-1] == item {
-			r.Items = r.Items[:len(r.Items)-1]
-			return
-		}
-	}
 }
 
 func (b *BadgerPartition) lowerLeasePivot(id []byte) {

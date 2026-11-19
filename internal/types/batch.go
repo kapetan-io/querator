@@ -93,6 +93,30 @@ func (r *LeaseBatch) FilterNils() {
 	r.Requests = r.Requests[:n]
 }
 
+func (r *LeaseBatch) Unassign(items []*Item) {
+	if len(items) == 0 {
+		return
+	}
+	unassigned := make(map[*Item]struct{}, len(items))
+	for _, item := range items {
+		unassigned[item] = struct{}{}
+	}
+	for _, req := range r.Requests {
+		if req == nil {
+			continue
+		}
+		n := 0
+		for _, item := range req.Items {
+			if _, ok := unassigned[item]; !ok {
+				req.Items[n] = item
+				n++
+			}
+		}
+		clear(req.Items[n:])
+		req.Items = req.Items[:n]
+	}
+}
+
 func (r *LeaseBatch) Iterator() LeaseBatchIterator {
 	return LeaseBatchIterator{b: r}
 }

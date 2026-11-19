@@ -11,4 +11,7 @@
 // goroutine, the logical queue that owns it, except Info and UpdateQueueInfo, which must be safe
 // for concurrent use. docs/storage/internals.md explains the contract and
 // why each backend is built the way it is. docs/storage/README.md covers configuring them.
+//
+// MongoDB's Lease keeps the items it placed in the same order as its bulk write models, because
+// a bulk write error names a failed update by its index in the models.
 package store

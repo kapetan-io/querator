@@ -2187,7 +2187,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		t.Run("QueueProduce", func(t *testing.T) {
 			t.Run("WriteFails", func(t *testing.T) {
-				var fault produceFault
+				var fault partitionFault
 				d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: fault.Wrap(storage)})
 				defer d.Shutdown(t)
 				c, ctx := d.MustClient(), d.Context()
@@ -2202,7 +2202,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				// An empty queue schedules its next lifecycle run far beyond the 24h ExpireTimeout.
 				waitForLifecycleRun(t, ctx, c, queueName)
 
-				fault.failing.Store(true)
+				fault.failingProduce.Store(true)
 				err := c.QueueProduce(ctx, &pb.QueueProduceRequest{
 					QueueName:      queueName,
 					RequestTimeout: "5s",
@@ -2225,7 +2225,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				assert.Greater(t, nextLifecycleRun(t, ctx, c, queueName), 24*clock.Hour)
 
 				// A produce after storage recovers counts only its own items, so the failed write left nothing in un_leased.
-				fault.failing.Store(false)
+				fault.failingProduce.Store(false)
 				require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
 					QueueName:      queueName,
 					RequestTimeout: "5s",
@@ -2238,7 +2238,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			})
 
 			t.Run("WriteFailsForEveryRequestInBatch", func(t *testing.T) {
-				var fault produceFault
+				var fault partitionFault
 				d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: fault.Wrap(storage)})
 				defer d.Shutdown(t)
 				c, ctx := d.MustClient(), d.Context()
@@ -2258,7 +2258,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 				// Requests held while the queue is paused reach the partition in one pass, so the
 				// lease counts the items of the failed write as un-leased before that write fails.
-				fault.failing.Store(true)
+				fault.failingProduce.Store(true)
 				require.NoError(t, d.Service().PauseQueue(ctx, queueName))
 
 				callCtx, cancel := context.WithCancel(ctx)
@@ -2440,6 +2440,137 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					}
 				})
 			}
+		})
+
+		t.Run("QueueLeaseWriteFails", func(t *testing.T) {
+			t.Run("TimesOutEmpty", func(t *testing.T) {
+				var fault partitionFault
+				d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: fault.Wrap(storage)})
+				defer d.Shutdown(t)
+				c, ctx := d.MustClient(), d.Context()
+				queueName := produceLeaseFaultItems(t, ctx, c)
+
+				fault.failingLease.Store(true)
+				var lease pb.QueueLeaseResponse
+				err := c.QueueLease(ctx, &pb.QueueLeaseRequest{
+					ClientId:       random.String("client-", 10),
+					RequestTimeout: "1s",
+					QueueName:      queueName,
+					BatchSize:      2,
+				}, &lease)
+				var e duh.Error
+				require.True(t, errors.As(err, &e))
+				assert.Equal(t, querator.MsgRequestTimeout, e.Message())
+				assert.Empty(t, lease.Items)
+				assert.False(t, isLeased(t, ctx, c, queueName, "A"))
+				assert.False(t, isLeased(t, ctx, c, queueName, "B"))
+				assert.Equal(t, leaseCounts{UnLeased: 2, TotalLeased: 0}, partitionLeaseCounts(t, ctx, c, queueName))
+
+				fault.failingLease.Store(false)
+				assert.Equal(t, []string{"A", "B"}, leaseAndCompleteReferences(t, ctx, c, queueName))
+			})
+
+			t.Run("LaterPassAnswersWaitingLease", func(t *testing.T) {
+				var fault partitionFault
+				d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: fault.Wrap(storage)})
+				defer d.Shutdown(t)
+				c, ctx := d.MustClient(), d.Context()
+				queueName := produceLeaseFaultItems(t, ctx, c)
+
+				fault.failingLease.Store(true)
+				var lease pb.QueueLeaseResponse
+				var leaseErr error
+				backgroundCall{
+					Call: func() {
+						leaseErr = c.QueueLease(ctx, &pb.QueueLeaseRequest{
+							ClientId:       random.String("client-", 10),
+							RequestTimeout: "10s",
+							QueueName:      queueName,
+							BatchSize:      2,
+						}, &lease)
+					},
+					While: func() {
+						require.NoError(t, untilLeaseClientWaiting(t, c, queueName, 1))
+						assert.False(t, isLeased(t, ctx, c, queueName, "A"))
+						assert.False(t, isLeased(t, ctx, c, queueName, "B"))
+
+						// Resuming runs another pass that tries the waiting request again and fails
+						// again, and neither pass moves the counts.
+						require.NoError(t, d.Service().PauseQueue(ctx, queueName))
+						require.NoError(t, d.Service().ResumeQueue(ctx, queueName))
+						require.NoError(t, untilLeaseClientWaiting(t, c, queueName, 1))
+						assert.Equal(t, leaseCounts{UnLeased: 2, TotalLeased: 0}, partitionLeaseCounts(t, ctx, c, queueName))
+
+						// A produce runs a later pass, which answers the waiting request.
+						fault.failingLease.Store(false)
+						require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+							QueueName:      queueName,
+							RequestTimeout: "5s",
+							Items:          []*pb.QueueProduceItem{{Reference: "C", Bytes: []byte("c")}},
+						}))
+					},
+				}.run()
+				require.NoError(t, leaseErr)
+
+				var references []string
+				for _, item := range lease.Items {
+					references = append(references, item.Reference)
+					assert.True(t, isLeased(t, ctx, c, queueName, itemReference(item.Reference)))
+				}
+				assert.Equal(t, []string{"A", "B"}, references)
+				assert.False(t, isLeased(t, ctx, c, queueName, "C"))
+				assert.Equal(t, leaseCounts{UnLeased: 1, TotalLeased: 2}, partitionLeaseCounts(t, ctx, c, queueName))
+			})
+
+			t.Run("SeveralWaitingLeases", func(t *testing.T) {
+				var fault partitionFault
+				d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: fault.Wrap(storage)})
+				defer d.Shutdown(t)
+				c, ctx := d.MustClient(), d.Context()
+				queueName := produceLeaseFaultItems(t, ctx, c)
+
+				fault.failingLease.Store(true)
+				require.NoError(t, d.Service().PauseQueue(ctx, queueName))
+				leases := make([]pb.QueueLeaseResponse, 2)
+				errs := make([]error, 2)
+				backgroundCall{
+					Call: func() {
+						concurrently(2, func(i int) {
+							errs[i] = c.QueueLease(ctx, &pb.QueueLeaseRequest{
+								ClientId:       random.String("client-", 10),
+								RequestTimeout: "10s",
+								QueueName:      queueName,
+								BatchSize:      1,
+							}, &leases[i])
+						})
+					},
+					While: func() {
+						require.NoError(t, untilLeaseClientWaiting(t, c, queueName, 2))
+						// Resuming runs one pass that assigns both requests to the partition, and
+						// the failed write leaves both waiting without moving the counts.
+						require.NoError(t, d.Service().ResumeQueue(ctx, queueName))
+						require.NoError(t, untilLeaseClientWaiting(t, c, queueName, 2))
+						assert.Equal(t, leaseCounts{UnLeased: 2, TotalLeased: 0}, partitionLeaseCounts(t, ctx, c, queueName))
+
+						fault.failingLease.Store(false)
+						require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+							QueueName:      queueName,
+							RequestTimeout: "5s",
+							Items:          []*pb.QueueProduceItem{{Reference: "C", Bytes: []byte("c")}},
+						}))
+					},
+				}.run()
+
+				var references []string
+				for i := range leases {
+					require.NoError(t, errs[i])
+					require.Len(t, leases[i].Items, 1)
+					references = append(references, leases[i].Items[0].Reference)
+					assert.True(t, isLeased(t, ctx, c, queueName, itemReference(leases[i].Items[0].Reference)))
+				}
+				slices.Sort(references)
+				assert.Equal(t, []string{"A", "B"}, references)
+			})
 		})
 
 		t.Run("QueueLease", func(t *testing.T) {
@@ -2733,7 +2864,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				now.Freeze(clock.Now())
 				defer now.UnFreeze()
 
-				var fault produceFault
+				var fault partitionFault
 				d := newDaemon(t, 20*clock.Second, svc.Config{StorageConfig: fault.Wrap(storage), Clock: now})
 				defer d.Shutdown(t)
 				c, ctx := d.MustClient(), d.Context()
@@ -2762,7 +2893,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				require.Equal(t, "dead", leaseOne(t, ctx, c, queueName).Reference)
 
 				// The dead letter queue's storage refuses the write, so the move must not delete the source item.
-				fault.failing.Store(true)
+				fault.failingProduce.Store(true)
 				now.Advance(2 * clock.Minute)
 				waitForLifecycleRun(t, ctx, c, queueName)
 				assert.True(t, isLeased(t, ctx, c, queueName, "dead"))
@@ -2772,7 +2903,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				assert.Empty(t, resp.Items)
 
 				// A later lifecycle run moves the item once the dead letter queue's storage accepts writes.
-				fault.failing.Store(false)
+				fault.failingProduce.Store(false)
 				now.Advance(5 * clock.Second)
 				require.Eventually(t, func() bool {
 					var resp pb.StorageItemsListResponse

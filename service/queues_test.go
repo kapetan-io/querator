@@ -296,6 +296,96 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				assert.Equal(t, dt.String(), r.ExpireTimeout)
 				assert.Equal(t, rt.String(), r.LeaseTimeout)
 			})
+
+			t.Run("InfoShowsUpdatedSettings", func(t *testing.T) {
+				queueName := random.String("queue-", 10)
+				deadName := queueName + "-dead"
+
+				require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+					QueueName:           deadName,
+					LeaseTimeout:        "1m",
+					ExpireTimeout:       "10m",
+					RequestedPartitions: 1,
+				}))
+				require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+					QueueName:           queueName,
+					LeaseTimeout:        "1m",
+					ExpireTimeout:       "10m",
+					RequestedPartitions: 1,
+				}))
+
+				var before pb.QueueInfo
+				require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &before))
+
+				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+					QueueName:           queueName,
+					LeaseTimeout:        "2m",
+					ExpireTimeout:       "20m",
+					MaxAttempts:         5,
+					DeadQueue:           deadName,
+					Reference:           "updated",
+					RequestedPartitions: 2,
+				}))
+
+				var info pb.QueueInfo
+				require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &info))
+				assert.Equal(t, "2m0s", info.LeaseTimeout)
+				assert.Equal(t, "20m0s", info.ExpireTimeout)
+				assert.Equal(t, int32(5), info.MaxAttempts)
+				assert.Equal(t, deadName, info.DeadQueue)
+				assert.Equal(t, "updated", info.Reference)
+				assert.Equal(t, int32(2), info.RequestedPartitions)
+				assert.True(t, before.UpdatedAt.AsTime().Before(info.UpdatedAt.AsTime()))
+
+				// Fields an update never carries keep the values the queue was created with
+				assert.Equal(t, before.Namespace, info.Namespace)
+				assert.Equal(t, before.CreatedAt.AsTime(), info.CreatedAt.AsTime())
+				assert.Len(t, info.Partitions, len(before.Partitions))
+
+				var list pb.QueuesListResponse
+				require.NoError(t, c.QueuesList(ctx, &list, &querator.ListOptions{Pivot: queueName, Limit: 1}))
+				require.Len(t, list.Items, 1)
+				stored := list.Items[0]
+				assert.Equal(t, info.LeaseTimeout, stored.LeaseTimeout)
+				assert.Equal(t, info.ExpireTimeout, stored.ExpireTimeout)
+				assert.Equal(t, info.MaxAttempts, stored.MaxAttempts)
+				assert.Equal(t, info.DeadQueue, stored.DeadQueue)
+				assert.Equal(t, info.Reference, stored.Reference)
+				assert.Equal(t, info.RequestedPartitions, stored.RequestedPartitions)
+				assert.Equal(t, info.UpdatedAt.AsTime(), stored.UpdatedAt.AsTime())
+			})
+
+			t.Run("PartialUpdateLeasesWithKeptLeaseTimeout", func(t *testing.T) {
+				queueName := random.String("queue-", 10)
+				require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+					QueueName:           queueName,
+					LeaseTimeout:        "1m",
+					ExpireTimeout:       "10m",
+					RequestedPartitions: 1,
+				}))
+
+				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+					QueueName: queueName,
+					Reference: "only-reference",
+				}))
+
+				require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+					QueueName:      queueName,
+					RequestTimeout: "1m",
+					Items:          produceRandomItems(1),
+				}))
+				// The update carries no lease_timeout, so a lease must still last the 1m the queue was created with
+				start := clock.Now().UTC()
+				var lease pb.QueueLeaseResponse
+				require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+					ClientId:       random.String("client-", 10),
+					RequestTimeout: "5s",
+					QueueName:      queueName,
+					BatchSize:      1,
+				}, &lease))
+				require.Len(t, lease.Items, 1)
+				assert.True(t, lease.Items[0].LeaseDeadline.AsTime().After(start.Add(30*clock.Second)))
+			})
 		})
 		t.Run("Delete", func(t *testing.T) {
 			l := queues[0]
@@ -446,6 +536,71 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					err := c.QueuesUpdate(ctx, &pb.QueueInfo{
 						QueueName: queueName,
 						DeadQueue: dlqName,
+					})
+					require.Error(t, err)
+					var duhErr duh.Error
+					require.True(t, errors.As(err, &duhErr))
+					assert.Equal(t, duh.CodeBadRequest, duhErr.Code())
+					assert.Contains(t, duhErr.Message(), "must have a single partition")
+				})
+
+				t.Run("DLQGainsDLQOnUpdate", func(t *testing.T) {
+					queueC := random.String("queue-c-", 10)
+					queueB := random.String("queue-b-", 10)
+					queueA := random.String("queue-a-", 10)
+
+					for _, name := range []string{queueC, queueB} {
+						require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+							QueueName:           name,
+							ExpireTimeout:       "10m",
+							LeaseTimeout:        "1m",
+							RequestedPartitions: 1,
+						}))
+					}
+
+					// B gains a dead-letter queue of its own after it was loaded, so it can no longer be named as one
+					require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+						QueueName: queueB,
+						DeadQueue: queueC,
+					}))
+
+					err := c.QueuesCreate(ctx, &pb.QueueInfo{
+						QueueName:           queueA,
+						DeadQueue:           queueB,
+						ExpireTimeout:       "10m",
+						LeaseTimeout:        "1m",
+						RequestedPartitions: 1,
+					})
+					require.Error(t, err)
+					var duhErr duh.Error
+					require.True(t, errors.As(err, &duhErr))
+					assert.Equal(t, duh.CodeBadRequest, duhErr.Code())
+					assert.Contains(t, duhErr.Message(), "already has its own dead_queue configured")
+				})
+
+				t.Run("DLQGainsPartitionsOnUpdate", func(t *testing.T) {
+					dlqName := random.String("dlq-", 10)
+					queueName := random.String("queue-", 10)
+
+					require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+						QueueName:           dlqName,
+						ExpireTimeout:       "10m",
+						LeaseTimeout:        "1m",
+						RequestedPartitions: 1,
+					}))
+
+					// The dead-letter queue gains a second requested partition after it was loaded, so it can no longer be named as one
+					require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+						QueueName:           dlqName,
+						RequestedPartitions: 2,
+					}))
+
+					err := c.QueuesCreate(ctx, &pb.QueueInfo{
+						QueueName:           queueName,
+						DeadQueue:           dlqName,
+						ExpireTimeout:       "10m",
+						LeaseTimeout:        "1m",
+						RequestedPartitions: 1,
 					})
 					require.Error(t, err)
 					var duhErr duh.Error

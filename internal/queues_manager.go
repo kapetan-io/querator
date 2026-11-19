@@ -202,7 +202,7 @@ func (qm *QueuesManager) Update(ctx context.Context, info types.QueueInfo) error
 		return err
 	}
 
-	info.UpdatedAt = qm.conf.LogicalConfig.Clock.Now().UTC()
+	info.UpdatedAt = qm.conf.LogicalConfig.Clock.Now().UTC().Truncate(clock.Microsecond)
 	if err := qm.conf.StorageConfig.Queues.Update(ctx, info); err != nil {
 		return errors.Errorf("Queues.Update(): %w", err)
 	}
@@ -212,8 +212,12 @@ func (qm *QueuesManager) Update(ctx context.Context, info types.QueueInfo) error
 		return nil
 	}
 
+	merged := q.Info()
+	merged.Update(info)
+	q.UpdateInfo(merged)
+
 	for _, l := range q.GetAll() {
-		if err := l.UpdateInfo(ctx, info); err != nil {
+		if err := l.UpdateInfo(ctx, merged); err != nil {
 			return errors.Errorf("LogicalQueue.UpdateInfo(): %w", err)
 		}
 	}

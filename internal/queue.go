@@ -43,7 +43,15 @@ func (q *Queue) AddLogical(ll ...*Logical) *Queue {
 }
 
 func (q *Queue) Info() types.QueueInfo {
+	defer q.mutex.RUnlock()
+	q.mutex.RLock()
 	return q.info
+}
+
+func (q *Queue) UpdateInfo(info types.QueueInfo) {
+	defer q.mutex.Unlock()
+	q.mutex.Lock()
+	q.info = info
 }
 
 func (q *Queue) GetAll() []*Logical {

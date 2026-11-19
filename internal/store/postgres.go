@@ -332,8 +332,9 @@ func (p *PostgresQueues) Update(ctx context.Context, info types.QueueInfo) error
 	}
 
 	query := `UPDATE queues SET lease_timeout_ns = $1, expire_timeout_ns = $2, dead_queue = $3,
-	                           max_attempts = $4, reference = $5, partition_info = $6, updated_at = $7
-	          WHERE name = $8`
+	                           max_attempts = $4, reference = $5, requested_partitions = $6,
+	                           partition_info = $7, updated_at = $8
+	          WHERE name = $9`
 
 	_, err = pool.Exec(ctx, query,
 		found.LeaseTimeout.Nanoseconds(),
@@ -341,6 +342,7 @@ func (p *PostgresQueues) Update(ctx context.Context, info types.QueueInfo) error
 		found.DeadQueue,
 		found.MaxAttempts,
 		found.Reference,
+		found.RequestedPartitions,
 		partitionInfoJSON,
 		timeToMicroseconds(found.UpdatedAt),
 		found.Name,

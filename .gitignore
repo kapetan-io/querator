@@ -11,5 +11,6 @@ coverage.html
 docs/notes
 testdata/
 benchmarks/benchmark_results/
-querator
+/querator
+cmd/querator/querator
 quickstart

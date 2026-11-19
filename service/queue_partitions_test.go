@@ -119,8 +119,7 @@ func TestQueuePartitionLimit(t *testing.T) {
 			}))
 		}()
 
-		// A running daemon's /queues.info returns the queue as it was loaded (ENG-787), so a fresh
-		// daemon is needed to see the update. The restart also proves the queue reloads.
+		// The restart proves the queue reloads from storage with the update applied.
 		d := newDaemon(t, 10*clock.Second, conf.Service)
 		defer d.Shutdown(t)
 		c, ctx := d.MustClient(), d.Context()

@@ -1,212 +1,151 @@
 # Queue Core
 
+> **No implementation detail in this file.** This page holds only what the code cannot say: purpose,
+> domain terms, why a choice was made, the rules that must stay true, and traps a reader would not
+> see from one function. If reading the code would tell you this, it does not belong here. Step-by-step flows,
+> lists of functions, fields or methods, timings, constants and per-backend mechanics stay in the
+> code. A reason with no place on this page goes in an ADR under `docs/adr/` or in the package
+> comment (`doc.go`).
+
 This page records why the code in `internal/` (the files directly in the package, not its
-sub-packages) works the way it does. The code says what it does. The reasons below are the parts it
-cannot say. Terms follow [CONTEXT.md](CONTEXT.md). Decisions already recorded as ADRs are linked,
-not repeated.
+sub-packages) works the way it does. Terms follow [CONTEXT.md](CONTEXT.md). Decisions already
+recorded as ADRs are linked, not repeated.
 
 ## The Logical Queue is the only writer to its partitions
 
 A Logical Queue is the read/write synchronization point for the partitions assigned to it
 ([ADR-0003](adr/0003-rw-sync-point.md)). Only one instance of a given Logical Queue may run anywhere
 in the cluster at a time, and every produce, lease, complete and retry for its partitions goes
-through that one instance's `requestLoop` goroutine.
+through that one instance's request loop.
 
 Moving an item to a dead-letter queue is no exception. A source queue does not write to the
-dead-letter queue's partitions. It hands the items to the dead-letter queue's own Logical Queue
-through `ProduceDeadLetter`, which enters that queue's `requestLoop` exactly like a client produce
-(`MethodProduceInternal`). No goroutine other than a Logical Queue's `requestLoop` writes to its
-partitions. The design is in [ENG-55
+dead-letter queue's partitions. It hands the items to the dead-letter queue's own Logical Queue,
+which takes them through its request loop exactly like a client produce. The design is in [ENG-55
 dlq-single-writer](features/ENG-55-dlq-single-writer/blueprint.md).
+
+Because there is one writer, the request loop is the one place where interaction with the data
+store can be optimised, for example by writing to partitions in parallel.
 
 `QueuesManager` runs one Logical Queue per queue. Running several per queue, as
 [ADR-0016](adr/0016-queue-partitions.md) describes, is deferred until there is a demonstrated need.
 
 ## Hot and cold requests in the request loop
 
-`requestLoop` sorts each request into one of two kinds.
+Hot requests are produce, lease, complete, retry and a dead-letter hand-off. They are the queue's
+throughput path, so the loop batches them: one
+wake-up does as much storage work as it can in as few transactions as it can
+([ADR-0003](adr/0003-rw-sync-point.md)). Every other request is cold (pause, clear, stats, storage
+inspection, queue info updates and the like). Cold requests are rare and are handled one at a time.
 
-* **Hot requests** are produce, internal produce, lease, complete and retry. These are the queue's
-  throughput path, so they are batched. When a hot request arrives, `handleHotRequests` pulls in
-  every hot request already waiting in `requestCh` (`consumeHotCh`), assigns the whole batch to
-  partitions (`assignToPartitions`), writes each partition's share in one call per operation
-  (`applyToPartitions`), then answers every request that is done (`finalizeRequests`). Lease
-  requests with nothing to lease stay in the loop's state for the next pass.
-* **Cold requests** are storage list, import and delete, stats, pause, clear, update info, update
-  partitions and reload. They are rare and are handled one at a time by `handleColdRequests`.
-
-Batching is the point of the single-goroutine design ([ADR-0003](adr/0003-rw-sync-point.md)): one
-wake-up of the loop does as much storage work as it can in as few transactions as it can.
-
-The batch stops at the first cold request it pulls from `requestCh`. `handleHotRequests` finishes
-the hot batch and returns that cold request, and the loop handles it next. Stopping there keeps
-requests in arrival order, so a pause, a clear or a queue info update is never applied ahead of a
-hot request that was sent before it, and never behind one sent after it. The exception is a paused
-queue: hot requests are held while cold requests still run, so a cold request sent during a pause is
-applied ahead of the hot requests held before it.
-
-`consumeHotCh` reads at most `len(requestCh)` requests. Only the `requestLoop` goroutine receives
-from `requestCh`, so the channel holds at least that many, and the bound makes the loop finite while
-still taking everything that was waiting.
-
-`handleHotRequests` called with no request (`nil`) pulls nothing from `requestCh`. It only processes
-the requests already held in the loop's state. Un-pausing a queue uses this to apply the requests
-held during the pause.
-
-The single-writer rule above also means `applyToPartitions` is the one place where interaction with
-the data store can be optimised (for example, writing to partitions in parallel). It calls each
-partition in turn.
+A batch stops at the first cold request. Stopping there keeps requests in arrival order, so a
+pause, a clear or a queue info update is never applied ahead of a hot request that was sent before
+it, and never behind one sent after it. The exception is a paused queue: hot requests are held while
+cold requests still run, so a cold request sent during a pause is applied ahead of the hot requests
+held before it.
 
 ## Pause
 
-Pause exists only for tests ([ADR-0013](adr/0013-pausing-a-queue.md)). While a queue is paused,
-`requestLoop` holds hot requests in its state without processing them, and stops the lifecycle,
-scheduled and request-timeout timers. It does this by selecting on `nil` channels in place of the
-timers, because a `nil` channel never fires. Cancelling the pause applies the held requests.
+Pause exists only for tests ([ADR-0013](adr/0013-pausing-a-queue.md)). A paused queue holds hot
+requests and stops its timers, and cancelling the pause applies what it held.
 
-A paused queue drops a held dead-letter hand-off whose caller has stopped waiting (its context
-ended, an abandoned hand-off). It checks each time it holds another hot request, so the newest
-abandoned hand-off stays held and is applied when the pause is cancelled. The source queue's
-lifecycle sends a new hand-off each time it runs again with back-off, so without the drop a paused
-dead-letter queue would hold one more copy every back-off interval for as long as the pause lasts. A
-held client produce is kept even after its caller gives up, and is applied when the pause is
-cancelled.
+A paused queue drops each held dead-letter hand-off whose caller has stopped waiting. It checks
+each time it holds another hot request, so the newest abandoned hand-off stays held until the next
+check. The source queue sends a new hand-off each time its lifecycle runs again with back-off, so
+without the drop a paused dead-letter queue would hold one more copy every back-off interval for as
+long as the pause lasts. A held client produce is kept even after its caller gives up, and is
+applied when the pause is cancelled.
 
 ## Shutdown
 
-`Logical.inFlight` counts callers that have entered `Produce`, `Lease`, `Complete`, `Retry` or
-`ProduceDeadLetter` and are waiting for an answer. Shutdown uses it to answer every one of them.
+Shutdown must answer every hot request's caller, including requests the loop is holding because
+the queue is paused or every partition has failed. A caller left unanswered keeps shutdown waiting
+until its context ends. A caller can be counted as waiting before its request reaches the loop, so
+shutdown waits for its count of waiting hot callers to reach zero, not for the request channel to
+empty. Cold requests are not counted, so one that reaches the channel after the count is zero
+waits until its own context ends (ENG-816).
 
-`handleShutdown` answers the requests held in the loop's state, then `rejectInFlight` answers what
-is still in `requestCh` until `inFlight` reaches zero. `rejectInFlight` keeps checking even when
-`requestCh` is empty, because a caller counted in `inFlight` may not have sent its request yet.
-
-Produce, complete and retry requests are held in state while the queue is paused, and produce
-requests are also held while every partition has failed. Shutdown must answer them too, or
-`inFlight` never reaches zero and shutdown waits until its context ends.
-
-`QueuesManager.Shutdown` copies its list of queues under the mutex, then releases the mutex before
-it waits for any Logical Queue to stop. Holding the mutex while waiting would deadlock: a
-`requestLoop` in the middle of `runLifecycle` can call `ProduceToQueue` to move dead items, and
-`ProduceToQueue` takes the same mutex.
-
-For the same reason `ProduceToQueue` holds the mutex only while it looks up the dead-letter queue,
-and releases it before it waits on the dead-letter queue's loop.
+`QueuesManager.Shutdown` must not hold its mutex while it waits for a Logical Queue to stop. Holding
+it would deadlock: a request loop in the middle of a lifecycle run can move dead items to a
+dead-letter queue, and that path takes the same mutex. For the same reason the dead-letter path
+holds the mutex only while it looks up the dead-letter queue, and releases it before it waits on
+the dead-letter queue's loop.
 
 `QueuesManager.Delete` holds the mutex while it shuts a queue's Logical Queue down, so it can hit
 this deadlock (ENG-782).
 
 ## Partition distribution
 
-Produce uses opportunistic distribution ([ADR-0019](adr/0019-partition-item-distribution.md)).
-`sortPartitionsByLoad` orders partitions by failures, then by unleased item count, both ascending,
-and the loop re-sorts after every assignment.
+Produce uses opportunistic distribution ([ADR-0019](adr/0019-partition-item-distribution.md)). A
+produce request goes to the healthy partition with the fewest unleased items, and a lease request
+to the healthy partition with the most. A failed partition takes no new produce or lease requests,
+and when every partition has failed a produce request waits unassigned.
 
-* A produce request goes to the first partition in that order, the healthy one with the fewest
-  unleased items. Failed partitions sort last, so if the first partition has failed, every partition
-  has failed, and the produce request is left unassigned.
-* A lease request goes to the last healthy partition in that order (`lastHealthyPartition`), the one
-  with the most unleased items. The lease records that partition's number, and the client sends it
-  back with complete and retry.
-* Complete and retry requests name their partition, so they cannot be moved to another one. When
-  that partition is missing or failing, or its storage call fails, the client gets a retry error.
+Complete and retry requests name the partition the lease came from, so they cannot be moved to
+another one. When that partition is missing or failing, the client gets a retry error.
 
-`QueueState.Partitions` is re-sorted continuously, so code that needs a partition by number looks it
-up with `GetPartition` instead of indexing the slice. `handleStats` does this.
+The queue state's list of partitions (`QueueState.Partitions`) is re-ordered by load as requests
+are assigned, so a position in it is not a partition number. Look a partition up by number with
+`GetPartition`.
 
-## Lifecycle and scheduled timers
+## Lifecycle and scheduled runs
 
-Each partition tracks when it next needs a lifecycle run (`NextLifecycleRun`, for expired leases and
-expired items) and a scheduled run (`NextScheduledRun`, for scheduled items and retries). The loop's
-two timers fire at the earliest of these across all partitions.
+The Lifecycle (see [CONTEXT.md](CONTEXT.md)) is two timed runs per partition, both on the request
+loop. A lifecycle run handles expired leases, expired items and items at `MaxAttempts`. A scheduled
+run enqueues scheduled items and retries whose time has come.
 
-Writing to a partition can bring a run forward. A lease sets a lease deadline, a produce sets item
-expire deadlines and may add scheduled items, and a retry may schedule a retry time
-(`applyToPartitions` with `notifyExpired`, `notifyScheduled` and `notifyScheduledRetry`). When any
-of these is earlier than the partition's next run, the next run moves forward and the timer is
-reset, so expiry is noticed on time without scanning storage on every pass. `runLifecycle` and
-`runScheduled` run on the `requestLoop` goroutine, not a goroutine of their own.
+Writing to a partition can bring its next lifecycle or scheduled run forward: a lease sets a lease
+deadline, a produce sets expire deadlines and may schedule items, and a retry may schedule a retry
+time. The run moves forward when the write's time is earlier, so expiry is noticed on time without
+scanning storage on every pass.
 
 A lifecycle run that leaves due work undone runs again with back-off. That covers a dead-letter move
-or a `TakeAction` that failed, and a deadline from `LifeCycleInfo` still at or before now after the
-run, which is how an item stuck in a failed move stops hiding later deadlines. The next run is the
-earlier of the next future deadline and the back-off (`lifecycleBackOff`, 750ms rising to 5s), and a
-move that keeps failing tries again every 5s forever. The back-off is measured from the end of the
-run, because a dead-letter move can block for `WriteTimeout`.
+or a lifecycle action (`TakeAction`) that failed, and a deadline still at or before now after the run. The back-off is measured from the end of the run, because
+a dead-letter move can block for `WriteTimeout`.
 
-* `PartitionLifecycleState.UnfinishedRuns` counts those runs and resets on a run that leaves
-  nothing due. It stops counting once the back-off reaches its maximum, since `IntervalBackOff.Next`
-  overflows its conversion to a `Duration` after enough attempts.
-* `PartitionLifecycleState.Failures` is different. It counts failed scans and `LifeCycleInfo` reads,
-  is copied to `State.Failures`, and takes the partition out of request distribution until
-  `recoverPartition` succeeds. An unfinished run leaves `State.Failures` alone, because the fault may
-  lie with the dead-letter queue and the partition can still serve requests.
-* `Failures` is capped differently from `UnfinishedRuns` and `ScheduledFailures`. Queue stats report
-  it as the total number of failures, so the counter is left alone and the back-off is given at most
-  `lifecycleBackOffAttemptLimit` (32) attempts instead. `recoverPartition` resets `Failures` whenever
-  its stats read succeeds, so the count only climbs that high while the stats read itself keeps
-  failing. A scan or `LifeCycleInfo` read that keeps failing behind a working stats read stays at
-  the first back-off step, 750ms. Past about 58
-  attempts `IntervalBackOff.Next` overflows its conversion to a `Duration`. On amd64 the overflow
-  is negative and `Next` returns its 500ms minimum, so an uncapped partition that kept failing
-  would go back to running every 500ms.
-* Each retry against a dead-letter queue that hangs blocks the source queue's loop for up to
-  `WriteTimeout`, once per back-off interval, for as long as it hangs.
-* Each run again with back-off scans the partition in `ScanForActions` and sends every dead item
-  again, all on the request loop. On InMemory, BadgerDB and PostgreSQL, `LifeCycleInfo` then reads
-  every item of the partition a second time; MongoDB's uses two sorted lookups. A move that keeps
-  failing on a large partition costs a whole-partition read every 5s while produce, lease and
-  complete wait. This cost has not been measured.
+* An unfinished run leaves the partition in request distribution, because the fault may lie with
+  the dead-letter queue and the partition can still serve requests. A failed scan or storage read
+  takes the partition out of distribution until it recovers.
+* Every attempt count passed to the back-off must be capped. Past about 58 attempts the back-off
+  overflows its conversion to a `Duration` and returns a wrong interval. For the partition's
+  `Failures` count, cap the value passed in, not the counter, because queue stats report the
+  counter.
+* A dead-letter queue that hangs blocks the source queue's loop for up to `WriteTimeout` once per
+  back-off interval, and each retry rescans the source partition on the request loop while produce,
+  lease and complete wait. This cost has not been measured.
 
-A scheduled run enqueues every scheduled item whose `EnqueueAt` is at or before now, then sets the
-partition's next scheduled run to the earliest `EnqueueAt` still in storage (`LifeCycleInfo`'s
-`NextEnqueueAt`), or far in the future when nothing is scheduled. The `notify*` functions only see
-items produced or retried since the queue loaded, and only the earliest of each batch, so storage,
-not those notices, is what keeps a later item from being forgotten. For the same reason
-`prepareQueueState` runs one scheduled pass while the queue loads: items scheduled before a restart,
-including ones already overdue, are enqueued and the first timer is set from storage. A run that
-fails, or that finds a due item still scheduled after enqueuing, retries with `lifecycleBackOff`.
-Scheduled runs count their failures in `ScheduledFailures`, apart from the lifecycle's `Failures`,
-so neither run resets or raises the other's back-off, and a failed scheduled run leaves the
-partition in request distribution. Like `UnfinishedRuns`, it stops counting once the back-off
-reaches its maximum.
+Storage, not the writes that brought a run forward, decides when the next scheduled run happens.
+Those writes are only the ones made since the queue loaded, so a scheduled item written before a
+restart would be forgotten otherwise. For the same reason the queue runs one scheduled pass while it loads, so items
+already overdue at startup are enqueued. Scheduled runs count their failures apart from the
+lifecycle's, so neither run resets or raises the other's back-off, and a failed scheduled run leaves
+the partition in request distribution.
 
-Lease requests that found no items wait in `QueueState.Leases`. After each lifecycle and scheduled
-run, `leaseToWaitingConsumers` runs `handleHotRequests` with no new request, so items the run just
-enqueued or gave back reach those waiting consumers instead of waiting for the next client request.
-A waiting request goes to the partition `lastHealthyPartition` picks, by an un-leased count that
-includes items still scheduled, so on a queue with several partitions it can miss an item that came
-due in another partition (ENG-792).
+After each lifecycle and scheduled run, lease requests that are waiting for items are tried again,
+so items the run just enqueued or gave back reach those consumers without waiting for the next
+client request. A waiting request is tried against one partition only, so on a queue with several
+partitions it can miss an item that came due in another one (ENG-792).
 
 ## Dead-letter moves
 
 Items reach a dead-letter queue when they expire or reach `MaxAttempts`.
 
-* `ProduceDeadLetter` skips the client produce checks on request timeout and batch size, because
-  `QueuesManager.LifeCycle` builds the items before handing them over. An empty batch returns `nil`
-  instead of the error a client produce gets. The dead-letter queue's loop assigns each item a new
-  `ExpireDeadline`, replacing the source queue's value.
-* The hand-off waits for the dead-letter queue's loop to confirm the produce.
-  `QueuesManager.LifeCycle` deletes the source items only after that confirmation
+* The source items are deleted only after the dead-letter queue's loop confirms the produce
   (delete-after-confirm), so an item is never lost between the two queues.
-* When the dead-letter queue's `requestCh` is full, `ProduceDeadLetter` returns at once with an
-  overloaded error instead of waiting. A saturated dead-letter queue never stalls the source queue's
-  loop. The source item stays where it is and the lifecycle runs again with back-off.
-* `ProduceDeadLetter` stops waiting when its context ends, and the lifecycle bounds that context
-  with `WriteTimeout`, so a stalled dead-letter queue cannot block the source loop indefinitely.
-* Before the move, each item's `SourceID` is set to its original ID, its `ID` is cleared so the
-  dead-letter queue's storage assigns a new one, and its lease state and attempts are reset. These
-  changes are made to copies, so the request's `Actions` keep the original IDs that the delete from
-  the source partition needs.
-* The source items are deleted through `TakeAction` with `ActionDeleteItem`, not `Complete`.
-  `Complete` refuses an item that is not leased, and an item can expire without ever being leased.
-* If deleting the source items fails after a confirmed move, `LifeCycle` returns the error, so the
-  lifecycle runs again with back-off. The items are already in the dead-letter queue. The next run
-  finds the source items again and the dead-letter queue drops the duplicate by `SourceID`.
+* A dead-letter queue whose request channel is full answers at once with an overloaded error
+  instead of making the source queue wait. A saturated dead-letter queue never stalls the source
+  queue's loop. The source item stays where it is and the lifecycle runs again with back-off.
+* The wait for the dead-letter queue is bounded by `WriteTimeout`, so a stalled dead-letter queue
+  cannot block the source loop indefinitely.
+* The source items are deleted as a lifecycle action, not through `Complete`. `Complete` refuses an
+  item that is not leased, and an item can expire without ever being leased.
+* The move sets each item's `SourceID` to its ID in the source queue and clears its ID. It changes
+  copies, because the delete from the source partition needs the original IDs. When deleting the source
+  items fails after a confirmed move, the next run finds them again and the dead-letter queue drops
+  the duplicate by that `SourceID`.
 
-`validateDeadQueue` checks the name's format before it looks the queue up, because the lookup
-(`QueuesManager.get`) loads the queue from storage and can start a Logical Queue for it. Besides the
-name and that the queue exists, it enforces these rules on the queue named as a dead-letter queue.
+A dead-letter queue name is checked for format before the queue is looked up, because the lookup
+loads the queue from storage and can start a Logical Queue for it. These rules apply to the queue
+named as a dead-letter queue.
 
 * A queue cannot be its own dead-letter queue, and the queue named as a dead-letter queue must not
   have a dead-letter queue of its own. These rules exist so the source queue's loop and the
@@ -221,62 +160,33 @@ name and that the queue exists, it enforces these rules on the queue named as a 
 
 ## Queue creation and loading
 
-`QueuesManager.Create` decides where partitions go from the storage backends' affinities
-(`store.PlacePartitions`). A caller supplies only the number of partitions. Any partition details it
-sends are ignored.
+`QueuesManager` decides where partitions go from the storage backends' affinities. A caller supplies
+only the number of partitions, and any partition details it sends are ignored.
 
-`NewQueuesManager` rejects two partition storage backends with the same name, because `store.Find`
-returns the first backend with a matching name, and a repeated name would open some partitions on
-the wrong backend.
+Two partition storage backends cannot share a name, because backends are found by name and a
+repeated name would open some partitions on the wrong backend.
 
-A queue stored with no partitions has nothing to run, so `get` registers it without a Logical Queue.
-Produce and lease report that there are no available partitions, complete and retry reject every
-partition number, and the queue can still be inspected and deleted.
+A queue stored with no partitions has nothing to run, so it has no Logical Queue. It refuses
+produce, lease, complete and retry, and can still be inspected and deleted.
 
 ## Clearing a queue
 
-`handleClear` clears each partition in storage. The Logical Queue holds no cached items. If it ever
-caches items in memory, clearing a queue must flush that cache too.
+The Logical Queue holds no cached items, so clearing a queue clears storage only. If it ever caches
+items in memory, clearing a queue must flush that cache too.
 
 ## Authentication and authorization
 
-`AuthBackend.HasPermission` follows the cascade in [ADR-0025](adr/0025-multi-tenancy-and-auth.md),
-with one addition. ADR-0025 says a key scoped to one namespace can never reach another. The code
-lets a scoped key act on the `_system` namespace (`auth.SystemNamespace`) itself, using only the
-permissions its user holds through `_system` role bindings. For any other namespace outside its
-scope, a scoped key is denied.
+Permission checks follow the cascade in [ADR-0025](adr/0025-multi-tenancy-and-auth.md), with one
+addition. ADR-0025 says a key scoped to one namespace can never reach another. The code lets a
+scoped key act on the `_system` namespace itself, using only the permissions its user holds through
+`_system` role bindings. For any other namespace outside its scope, a scoped key is denied.
 
-A permission check reads at most `maxRoleBindingsPerCheck` (100) role bindings for each namespace it
-checks (the target, then `_system`), so a user with many bindings cannot cause an unbounded storage
-scan. The cost that remains is in [known-issues.md](known-issues.md).
+A permission check reads a bounded number of role bindings for each namespace it checks, so a user
+with many bindings cannot cause an unbounded storage scan. The cost that remains is in
+[known-issues.md](known-issues.md).
 
-`AuthCache` caches the principal for each API key for a TTL (default five minutes) so that most
-requests authenticate without a storage read. `AuthCache.Authenticate` collapses concurrent lookups
-of the same key into one storage lookup (`singleflight`). That lookup runs on its own context with a
-10 second timeout instead of the first caller's context, so one caller cancelling does not fail
-every caller sharing the lookup.
+Concurrent lookups of the same API key share one storage lookup. That lookup runs on its own
+context, not the first caller's, so one caller cancelling does not fail every caller sharing it.
 
-A storage error while looking up a key or its user is logged and returned to the caller as an
-invalid key (HTTP 401) instead of a server error.
-
-A cache miss also records the key's last-used time. That must not slow authentication, so the lookup
-sends it to a buffered channel and drops the update when the buffer is full. `lastUsedLoop` writes
-the updates to storage, and on `Close` it writes every update still buffered before it exits.
-
-## Debugging
-
-This helper prints the partition order. It is kept here because it is useful when debugging
-distribution and is not part of the code.
-
-```go
-func (l *Logical) dumpPartitionOrder(state *QueueState) string {
-	out := strings.Builder{}
-	out.WriteString("Partition Order:\n")
-	for _, req := range state.Partitions {
-		fmt.Fprintf(&out, "  %02d - UnLeased: %d NumLeased: %d Failures: %d\n",
-			req.Info.PartitionNum, req.State.UnLeased, req.State.NumLeased,
-			req.State.Failures)
-	}
-	return out.String()
-}
-```
+Recording a key's last-used time must not slow authentication, so an update is dropped when the
+updates waiting to be written fill their buffer.

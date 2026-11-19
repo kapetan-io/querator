@@ -1,228 +1,157 @@
 # Storage Backend Internals
 
-This page is for people changing or adding a storage backend in `internal/store`. It records why
-the backends are built the way they are. For how to configure and run each backend, see the
-[backend overview](README.md). Decisions that have their own ADR are linked, not repeated.
+> **No implementation detail in this file.** This page holds only what the code cannot say: purpose,
+> domain terms, why a choice was made, the rules that must stay true, and traps a reader would not
+> see from one function. If reading the code would tell you this, it does not belong here. Step-by-step flows,
+> lists of functions, fields or methods, timings, constants and per-backend mechanics stay in the
+> code. A reason with no place on this page goes in an ADR under `docs/adr/` or in the package
+> comment (`doc.go`).
+
+This page is for people changing or adding a storage backend in `internal/store`. It records the
+rules every backend must keep and why some backends are built the way they are. For how to
+configure and run each backend, see the [backend overview](README.md). Decisions that have their
+own ADR are linked, not repeated.
 
 ## The Partition contract
 
 A `Partition` holds the items of one partition of one queue. Each backend implements it.
 
-**One goroutine drives a partition.** Only the logical queue that owns the partition calls
-`Produce`, `Lease`, `Complete`, `Retry`, `TakeAction` and the other item methods, one call at a time
-([ADR 0003](../adr/0003-rw-sync-point.md)). A `Partition` is therefore not safe for concurrent use,
-and backends lean on this. The MongoDB backend runs without transactions and deduplicates
-`SourceID` with a read followed by an insert, with nothing between them to stop a second caller.
-Badger advances its item ID seed without a lock. Code that calls these methods from a second
-goroutine breaks both.
+**One goroutine drives a partition.** Only the logical queue that owns the partition calls the item
+methods, one call at a time ([ADR 0003](../adr/0003-rw-sync-point.md)). A `Partition` is therefore
+not safe for concurrent use, and backends lean on this. MongoDB deduplicates `SourceID` with a read
+followed by an insert, and Badger advances its item ID generator without a lock. Code that calls the
+item methods from a second goroutine breaks both.
 
-**`Info` and `UpdateQueueInfo` must be safe for concurrent use.** `UpdateQueueInfo` runs when a
-user changes queue settings that must take effect at once. Every backend guards both with the
-partition's read-write lock. Today every caller of either method runs on the logical queue's own
-request loop, and the lock keeps them safe if a caller moves off it.
+**`Info` and `UpdateQueueInfo` must be safe for concurrent use.** `UpdateQueueInfo` applies queue
+settings a user changed, which must take effect at once. Every caller runs on the logical queue's
+own request loop now, and the rule keeps them safe if a caller moves off it.
 
-**Storage is contacted lazily.** `PartitionStore.Get` returns a `Partition` without an error and
-without touching storage. The first call that needs the data creates tables, collections or
-connections ([ADR 0021](../adr/0021-storage-lazy-initialization.md)). The metadata stores
-(`Queues`, `Namespaces`, `Users`, `APIKeys`, `Roles` and `RoleBindings`) follow the same rule.
+**Storage is contacted lazily.** Handing out a `Partition` never touches storage or fails. The first
+call that needs the data creates tables, collections or connections
+([ADR 0021](../adr/0021-storage-lazy-initialization.md)). The metadata stores follow the same rule.
 
-**An error from `Complete` or `Retry` fails the whole batch.** When the backend returns an error,
-the logical queue marks every request in the batch for retry, and the client retries it. Each
-request touches one partition ([ADR 0020](../adr/0020-api-semantics.md)). Badger and Postgres
-discard their transaction, so nothing in the batch applies. MongoDB has no transaction and keeps
-the items it already removed, so the retried request reports those as "does not exist".
+**An error from `Complete` or `Retry` fails the whole batch.** The logical queue marks every request
+in the batch for retry, and the client retries it. Each request touches one partition
+([ADR 0020](../adr/0020-api-semantics.md)). A backend without transactions may already have removed
+some of the items, so the retried request reports those as "does not exist".
 
-**`Lease` hands items out through `batch.Iterator()`.** The iterator spreads the available items
-evenly across every waiting lease request in the batch, so one consumer does not take them all.
+**A problem with one request goes on that request.** An invalid, missing, scheduled or not-leased
+item ID is recorded on its request, and the method still returns nil. The returned error is only for
+a storage failure.
 
-**A problem with one request goes on that request.** `Complete` and `Retry` record an invalid,
-missing, scheduled or not-leased item ID on the request's `Err` and return nil. The returned error
-is only for a storage failure.
+**A lease spreads items across every waiting request.** Available items are shared evenly among the
+lease requests in the batch, so one consumer does not take them all.
 
-**Scheduled items have their own scan.** `ScanForScheduled` returns only the actions that move a
-scheduled item into the queue, separate from `ScanForActions`. Scheduled items run on their own
-timer and their own times, and a separate scan lets the logical queue check them without walking
-every item for lease and expiry work. Both scans stop at the first error they yield.
-`ScanForScheduled` treats an item as due when its `EnqueueAt` is at or before `now`.
+**A failed `Lease` hands out nothing.** Items are placed on their requests before the write commits,
+so a backend whose write fails must take them back off before it returns the error. Otherwise a
+consumer receives an item whose lease was not saved. Badger keeps this rule. PostgreSQL and MongoDB
+break it (ENG-815).
 
-**The methods a name does not explain:**
+**Scheduled items have their own scan.** Scheduled items run on their own timer, and a separate scan
+lets the logical queue check them without walking every item for lease and expiry work.
 
-- `Lease` sets `IsLeased` and `LeaseDeadline` and adds one to `Attempts` on each item it hands out.
-- `Add` serves `/v1/storage/items.import`. It rejects an empty list and does not apply the 100ms
-  `EnqueueAt` rule below, so an imported item keeps the `EnqueueAt` it was given.
-- `Delete` skips IDs it cannot find and fails on an ID that is not valid. Postgres and MongoDB
-  also reject an empty list.
-- `Clear` removes what the `Queue`, `Scheduled` and `Destructive` flags of `types.ClearRequest`
-  select, and the backends disagree on scheduled items. With `Queue` set, Postgres and MongoDB
-  also remove scheduled items whose `EnqueueAt` has passed. InMemory and Badger keep every
-  scheduled item on a non-destructive `Queue` clear, and empty the whole partition, scheduled
-  items included, when `Queue` and `Destructive` are both set.
-- `Produce` and `Add` skip an item whose `SourceID` matches one already in the partition. Removing
-  an item by `Complete`, `Delete`, `Clear` or a lifecycle delete through `TakeAction` frees its
-  `SourceID` again. InMemory and Badger read the `SourceID` to free from the stored item and from
-  the `Action`'s item respectively.
-- `LifeCycleInfo` leaves `NextLeaseExpiry` or `NextExpireDeadline` zero when there is none.
-  `NextEnqueueAt` is the earliest `EnqueueAt` of every scheduled item still in the partition,
-  including items already due, or zero when none remain. An item enqueued by
-  `ActionQueueScheduledItem` must stop counting as scheduled. Otherwise the logical queue sees a
-  due item that was never enqueued and retries the scheduled run with back-off.
-- `PlacePartitions` returns no partitions when every backend's affinity is 0 or less. Its callers
-  check `CanPlacePartitions` first, so a queue that requests partitions always gets them. The
-  `QueuesManager` refuses to create a queue, and the daemon refuses a configured queue with no
-  partitions listed, when no backend can take one.
-- `Queues.Get` returns `ErrQueueNotExist` for a missing queue, which the `QueuesManager` checks
-  for. `Queues.Delete` of a missing queue succeeds.
+**Removing an item frees its `SourceID`.** A produce or import skips an item whose `SourceID` is
+already in the partition, so every way of removing an item (complete, delete, clear, a lifecycle
+delete) must free its `SourceID` again.
+
+**An item enqueued from the schedule stops counting as scheduled.** The earliest scheduled time a
+partition reports includes items already due. If an enqueued item kept counting, the logical queue
+would see a due item that was never enqueued and retry the scheduled run with back-off.
+
+## The Queues contract
+
+**A missing queue is `ErrQueueNotExist`.** The `QueuesManager` checks for that error when it reads a
+queue from the `Queues` store. Deleting a missing queue succeeds.
 
 ## Rules every backend follows
 
-**An `EnqueueAt` less than 100ms away is not scheduled.** `Produce` treats an item whose
-`EnqueueAt` is in the past or within 100ms of now as an ordinary item and clears `EnqueueAt`.
-Clients often fill in every field of a produce request and set `EnqueueAt` to "now", which clock
-drift between machines puts a few milliseconds in the future. Scheduling such an item costs a
-write, a scan and a move for no benefit. `Retry` uses the same 100ms rule for `RetryAt`.
+**An `EnqueueAt` less than 100ms away is not scheduled.** A produced item whose `EnqueueAt` is in the
+past or within 100ms of now is an ordinary item, and its `EnqueueAt` is cleared. Clients often fill
+in every field of a produce request and set `EnqueueAt` to "now", which clock drift between machines
+puts a few milliseconds in the future. Scheduling such an item costs a write, a scan and a move for
+no benefit. A retry uses the same rule for `RetryAt`. An import restores items as they were, so an
+imported item is exempt and keeps the `EnqueueAt` it was given.
 
-**An unleased item records no lease deadline.** Badger, InMemory and Postgres store a zero or
-`NULL` lease deadline and MongoDB stores BSON `null`. Expiry scans select leased items by the
-`is_leased` flag, never by comparing the deadline against a sentinel. `theFuture` in `store.go`
-marks "nothing found yet" when InMemory and Badger compute `LifeCycleInfo`, and no backend writes
-it.
+**An unleased item records no lease deadline.** Expiry scans select leased items by the leased flag,
+never by comparing the deadline against a sentinel value.
 
-**A deadline equal to now is due.** `ScanForActions` yields a lease or expire action when the
-deadline is at or before the time it is given, never only after it. `runLifecycle` treats a
-deadline from `LifeCycleInfo` at or before now as work left undone, so a deadline equal to now that
-the scan skipped would cost a back-off before the item is acted on.
+**A deadline equal to now is due.** The lifecycle scan yields an action when a deadline is at or
+before the time it is given, never only after it. The logical queue treats a deadline at or before
+now as work left undone, so a deadline equal to now that the scan skipped would cost a back-off
+before the item is acted on. The same holds for a scheduled item's `EnqueueAt`.
 
-**The lifecycle scan removes a leased item at `MaxAttempts`.** `ScanForActions` yields
-`ActionItemMaxAttempts` for a leased item whose lease has not expired but whose `Attempts` reached
-the queue's `MaxAttempts`, and the logical queue moves it to the dead letter queue, or deletes it
-when the queue has none. Because `Lease` counts the attempt when it hands the item out, this also
-matches an item a consumer holds on its final allowed lease. ENG-776 tracks whether that is
+**The lifecycle scan removes a leased item at `MaxAttempts`.** A leased item whose lease has not
+expired but whose attempts reached the queue's `MaxAttempts` goes to the dead-letter queue, or is
+deleted when the queue has none. Because a lease counts the attempt when it hands the item out, this
+also matches an item a consumer holds on its final allowed lease. ENG-776 tracks whether that is
 intended.
 
-**Lifecycle actions may carry less than the whole item.** A backend that can move a scheduled
-item into the queue by its ID alone does not need the rest of the item in the `Action`, and
-`TakeAction` may either insert the item it is given or update the stored item in place, whichever
-the data store does best.
+**Lifecycle actions may carry less than the whole item.** A backend that can move a scheduled item
+into the queue by its ID alone does not need the rest of the item in the action, and may either
+insert the item it is given or update the stored item in place, whichever the data store does best.
 
-**`Stats` counts a due scheduled item as ready.** Postgres and MongoDB count an item as active,
-and so in `Total`, when it has no `EnqueueAt` or its `EnqueueAt` has passed, even before the
-lifecycle moves it into the queue. InMemory and Badger count every item with an `EnqueueAt` as
-scheduled until it moves.
+**An item reads back exactly as it was returned.** The functional suite compares an item returned
+from produce with the same item read back through list, so a backend whose database keeps less
+precision than Go's `time.Time` (PostgreSQL keeps microseconds) must return times at the precision it
+stores. The exception is the lease deadline on items a lease hands out, which keeps full precision
+while the stored copy is truncated. The [MongoDB tech spec](../features/ENG-48-mongodb-backend/tech-spec.md) has the full
+reasoning under "Time precision".
 
-## Timestamps are stored at microsecond precision
+## Where the backends differ
 
-Postgres `TIMESTAMPTZ` keeps microseconds, so the Postgres backend truncates every timestamp to
-the microsecond before it writes it and before it returns an item. The exception is the
-`LeaseDeadline` on items `Lease` hands out, which keeps full precision while the stored copy is
-truncated. MongoDB does the same. Without that, an item returned
-from `Produce` would not equal the same item read back through `List`, and the functional suite
-compares the two exactly. MongoDB's BSON `Date` keeps only milliseconds, so the MongoDB backend
-stores timestamps as int64 microseconds since the epoch to match Postgres. The
-[MongoDB tech spec](../features/ENG-48-mongodb-backend/tech-spec.md) has the full reasoning
-under "Time precision".
+These differences are known and not yet resolved, so a test that compares backends will see them.
 
-## Shared connections
-
-Postgres and MongoDB each keep one process-wide connection pool per connection string, shared by
-every queue and partition that points at the same server and reference counted so the last
-`Close` disconnects it (`postgresPoolManager` and `mongoClientManager`). A config takes one
-reference on first use and reuses the pool on every later call, because a reference per call
-would never be given back and the pool would never close. `MongoConfig` checks and sets its flag
-under the manager's lock. `PostgresConfig` sets `poolAcquired` without a lock, so two first calls
-at the same moment could each take a reference.
-
-The MongoDB client manager holds its lock across the connect retry loop. The driver's
-`mongo.Connect` returns at once and does no I/O on the calling goroutine, so the loop never waits
-on the server while holding the lock. It still sleeps between attempts when `Connect` itself
-returns an error. The backend stays lazy ([ADR 0021](../adr/0021-storage-lazy-initialization.md))
-because the client is created on first use, not when the config is built.
-
-Postgres and MongoDB read `ScanForActions` and `ScanForScheduled` results a page at a time,
-`ScanBatchSize` items per page, 1,000 by default.
+* With the `Queue` flag set, PostgreSQL and MongoDB `Clear` also removes scheduled items whose
+  `EnqueueAt` has passed. InMemory and Badger keep every scheduled item on a non-destructive clear,
+  and empty the whole partition, scheduled items included, when `Queue` and `Destructive` are both
+  set.
+* PostgreSQL and MongoDB `Stats` count a scheduled item whose `EnqueueAt` has passed as active, and
+  so in `Total`, as well as in `Scheduled`, even before the lifecycle moves it into the queue. InMemory and Badger count it as scheduled until it
+  moves.
 
 ## Badger
 
-The queue, namespace, user, API key, role and role binding lists each live in one Badger
-database whose directory name starts with `~` (for example `~queue-storage-partition`). Queue
-names cannot contain `~`, so no queue's partition directory can collide with these.
+Badger keeps the queue list and the other metadata lists in databases whose directory names start
+with `~`. Queue names cannot contain `~`, so no queue's partition directory can collide with them.
 
-**`Lease` starts at the lease pivot, not at the first item.** A partition keeps its items in ID
-order, and an item stays where it is while leased or scheduled. Reading from the first item would
-read every leased item again on every lease. `BadgerPartition` remembers, in memory, the lease
-pivot, a key that no leasable item (one neither leased nor scheduled) sorts before. Item IDs are
-KSUID strings, which sort before the `source:` keys of the `SourceID` index, so a pivot of
-`source:` means no item is leasable, and a nil pivot starts at the first item. `Lease` seeks to
-the pivot and, after its transaction commits, moves it to the first key it did not read, or to
-`source:` when it read every item. Only the logical queue's goroutine calls a partition, so the
-pivot needs no lock.
+**A Badger item never becomes leasable again under the same ID.** `Lease` starts reading at the
+lease pivot (`leasePivot`) instead of the first item, so it does not read every leased item again on every
+lease. That only works while an item that becomes leasable again (an expired lease, an immediate
+retry, a scheduled item coming due) is written under a new ID
+([ADR 0022](../adr/0022-managing-item-lifecycles.md)), and while every write that stores a leasable
+item moves the pivot back to that item when it sorts earlier. IDs made after a restart can sort
+before older ones, so new items need the pivot moved back too. Storage changed out of band (a queue
+reload) makes the pivot wrong, so `Stats`, which reads the whole partition, resets it, and a failed
+`Stats` clears it.
 
-The pivot stays correct because `BadgerPartition` never makes an item leasable again under the
-same ID. An expired lease, an immediate retry and a scheduled item coming due each write the item
-under a new ID ([ADR 0022](../adr/0022-managing-item-lifecycles.md)). A retry with a future
-`RetryAt` keeps its ID but is scheduled. Every write that stores a leasable item (`Produce`, `Add`,
-`Retry`, `TakeAction`) lowers the pivot to that item's ID when the ID sorts below it. Two things
-need this. A new item must be found after the pivot has reached `source:`. And each
-`BadgerPartition` seeds its ID generator with `ksuid.New()` when it is created, so IDs made after a
-restart in the same second as older ones can sort before them.
+**A Badger lease stops at its context's deadline and keeps what it leased.** Produce and lease share
+one write deadline. When it ends, the lease commits what it already assigned and the next lease
+resumes where it stopped. A lone consumer on a quiet queue can therefore get "no items are in the
+queue" while free items wait further on, and each new lease gets further.
 
-`Stats` reads every item, so it sets the pivot to the first leasable item it finds. That covers
-startup, lifecycle recovery, `QueueReload` (storage changed out of band) and `QueueStats`. A
-`Stats` that fails sets the pivot to nil, because storage may have changed out of band. `Close`
-and `Clear` leave the pivot alone, because the writes that store leasable items lower it.
+**A Badger lifecycle delete needs the item's `SourceID` in the action.** Badger frees the `SourceID`
+from the action's copy of the item, not the stored one, so a delete action without it leaves the
+`SourceID` behind and a later produce with that `SourceID` is skipped.
 
-**`Lease` stops at its context's deadline.** The logical queue gives each partition's writes one
-context bounded by `WriteTimeout`, and `Produce` runs on it before `Lease`. When it ends, `Lease`
-commits the leases it already assigned, returns nil, and the next lease resumes at the pivot. A
-`Produce` that uses up the whole `WriteTimeout` leaves `Lease` nothing, as it does on Postgres and
-MongoDB, whose lease query fails on the ended context. A lease request that got nothing keeps
-waiting as it does on an empty queue, until the logical queue handles another produce, lease,
-complete or retry request, finishes a lifecycle or scheduled run, or the request times out. A
-lone consumer on a quiet queue can therefore get "no items are in the queue" while free items wait
-past the pivot, and each new lease gets further.
+## PostgreSQL
 
-**A lease too big for one transaction saves what fits.** Badger refuses a write that would take a
-transaction past its size limit (`ErrTxnTooBig`) without adding it, so `Lease` takes that item back
-off its request, stops reading there and commits the leases already written. The pivot stays on the
-item it could not save, and the next lease starts with it.
-
-**A failed `Lease` hands out nothing.** `batch.Iterator()` puts each item on its request before
-the transaction commits. When the transaction fails, `Lease` removes those items from the requests
-again before it returns the error, so no consumer receives an item whose lease was not saved.
-
-## Postgres
-
-Table and index creation runs under its own context with a 30 second timeout instead of the
-caller's context. The first call on a partition creates its table, and that call may carry a short request
-deadline, which would cancel the creation halfway through.
+Table creation runs under its own context, not the caller's. The first call on a partition creates
+its table, and that call may carry a short request deadline that would cancel the creation halfway
+through.
 
 ## MongoDB
 
-The [MongoDB tech spec](../features/ENG-48-mongodb-backend/tech-spec.md) records the design:
-no multi-document transactions, no replica set required, insert-before-delete ordering, the
-partial-index layout, the non-unique `source_id` index, and dropping the collection on a
-destructive whole-queue `Clear` (a `Clear` with `Queue`, `Scheduled` and `Destructive` all set),
-which also resets the partition's lazy-initialization flag (the spec calls it the once-guard; the
-code calls it `initDone`). It does not cover the choices below, and its account of `Complete`
-predates the code.
+The [MongoDB tech spec](../features/ENG-48-mongodb-backend/tech-spec.md) records the design: no
+multi-document transactions, no replica set required, insert-before-delete ordering, the
+partial-index layout, the non-unique `source_id` index, and dropping the collection on a destructive
+whole-queue `Clear`. Its account of `Complete` predates the code and is out of date. Two traps it
+does not cover follow.
 
-**An empty lease batch skips the query.** MongoDB reads `SetLimit(0)` as "no limit", unlike SQL
+**An empty lease batch skips the query.** MongoDB reads a limit of 0 as "no limit", unlike SQL
 `LIMIT 0`, so a lease with nothing requested would otherwise read the whole collection.
 
-**`Complete` deletes with `FindOneAndDelete` filtered on `is_leased`.** One round trip checks the
-lease and deletes the item. When nothing matches, the item is either missing or not leased, and a
-second read runs only on that error path to say which.
-
-**`Retry` reads the whole document before writing.** It must tell a missing or scheduled item,
-both reported as "does not exist", apart from one that is not leased, and an immediate retry
-rebuilds the item at a new tail ID from every field of the document. A single `FindOneAndDelete`
-would lose both.
-
-**Moving an item to the tail checks first that the item still exists.** An
-expired lease moves its item to the tail of the partition under a new ID
-([ADR 0022](../adr/0022-managing-item-lifecycles.md)). The copy keeps every field of the item,
-`SourceID` included, and resets only the lease, so a field added later is carried along. The lifecycle
-scan and the action that follows it are separate steps, so another path may have moved the item in
-between. Checking first avoids inserting a tail copy of an item that is already gone. The check
-stays a separate read because the move inserts the new tail document before it deletes the old
-one, so a crash leaves a duplicate rather than a lost item, and folding the check into the delete
-would reverse that order.
+**Moving an item to the tail checks first that the item still exists.** The lifecycle scan and the
+action that follows it are separate steps, so another path may have moved the item in between.
+The check stays a separate read because the move inserts the new tail document before it deletes
+the old one, so a crash leaves a duplicate rather than a lost item, and folding the check into the
+delete would reverse that order.

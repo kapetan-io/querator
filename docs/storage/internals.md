@@ -137,6 +137,11 @@ Table creation runs under its own context, not the caller's. The first call on a
 its table, and that call may carry a short request deadline that would cancel the creation halfway
 through.
 
+**A PostgreSQL batch sent outside a transaction commits when it closes.** PostgreSQL runs the
+statements of one batch as a single implicit transaction and commits it at the end, and the driver
+reports that commit only when the batch is closed. A write that ignores the close error answers
+success for a commit that failed.
+
 ## MongoDB
 
 The [MongoDB tech spec](../features/ENG-48-mongodb-backend/tech-spec.md) records the design: no

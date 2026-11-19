@@ -626,7 +626,6 @@ func (p *PostgresPartition) Produce(ctx context.Context, batch types.ProduceBatc
 	}
 
 	pgxBatch := &pgx.Batch{}
-	requestIndexes := []int{}
 
 	p.mu.Lock()
 	for i := range batch.Requests {
@@ -684,22 +683,13 @@ func (p *PostgresPartition) Produce(ctx context.Context, batch types.ProduceBatc
 				item.Kind,
 				item.Payload,
 			)
-
-			requestIndexes = append(requestIndexes, i)
 		}
 	}
 	p.mu.Unlock()
 
-	br := pool.SendBatch(ctx, pgxBatch)
-	defer func() { _ = br.Close() }()
-
-	for range requestIndexes {
-		_, err := br.Exec()
-		if err != nil {
-			return errors.Errorf("failed to insert item: %w", err)
-		}
+	if err := pool.SendBatch(ctx, pgxBatch).Close(); err != nil {
+		return errors.Errorf("insert items: %w", err)
 	}
-
 	return nil
 }
 
@@ -1255,16 +1245,9 @@ func (p *PostgresPartition) Add(ctx context.Context, items []*types.Item, now cl
 	}
 	p.mu.Unlock()
 
-	br := pool.SendBatch(ctx, pgxBatch)
-	defer func() { _ = br.Close() }()
-
-	for range items {
-		_, err := br.Exec()
-		if err != nil {
-			return errors.Errorf("failed to insert item: %w", err)
-		}
+	if err := pool.SendBatch(ctx, pgxBatch).Close(); err != nil {
+		return errors.Errorf("insert items: %w", err)
 	}
-
 	return nil
 }
 
@@ -1292,16 +1275,9 @@ func (p *PostgresPartition) Delete(ctx context.Context, ids []types.ItemID) erro
 		pgxBatch.Queue(`DELETE FROM `+p.tableName()+` WHERE id = $1`, string(id))
 	}
 
-	br := pool.SendBatch(ctx, pgxBatch)
-	defer func() { _ = br.Close() }()
-
-	for range ids {
-		_, err := br.Exec()
-		if err != nil {
-			return errors.Errorf("failed to delete item: %w", err)
-		}
+	if err := pool.SendBatch(ctx, pgxBatch).Close(); err != nil {
+		return errors.Errorf("delete items: %w", err)
 	}
-
 	return nil
 }
 

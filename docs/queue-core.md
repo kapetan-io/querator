@@ -80,16 +80,17 @@ produce request is meant to go to the healthy partition with the fewest unleased
 request to the healthy partition with the most. A failed partition takes no new produce or lease
 requests, and when every partition has failed a produce request waits unassigned.
 
-Lease requests assigned in the same pass spread by load, so each one moves its partition's in-memory
-un-leased and leased counts by an estimate when it is assigned. Once storage answers, the part of
-the estimate storage did not lease is given back, on a successful write as well as a failed one.
-Otherwise a failed lease write moves the counts for items nobody leased, and a lease request that
-keeps waiting moves them again on later passes. When a write's outcome is unknown, the whole
-estimate is given back although storage may show some of those items as leased, so the un-leased
-count overstates until the partition is next recounted from storage. A failed produce in the same
-pass takes all its items out of the un-leased count, even those the lease estimate already counted
-as leased. The estimate gives those back when storage answers the lease, so the produce must not
-give them back as well.
+Lease requests assigned in the same pass must spread by load, so each assignment counts its items
+as leased before storage has leased them. That count is only an estimate. A failed lease write
+would leave items nobody leased counted as leased, and a lease request that keeps waiting would
+count them again on every later pass. So once storage answers, the part of the estimate it did not
+lease is given back, after a successful write as well as a failed one.
+
+When a write's outcome is unknown, the whole estimate is given back although storage may show some
+of those items as leased, so the un-leased count overstates until the partition is next recounted
+from storage. A failed produce in the same pass takes all its items out of the un-leased count,
+even those the lease estimate already counted as leased. The estimate gives those back when
+storage answers the lease, so the produce must not give them back as well.
 
 Produce assignment assumes the list of partitions is sorted with failed partitions last, and checks
 only the first. A partition that fails while it is first stays first until an assigned lease or a

@@ -152,8 +152,8 @@ does not cover follow.
 as one unordered bulk write, so some can apply while others fail. Only the items a write error
 names are taken back off their requests. Any other failure, a write concern error included, takes
 every item back, since the writes may or may not have applied. An update that matches no document
-raises no error, so a lease whose updates matched fewer items than it placed also takes every item
-back.
+raises no error, so a lease whose updates matched fewer items than it placed, counting the ones a
+write error names, also takes every item back.
 
 **`Retry` reads the whole document before it writes.** It must tell a missing or scheduled item,
 both reported as "does not exist", apart from one that is not leased, and an immediate retry

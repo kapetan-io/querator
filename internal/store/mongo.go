@@ -725,7 +725,7 @@ func (p *MongoPartition) Lease(ctx context.Context, batch types.LeaseBatch, opts
 
 	result, err := coll.BulkWrite(ctx, models, options.BulkWrite().SetOrdered(false))
 	if err != nil {
-		batch.Unassign(unsavedLeases(err, placed))
+		batch.Unassign(unsavedLeases(err, result, placed))
 		return errors.Errorf("update leased items: %w", err)
 	}
 	if result.MatchedCount != int64(len(models)) {
@@ -735,9 +735,12 @@ func (p *MongoPartition) Lease(ctx context.Context, batch types.LeaseBatch, opts
 	return nil
 }
 
-func unsavedLeases(err error, placed []*types.Item) []*types.Item {
+func unsavedLeases(err error, result *mongo.BulkWriteResult, placed []*types.Item) []*types.Item {
 	var bulk mongo.BulkWriteException
 	if !errors.As(err, &bulk) || bulk.WriteConcernError != nil || len(bulk.WriteErrors) == 0 {
+		return placed
+	}
+	if result == nil || result.MatchedCount+int64(len(bulk.WriteErrors)) < int64(len(placed)) {
 		return placed
 	}
 	unsaved := make([]*types.Item, 0, len(bulk.WriteErrors))

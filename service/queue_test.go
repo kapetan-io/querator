@@ -2520,6 +2520,90 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				assert.Len(t, list.Items, 3)
 			})
 
+			t.Run("RequestTimeoutBeforeRecoveryPass", func(t *testing.T) {
+				now := clock.NewProvider()
+				now.Freeze(clock.Now())
+				defer now.UnFreeze()
+
+				var fault produceFault
+				d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: fault.Wrap(storage), Clock: now})
+				defer d.Shutdown(t)
+				c, ctx := d.MustClient(), d.Context()
+
+				queueName := random.String("queue-", 10)
+				createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+					LeaseTimeout:        LeaseTimeout,
+					ExpireTimeout:       ExpireTimeout,
+					QueueName:           queueName,
+					RequestedPartitions: 1,
+				})
+
+				// The first lifecycle run waits for the clock to move. Its scan fails, which marks the
+				// only partition failed.
+				fault.scanFailing.Store(&queueName)
+				now.Advance(clock.Millisecond)
+				var stats pb.QueueStatsResponse
+				require.Eventually(t, func() bool {
+					if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats); err != nil {
+						return false
+					}
+					return stats.LogicalQueues[0].Partitions[0].Failures != 0
+				}, 5*clock.Second, 20*clock.Millisecond)
+
+				// With a lease waiting, the lifecycle run that recovers the partition goes on to assign
+				// waiting produces. This advance makes that run and the produce's request timeout due
+				// together, and whichever the queue handles first, the produce must not be written.
+				produceCtx, produceCancel := context.WithCancel(ctx)
+				defer produceCancel()
+				leaseCtx, leaseCancel := context.WithCancel(ctx)
+				defer leaseCancel()
+				var produceErr, leaseErr error
+				duringCalls(func() {
+					produceCancel()
+					leaseCancel()
+				}, func() {
+					require.Eventually(t, func() bool {
+						if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats); err != nil {
+							return false
+						}
+						return stats.LogicalQueues[0].ProduceWaiting == 1 && stats.LogicalQueues[0].LeaseWaiting == 1
+					}, 5*clock.Second, 20*clock.Millisecond)
+
+					fault.scanFailing.Store(nil)
+					now.Advance(2 * clock.Second)
+					require.Eventually(t, func() bool {
+						if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats); err != nil {
+							return false
+						}
+						return stats.LogicalQueues[0].ProduceWaiting == 0
+					}, 5*clock.Second, 20*clock.Millisecond)
+					leaseCancel()
+				}, func() {
+					produceErr = c.QueueProduce(produceCtx, &pb.QueueProduceRequest{
+						QueueName:      queueName,
+						RequestTimeout: "1s",
+						Items:          produceRandomItems(3),
+					})
+				}, func() {
+					var lease pb.QueueLeaseResponse
+					leaseErr = c.QueueLease(leaseCtx, &pb.QueueLeaseRequest{
+						ClientId:       random.String("client-", 10),
+						RequestTimeout: "5m",
+						QueueName:      queueName,
+						BatchSize:      1,
+					}, &lease)
+				})
+
+				var e duh.Error
+				require.True(t, errors.As(produceErr, &e))
+				assert.Equal(t, duh.CodeRetryRequest, e.Code())
+				// The lease found nothing to take and waited until it was cancelled.
+				require.ErrorContains(t, leaseErr, "context canceled")
+				var list pb.StorageItemsListResponse
+				require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, nil))
+				assert.Empty(t, list.Items)
+			})
+
 			var queueName = random.String("queue-", 10)
 			d := newDaemon(t, 5*clock.Second, svc.Config{StorageConfig: storage})
 			defer d.Shutdown(t)

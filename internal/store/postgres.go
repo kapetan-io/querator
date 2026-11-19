@@ -1363,8 +1363,16 @@ func (p *PostgresPartition) Stats(ctx context.Context, stats *types.PartitionSta
 	return nil
 }
 
+const (
+	actionPageColumns = `id, source_id, is_leased, attempts, lease_deadline, expire_deadline,
+		enqueue_at, created_at, max_attempts, reference, encoding, kind, payload`
+	scheduledPageColumns = `id, NULL::text, false, attempts, lease_deadline, expire_deadline,
+		enqueue_at, NULL::timestamptz, 0, '', '', '', NULL::bytea`
+)
+
 func (p *PostgresPartition) ScanForScheduled(ctx context.Context, scan *types.LifeCycleScan, now clock.Time) error {
-	return p.readLifeCyclePage(ctx, scan, `enqueue_at IS NOT NULL`, nil, func(item types.Item) {
+	query := pageQuery{columns: scheduledPageColumns, filter: `enqueue_at IS NOT NULL`}
+	return p.readLifeCyclePage(ctx, scan, query, func(item types.Item) {
 		if item.EnqueueAt.After(now) {
 			scan.SeeEnqueueAt(item.EnqueueAt)
 			return
@@ -1383,7 +1391,12 @@ func (p *PostgresPartition) ScanForActions(ctx context.Context, scan *types.Life
 	maxAttempts := p.info.Queue.MaxAttempts
 	p.mu.RUnlock()
 
-	return p.readLifeCyclePage(ctx, scan, `(enqueue_at IS NULL OR enqueue_at <= $4)`, now, func(item types.Item) {
+	query := pageQuery{
+		columns:   actionPageColumns,
+		filter:    `(enqueue_at IS NULL OR enqueue_at <= $4)`,
+		filterArg: now,
+	}
+	return p.readLifeCyclePage(ctx, scan, query, func(item types.Item) {
 		if item.IsLeased && !item.LeaseDeadline.After(now) {
 			scan.Add(types.Action{
 				Action:       types.ActionLeaseExpired,
@@ -1420,8 +1433,14 @@ func (p *PostgresPartition) ScanForActions(ctx context.Context, scan *types.Life
 	})
 }
 
-func (p *PostgresPartition) readLifeCyclePage(ctx context.Context, scan *types.LifeCycleScan,
-	filter string, filterArg any, visit func(types.Item)) error {
+type pageQuery struct {
+	columns   string
+	filter    string
+	filterArg any
+}
+
+func (p *PostgresPartition) readLifeCyclePage(ctx context.Context, scan *types.LifeCycleScan, page pageQuery,
+	visit func(types.Item)) error {
 
 	pool, err := p.conf.getOrCreatePool(ctx)
 	if err != nil {
@@ -1447,15 +1466,14 @@ func (p *PostgresPartition) readLifeCyclePage(ctx context.Context, scan *types.L
 	limit := min(LifeCyclePageSize, p.conf.ScanBatchSize)
 
 	query := `
-		SELECT id, source_id, is_leased, attempts, lease_deadline, expire_deadline,
-		       enqueue_at, created_at, max_attempts, reference, encoding, kind, payload
+		SELECT ` + page.columns + `
 		FROM ` + p.tableName() + `
-		WHERE id > $1 AND id <= $2 AND ` + filter + `
+		WHERE id > $1 AND id <= $2 AND ` + page.filter + `
 		ORDER BY id
 		LIMIT $3`
 	args := []any{string(scan.Pivot), tail, limit}
-	if filterArg != nil {
-		args = append(args, filterArg)
+	if page.filterArg != nil {
+		args = append(args, page.filterArg)
 	}
 
 	rows, err := pool.Query(ctx, query, args...)

@@ -319,6 +319,8 @@ func testLifecycle(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		require.Len(t, leased.Items, 1)
 		require.Equal(t, "item-00001", leased.Items[0].Reference)
 		require.Equal(t, 2, spy.Pages())
+		// The next run is due when item-00001's lease expires, not later.
+		require.LessOrEqual(t, nextLifecycleRun(t, ctx, c, queueName), clock.Minute)
 
 		now.Advance(clock.Minute + clock.Second)
 		waitForLifecycleRun(t, ctx, c, queueName)
@@ -352,8 +354,9 @@ func testLifecycle(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		})
 		require.NoError(t, pauseErr)
 
-		// While paused, the pass stops after its first page.
-		clock.Sleep(requestSettle)
+		// While paused, the pass stops after its first page. The stats reply comes from the
+		// request loop, which would run the next page first if the pause did not hold it.
+		nextLifecycleRun(t, ctx, c, queueName)
 		assert.Equal(t, 1, spy.Pages())
 
 		require.NoError(t, d.Service().ResumeQueue(ctx, queueName))
@@ -639,8 +642,9 @@ func testLifecycle(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		})
 		require.NoError(t, pauseErr)
 
-		// While paused, the scheduled pass stops after its first page.
-		clock.Sleep(requestSettle)
+		// While paused, the scheduled pass stops after its first page. The stats reply comes from
+		// the request loop, which would run the next page first if the pause did not hold it.
+		nextLifecycleRun(t, ctx, c, queueName)
 		assert.Equal(t, 1, spy.Pages())
 
 		require.NoError(t, d.Service().ResumeQueue(ctx, queueName))

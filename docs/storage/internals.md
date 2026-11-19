@@ -138,10 +138,8 @@ queue" while free items wait further on, and each new lease gets further.
 **A Badger lifecycle write may commit in more than one transaction, but never splits an action.** A
 page of actions can exceed Badger's transaction size. Moving an item to the tail is two writes, the
 item under its new ID and the delete of the old one, so committing whatever fits when Badger reports
-the transaction too big would commit half an action and leave a duplicate. `TakeAction` commits the
-whole actions before the one that did not fit, then starts a new transaction with it. A failure
-partway leaves the earlier actions committed, and the next run reads the page again and finds the
-rest.
+the transaction too big would commit half an action and leave a duplicate. A failure partway leaves
+the earlier actions committed, and the next run reads the page again and finds the rest.
 
 **A Badger lifecycle delete needs the item's `SourceID` in the action.** Badger frees the `SourceID`
 from the action's copy of the item, not the stored one, so a delete action without it leaves the

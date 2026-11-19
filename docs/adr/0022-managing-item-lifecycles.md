@@ -21,10 +21,11 @@ items that require action. In the second phase it writes those actions to the pa
 items bound for a dead letter to the QueuesManager.
 
 The life cycle must not hold the request loop for longer than one bounded storage call. Each life
-cycle run reads one page of one partition (1,000 items) and acts on what that page found. The
-Logical Queue remembers a pivot, the last item the page read, and the next run continues after it.
-Between pages the request loop handles any produce, lease, complete or retry requests that are
-waiting. A full pass over a partition is therefore many short runs, not one long one.
+cycle run reads one page of one partition (at most 1,000 items, fewer on PostgreSQL and MongoDB when
+`scan-batch-size` is smaller) and acts on what that page found. The Logical Queue remembers a pivot,
+the last item the page read, and the next run continues after it. Between pages the request loop
+handles any produce, lease, complete or retry requests that are waiting. A full pass over a
+partition is therefore many short runs, not one long one.
 
 Because the life cycle runs on the request loop, the Logical Queue remains the only reader and
 writer of its partitions, and a partition store does not have to be safe for concurrent use.
@@ -75,9 +76,12 @@ A pass ends when it reads the item that was last in the partition when the pass 
 behind that point during the pass wait for the next pass, so a busy producer cannot keep a pass
 running forever. The next pass starts at the earliest deadline seen during the pass, including the
 deadline of any lease granted while the pass was running and of any item the pass moved to the
-tail. When a retry moves an item the pass has not read yet to the tail, the next pass starts as soon
-as this one ends: the pass will not read that item, and a retry carries no expire deadline to
-schedule the next pass from. On a large partition with steady retries, passes can run back to back.
+tail. When an immediate retry moves an item the pass has not read yet to the tail, the next pass
+starts as soon as this one ends: the pass will not read that item, and a retry carries no expire
+deadline to schedule the next pass from. A retry request that fails partway counts all its items,
+because the items before the failure were moved. The cost is that a large partition under a steady
+stream of immediate retries is read end to end without pause, one page at a time with requests
+served between pages, rather than only when a deadline is due.
 A failed move to the dead letter overrides both: the rest of the pass leaves dead items for the
 next pass, and the next pass waits for the back-off, so a dead letter queue that hangs is called
 once per pass, not once per page.

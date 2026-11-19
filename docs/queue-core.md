@@ -132,17 +132,17 @@ too, because the actions before the failure stay committed. A retry carries no e
 an immediate retry of an item the pass has not read yet starts the next pass as soon as this one
 ends. What counts as immediate must match the rule storage uses to move a retry to the tail.
 
-While a pass is mid-way and its writes succeed, its next run is now, so the request loop never
-blocks waiting for a timer. Before each page it serves the requests already waiting and checks for
-shutdown and request timeouts. Without those checks they would wait until the pass ends, because
-Go's `select` gives a ready timer no lower priority than a waiting request.
+A pass that is mid-way is always due, so the request loop must not wait on a timer between pages,
+and requests, shutdown and request timeouts must get their turn between pages. Otherwise they wait
+until the pass ends, because Go's `select` gives a ready timer no lower priority than a waiting
+request.
 
 A pass that leaves due work undone runs again with back-off. That covers a dead-letter move or a
 lifecycle action (`TakeAction`) that failed. An item stuck in a failed move is due on every pass,
 so without counting it as undone work the next pass would be set only from future deadlines and the
 stuck item would wait for one of them. The back-off is measured from the end of the run, because a
-dead-letter move can block for `WriteTimeout`. A failed `TakeAction` keeps the pass where it was, so
-the same page is read again.
+dead-letter move can block for `WriteTimeout`. A page whose actions failed to write must be read
+again, or its due items wait for the next pass.
 
 * An unfinished run leaves the partition in request distribution, because the fault may lie with
   the dead-letter queue and the partition can still serve requests. A failed scan or storage read

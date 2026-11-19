@@ -230,7 +230,9 @@ func (l *Logical) enqueueScheduled(partition *Partition, now clock.Time) error {
 	err = partition.Store.TakeAction(ctx, batch, &partition.State)
 	cancel()
 	for _, a := range pass.Scan.Actions {
-		partition.Lifecycle.RunLifecycleBy(a.Item.ExpireDeadline)
+		if err == nil || a.Item.ExpireDeadline.After(now) {
+			partition.Lifecycle.RunLifecycleBy(a.Item.ExpireDeadline)
+		}
 	}
 	if err != nil {
 		pass.Scan.Pivot, pass.Scan.Last = pivot, last

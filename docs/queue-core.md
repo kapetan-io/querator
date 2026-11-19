@@ -52,8 +52,8 @@ A paused queue drops each held dead-letter hand-off whose caller has stopped wai
 each time it holds another hot request, so the newest abandoned hand-off stays held until the next
 check, and is applied when the pause is cancelled. The source queue sends a new hand-off each time
 its lifecycle runs again with back-off, so without the drop a paused dead-letter queue would hold
-one more copy every back-off interval for as long as the pause lasts. A held client produce is kept even after its caller gives up, and is
-applied when the pause is cancelled.
+one more copy every back-off interval for as long as the pause lasts. A held client produce is kept
+even after its caller gives up, and is applied when the pause is cancelled.
 
 ## Shutdown
 
@@ -81,9 +81,9 @@ request to the healthy partition with the most. A failed partition takes no new 
 requests, and when every partition has failed a produce request waits unassigned.
 
 Produce assignment assumes the list of partitions is sorted with failed partitions last, and checks
-only the first. A partition that fails while it is first stays first until the next assignment
-re-sorts the list, and until then produce requests wait unassigned although another partition is
-healthy (ENG-818).
+only the first. A partition that fails while it is first stays first until an assigned lease or a
+queue load re-sorts the list, and until then produce requests wait unassigned although another
+partition is healthy (ENG-818).
 
 Complete and retry requests name the partition the lease came from, so they cannot be moved to
 another one. When that partition is missing or failing, the client gets a retry error.
@@ -107,9 +107,9 @@ A lifecycle run that leaves due work undone runs again with back-off. That cover
 or a lifecycle action (`TakeAction`) that failed, and a deadline still at or before now after the
 run. A partition reports only its earliest lease and expire deadlines, and the next run is set from
 deadlines in the future. An item stuck in a failed move keeps the earliest deadline in the past, so
-without counting it as undone work the lifecycle would never run again and every later deadline
-would be missed. The back-off is measured from the end of the run, because a dead-letter move can
-block for `WriteTimeout`.
+without counting it as undone work the lifecycle would not run again until a write brought it
+forward, and every later deadline would wait for that write. The back-off is measured from the end
+of the run, because a dead-letter move can block for `WriteTimeout`.
 
 * An unfinished run leaves the partition in request distribution, because the fault may lie with
   the dead-letter queue and the partition can still serve requests. A failed scan or storage read
@@ -127,10 +127,10 @@ block for `WriteTimeout`.
 
 Storage, not the writes that brought a run forward, decides when the next scheduled run happens.
 Those writes are only the ones made since the queue loaded, so a scheduled item written before a
-restart would be forgotten otherwise. For the same reason the queue runs one scheduled pass while it loads, so items
-already overdue at startup are enqueued. Scheduled runs count their failures apart from the
-lifecycle's, so neither run resets or raises the other's back-off, and a failed scheduled run leaves
-the partition in request distribution.
+restart would be forgotten otherwise. For the same reason the queue runs one scheduled pass while it
+loads, so items already overdue at startup are enqueued. Scheduled runs count their failures apart
+from the lifecycle's, so neither run resets or raises the other's back-off, and a failed scheduled
+run leaves the partition in request distribution.
 
 After each lifecycle and scheduled run, lease requests that are waiting for items are tried again,
 so items the run just enqueued or gave back reach those consumers without waiting for the next
@@ -153,9 +153,9 @@ Items reach a dead-letter queue when they expire or reach `MaxAttempts`.
 * The source items are deleted as a lifecycle action, not through `Complete`. `Complete` refuses an
   item that is not leased, and an item can expire without ever being leased.
 * The move sets each item's `SourceID` to its ID in the source queue and clears its ID. It changes
-  copies, because the delete from the source partition needs the original IDs. When deleting the source
-  items fails after a confirmed move, the next run finds them again and the dead-letter queue drops
-  the duplicate by that `SourceID`.
+  copies, because the delete from the source partition needs the original IDs. When deleting the
+  source items fails after a confirmed move, the next run finds them again and the dead-letter queue
+  drops the duplicate by that `SourceID`.
 
 A dead-letter queue name is checked for format before the queue is looked up, because the lookup
 loads the queue from storage and can start a Logical Queue for it. These rules apply to the queue

@@ -107,13 +107,14 @@ Badger keeps the queue list and the other metadata lists in databases whose dire
 with `~`. Queue names cannot contain `~`, so no queue's partition directory can collide with them.
 
 **A Badger item never becomes leasable again under the same ID.** `Lease` starts reading at the
-lease pivot (`leasePivot`) instead of the first item, so it does not read every leased item again on every
+lease pivot instead of the first item, so it does not read every leased item again on every
 lease. That only works while an item that becomes leasable again (an expired lease, an immediate
 retry, a scheduled item coming due) is written under a new ID
 ([ADR 0022](../adr/0022-managing-item-lifecycles.md)), and while every write that stores a leasable
 item moves the pivot back to that item when it sorts earlier. IDs made after a restart can sort
 before older ones, so new items need the pivot moved back too. Storage changed out of band (a queue
-reload) makes the pivot wrong, so anything that reads the whole partition must reset it.
+reload) makes the pivot wrong, so `Stats`, the read a reload or a partition recovery does, must reset
+it, and the lifecycle scans, which do not, cannot be relied on to.
 
 **A Badger lease stops at its context's deadline and keeps what it leased.** Produce and lease share
 one write deadline. When it ends, the lease commits what it already assigned and the next lease
@@ -146,9 +147,11 @@ both reported as "does not exist", apart from one that is not leased, and an imm
 rebuilds the item at a new tail ID from the document's fields. A single `FindOneAndDelete` would
 lose both.
 
-**Holding the client manager's lock across the connect retries is safe.** `mongo.Connect` returns at
-once and does no I/O on the calling goroutine, so the lock is never held while waiting on the
-server. It still sleeps between attempts when `Connect` itself returns an error.
+**The process-wide client lock (`globalMongoMu`) is held across the connect retries.** Every
+MongoDB call takes it on its way to the shared client. `mongo.Connect` returns at once and does no
+I/O on the calling goroutine, so a healthy connect never holds the lock while waiting on the server.
+When `Connect` itself returns an error, the sleeps between attempts (up to 1.5s in all) run under
+the lock and hold up every MongoDB call in the process.
 
 **A tail copy keeps every field of the item, `SourceID` included.** An expired lease moves its item
 to the tail under a new ID ([ADR 0022](../adr/0022-managing-item-lifecycles.md)). Duplicate

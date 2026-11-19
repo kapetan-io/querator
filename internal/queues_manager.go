@@ -233,22 +233,14 @@ func (qm *QueuesManager) LifeCycle(ctx context.Context, req *types.LifeCycleRequ
 				"partition", req.PartitionNum)
 		}
 
-		var itemIDs [][]byte
-		for _, item := range deadItems {
-			itemIDs = append(itemIDs, item.ID)
-		}
-		batch := types.CompleteBatch{}
-		batch.Add(&types.CompleteRequest{Ids: itemIDs})
-		if err := req.PartitionStorage.Complete(ctx, batch); err != nil {
+		if err := deleteDeadItems(ctx, req); err != nil {
 			return errors.Errorf("failed to delete items from source partition: %w", err)
 		}
 		return nil
 	}
 
-	itemIDs := make([][]byte, 0, len(deadItems))
 	for _, item := range deadItems {
 		item.SourceID = item.ID
-		itemIDs = append(itemIDs, item.ID)
 		item.ID = nil
 		item.IsLeased = false
 		item.LeaseDeadline = clock.Time{}
@@ -263,9 +255,7 @@ func (qm *QueuesManager) LifeCycle(ctx context.Context, req *types.LifeCycleRequ
 		return err
 	}
 
-	batch := types.CompleteBatch{}
-	batch.Add(&types.CompleteRequest{Ids: itemIDs})
-	if err := req.PartitionStorage.Complete(ctx, batch); err != nil {
+	if err := deleteDeadItems(ctx, req); err != nil {
 		qm.log.Error("failed to delete items from source partition after DLQ produce",
 			"source_queue", queueInfo.Name,
 			"partition", req.PartitionNum,
@@ -273,6 +263,19 @@ func (qm *QueuesManager) LifeCycle(ctx context.Context, req *types.LifeCycleRequ
 	}
 
 	return nil
+}
+
+func deleteDeadItems(ctx context.Context, req *types.LifeCycleRequest) error {
+	actions := make([]types.Action, 0, len(req.Actions))
+	for _, a := range req.Actions {
+		if a.Action == types.ActionItemExpired || a.Action == types.ActionItemMaxAttempts {
+			a.Action = types.ActionDeleteItem
+			actions = append(actions, a)
+		}
+	}
+	var batch types.LifeCycleBatch
+	batch.Add(&types.LifeCycleRequest{PartitionNum: req.PartitionNum, Actions: actions})
+	return req.PartitionStorage.TakeAction(ctx, batch, req.PartitionState)
 }
 
 func (qm *QueuesManager) ProduceToQueue(ctx context.Context, queueName string, items []*types.Item) error {

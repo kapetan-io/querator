@@ -398,7 +398,7 @@ func (m *MemoryPartition) ScanForActions(_ context.Context, now clock.Time) iter
 				continue
 			}
 			if item.IsLeased {
-				if now.After(item.LeaseDeadline) {
+				if !item.LeaseDeadline.After(now) {
 					if !yield(types.Action{
 						Action:       types.ActionLeaseExpired,
 						PartitionNum: m.info.PartitionNum,
@@ -421,7 +421,7 @@ func (m *MemoryPartition) ScanForActions(_ context.Context, now clock.Time) iter
 					continue
 				}
 			}
-			if now.After(item.ExpireDeadline) {
+			if !item.ExpireDeadline.After(now) {
 				if !yield(types.Action{
 					Action:       types.ActionItemExpired,
 					PartitionNum: m.info.PartitionNum,
@@ -469,6 +469,9 @@ func (m *MemoryPartition) TakeAction(_ context.Context, batch types.LifeCycleBat
 				idx, ok := m.findID(a.Item.ID)
 				if !ok {
 					continue
+				}
+				if m.mem[idx].SourceID != nil {
+					delete(m.bySourceID, string(m.mem[idx].SourceID))
 				}
 				m.mem = append(m.mem[:idx], m.mem[idx+1:]...)
 			case types.ActionQueueScheduledItem:

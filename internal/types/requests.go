@@ -110,8 +110,8 @@ type PartitionStats struct {
 	NextLifecycleRun clock.Duration
 }
 
-type PartitionCompleter interface {
-	Complete(ctx context.Context, batch CompleteBatch) error
+type PartitionActionTaker interface {
+	TakeAction(ctx context.Context, batch LifeCycleBatch, state *PartitionState) error
 }
 
 type LifeCycleRequest struct {
@@ -119,5 +119,6 @@ type LifeCycleRequest struct {
 	Actions          []Action
 	PartitionNum     int
 	PartitionInfo    PartitionInfo
-	PartitionStorage PartitionCompleter
+	PartitionStorage PartitionActionTaker
+	PartitionState   *PartitionState
 }

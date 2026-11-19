@@ -17,6 +17,7 @@ type PartitionLifecycleState struct {
 	NextLifecycleRun clock.Time
 	NextScheduledRun clock.Time
 	Failures         int
+	UnfinishedRuns   int
 }
 
 type Partition struct {

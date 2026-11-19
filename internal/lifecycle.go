@@ -40,6 +40,7 @@ func (l *Logical) runLifecycle(state *QueueState) {
 		partition.Lifecycle.Failures = 0
 
 		var dlqActions []types.Action
+		var unfinished bool
 
 		for _, a := range actions {
 			switch a.Action {
@@ -94,10 +95,12 @@ func (l *Logical) runLifecycle(state *QueueState) {
 				PartitionNum:     partition.Info.PartitionNum,
 				Actions:          dlqActions,
 				PartitionStorage: partition.Store,
+				PartitionState:   &partition.State,
 			}
 			err := l.conf.Manager.LifeCycle(ctx, req)
 			cancel()
 			if err != nil {
+				unfinished = true
 				l.log.Warn("manager lifecycle failed",
 					"partition", partition.Info.PartitionNum,
 					"num_actions", len(dlqActions),
@@ -108,6 +111,7 @@ func (l *Logical) runLifecycle(state *QueueState) {
 		if len(partition.LifeCycleRequests.Requests) > 0 {
 			ctx, cancel := context.WithTimeout(context.Background(), l.conf.WriteTimeout)
 			if err := partition.Store.TakeAction(ctx, partition.LifeCycleRequests, &partition.State); err != nil {
+				unfinished = true
 				l.log.Error("while calling store.Partition.TakeAction()",
 					"partition", partition.Info.PartitionNum,
 					"queueName", l.conf.Name,
@@ -143,6 +147,23 @@ func (l *Logical) runLifecycle(state *QueueState) {
 			if nextRun.IsZero() || info.NextExpireDeadline.Before(nextRun) {
 				nextRun = info.NextExpireDeadline
 			}
+		}
+
+		overdue := (!info.NextLeaseExpiry.IsZero() && !info.NextLeaseExpiry.After(now)) ||
+			(!info.NextExpireDeadline.IsZero() && !info.NextExpireDeadline.After(now))
+		if unfinished || overdue {
+			if lifecycleBackOff.Next(partition.Lifecycle.UnfinishedRuns) < lifecycleBackOff.Max {
+				partition.Lifecycle.UnfinishedRuns++
+			}
+			retryIn := lifecycleBackOff.Next(partition.Lifecycle.UnfinishedRuns)
+			if retryAt := l.conf.Clock.Now().UTC().Add(retryIn); nextRun.IsZero() || retryAt.Before(nextRun) {
+				nextRun = retryAt
+			}
+			l.log.Warn("lifecycle left due work undone; retrying...",
+				"partition", partition.Info.PartitionNum,
+				"retry", retryIn)
+		} else {
+			partition.Lifecycle.UnfinishedRuns = 0
 		}
 
 		if nextRun.IsZero() {

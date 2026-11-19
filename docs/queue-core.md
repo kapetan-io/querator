@@ -64,6 +64,14 @@ Pause exists only for tests ([ADR-0013](adr/0013-pausing-a-queue.md)). While a q
 scheduled and request-timeout timers. It does this by selecting on `nil` channels in place of the
 timers, because a `nil` channel never fires. Cancelling the pause applies the held requests.
 
+A paused queue drops a held dead-letter hand-off whose caller has stopped waiting (its context
+ended, an abandoned hand-off). It checks each time it holds another hot request, so the newest
+abandoned hand-off stays held and is applied when the pause is cancelled. The source queue's
+lifecycle sends a new hand-off each time it runs again with back-off, so without the drop a paused
+dead-letter queue would hold one more copy every back-off interval for as long as the pause lasts. A
+held client produce is kept even after its caller gives up, and is applied when the pause is
+cancelled.
+
 ## Shutdown
 
 `Logical.inFlight` counts callers that have entered `Produce`, `Lease`, `Complete`, `Retry` or
@@ -133,8 +141,22 @@ run, because a dead-letter move can block for `WriteTimeout`.
   is copied to `State.Failures`, and takes the partition out of request distribution until
   `recoverPartition` succeeds. An unfinished run leaves `State.Failures` alone, because the fault may
   lie with the dead-letter queue and the partition can still serve requests.
+* `Failures` is capped differently from `UnfinishedRuns` and `ScheduledFailures`. Queue stats report
+  it as the total number of failures, so the counter is left alone and the back-off is given at most
+  `lifecycleBackOffAttemptLimit` (32) attempts instead. `recoverPartition` resets `Failures` whenever
+  its stats read succeeds, so the count only climbs that high while the stats read itself keeps
+  failing. A scan or `LifeCycleInfo` read that keeps failing behind a working stats read stays at
+  the first back-off step, 750ms. Past about 58
+  attempts `IntervalBackOff.Next` overflows its conversion to a `Duration`. On amd64 the overflow
+  is negative and `Next` returns its 500ms minimum, so an uncapped partition that kept failing
+  would go back to running every 500ms.
 * Each retry against a dead-letter queue that hangs blocks the source queue's loop for up to
   `WriteTimeout`, once per back-off interval, for as long as it hangs.
+* Each run again with back-off scans the partition in `ScanForActions` and sends every dead item
+  again, all on the request loop. On InMemory, BadgerDB and PostgreSQL, `LifeCycleInfo` then reads
+  every item of the partition a second time; MongoDB's uses two sorted lookups. A move that keeps
+  failing on a large partition costs a whole-partition read every 5s while produce, lease and
+  complete wait. This cost has not been measured.
 
 A scheduled run enqueues every scheduled item whose `EnqueueAt` is at or before now, then sets the
 partition's next scheduled run to the earliest `EnqueueAt` still in storage (`LifeCycleInfo`'s

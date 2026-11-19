@@ -67,6 +67,8 @@ var (
 	}
 )
 
+const lifecycleBackOffAttemptLimit = 32
+
 type LogicalConfig struct {
 	types.QueueInfo
 
@@ -326,6 +328,7 @@ func (l *Logical) ProduceDeadLetter(ctx context.Context, req *types.ProduceReque
 
 	req.ReadyCh = make(chan struct{})
 	req.Context = ctx
+	req.DeadLetterHandOff = true
 
 	select {
 	case l.requestCh <- &Request{
@@ -611,6 +614,7 @@ func (l *Logical) handleRequest(state *QueueState, req *Request) {
 	switch req.Method {
 	case MethodProduce, MethodProduceInternal, MethodLease, MethodComplete, MethodRetry:
 		if state.Paused {
+			state.Producers.DropAbandonedHandOffs()
 			l.reqToState(req, state)
 			return
 		}

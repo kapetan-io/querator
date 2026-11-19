@@ -8,12 +8,6 @@ import (
 	"github.com/kapetan-io/querator/transport/reply"
 )
 
-// TODO: When migrating from one data store to another, some partitions may be
-//  set to read only, in this case, it might be necessary to have multiple partitions
-//  with the same partition idx.
-
-// Queue is a collection of Logical instances which represent the current
-// state of the partition distribution from the perspective of the current querator instance.
 type Queue struct {
 	info    types.QueueInfo
 	ordered []*Logical
@@ -34,18 +28,12 @@ func (q *Queue) AddLogical(ll ...*Logical) *Queue {
 	defer q.mutex.Unlock()
 	q.mutex.Lock()
 
-	// Adds a pointer to q.logical which is a list of logical pointers
-	// corresponding to the partition index.
-	// return q.logical[10] // returns the logical that owns partition 10
 	for _, l := range ll {
 		for _, p := range l.conf.PartitionInfo {
 			q.logical[p.PartitionNum] = l
 		}
 	}
 
-	// Adds a pointer to q.ordered which is a list of logical pointers
-	// ordered by partition such that we can easily iterate through all
-	// the logical queues this queue has.
 	for _, add := range ll {
 		if !slices.Contains(q.ordered, add) {
 			q.ordered = append(q.ordered, add)

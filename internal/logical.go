@@ -41,9 +41,6 @@ const (
 	MethodReload
 	MethodNotify
 	MethodNotifyScheduled
-	// MethodProduceInternal carries pre-built items (e.g. dead-letter moves) produced through
-	// this Logical's requestLoop. It is treated as a hot request indistinguishable from
-	// MethodProduce once inside the loop. See docs/adr/0003-rw-sync-point.md.
 	MethodProduceInternal
 
 	DefaultMaxLeaseBatchSize        = 1_000
@@ -74,53 +71,25 @@ var (
 type LogicalConfig struct {
 	types.QueueInfo
 
-	// If defined, is the logger used by the queue
-	Log *slog.Logger
-	// TODO: Make these configurable at the Service level
-	// WriteTimeout The time it should take for a single batched write to complete
-	WriteTimeout clock.Duration
-	// ReadTimeout The time it should take for a single batched read to complete
-	ReadTimeout clock.Duration
-	// MaxLeaseBatchSize is the maximum number of items a client can request in a single lease request
-	MaxLeaseBatchSize int
-	// MaxProduceBatchSize is the maximum number of items a client can produce in a single produce request
-	MaxProduceBatchSize int
-	// MaxCompleteBatchSize is the maximum number of ids a client can mark complete in a single complete request
+	Log                  *slog.Logger
+	WriteTimeout         clock.Duration
+	ReadTimeout          clock.Duration
+	MaxLeaseBatchSize    int
+	MaxProduceBatchSize  int
 	MaxCompleteBatchSize int
-	// MaxRequestsPerQueue is the maximum number of client requests a queue can handle before it returns an
-	// queue overloaded message
-	MaxRequestsPerQueue int
-	// Clock is the clock provider used to calculate the current time
-	Clock *clock.Provider
-	// The storage partitions handled by the LogicalQueue
-	StoragePartitions []store.Partition
-	// Manager is the QueuesManager used by lifecycle processing to move items to a dead letter queue
-	Manager *QueuesManager
+	MaxRequestsPerQueue  int
+	Clock                *clock.Provider
+	StoragePartitions    []store.Partition
+	Manager              *QueuesManager
 }
 
-// Logical produces and consumes items from the many partitions ensuring consumers and producers are handled fairly
-// and efficiently. Since a Logical is the synchronization point for R/W there can ONLY BE ONE instance of a
-// Logical running anywhere in the cluster at any given time. All consume and produce requests for the partitions
-// assigned to this Logical instance MUST go through this singleton.
-//
-// Dead-letter movement is no exception: items dead-lettered from a source queue are produced to the dead-letter
-// queue via ProduceDeadLetter, which routes through this Logical's requestCh exactly like a client Produce. This
-// preserves the single-writer-per-partition invariant — no goroutine other than this Logical's requestLoop
-// writes to its partitions. See docs/adr/0003-rw-sync-point.md.
 type Logical struct {
-	// TODO: Failures should be used to indicate all partitions for this Logical Queue have failed. The QueueManager
-	//  can check for this flag and avoid routing clients to this Logical Queue.
-	// Failures      atomic.Bool
-
 	requestCh requestInbox
 
 	shutdownCh shutdownRequests
 	wg         sync.WaitGroup
 	conf       LogicalConfig
 	log        *slog.Logger
-	// inFlight is a counter of number of hot requests that are in flight waiting
-	// for a response to their request. It is used by shutdown to gracefully shut down
-	// all outstanding requests.
 	inFlight   atomic.Int32
 	inShutdown atomic.Bool
 	instanceID string
@@ -147,9 +116,6 @@ func SpawnLogicalQueue(conf LogicalConfig) (*Logical, error) {
 	return l, nil
 }
 
-// Produce is called by clients who wish to produce an item to the queue. This
-// call will block until the item has been written to a partition or until the request
-// is cancelled via the passed context or RequestTimeout is reached.
 func (l *Logical) Produce(ctx context.Context, req *types.ProduceRequest) error {
 	if l.inShutdown.Load() {
 		return ErrQueueShutdown
@@ -193,9 +159,6 @@ func (l *Logical) Produce(ctx context.Context, req *types.ProduceRequest) error 
 		return reply.NewRetryRequest(MsgQueueOverLoaded)
 	}
 
-	// Wait until the request has been processed or the client has gone away. If the
-	// client goes away the request loop may still apply the produce after we return.
-	// See docs/adr/0009-client-timeouts.md
 	select {
 	case <-req.ReadyCh:
 		return req.Err
@@ -204,21 +167,6 @@ func (l *Logical) Produce(ctx context.Context, req *types.ProduceRequest) error 
 	}
 }
 
-// Lease is called by clients wanting to lease a new item from the queue. This call
-// will block until the request is cancelled via the passed context or the RequestTimeout
-// is reached.
-//
-// # Context Cancellation
-// IT IS NOT recommend to cancel wit context.WithTimeout() or context.WithDeadline() on Lease() since
-// Lease() will block until the duration provided via LeaseRequest.RequestTimeout has been reached.
-// Callers SHOULD cancel the context if the client has gone away, in this case Logical will abort the lease
-// request. If the context is cancelled after lease has been written to the data store
-// then those leases will remain leased until they can be offered to another client after the
-// LeaseDeadline has been reached. See docs/adr/0009-client-timeouts.md
-//
-// # Unique Requests
-// ClientID must NOT be empty and each request must be unique, Non-unique requests will be rejected with
-// MsgDuplicateClientID. See docs/adr/0007-encourage-simple-clients.md for an explanation.
 func (l *Logical) Lease(ctx context.Context, req *types.LeaseRequest) error {
 	if l.inShutdown.Load() {
 		return ErrQueueShutdown
@@ -266,9 +214,6 @@ func (l *Logical) Lease(ctx context.Context, req *types.LeaseRequest) error {
 		return reply.NewRetryRequest(MsgQueueOverLoaded)
 	}
 
-	// Wait until the request has been processed or the client has gone away. If the
-	// client goes away the request loop may still lease items to this request after we return.
-	// See docs/adr/0009-client-timeouts.md
 	select {
 	case <-req.ReadyCh:
 		return req.Err
@@ -277,9 +222,6 @@ func (l *Logical) Lease(ctx context.Context, req *types.LeaseRequest) error {
 	}
 }
 
-// Complete is called by clients who wish to mark an item as complete. The call will block
-// until the item has been marked as complete or until the request is cancelled via the passed
-// context or RequestTimeout is reached.
 func (l *Logical) Complete(ctx context.Context, req *types.CompleteRequest) error {
 	if l.inShutdown.Load() {
 		return ErrQueueShutdown
@@ -318,9 +260,6 @@ func (l *Logical) Complete(ctx context.Context, req *types.CompleteRequest) erro
 		return reply.NewRetryRequest(MsgQueueOverLoaded)
 	}
 
-	// Wait until the request has been processed or the client has gone away. If the
-	// client goes away the request loop may still apply the complete after we return.
-	// See docs/adr/0009-client-timeouts.md
 	select {
 	case <-req.ReadyCh:
 		return req.Err
@@ -329,9 +268,6 @@ func (l *Logical) Complete(ctx context.Context, req *types.CompleteRequest) erro
 	}
 }
 
-// Retry is called by clients who wish to retry or dead-letter leased items. The call will
-// block until the retry has been applied or until the request is cancelled via the passed
-// context or RequestTimeout is reached.
 func (l *Logical) Retry(ctx context.Context, req *types.RetryRequest) error {
 	if l.inShutdown.Load() {
 		return ErrQueueShutdown
@@ -370,9 +306,6 @@ func (l *Logical) Retry(ctx context.Context, req *types.RetryRequest) error {
 		return reply.NewRetryRequest(MsgQueueOverLoaded)
 	}
 
-	// Wait until the request has been processed or the client has gone away. If the
-	// client goes away the request loop may still apply the retry after we return.
-	// See docs/adr/0009-client-timeouts.md
 	select {
 	case <-req.ReadyCh:
 		return req.Err
@@ -381,18 +314,6 @@ func (l *Logical) Retry(ctx context.Context, req *types.RetryRequest) error {
 	}
 }
 
-// ProduceDeadLetter produces pre-built items (e.g. dead-letter moves from a source queue's
-// lifecycle) through this Logical's requestLoop, preserving the single-writer-per-partition
-// invariant (ADR-0003). Unlike the client-facing Produce, it skips client validation
-// (RequestTimeout, ClientID, batch-size limits) since the items are already built and validated
-// upstream by QueuesManager.LifeCycle. ExpireDeadline is assigned by the loop in
-// assignProduceRequests, so the caller must not pre-assign it.
-//
-// The hand-off is synchronous: it blocks until the loop confirms the produce (required by the
-// delete-after-confirm invariant — the caller deletes the source item only after this returns
-// success) or until ctx is done. If the request channel is full it returns immediately rather
-// than blocking, so a saturated dead-letter queue never stalls the source loop; the caller
-// retains the source item and retries on the next lifecycle pass.
 func (l *Logical) ProduceDeadLetter(ctx context.Context, req *types.ProduceRequest) error {
 	if l.inShutdown.Load() {
 		return ErrQueueShutdown
@@ -416,9 +337,6 @@ func (l *Logical) ProduceDeadLetter(ctx context.Context, req *types.ProduceReque
 		return reply.NewRetryRequest(MsgQueueOverLoaded)
 	}
 
-	// Wait until the request has been processed or the caller's context is done. Unlike the
-	// client Produce, we honor ctx here so a stalled dead-letter queue cannot block the source
-	// loop indefinitely; the lifecycle's WriteTimeout context bounds the wait.
 	select {
 	case <-req.ReadyCh:
 		return req.Err
@@ -427,7 +345,6 @@ func (l *Logical) ProduceDeadLetter(ctx context.Context, req *types.ProduceReque
 	}
 }
 
-// QueueStats retrieves stats about the queue and items in storage
 func (l *Logical) QueueStats(ctx context.Context, stats *types.LogicalStats) error {
 	if l.inShutdown.Load() {
 		return ErrQueueShutdown
@@ -440,9 +357,6 @@ func (l *Logical) QueueStats(ctx context.Context, stats *types.LogicalStats) err
 	return l.queueRequest(ctx, &r)
 }
 
-// Pause pauses processing of produce, lease, complete and retry operations until the pause is cancelled.
-// It is only used for testing and not exposed to the user via API, as such it is not considered apart of
-// the public API.
 func (l *Logical) Pause(ctx context.Context, req *types.PauseRequest) error {
 	r := Request{
 		Method:  MethodQueuePause,
@@ -451,8 +365,6 @@ func (l *Logical) Pause(ctx context.Context, req *types.PauseRequest) error {
 	return l.queueRequest(ctx, &r)
 }
 
-// ReloadPartitions reloads all partitions from storage. Queue operation
-// is paused while reload completes.
 func (l *Logical) ReloadPartitions(ctx context.Context, req *types.ReloadRequest) error {
 	if l.inShutdown.Load() {
 		return ErrQueueShutdown
@@ -465,7 +377,6 @@ func (l *Logical) ReloadPartitions(ctx context.Context, req *types.ReloadRequest
 	return l.queueRequest(ctx, &r)
 }
 
-// Clear clears enqueued items from the queue
 func (l *Logical) Clear(ctx context.Context, req *types.ClearRequest) error {
 	if l.inShutdown.Load() {
 		return ErrQueueShutdown
@@ -483,8 +394,6 @@ func (l *Logical) Clear(ctx context.Context, req *types.ClearRequest) error {
 	return l.queueRequest(ctx, &r)
 }
 
-// UpdateInfo is called whenever QueueInfo changes. It is called during initialization of Logical struct and
-// is intended to be called whenever queue configuration changes.
 func (l *Logical) UpdateInfo(ctx context.Context, info types.QueueInfo) error {
 	if l.inShutdown.Load() {
 		return ErrQueueShutdown
@@ -496,8 +405,6 @@ func (l *Logical) UpdateInfo(ctx context.Context, info types.QueueInfo) error {
 	return l.queueRequest(ctx, &r)
 }
 
-// UpdatePartitions is called whenever the list of partitions this Logical Queue is responsible for changes.
-// It is called during initialization of Logical struct.
 func (l *Logical) UpdatePartitions(ctx context.Context, p []store.Partition) error {
 	r := Request{
 		Method:  MethodUpdatePartitions,
@@ -505,10 +412,6 @@ func (l *Logical) UpdatePartitions(ctx context.Context, p []store.Partition) err
 	}
 	return l.queueRequest(ctx, &r)
 }
-
-// -------------------------------------------------
-// Methods to manage queue storage
-// -------------------------------------------------
 
 func (l *Logical) StorageItemsList(ctx context.Context, req StorageRequest) error {
 
@@ -526,7 +429,6 @@ func (l *Logical) StorageItemsImport(ctx context.Context, partition int, items *
 	if l.inShutdown.Load() {
 		return ErrQueueShutdown
 	}
-	// TODO: Test for empty list
 	r := Request{
 		Method: MethodStorageItemsImport,
 		Request: StorageRequest{
@@ -565,8 +467,6 @@ func (l *Logical) Shutdown(ctx context.Context) error {
 		Context: ctx,
 	}
 
-	// Wait until l.requestLoop() shutdown is complete or until
-	// our context is cancelled.
 	select {
 	case l.shutdownCh <- req:
 		l.wg.Wait()
@@ -576,7 +476,6 @@ func (l *Logical) Shutdown(ctx context.Context) error {
 	}
 }
 
-// prepareQueueState is called whenever partition assignment changes
 func (l *Logical) prepareQueueState(state *QueueState) {
 	now := l.conf.Clock.Now().UTC()
 
@@ -591,14 +490,6 @@ func (l *Logical) prepareQueueState(state *QueueState) {
 	if state.Completes.Requests == nil {
 		state.Completes.Requests = make([]*types.CompleteRequest, 0, 5_000)
 	}
-
-	// TODO: Validate each partition hasn't been modified since last loaded by a Logical queue.
-	//  we do this by saving he last item id in the partition into QueueInfo.StoragePartitions along with
-	//  the the QueueInfo.StoragePartitions.UnLeased of items in the partition. When loading the partition,
-	//  If the last item id saved in QueueInfo.StoragePartitions agrees with what is in the actual partition,
-	//  we should trust that the partition was not modified and the count saved in
-	//  QueueInfo.StoragePartitions.UnLeased is accurate. If it's not accurate, we MUST re-count all the items
-	//  in the partition in order to accurately distribute items.
 
 	state.Partitions = make([]*Partition, len(l.conf.StoragePartitions))
 
@@ -640,11 +531,6 @@ func (l *Logical) prepareQueueState(state *QueueState) {
 
 }
 
-// -------------------------------------------------
-// Main Loop and Handlers
-// See docs/adr/0003-rw-sync-point.md for an explanation of this design
-// -------------------------------------------------
-
 type QueueState struct {
 	LifeCycles        types.LifeCycleBatch
 	Completes         types.CompleteBatch
@@ -655,9 +541,7 @@ type QueueState struct {
 	LifecycleTimer    clock.Timer
 	ScheduledTimer    clock.Timer
 	Partitions        []*Partition
-	// Paused holds produce, lease, complete and retry requests in state unprocessed, and stops
-	// the lifecycle, scheduled and request timeout timers, until a pause request cancels it.
-	Paused bool
+	Paused            bool
 }
 
 func (q *QueueState) GetPartition(num int) *Partition {
@@ -685,7 +569,6 @@ func (l *Logical) requestLoop() {
 			slog.Bool("Paused", state.Paused),
 		)
 
-		// A nil channel never fires, so a paused loop waits only on requests and shutdown.
 		lifecycleCh, scheduledCh, maintenanceCh := state.LifecycleTimer.C(), state.ScheduledTimer.C(), state.NextMaintenanceCh
 		if state.Paused {
 			lifecycleCh, scheduledCh, maintenanceCh = nil, nil, nil
@@ -735,7 +618,6 @@ func (l *Logical) handleRequest(state *QueueState, req *Request) {
 }
 
 func (l *Logical) handleRequestTimeouts(state *QueueState) {
-	// TODO: Consider state.nextDeadLine which should be the next time a lease will expire
 	next := l.nextTimeout(&state.Leases)
 	if next.Nanoseconds() != 0 {
 		l.log.LogAttrs(context.Background(), LevelDebug, "next maintenance",
@@ -744,41 +626,21 @@ func (l *Logical) handleRequestTimeouts(state *QueueState) {
 	}
 }
 
-// handleHotRequests applies req and every hot request waiting behind it in requestCh. It
-// returns the first cold request it drew from requestCh, which the caller must handle next.
 func (l *Logical) handleHotRequests(state *QueueState, req *Request) *Request {
-	// If request is empty, do not consume more requests, the caller only wants us
-	// to process requests currently waiting in 'state'
 	var cold *Request
 	if req != nil {
 		cold = l.consumeHotCh(state, req)
 	}
 
-	// Assign all the client requests in 'state' to appropriate partitions
-	// according to request type.
 	l.assignToPartitions(state)
 
-	// Apply the requests to each partition according their assignment.
 	l.applyToPartitions(state)
 
-	// TODO: If an error occurred with one of the partitions and it's recoverable,
-	//  then attempt to re-distribute un-applied requests to other partitions, else
-	//  we let the client request remain until it times out.
-
-	// TODO: Some time may have passed while talking to the partition, due to
-	//  storage degradation, ensure we handle timed out clients.
-
-	// If the request was fulfilled, Finalize the requests, else leave the
-	// request in the state until our next run
 	l.finalizeRequests(state)
 
-	// Reset the partition assignments
 	lifecycleUpdated := false
 	for _, p := range state.Partitions {
 		if p.State.NumLeased != 0 {
-			// MostRecentDeadline is updated when we apply leases to our
-			// partitions. Update the partition lifecycle state so it knows
-			// when a lease is likely to expire next.
 			now := l.conf.Clock.Now().UTC()
 			if p.State.MostRecentDeadline.After(now) && p.State.MostRecentDeadline.Before(p.Lifecycle.NextLifecycleRun) {
 				p.Lifecycle.NextLifecycleRun = p.State.MostRecentDeadline
@@ -788,7 +650,6 @@ func (l *Logical) handleHotRequests(state *QueueState, req *Request) *Request {
 		p.Reset()
 	}
 
-	// Reset lifecycle timer if any partition's NextLifecycleRun was updated
 	if lifecycleUpdated {
 		state.LifecycleTimer.Reset(l.minNextLifecycleRun(state))
 	}
@@ -799,7 +660,6 @@ func (l *Logical) handleHotRequests(state *QueueState, req *Request) *Request {
 	state.Completes.Reset()
 	state.Retries.Reset()
 
-	// Handle any request timeouts and update our next run timer
 	l.handleRequestTimeouts(state)
 	return cold
 }
@@ -818,12 +678,9 @@ func (l *Logical) isHotRequest(req *Request) bool {
 	return false
 }
 
-// consumeHotCh adds req, and the hot requests already waiting in requestCh, to the client
-// request state. It stops at the first cold request and returns it, or returns nil.
 func (l *Logical) consumeHotCh(state *QueueState, req *Request) *Request {
 	l.reqToState(req, state)
 
-	// Only this goroutine receives from requestCh, so it holds at least this many requests.
 	for range len(l.requestCh) {
 		select {
 		case next := <-l.requestCh:
@@ -839,13 +696,6 @@ func (l *Logical) consumeHotCh(state *QueueState, req *Request) *Request {
 }
 
 func (l *Logical) reqToState(req *Request, state *QueueState) {
-	// TODO: Check for request timeout, it's possible the request has been sitting in
-	//  the channel for a while
-
-	// TODO(thrawn01): Ensure we don't go beyond our max number of state.Producers, state.Completes, etc..
-	//  If we do then we must inform the client that we are overloaded, and they must try again. We
-	//  cannot hold on to a request and let it sit in the channel, else we break the
-	//  request_timeout contract we have with the client.
 
 	switch req.Method {
 	case MethodProduce, MethodProduceInternal:
@@ -860,10 +710,6 @@ func (l *Logical) reqToState(req *Request, state *QueueState) {
 		assert.Unreachable(fmt.Sprintf("undefined request method '%d'", req.Method))
 	}
 }
-
-// -------------------------------------------------
-// Handlers for requestLoop
-// -------------------------------------------------
 
 func (l *Logical) queueRequest(ctx context.Context, r *Request) error {
 	if l.inShutdown.Load() {
@@ -887,7 +733,6 @@ func (l *Logical) queueRequest(ctx context.Context, r *Request) error {
 	}
 }
 
-// TODO: I don't think we should pass by ref. We should use escape analysis to decide
 func (l *Logical) nextTimeout(r *types.LeaseBatch) clock.Duration {
 	var soon *types.LeaseRequest
 
@@ -910,41 +755,23 @@ func (l *Logical) nextTimeout(r *types.LeaseBatch) clock.Duration {
 			continue
 		}
 
-		// If there is no soon
 		if soon == nil {
 			soon = req
 			continue
 		}
 
-		// Will this happen sooner?
 		if req.RequestDeadline.Before(soon.RequestDeadline) {
 			soon = req
 		}
 	}
 
-	// No sooner than now =)
 	if soon == nil {
 		return clock.Duration(0)
 	}
 
-	// How soon is it? =)
 	return soon.RequestDeadline.Sub(l.conf.Clock.Now().UTC())
 }
 
-// Useful for debugging, do not remove thrawn(2025-03-31)
-// func (l *Logical) dumpPartitionOrder(state *QueueState) string {
-// 	out := strings.Builder{}
-// 	out.WriteString("Partition Order:\n")
-// 	for _, req := range state.Partitions {
-// 		fmt.Fprintf(&out, "  %02d - UnLeased: %d NumLeased: %d Failures: %d\n",
-// 			req.Info.PartitionNum, req.State.UnLeased, req.State.NumLeased,
-// 			req.State.Failures)
-// 	}
-// 	return out.String()
-// }
-
-// addIfUnique adds a LeaseRequest to the batch. Returns false if the LeaseRequest.ClientID is a duplicate
-// and the request was not added to the batch
 func addIfUnique(r *types.LeaseBatch, req *types.LeaseRequest) {
 	if req == nil {
 		return

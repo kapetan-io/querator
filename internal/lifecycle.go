@@ -9,7 +9,6 @@ import (
 	"github.com/kapetan-io/tiger/assert"
 )
 
-// runLifecycle processes lifecycle actions for all partitions that are due
 func (l *Logical) runLifecycle(state *QueueState) {
 	now := l.conf.Clock.Now().UTC()
 
@@ -40,20 +39,16 @@ func (l *Logical) runLifecycle(state *QueueState) {
 		}
 		partition.Lifecycle.Failures = 0
 
-		// Batch DLQ actions for manager processing
 		var dlqActions []types.Action
 
 		for _, a := range actions {
 			switch a.Action {
 			case types.ActionLeaseExpired:
-				// Check if max attempts exceeded - route to DLQ or delete
 				if partition.Info.Queue.MaxAttempts != 0 && a.Item.Attempts >= partition.Info.Queue.MaxAttempts {
 					if partition.Info.Queue.DeadQueue != "" {
-						// Route to DLQ via manager
 						a.Action = types.ActionItemMaxAttempts
 						dlqActions = append(dlqActions, a)
 					} else {
-						// No DLQ - delete the item
 						a.Action = types.ActionDeleteItem
 						partition.LifeCycleRequests.Add(&types.LifeCycleRequest{
 							PartitionNum: partition.Info.PartitionNum,
@@ -61,7 +56,6 @@ func (l *Logical) runLifecycle(state *QueueState) {
 						})
 					}
 				} else {
-					// Normal lease expiry - re-queue item
 					partition.LifeCycleRequests.Add(&types.LifeCycleRequest{
 						PartitionNum: partition.Info.PartitionNum,
 						Actions:      []types.Action{a},
@@ -75,7 +69,6 @@ func (l *Logical) runLifecycle(state *QueueState) {
 						Actions:      []types.Action{a},
 					})
 				} else {
-					// Batch DLQ actions for single manager call
 					dlqActions = append(dlqActions, a)
 				}
 			case types.ActionDeleteItem:
@@ -93,7 +86,6 @@ func (l *Logical) runLifecycle(state *QueueState) {
 			}
 		}
 
-		// Process batched DLQ actions if any
 		if len(dlqActions) > 0 {
 			ctx, cancel := context.WithTimeout(context.Background(), l.conf.WriteTimeout)
 			req := &types.LifeCycleRequest{
@@ -113,7 +105,6 @@ func (l *Logical) runLifecycle(state *QueueState) {
 			}
 		}
 
-		// Execute the lifecycle actions against storage
 		if len(partition.LifeCycleRequests.Requests) > 0 {
 			ctx, cancel := context.WithTimeout(context.Background(), l.conf.WriteTimeout)
 			if err := partition.Store.TakeAction(ctx, partition.LifeCycleRequests, &partition.State); err != nil {
@@ -142,7 +133,6 @@ func (l *Logical) runLifecycle(state *QueueState) {
 			continue
 		}
 
-		// Find the earliest future deadline (lease expiry or item expiry)
 		nextRun := clock.Time{}
 
 		if info.NextLeaseExpiry.After(now) {
@@ -163,7 +153,6 @@ func (l *Logical) runLifecycle(state *QueueState) {
 	}
 }
 
-// runScheduled processes scheduled items for all partitions that are due
 func (l *Logical) runScheduled(state *QueueState) {
 	now := l.conf.Clock.Now().UTC()
 
@@ -194,7 +183,6 @@ func (l *Logical) runScheduled(state *QueueState) {
 			})
 		}
 
-		// Execute the scheduled actions against storage
 		if len(partition.LifeCycleRequests.Requests) > 0 {
 			ctx, cancel := context.WithTimeout(context.Background(), l.conf.WriteTimeout)
 			if err := partition.Store.TakeAction(ctx, partition.LifeCycleRequests, &partition.State); err != nil {
@@ -211,7 +199,6 @@ func (l *Logical) runScheduled(state *QueueState) {
 	}
 }
 
-// minNextLifecycleRun finds the minimum NextLifecycleRun across all partitions
 func (l *Logical) minNextLifecycleRun(state *QueueState) clock.Duration {
 	now := l.conf.Clock.Now().UTC()
 	var minTime clock.Time
@@ -233,7 +220,6 @@ func (l *Logical) minNextLifecycleRun(state *QueueState) clock.Duration {
 	return minTime.Sub(now)
 }
 
-// minNextScheduledRun finds the minimum NextScheduledRun across all partitions
 func (l *Logical) minNextScheduledRun(state *QueueState) clock.Duration {
 	now := l.conf.Clock.Now().UTC()
 	var minTime clock.Time
@@ -255,7 +241,6 @@ func (l *Logical) minNextScheduledRun(state *QueueState) clock.Duration {
 	return minTime.Sub(now)
 }
 
-// recoverPartition attempts to recover a failed partition
 func (l *Logical) recoverPartition(partition *Partition, now clock.Time) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), l.conf.ReadTimeout)
 	var stats types.PartitionStats
@@ -293,7 +278,6 @@ func (l *Logical) recoverPartition(partition *Partition, now clock.Time) bool {
 	return true
 }
 
-// scanPartitionLifecycle scans a partition for lifecycle actions
 func (l *Logical) scanPartitionLifecycle(ctx context.Context, partition *Partition) ([]types.Action, error) {
 	now := l.conf.Clock.Now().UTC()
 	actions := make([]types.Action, 0, 1_000)
@@ -308,7 +292,6 @@ func (l *Logical) scanPartitionLifecycle(ctx context.Context, partition *Partiti
 	return actions, nil
 }
 
-// scanPartitionScheduled scans a partition for scheduled items
 func (l *Logical) scanPartitionScheduled(ctx context.Context, partition *Partition) ([]types.Action, error) {
 	now := l.conf.Clock.Now().UTC()
 	actions := make([]types.Action, 0, 1_000)

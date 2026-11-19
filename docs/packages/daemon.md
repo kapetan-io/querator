@@ -10,6 +10,8 @@ queue that queue storage already holds is skipped, before any partition
 placement runs.
 
 The skip lets a restart succeed when every partition storage has affinity 0.
+Affinity is a decimal, so `0.5` is valid; `.nan` and infinite values fail with an error naming the
+partition storage.
 It applies only with persistent queue storage (badger, mongo or postgres); with
 the default memory queue storage nothing survives a restart, so every listed
 queue is added again. A

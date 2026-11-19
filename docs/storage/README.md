@@ -115,7 +115,8 @@ Affinity splits each queue's partitions, not the set of queues. Querator rounds 
 share down and gives the leftover partitions one each to the backends with the highest affinity,
 ties going to the backend listed first. A queue with 10 partitions gets 3 on BadgerDB and 7 on
 PostgreSQL, while a queue with 1 partition always lands on PostgreSQL. A backend with an affinity
-of 0 receives no new partitions. `/queues.info` lists each partition with the `storage_name` of
+of 0 or less receives no new partitions. Affinity may be fractional, so `0.5` and `1.5` split
+partitions 1 to 3, the same as `1` and `3`. `.nan`, `.inf` and `-.inf` are rejected at startup. `/queues.info` lists each partition with the `storage_name` of
 the backend which holds it.
 
 ## Storage Directory Structure

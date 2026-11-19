@@ -2,6 +2,7 @@ package daemon_test
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -480,4 +481,75 @@ func TestApplyConfigFilePlacesUnlistedPartitions(t *testing.T) {
 		require.Len(t, info.PartitionInfo, 1)
 		assert.Equal(t, "mem-02", info.PartitionInfo[0].StorageName)
 	})
+}
+
+func TestAffinityFromYAML(t *testing.T) {
+	ctx := context.Background()
+	const template = `
+partition-storage:
+  - name: mem-00
+    memory: {}
+    affinity: %s
+  - name: mem-01
+    memory: {}
+    affinity: %s
+queue-storage:
+  memory: {}
+queues:
+  - name: queue-1
+    requested-partitions: 4
+    lease-timeout: 1m
+    expire-timeout: 1h
+`
+	apply := func(t *testing.T, first, second string) (types.QueueInfo, error) {
+		t.Helper()
+		file, err := daemon.ReadConfig(strings.NewReader(fmt.Sprintf(template, first, second)))
+		require.NoError(t, err)
+		conf := &daemon.Config{}
+		if err := daemon.ApplyConfigFile(ctx, conf, file, io.Discard); err != nil {
+			return types.QueueInfo{}, err
+		}
+		var info types.QueueInfo
+		require.NoError(t, conf.Service.StorageConfig.Queues.Get(ctx, "queue-1", &info))
+		return info, nil
+	}
+	spread := func(info types.QueueInfo) map[string]int {
+		counts := map[string]int{}
+		for _, p := range info.PartitionInfo {
+			counts[p.StorageName]++
+		}
+		return counts
+	}
+
+	for _, test := range []struct {
+		name     string
+		first    string
+		second   string
+		expected map[string]int
+	}{
+		{name: "Fractions", first: "0.5", second: "1.5", expected: map[string]int{"mem-00": 1, "mem-01": 3}},
+		{name: "WholeNumbers", first: "1", second: "3", expected: map[string]int{"mem-00": 1, "mem-01": 3}},
+		{name: "Zero", first: "0", second: "1", expected: map[string]int{"mem-01": 4}},
+		{name: "Negative", first: "-1", second: "1", expected: map[string]int{"mem-01": 4}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			info, err := apply(t, test.first, test.second)
+			require.NoError(t, err)
+			assert.Equal(t, test.expected, spread(info))
+		})
+	}
+
+	for _, test := range []struct {
+		name  string
+		value string
+	}{
+		{name: "NaN", value: ".nan"},
+		{name: "PositiveInfinity", value: ".inf"},
+		{name: "NegativeInfinity", value: "-.inf"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := apply(t, "1", test.value)
+			require.ErrorContains(t, err, "partition storage 'mem-01' affinity must be a finite number")
+		})
+	}
 }

@@ -92,6 +92,19 @@ from storage. A failed produce in the same pass takes all its items out of the u
 even those the lease estimate already counted as leased. The estimate gives those back when
 storage answers the lease, so the produce must not give them back as well.
 
+A running queue does not write items for a client that stopped waiting
+([ADR-0009](adr/0009-client-timeouts.md)). An unassigned client produce whose request timeout has
+passed is answered with a retry error and dropped. One whose client has gone is dropped too.
+
+Every pass that assigns produces must expire them first, including produces it has just taken
+from the request channel, because a produce can sit there past its deadline while the loop is
+busy. A pass that skips this writes items for a client that has already given up. The one
+deliberate exception is the pass that cancels a pause, which applies what the pause held, as
+described under Pause.
+
+A dead-letter hand-off has no request timeout and its deadline is zero, so the deadline check must
+skip it or it would expire at once.
+
 Produce assignment assumes the list of partitions is sorted with failed partitions last, and checks
 only the first. A partition that fails while it is first stays first until an assigned lease or a
 queue load re-sorts the list, and until then produce requests wait unassigned although another

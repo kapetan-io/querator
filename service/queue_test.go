@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/duh-rpc/duh-go"
@@ -2317,6 +2318,292 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				assert.Equal(t, int32(4), stats.LogicalQueues[0].Partitions[0].TotalLeased)
 			})
 
+			t.Run("RequestTimeoutWhilePartitionFailed", func(t *testing.T) {
+				now := clock.NewProvider()
+				now.Freeze(clock.Now())
+				defer now.UnFreeze()
+
+				var fault partitionFault
+				d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: fault.Wrap(storage), Clock: now})
+				defer d.Shutdown(t)
+				c, ctx := d.MustClient(), d.Context()
+
+				queueName := random.String("queue-", 10)
+				createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+					LeaseTimeout:        LeaseTimeout,
+					ExpireTimeout:       ExpireTimeout,
+					QueueName:           queueName,
+					RequestedPartitions: 1,
+				})
+
+				// The first lifecycle run waits for the clock to move. Its scan fails, which marks the
+				// only partition failed, so a produce waits unassigned until the partition recovers and
+				// another request arrives.
+				fault.scanFailing.Store(&queueName)
+				now.Advance(clock.Millisecond)
+				var stats pb.QueueStatsResponse
+				require.Eventually(t, func() bool {
+					if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats); err != nil {
+						return false
+					}
+					return stats.LogicalQueues[0].Partitions[0].Failures != 0
+				}, 5*clock.Second, 20*clock.Millisecond)
+
+				callCtx, cancel := context.WithCancel(ctx)
+				defer cancel()
+				var produceErr error
+				duringCalls(cancel, func() {
+					require.Eventually(t, func() bool {
+						if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats); err != nil {
+							return false
+						}
+						return stats.LogicalQueues[0].ProduceWaiting == 1
+					}, 5*clock.Second, 20*clock.Millisecond)
+
+					// The partition stays failed past this advance because its lifecycle scan still fails.
+					now.Advance(2 * clock.Second)
+				}, func() {
+					produceErr = c.QueueProduce(callCtx, &pb.QueueProduceRequest{
+						QueueName:      queueName,
+						RequestTimeout: "1s",
+						Items:          produceRandomItems(3),
+					})
+				})
+				var e duh.Error
+				require.True(t, errors.As(produceErr, &e))
+				assert.Equal(t, duh.CodeRetryRequest, e.Code())
+				assert.Equal(t, "internal error, try your request again", e.Message())
+
+				require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats))
+				assert.Equal(t, int32(0), stats.LogicalQueues[0].ProduceWaiting)
+
+				// Once the partition recovers, a new produce is written and the timed-out one is not.
+				fault.scanFailing.Store(nil)
+				require.Eventually(t, func() bool {
+					now.Advance(clock.Second)
+					if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats); err != nil {
+						return false
+					}
+					return stats.LogicalQueues[0].Partitions[0].Failures == 0
+				}, 5*clock.Second, 20*clock.Millisecond)
+				require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+					QueueName:      queueName,
+					RequestTimeout: "5s",
+					Items:          produceRandomItems(2),
+				}))
+				var list pb.StorageItemsListResponse
+				require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, nil))
+				assert.Len(t, list.Items, 2)
+			})
+
+			t.Run("ClientGoneWhilePartitionFailed", func(t *testing.T) {
+				now := clock.NewProvider()
+				now.Freeze(clock.Now())
+				defer now.UnFreeze()
+
+				var fault partitionFault
+				d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: fault.Wrap(storage), Clock: now})
+				defer d.Shutdown(t)
+				c, ctx := d.MustClient(), d.Context()
+
+				queueName := random.String("queue-", 10)
+				createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+					LeaseTimeout:        LeaseTimeout,
+					ExpireTimeout:       ExpireTimeout,
+					QueueName:           queueName,
+					RequestedPartitions: 1,
+				})
+
+				// The first lifecycle run waits for the clock to move. Its scan fails, which marks the
+				// only partition failed, so a produce waits unassigned until the partition recovers and
+				// another request arrives.
+				fault.scanFailing.Store(&queueName)
+				now.Advance(clock.Millisecond)
+				var stats pb.QueueStatsResponse
+				require.Eventually(t, func() bool {
+					if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats); err != nil {
+						return false
+					}
+					return stats.LogicalQueues[0].Partitions[0].Failures != 0
+				}, 5*clock.Second, 20*clock.Millisecond)
+
+				gone, cancel := context.WithCancel(ctx)
+				defer cancel()
+				var abandonedErr error
+				duringCalls(cancel, func() {
+					require.Eventually(t, func() bool {
+						if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats); err != nil {
+							return false
+						}
+						return stats.LogicalQueues[0].ProduceWaiting == 1
+					}, 5*clock.Second, 20*clock.Millisecond)
+					cancel()
+				}, func() {
+					abandonedErr = c.QueueProduce(gone, &pb.QueueProduceRequest{
+						QueueName:      queueName,
+						RequestTimeout: "10m",
+						Items:          produceRandomItems(3),
+					})
+				})
+				require.ErrorContains(t, abandonedErr, "context canceled")
+
+				// The server has seen the client go once the abandoned produce call has returned.
+				require.Eventually(t, func() bool {
+					if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats); err != nil {
+						return false
+					}
+					return stats.LogicalQueues[0].InFlight == 0
+				}, 5*clock.Second, 20*clock.Millisecond)
+
+				// The next produce to arrive finds the abandoned one and drops it. That produce is answered
+				// once its short request timeout passes, which proves it reached the queue, so nothing waits
+				// afterwards. The abandoned produce's own request timeout is far beyond these advances.
+				timeoutCtx, timeoutCancel := context.WithCancel(ctx)
+				defer timeoutCancel()
+				var timedOutErr error
+				var answered atomic.Bool
+				duringCalls(timeoutCancel, func() {
+					require.Eventually(t, func() bool {
+						now.Advance(clock.Second)
+						return answered.Load()
+					}, 5*clock.Second, 20*clock.Millisecond)
+				}, func() {
+					timedOutErr = c.QueueProduce(timeoutCtx, &pb.QueueProduceRequest{
+						QueueName:      queueName,
+						RequestTimeout: "1s",
+						Items:          produceRandomItems(1),
+					})
+					answered.Store(true)
+				})
+				var e duh.Error
+				require.True(t, errors.As(timedOutErr, &e))
+				assert.Equal(t, duh.CodeRetryRequest, e.Code())
+				require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats))
+				assert.Equal(t, int32(0), stats.LogicalQueues[0].ProduceWaiting)
+
+				// Once the partition recovers, a new produce writes the waiting one with it, and the
+				// abandoned one is not written.
+				callCtx, callCancel := context.WithCancel(ctx)
+				defer callCancel()
+				var waitingErr error
+				duringCalls(callCancel, func() {
+					require.Eventually(t, func() bool {
+						if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats); err != nil {
+							return false
+						}
+						return stats.LogicalQueues[0].ProduceWaiting == 1
+					}, 5*clock.Second, 20*clock.Millisecond)
+
+					fault.scanFailing.Store(nil)
+					require.Eventually(t, func() bool {
+						now.Advance(clock.Second)
+						if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats); err != nil {
+							return false
+						}
+						return stats.LogicalQueues[0].Partitions[0].Failures == 0
+					}, 5*clock.Second, 20*clock.Millisecond)
+					require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+						QueueName:      queueName,
+						RequestTimeout: "5s",
+						Items:          produceRandomItems(1),
+					}))
+				}, func() {
+					waitingErr = c.QueueProduce(callCtx, &pb.QueueProduceRequest{
+						QueueName:      queueName,
+						RequestTimeout: "1m",
+						Items:          produceRandomItems(2),
+					})
+				})
+				require.NoError(t, waitingErr)
+				var list pb.StorageItemsListResponse
+				require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, nil))
+				assert.Len(t, list.Items, 3)
+			})
+
+			t.Run("RequestTimeoutBeforeRecoveryPass", func(t *testing.T) {
+				now := clock.NewProvider()
+				now.Freeze(clock.Now())
+				defer now.UnFreeze()
+
+				var fault partitionFault
+				d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: fault.Wrap(storage), Clock: now})
+				defer d.Shutdown(t)
+				c, ctx := d.MustClient(), d.Context()
+
+				queueName := random.String("queue-", 10)
+				createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+					LeaseTimeout:        LeaseTimeout,
+					ExpireTimeout:       ExpireTimeout,
+					QueueName:           queueName,
+					RequestedPartitions: 1,
+				})
+
+				// The first lifecycle run waits for the clock to move. Its scan fails, which marks the
+				// only partition failed.
+				fault.scanFailing.Store(&queueName)
+				now.Advance(clock.Millisecond)
+				var stats pb.QueueStatsResponse
+				require.Eventually(t, func() bool {
+					if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats); err != nil {
+						return false
+					}
+					return stats.LogicalQueues[0].Partitions[0].Failures != 0
+				}, 5*clock.Second, 20*clock.Millisecond)
+
+				// With a lease waiting, the lifecycle run that recovers the partition goes on to assign
+				// waiting produces. This advance makes that run and the produce's request timeout due
+				// together, and whichever the queue handles first, the produce must not be written.
+				produceCtx, produceCancel := context.WithCancel(ctx)
+				defer produceCancel()
+				leaseCtx, leaseCancel := context.WithCancel(ctx)
+				defer leaseCancel()
+				var produceErr, leaseErr error
+				duringCalls(func() {
+					produceCancel()
+					leaseCancel()
+				}, func() {
+					require.Eventually(t, func() bool {
+						if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats); err != nil {
+							return false
+						}
+						return stats.LogicalQueues[0].ProduceWaiting == 1 && stats.LogicalQueues[0].LeaseWaiting == 1
+					}, 5*clock.Second, 20*clock.Millisecond)
+
+					fault.scanFailing.Store(nil)
+					now.Advance(2 * clock.Second)
+					require.Eventually(t, func() bool {
+						if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats); err != nil {
+							return false
+						}
+						return stats.LogicalQueues[0].ProduceWaiting == 0
+					}, 5*clock.Second, 20*clock.Millisecond)
+					leaseCancel()
+				}, func() {
+					produceErr = c.QueueProduce(produceCtx, &pb.QueueProduceRequest{
+						QueueName:      queueName,
+						RequestTimeout: "1s",
+						Items:          produceRandomItems(3),
+					})
+				}, func() {
+					var lease pb.QueueLeaseResponse
+					leaseErr = c.QueueLease(leaseCtx, &pb.QueueLeaseRequest{
+						ClientId:       random.String("client-", 10),
+						RequestTimeout: "5m",
+						QueueName:      queueName,
+						BatchSize:      1,
+					}, &lease)
+				})
+
+				var e duh.Error
+				require.True(t, errors.As(produceErr, &e))
+				assert.Equal(t, duh.CodeRetryRequest, e.Code())
+				// The lease found nothing to take and waited until it was cancelled.
+				require.ErrorContains(t, leaseErr, "context canceled")
+				var list pb.StorageItemsListResponse
+				require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, nil))
+				assert.Empty(t, list.Items)
+			})
+
 			var queueName = random.String("queue-", 10)
 			d := newDaemon(t, 5*clock.Second, svc.Config{StorageConfig: storage})
 			defer d.Shutdown(t)
@@ -3935,6 +4222,94 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			assert.Greater(t, third, second)
 			assert.LessOrEqual(t, third, 5*clock.Second)
 			assert.True(t, isLeased(t, ctx, c, queueName, "dead"))
+		})
+
+		t.Run("HandOffWaitsForFailedDeadLetterPartition", func(t *testing.T) {
+			now := clock.NewProvider()
+			now.Freeze(clock.Now())
+			defer now.UnFreeze()
+
+			var fault partitionFault
+			d := newDaemon(t, 20*clock.Second, svc.Config{
+				StorageConfig: fault.Wrap(setup()),
+				Clock:         now,
+				// The source lifecycle waits this long, in real time, for a hand-off. It keeps the hand-off's
+				// caller waiting through the steps below.
+				WriteTimeout: 5 * clock.Second,
+			})
+			defer func() {
+				d.Shutdown(t)
+				tearDown()
+			}()
+			c, ctx := d.MustClient(), d.Context()
+
+			queueName := random.String("queue-", 10)
+			dlqName := random.String("dlq-", 10)
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				QueueName:           dlqName,
+				LeaseTimeout:        "1m0s",
+				ExpireTimeout:       ExpireTimeout,
+				RequestedPartitions: 1,
+			})
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				QueueName:           queueName,
+				LeaseTimeout:        "100ms",
+				ExpireTimeout:       ExpireTimeout,
+				MaxAttempts:         1,
+				DeadQueue:           dlqName,
+				RequestedPartitions: 1,
+			})
+			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+				QueueName:      queueName,
+				RequestTimeout: "5s",
+				Items:          []*pb.QueueProduceItem{{Reference: "dead", Bytes: []byte("x")}},
+			}))
+			require.Equal(t, "dead", leaseOne(t, ctx, c, queueName).Reference)
+
+			// The dead letter queue's first lifecycle run waits for the clock to move. Its scan fails,
+			// which marks the only partition failed until a later run succeeds.
+			fault.scanFailing.Store(&dlqName)
+			now.Advance(clock.Millisecond)
+			var stats pb.QueueStatsResponse
+			require.Eventually(t, func() bool {
+				if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: dlqName}, &stats); err != nil {
+					return false
+				}
+				return stats.LogicalQueues[0].Partitions[0].Failures != 0
+			}, 5*clock.Second, 20*clock.Millisecond)
+
+			// The source lease expires and its lifecycle hands the item off. A hand-off has no request
+			// timeout, so it waits for the failed partition instead of being answered.
+			now.Advance(200 * clock.Millisecond)
+			require.Eventually(t, func() bool {
+				if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: dlqName}, &stats); err != nil {
+					return false
+				}
+				return stats.LogicalQueues[0].ProduceWaiting == 1
+			}, 5*clock.Second, 20*clock.Millisecond)
+
+			// Once the partition recovers, the next produce writes the item. The poll above proved the
+			// hand-off waited, and the source ID keeps a later copy from storing it twice.
+			fault.scanFailing.Store(nil)
+			require.Eventually(t, func() bool {
+				now.Advance(clock.Second)
+				if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: dlqName}, &stats); err != nil {
+					return false
+				}
+				return stats.LogicalQueues[0].Partitions[0].Failures == 0
+			}, 5*clock.Second, 20*clock.Millisecond)
+			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+				QueueName:      dlqName,
+				RequestTimeout: "5s",
+				Items:          []*pb.QueueProduceItem{{Reference: "direct", Bytes: []byte("y")}},
+			}))
+			var list pb.StorageItemsListResponse
+			require.NoError(t, c.StorageItemsList(ctx, dlqName, 0, &list, nil))
+			var references []string
+			for _, item := range list.Items {
+				references = append(references, item.Reference)
+			}
+			assert.ElementsMatch(t, []string{"dead", "direct"}, references)
 		})
 
 		t.Run("PausedDeadLetterQueueHoldsOneHandOff", func(t *testing.T) {

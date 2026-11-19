@@ -607,6 +607,7 @@ func (l *Logical) leaseToWaitingConsumers(state *QueueState) {
 	if len(state.Leases.Requests) == 0 {
 		return
 	}
+	l.expireProduceRequests(&state.Producers)
 	l.handleHotRequests(state, nil)
 }
 
@@ -632,6 +633,11 @@ func (l *Logical) handleRequest(state *QueueState, req *Request) {
 
 func (l *Logical) handleRequestTimeouts(state *QueueState) {
 	next := l.nextTimeout(&state.Leases)
+	if produce := l.expireProduceRequests(&state.Producers); produce != 0 {
+		if next == 0 || produce < next {
+			next = produce
+		}
+	}
 	if next.Nanoseconds() != 0 {
 		l.log.LogAttrs(context.Background(), LevelDebug, "next maintenance",
 			slog.String("duration", next.String()))
@@ -643,6 +649,7 @@ func (l *Logical) handleHotRequests(state *QueueState, req *Request) *Request {
 	var cold *Request
 	if req != nil {
 		cold = l.consumeHotCh(state, req)
+		l.expireProduceRequests(&state.Producers)
 	}
 
 	l.assignToPartitions(state)
@@ -783,6 +790,43 @@ func (l *Logical) nextTimeout(r *types.LeaseBatch) clock.Duration {
 	}
 
 	return soon.RequestDeadline.Sub(l.conf.Clock.Now().UTC())
+}
+
+func (l *Logical) expireProduceRequests(r *types.ProduceBatch) clock.Duration {
+	now := l.conf.Clock.Now().UTC()
+	var soon clock.Time
+	n := 0
+
+	for _, req := range r.Requests {
+		if req.DeadLetterHandOff {
+			r.Requests[n] = req
+			n++
+			continue
+		}
+
+		if !now.Before(req.RequestDeadline) {
+			req.Err = ErrInternalRetry
+			close(req.ReadyCh)
+			continue
+		}
+		if req.Context.Err() != nil {
+			req.Err = req.Context.Err()
+			close(req.ReadyCh)
+			continue
+		}
+
+		if soon.IsZero() || req.RequestDeadline.Before(soon) {
+			soon = req.RequestDeadline
+		}
+		r.Requests[n] = req
+		n++
+	}
+	r.Requests = r.Requests[:n]
+
+	if soon.IsZero() {
+		return clock.Duration(0)
+	}
+	return soon.Sub(now)
 }
 
 func addIfUnique(r *types.LeaseBatch, req *types.LeaseRequest) {

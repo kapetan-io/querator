@@ -2468,22 +2468,36 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					RequestedPartitions: 2,
 				})
 
-				// Both partitions are empty, so partition 0 has the fewest unleased items and sorts first.
-				fault.scanFailingOnly.Store(1)
-				fault.scanFailing.Store(&queueName)
-				now.Advance(clock.Millisecond)
-				var stats pb.QueueStatsResponse
-				require.Eventually(t, func() bool {
+				// Both partitions start empty and the first produce lands in partition 0, so partition 1
+				// has the fewest unleased items and sorts first.
+				require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+					QueueName:      queueName,
+					RequestTimeout: "5s",
+					Items:          produceRandomItems(1),
+				}))
+
+				partitionFailures := func(num int32) int32 {
+					var stats pb.QueueStatsResponse
 					if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats); err != nil {
-						return false
+						return -1
 					}
 					for _, p := range stats.LogicalQueues[0].Partitions {
-						if p.Partition == 0 {
-							return p.Failures != 0
+						if p.Partition == num {
+							return p.Failures
 						}
 					}
-					return false
-				}, 5*clock.Second, 20*clock.Millisecond)
+					return -1
+				}
+				itemCount := func(num int) int {
+					var list pb.StorageItemsListResponse
+					require.NoError(t, c.StorageItemsList(ctx, queueName, num, &list, nil))
+					return len(list.Items)
+				}
+
+				fault.scanFailingOnly.Store(2)
+				fault.scanFailing.Store(&queueName)
+				now.Advance(clock.Millisecond)
+				require.Eventually(t, func() bool { return partitionFailures(1) > 0 }, 5*clock.Second, 20*clock.Millisecond)
 
 				produceCtx, cancel := context.WithTimeout(ctx, 3*clock.Second)
 				defer cancel()
@@ -2492,12 +2506,21 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					RequestTimeout: "5s",
 					Items:          produceRandomItems(2),
 				}))
+				assert.Equal(t, 3, itemCount(0))
+				assert.Equal(t, 0, itemCount(1))
 
-				var list pb.StorageItemsListResponse
-				require.NoError(t, c.StorageItemsList(ctx, queueName, 1, &list, nil))
-				assert.Len(t, list.Items, 2)
-				require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, nil))
-				assert.Empty(t, list.Items)
+				// Once partition 1 recovers it has the fewest unleased items again and takes the next produce.
+				fault.scanFailing.Store(nil)
+				require.Eventually(t, func() bool {
+					now.Advance(clock.Second)
+					return partitionFailures(1) == 0
+				}, 5*clock.Second, 20*clock.Millisecond)
+				require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+					QueueName:      queueName,
+					RequestTimeout: "5s",
+					Items:          produceRandomItems(1),
+				}))
+				assert.Equal(t, 1, itemCount(1))
 			})
 
 			t.Run("ClientGoneWhilePartitionFailed", func(t *testing.T) {

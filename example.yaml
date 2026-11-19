@@ -20,8 +20,8 @@ queue-storage:
     storage-dir: /data/queues
 
 # Partition Storage defines where partitions are stored. Each backend's affinity is its share of a
-# queue's partitions, so 1.5 gets three times the partitions of 0.5. Fractions are accepted; 0 or a
-# negative value gets no partitions.
+# queue's partitions, so 1.5 gets three times the partitions of 0.5. Fractions are accepted. A backend
+# with 0 or a negative affinity gets none of the partitions Querator places itself.
 partition-storage:
   - name: badger-01
     affinity: 1

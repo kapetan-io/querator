@@ -2200,9 +2200,23 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					QueueName:           queueName,
 					RequestedPartitions: 2,
 				})
-				_ = writeRandomItems(t, ctx, c, queueName, 10)
+				// Write to both partitions so a clear that stops at the failing one is visible.
+				var before [2]pb.StorageItemsListResponse
+				for partition := range 2 {
+					var imported pb.StorageItemsImportResponse
+					require.NoError(t, c.StorageItemsImport(ctx, &pb.StorageItemsImportRequest{
+						QueueName: queueName,
+						Partition: int32(partition),
+						Items: []*pb.StorageItem{
+							{ExpireDeadline: timestamppb.New(clock.Now().UTC().Add(clock.Hour)), Payload: []byte("item")},
+						},
+					}, &imported))
+					require.NoError(t, c.StorageItemsList(ctx, queueName, partition, &before[partition], nil))
+					require.NotEmpty(t, before[partition].Items)
+				}
 
-				fault.failingClear.Store(true)
+				// Partition 0 fails and partition 1 is healthy.
+				fault.failingClear.Store(1)
 				start := clock.Now().UTC()
 				err := c.QueueClear(ctx, &pb.QueueClearRequest{QueueName: queueName, Queue: true, Destructive: true})
 				require.Error(t, err)
@@ -2211,14 +2225,18 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				require.True(t, errors.As(err, &e))
 				assert.Equal(t, duh.CodeInternalError, e.Code())
 
-				// A clear after storage recovers empties every partition.
-				fault.failingClear.Store(false)
+				// The failing partition keeps its items and the healthy one is cleared.
+				var list pb.StorageItemsListResponse
+				require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, nil))
+				assert.Len(t, list.Items, len(before[0].Items))
+				require.NoError(t, c.StorageItemsList(ctx, queueName, 1, &list, nil))
+				assert.Empty(t, list.Items)
+
+				// A clear after storage recovers empties the partition that failed.
+				fault.failingClear.Store(0)
 				require.NoError(t, c.QueueClear(ctx, &pb.QueueClearRequest{QueueName: queueName, Queue: true, Destructive: true}))
-				for partition := range 2 {
-					var list pb.StorageItemsListResponse
-					require.NoError(t, c.StorageItemsList(ctx, queueName, partition, &list, nil))
-					assert.Empty(t, list.Items)
-				}
+				require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, nil))
+				assert.Empty(t, list.Items)
 			})
 		})
 

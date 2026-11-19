@@ -146,6 +146,49 @@ The queue, namespace, user, API key, role and role binding lists each live in on
 database whose directory name starts with `~` (for example `~queue-storage-partition`). Queue
 names cannot contain `~`, so no queue's partition directory can collide with these.
 
+**`Lease` starts at the lease pivot, not at the first item.** A partition keeps its items in ID
+order, and an item stays where it is while leased or scheduled. Reading from the first item would
+read every leased item again on every lease. `BadgerPartition` remembers, in memory, the lease
+pivot, a key that no leasable item (one neither leased nor scheduled) sorts before. Item IDs are
+KSUID strings, which sort before the `source:` keys of the `SourceID` index, so a pivot of
+`source:` means no item is leasable, and a nil pivot starts at the first item. `Lease` seeks to
+the pivot and, after its transaction commits, moves it to the first key it did not read, or to
+`source:` when it read every item. Only the logical queue's goroutine calls a partition, so the
+pivot needs no lock.
+
+The pivot stays correct because `BadgerPartition` never makes an item leasable again under the
+same ID. An expired lease, an immediate retry and a scheduled item coming due each write the item
+under a new ID ([ADR 0022](../adr/0022-managing-item-lifecycles.md)). A retry with a future
+`RetryAt` keeps its ID but is scheduled. Every write that stores a leasable item (`Produce`, `Add`,
+`Retry`, `TakeAction`) lowers the pivot to that item's ID when the ID sorts below it. Two things
+need this. A new item must be found after the pivot has reached `source:`. And each
+`BadgerPartition` seeds its ID generator with `ksuid.New()` when it is created, so IDs made after a
+restart in the same second as older ones can sort before them.
+
+`Stats` reads every item, so it sets the pivot to the first leasable item it finds. That covers
+startup, lifecycle recovery, `QueueReload` (storage changed out of band) and `QueueStats`. A
+`Stats` that fails sets the pivot to nil, because storage may have changed out of band. `Close`
+and `Clear` leave the pivot alone, because the writes that store leasable items lower it.
+
+**`Lease` stops at its context's deadline.** The logical queue gives each partition's writes one
+context bounded by `WriteTimeout`, and `Produce` runs on it before `Lease`. When it ends, `Lease`
+commits the leases it already assigned, returns nil, and the next lease resumes at the pivot. A
+`Produce` that uses up the whole `WriteTimeout` leaves `Lease` nothing, as it does on Postgres and
+MongoDB, whose lease query fails on the ended context. A lease request that got nothing keeps
+waiting as it does on an empty queue, until the logical queue handles another produce, lease,
+complete or retry request, finishes a lifecycle or scheduled run, or the request times out. A
+lone consumer on a quiet queue can therefore get "no items are in the queue" while free items wait
+past the pivot, and each new lease gets further.
+
+**A lease too big for one transaction saves what fits.** Badger refuses a write that would take a
+transaction past its size limit (`ErrTxnTooBig`) without adding it, so `Lease` takes that item back
+off its request, stops reading there and commits the leases already written. The pivot stays on the
+item it could not save, and the next lease starts with it.
+
+**A failed `Lease` hands out nothing.** `batch.Iterator()` puts each item on its request before
+the transaction commits. When the transaction fails, `Lease` removes those items from the requests
+again before it returns the error, so no consumer receives an item whose lease was not saved.
+
 ## Postgres
 
 Table and index creation runs under its own context with a 30 second timeout instead of the

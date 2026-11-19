@@ -22,6 +22,8 @@ import (
 	"github.com/segmentio/ksuid"
 )
 
+var sourcePrefix = []byte("source:")
+
 type BadgerConfig struct {
 	StorageDir string
 	Log        *slog.Logger
@@ -50,11 +52,12 @@ func (b *BadgerPartitionStore) Config() BadgerConfig {
 }
 
 type BadgerPartition struct {
-	info types.PartitionInfo
-	conf BadgerConfig
-	mu   sync.RWMutex
-	uid  ksuid.KSUID
-	db   *badger.DB
+	info       types.PartitionInfo
+	conf       BadgerConfig
+	mu         sync.RWMutex
+	uid        ksuid.KSUID
+	db         *badger.DB
+	leasePivot []byte
 }
 
 func (b *BadgerPartition) Produce(_ context.Context, batch types.ProduceBatch, now clock.Time) error {
@@ -93,6 +96,9 @@ func (b *BadgerPartition) Produce(_ context.Context, batch types.ProduceBatch, n
 				if err := txn.Set(item.ID, buf.Bytes()); err != nil {
 					return errors.Errorf("during Set(): %w", err)
 				}
+				if item.EnqueueAt.IsZero() {
+					b.lowerLeasePivot(item.ID)
+				}
 
 				if item.SourceID != nil {
 					sourceKey := []byte("source:" + string(item.SourceID))
@@ -106,75 +112,115 @@ func (b *BadgerPartition) Produce(_ context.Context, batch types.ProduceBatch, n
 	})
 }
 
-func (b *BadgerPartition) Lease(_ context.Context, batch types.LeaseBatch, opts LeaseOptions) error {
+func (b *BadgerPartition) Lease(ctx context.Context, batch types.LeaseBatch, opts LeaseOptions) error {
 	db, err := b.getDB()
 	if err != nil {
 		return err
 	}
 
-	return db.Update(func(txn *badger.Txn) error {
-
-		batchIter := batch.Iterator()
-		var count int
-		iter := txn.NewIterator(badger.IteratorOptions{
-			PrefetchValues: false,
-			PrefetchSize:   100,
-			Reverse:        false,
-			AllVersions:    false,
-		})
-
-		defer iter.Close()
-
-		for iter.Rewind(); iter.Valid(); iter.Next() {
-			if count >= batch.TotalRequested {
-				break
+	var pivot []byte
+	err = db.Update(func(txn *badger.Txn) error {
+		var err error
+		pivot, err = b.leaseItems(ctx, txn, batch, opts)
+		return err
+	})
+	if err != nil {
+		for _, r := range batch.Requests {
+			if r != nil {
+				r.Items = r.Items[:0]
 			}
+		}
+		return err
+	}
+	b.leasePivot = pivot
+	return nil
+}
 
-			key := iter.Item().Key()
+func (b *BadgerPartition) leaseItems(ctx context.Context, txn *badger.Txn, batch types.LeaseBatch,
+	opts LeaseOptions) (pivot []byte, err error) {
 
-			if bytes.HasPrefix(key, []byte("source:")) {
-				continue
-			}
+	batchIter := batch.Iterator()
+	var count int
+	iter := txn.NewIterator(badger.IteratorOptions{
+		PrefetchValues: false,
+		PrefetchSize:   100,
+		Reverse:        false,
+		AllVersions:    false,
+	})
 
-			var v []byte
-			v, err := iter.Item().ValueCopy(v)
-			if err != nil {
-				return errors.Errorf("while getting value: %w", err)
-			}
+	defer iter.Close()
 
-			item := new(types.Item)
-			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(item); err != nil {
-				return errors.Errorf("during Decode(): %w", err)
-			}
-
-			if item.IsLeased {
-				continue
-			}
-
-			if !item.EnqueueAt.IsZero() {
-				continue
-			}
-
-			item.LeaseDeadline = opts.LeaseDeadline
-			item.IsLeased = true
-			item.Attempts++
-			count++
-
-			if batchIter.Next(item) {
-				var buf bytes.Buffer
-				if err := gob.NewEncoder(&buf).Encode(item); err != nil {
-					return errors.Errorf("during gob.Encode(): %w", err)
-				}
-
-				if err := txn.Set(item.ID, buf.Bytes()); err != nil {
-					return errors.Errorf("during Put(): %w", err)
-				}
-				continue
-			}
+	for iter.Seek(b.leasePivot); iter.Valid() && ctx.Err() == nil; iter.Next() {
+		if count >= batch.TotalRequested {
 			break
 		}
-		return nil
-	})
+
+		key := iter.Item().Key()
+		if bytes.HasPrefix(key, sourcePrefix) {
+			break
+		}
+
+		var v []byte
+		v, err := iter.Item().ValueCopy(v)
+		if err != nil {
+			return nil, errors.Errorf("while getting value: %w", err)
+		}
+
+		item := new(types.Item)
+		if err := gob.NewDecoder(bytes.NewReader(v)).Decode(item); err != nil {
+			return nil, errors.Errorf("during Decode(): %w", err)
+		}
+
+		if item.IsLeased {
+			continue
+		}
+
+		if !item.EnqueueAt.IsZero() {
+			continue
+		}
+
+		item.LeaseDeadline = opts.LeaseDeadline
+		item.IsLeased = true
+		item.Attempts++
+
+		if !batchIter.Next(item) {
+			break
+		}
+		count++
+
+		var buf bytes.Buffer
+		if err := gob.NewEncoder(&buf).Encode(item); err != nil {
+			return nil, errors.Errorf("during gob.Encode(): %w", err)
+		}
+
+		if err := txn.Set(item.ID, buf.Bytes()); err != nil {
+			if errors.Is(err, badger.ErrTxnTooBig) {
+				unassign(batch, item)
+				break
+			}
+			return nil, errors.Errorf("during Put(): %w", err)
+		}
+	}
+
+	if iter.Valid() && !bytes.HasPrefix(iter.Item().Key(), sourcePrefix) {
+		return iter.Item().KeyCopy(nil), nil
+	}
+	return sourcePrefix, nil
+}
+
+func unassign(batch types.LeaseBatch, item *types.Item) {
+	for _, r := range batch.Requests {
+		if r != nil && len(r.Items) != 0 && r.Items[len(r.Items)-1] == item {
+			r.Items = r.Items[:len(r.Items)-1]
+			return
+		}
+	}
+}
+
+func (b *BadgerPartition) lowerLeasePivot(id []byte) {
+	if bytes.Compare(id, b.leasePivot) < 0 {
+		b.leasePivot = bytes.Clone(id)
+	}
 }
 
 func (b *BadgerPartition) Complete(_ context.Context, batch types.CompleteBatch) error {
@@ -339,6 +385,7 @@ func (b *BadgerPartition) retryItems(txn *badger.Txn, req *types.RetryRequest) e
 				if err := txn.Set(item.ID, buf.Bytes()); err != nil {
 					return errors.Errorf("during Set(%s): %w", item.ID, err)
 				}
+				b.lowerLeasePivot(item.ID)
 				if err := txn.Delete(retryItem.ID); err != nil {
 					return errors.Errorf("during Delete(%s): %w", retryItem.ID, err)
 				}
@@ -366,6 +413,7 @@ func (b *BadgerPartition) retryItems(txn *badger.Txn, req *types.RetryRequest) e
 			if err := txn.Set(item.ID, buf.Bytes()); err != nil {
 				return errors.Errorf("during Set(%s): %w", item.ID, err)
 			}
+			b.lowerLeasePivot(item.ID)
 			if err := txn.Delete(retryItem.ID); err != nil {
 				return errors.Errorf("during Delete(%s): %w", retryItem.ID, err)
 			}
@@ -528,6 +576,9 @@ func (b *BadgerPartition) Add(_ context.Context, items []*types.Item, now clock.
 
 			if err := txn.Set(item.ID, buf.Bytes()); err != nil {
 				return errors.Errorf("during Put(): %w", err)
+			}
+			if !item.IsLeased && item.EnqueueAt.IsZero() {
+				b.lowerLeasePivot(item.ID)
 			}
 
 			if item.SourceID != nil {
@@ -843,6 +894,7 @@ func (b *BadgerPartition) TakeAction(_ context.Context, batch types.LifeCycleBat
 					if err := txn.Set(item.ID, buf.Bytes()); err != nil {
 						return err
 					}
+					b.lowerLeasePivot(item.ID)
 
 					if err := txn.Delete(a.Item.ID); err != nil {
 						return err
@@ -896,6 +948,7 @@ func (b *BadgerPartition) TakeAction(_ context.Context, batch types.LifeCycleBat
 					if err := txn.Set(newID, buf.Bytes()); err != nil {
 						return err
 					}
+					b.lowerLeasePivot(newID)
 
 					if err := txn.Delete(a.Item.ID); err != nil {
 						return err
@@ -981,7 +1034,8 @@ func (b *BadgerPartition) Stats(_ context.Context, stats *types.PartitionStats, 
 		return err
 	}
 
-	return db.View(func(txn *badger.Txn) error {
+	pivot := sourcePrefix
+	err = db.View(func(txn *badger.Txn) error {
 
 		iter := txn.NewIterator(badger.DefaultIteratorOptions)
 		defer iter.Close()
@@ -1014,6 +1068,8 @@ func (b *BadgerPartition) Stats(_ context.Context, stats *types.PartitionStats, 
 			if item.IsLeased {
 				stats.AverageLeasedAge += item.LeaseDeadline.Sub(now)
 				stats.NumLeased++
+			} else if bytes.Equal(pivot, sourcePrefix) {
+				pivot = iter.Item().KeyCopy(nil)
 			}
 		}
 
@@ -1025,6 +1081,12 @@ func (b *BadgerPartition) Stats(_ context.Context, stats *types.PartitionStats, 
 		}
 		return nil
 	})
+	if err != nil {
+		b.leasePivot = nil
+		return err
+	}
+	b.leasePivot = pivot
+	return nil
 }
 
 func (b *BadgerPartition) Close(_ context.Context) error {

@@ -87,6 +87,11 @@ const largePartition = pageSize + pageSize/2
 // requestSettle is how long a test waits for a request it started to reach the queue.
 const requestSettle = 200 * clock.Millisecond
 
+// pageWriteTimeout is the real time a lifecycle write gets. A page of 1,000 requeued items on
+// MongoDB or PostgreSQL can take longer than the 3s default under -race on a busy machine, and a
+// write that times out backs off on the frozen clock, which never moves to retry it.
+const pageWriteTimeout = 30 * clock.Second
+
 func testLifecycle(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime storageLifetime) {
 	defer goleak.VerifyNone(t, goleakOptions...)
 
@@ -96,7 +101,7 @@ func testLifecycle(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 			now.Freeze(clock.Now())
 			defer now.UnFreeze()
 
-			d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: setup(), Clock: now})
+			d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: setup(), Clock: now, WriteTimeout: pageWriteTimeout})
 			defer func() {
 				d.Shutdown(t)
 				tearDown()
@@ -118,7 +123,7 @@ func testLifecycle(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 			now.Freeze(clock.Now())
 			defer now.UnFreeze()
 
-			d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: setup(), Clock: now})
+			d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: setup(), Clock: now, WriteTimeout: pageWriteTimeout})
 			defer func() {
 				d.Shutdown(t)
 				tearDown()
@@ -141,7 +146,7 @@ func testLifecycle(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 			now.Freeze(clock.Now())
 			defer now.UnFreeze()
 
-			d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: setup(), Clock: now})
+			d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: setup(), Clock: now, WriteTimeout: pageWriteTimeout})
 			defer func() {
 				d.Shutdown(t)
 				tearDown()
@@ -174,7 +179,7 @@ func testLifecycle(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 			now.Freeze(clock.Now())
 			defer now.UnFreeze()
 
-			d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: setup(), Clock: now})
+			d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: setup(), Clock: now, WriteTimeout: pageWriteTimeout})
 			defer func() {
 				d.Shutdown(t)
 				tearDown()
@@ -217,7 +222,7 @@ func testLifecycle(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		now.Freeze(clock.Now())
 		defer now.UnFreeze()
 
-		d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: setup(), Clock: now})
+		d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: setup(), Clock: now, WriteTimeout: pageWriteTimeout})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
@@ -243,7 +248,7 @@ func testLifecycle(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		defer now.UnFreeze()
 
 		spy := &lifecycleSpy{}
-		d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: spy.Wrap(setup()), Clock: now})
+		d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: spy.Wrap(setup()), Clock: now, WriteTimeout: pageWriteTimeout})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
@@ -256,7 +261,7 @@ func testLifecycle(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		createOnePartitionQueue(t, ctx, c, queueName)
 		produceScheduled(t, ctx, c, queueName, 2, now.Now().UTC().Add(48*clock.Hour))
 		now.Advance(24*clock.Hour + clock.Second)
-		nextLifecycleRun(t, ctx, c, queueName)
+		waitForLifecycleRun(t, ctx, c, queueName)
 
 		// The scheduled write enqueues item-00000 and then fails, so the item is no longer scheduled
 		// and its expire deadline has passed. Only a lifecycle pass removes it.
@@ -276,7 +281,7 @@ func testLifecycle(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		defer now.UnFreeze()
 
 		spy := &lifecycleSpy{}
-		d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: spy.Wrap(setup()), Clock: now})
+		d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: spy.Wrap(setup()), Clock: now, WriteTimeout: pageWriteTimeout})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
@@ -320,7 +325,7 @@ func testLifecycle(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		defer now.UnFreeze()
 
 		spy := &lifecycleSpy{}
-		d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: spy.Wrap(setup()), Clock: now})
+		d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: spy.Wrap(setup()), Clock: now, WriteTimeout: pageWriteTimeout})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
@@ -366,7 +371,7 @@ func testLifecycle(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		defer now.UnFreeze()
 
 		spy := &lifecycleSpy{}
-		d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: spy.Wrap(setup()), Clock: now})
+		d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: spy.Wrap(setup()), Clock: now, WriteTimeout: pageWriteTimeout})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
@@ -408,7 +413,7 @@ func testLifecycle(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 			conf := setup()
 			defer tearDown()
 			spy := &lifecycleSpy{}
-			first := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: spy.Wrap(conf), Clock: now})
+			first := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: spy.Wrap(conf), Clock: now, WriteTimeout: pageWriteTimeout})
 			stopped := false
 			defer func() {
 				if !stopped {
@@ -436,7 +441,7 @@ func testLifecycle(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 			first.Shutdown(t)
 			stopped = true
 
-			second := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: conf, Clock: now})
+			second := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: conf, Clock: now, WriteTimeout: pageWriteTimeout})
 			defer second.Shutdown(t)
 			c, ctx = second.MustClient(), second.Context()
 
@@ -454,7 +459,7 @@ func testLifecycle(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		defer now.UnFreeze()
 
 		spy := &lifecycleSpy{}
-		d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: spy.Wrap(setup()), Clock: now})
+		d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: spy.Wrap(setup()), Clock: now, WriteTimeout: pageWriteTimeout})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
@@ -489,7 +494,7 @@ func testLifecycle(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		defer now.UnFreeze()
 
 		spy := &lifecycleSpy{}
-		d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: spy.Wrap(setup()), Clock: now})
+		d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: spy.Wrap(setup()), Clock: now, WriteTimeout: pageWriteTimeout})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
@@ -540,7 +545,7 @@ func testLifecycle(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		defer now.UnFreeze()
 
 		spy := &lifecycleSpy{}
-		d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: spy.Wrap(setup()), Clock: now})
+		d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: spy.Wrap(setup()), Clock: now, WriteTimeout: pageWriteTimeout})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
@@ -590,7 +595,7 @@ func testLifecycle(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		defer now.UnFreeze()
 
 		spy := &lifecycleSpy{}
-		d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: spy.Wrap(setup()), Clock: now})
+		d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: spy.Wrap(setup()), Clock: now, WriteTimeout: pageWriteTimeout})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
@@ -660,7 +665,7 @@ func testLifecycle(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		defer now.UnFreeze()
 
 		spy := &lifecycleSpy{watchScheduled: true}
-		d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: spy.Wrap(setup()), Clock: now})
+		d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: spy.Wrap(setup()), Clock: now, WriteTimeout: pageWriteTimeout})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
@@ -699,7 +704,7 @@ func testLifecycle(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		defer now.UnFreeze()
 
 		spy := &lifecycleSpy{watchScheduled: true}
-		d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: spy.Wrap(setup()), Clock: now})
+		d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: spy.Wrap(setup()), Clock: now, WriteTimeout: pageWriteTimeout})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
@@ -735,7 +740,7 @@ func testLifecycle(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		now.Freeze(clock.Now())
 		defer now.UnFreeze()
 
-		d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: setup(), Clock: now})
+		d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: setup(), Clock: now, WriteTimeout: pageWriteTimeout})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()

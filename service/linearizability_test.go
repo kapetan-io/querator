@@ -487,6 +487,7 @@ func testLinearizability(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					RequestTimeout: "5s",
 					BatchSize:      1,
 				}, &lease)
+				returned := time.Now()
 				if err != nil {
 					t.Errorf("staller %d lease: %v", si, err)
 					stallerWg.Done()
@@ -512,10 +513,13 @@ func testLinearizability(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				// Signal that this staller has acquired its item.
 				stallerWg.Done()
 
-				// Wait for lease to expire, plus buffer for lifecycle to process.
-				// The server's deadline, not a local clock read after a slow reply, so the
-				// recorded expiry never starts after a consumer legitimately re-leases the item.
 				leaseDeadline := lease.Items[0].LeaseDeadline.AsTime()
+				if leaseDeadline.UnixNano() < call+int64(leaseTimeout) || leaseDeadline.After(returned.Add(leaseTimeout)) {
+					t.Errorf("staller %d: lease_deadline %s is not the lease timeout after the grant", si, leaseDeadline)
+					return
+				}
+
+				// Wait for lease to expire, plus buffer for lifecycle to process.
 				time.Sleep(time.Until(leaseDeadline) + 100*time.Millisecond)
 
 				mu.Lock()

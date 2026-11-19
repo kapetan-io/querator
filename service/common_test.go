@@ -822,23 +822,27 @@ func leaseOne(t *testing.T, ctx context.Context, c *querator.Client, queueName s
 	return lease.Items[0]
 }
 
-func isLeased(t *testing.T, ctx context.Context, c *querator.Client, queueName, ref string) bool {
+// itemReference is the Reference a test gave an item when producing it. A distinct type keeps
+// it from being swapped with the queue name beside it.
+type itemReference string
+
+func isLeased(t *testing.T, ctx context.Context, c *querator.Client, queueName string, ref itemReference) bool {
 	t.Helper()
 	var resp pb.StorageItemsListResponse
 	require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &resp, nil))
-	item := findInStorageList(ref, &resp)
+	item := findInStorageList(string(ref), &resp)
 	require.NotNil(t, item)
 	return item.IsLeased
 }
 
 // isUnLeased reports whether the item is in the queue and not leased. It takes no t and returns
 // false on any error so it can be polled from require.Eventually.
-func isUnLeased(ctx context.Context, c *querator.Client, queueName, ref string) bool {
+func isUnLeased(ctx context.Context, c *querator.Client, queueName string, ref itemReference) bool {
 	var resp pb.StorageItemsListResponse
 	if err := c.StorageItemsList(ctx, queueName, 0, &resp, nil); err != nil {
 		return false
 	}
-	item := findInStorageList(ref, &resp)
+	item := findInStorageList(string(ref), &resp)
 	return item != nil && !item.IsLeased
 }
 

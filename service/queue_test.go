@@ -3613,6 +3613,87 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			assert.LessOrEqual(t, third, 5*clock.Second)
 			assert.True(t, isLeased(t, ctx, c, queueName, "dead"))
 		})
+
+		t.Run("PausedDeadLetterQueueHoldsOneHandOff", func(t *testing.T) {
+			now := clock.NewProvider()
+			now.Freeze(clock.Now())
+			defer now.UnFreeze()
+
+			d := newDaemon(t, 20*clock.Second, svc.Config{
+				StorageConfig: setup(),
+				Clock:         now,
+				WriteTimeout:  200 * clock.Millisecond,
+			})
+			defer func() {
+				d.Shutdown(t)
+				tearDown()
+			}()
+			c, ctx := d.MustClient(), d.Context()
+
+			queueName := random.String("queue-", 10)
+			dlqName := random.String("dlq-", 10)
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				QueueName:           dlqName,
+				LeaseTimeout:        "1m0s",
+				ExpireTimeout:       ExpireTimeout,
+				RequestedPartitions: 1,
+			})
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				QueueName:           queueName,
+				LeaseTimeout:        "1m0s",
+				ExpireTimeout:       ExpireTimeout,
+				MaxAttempts:         1,
+				DeadQueue:           dlqName,
+				RequestedPartitions: 1,
+			})
+			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+				QueueName:      queueName,
+				RequestTimeout: "5s",
+				Items:          []*pb.QueueProduceItem{{Reference: "dead", Bytes: []byte("x")}},
+			}))
+			require.Equal(t, "dead", leaseOne(t, ctx, c, queueName).Reference)
+
+			// Each failed run sends a new hand-off to the paused dead letter queue after the
+			// previous one's caller gave up at WriteTimeout.
+			require.NoError(t, d.Service().PauseQueue(ctx, dlqName))
+			now.Advance(2 * clock.Minute)
+			waitForLifecycleRun(t, ctx, c, queueName)
+			for range 3 {
+				now.Advance(nextLifecycleRun(t, ctx, c, queueName))
+				waitForLifecycleRun(t, ctx, c, queueName)
+			}
+
+			var stats pb.QueueStatsResponse
+			require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: dlqName}, &stats))
+			require.Len(t, stats.LogicalQueues, 1)
+			assert.Equal(t, int32(1), stats.LogicalQueues[0].ProduceWaiting)
+
+			// The one hand-off still held lands on resume.
+			require.NoError(t, d.Service().ResumeQueue(ctx, dlqName))
+			require.Eventually(t, func() bool {
+				var resp pb.StorageItemsListResponse
+				if err := c.StorageItemsList(ctx, dlqName, 0, &resp, nil); err != nil {
+					return false
+				}
+				return len(resp.Items) == 1
+			}, 5*clock.Second, 20*clock.Millisecond)
+
+			// The next lifecycle run, within the back-off's 5s maximum, deletes the source item. Its
+			// new hand-off is dropped by SourceID, so the dead letter queue still holds one copy.
+			now.Advance(5 * clock.Second)
+			require.Eventually(t, func() bool {
+				var resp pb.StorageItemsListResponse
+				if err := c.StorageItemsList(ctx, queueName, 0, &resp, nil); err != nil {
+					return false
+				}
+				return len(resp.Items) == 0
+			}, 5*clock.Second, 20*clock.Millisecond)
+
+			var resp pb.StorageItemsListResponse
+			require.NoError(t, c.StorageItemsList(ctx, dlqName, 0, &resp, nil))
+			require.Len(t, resp.Items, 1)
+			assert.Equal(t, "dead", resp.Items[0].Reference)
+		})
 	})
 
 	t.Run("SourceID", func(t *testing.T) {

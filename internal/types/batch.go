@@ -37,6 +37,20 @@ func (r *ProduceBatch) Add(req *ProduceRequest) {
 	r.Requests = append(r.Requests, req)
 }
 
+func (r *ProduceBatch) DropAbandonedHandOffs() {
+	n := 0
+	for _, req := range r.Requests {
+		if req.DeadLetterHandOff && req.Context.Err() != nil {
+			req.Err = req.Context.Err()
+			close(req.ReadyCh)
+			continue
+		}
+		r.Requests[n] = req
+		n++
+	}
+	r.Requests = r.Requests[:n]
+}
+
 func (r *ProduceBatch) Reset() {
 	n := 0
 	for _, req := range r.Requests {

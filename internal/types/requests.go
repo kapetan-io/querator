@@ -29,13 +29,14 @@ type LeaseRequest struct {
 }
 
 type ProduceRequest struct {
-	RequestTimeout  clock.Duration
-	Context         context.Context
-	Items           []*Item
-	RequestDeadline clock.Time
-	ReadyCh         chan struct{}
-	Err             error
-	Assigned        bool
+	RequestTimeout    clock.Duration
+	Context           context.Context
+	Items             []*Item
+	RequestDeadline   clock.Time
+	ReadyCh           chan struct{}
+	Err               error
+	Assigned          bool
+	DeadLetterHandOff bool
 }
 
 type CompleteRequest struct {

@@ -124,7 +124,7 @@ _Avoid_: Driver, adapter, plugin
 ## Example Dialogue
 
 > **Dev:** "When a **Producer** calls produce with an **EnqueueAt** in the future, does the **Item** go into the **Partition** immediately?"
-> **Domain expert:** "Yes — the **Item** is written to the **Partition's** scheduled storage immediately. But it won't appear in the main queue until the **Lifecycle** detects that its **EnqueueAt** has passed and moves it."
+> **Domain expert:** "Yes — the **Item** is written to the **Partition's** scheduled storage immediately. But it won't appear in the main queue until the **Lifecycle** detects that its **EnqueueAt** has arrived and moves it."
 
 > **Dev:** "If a **Lease** expires, does the **Item** stay at its original position in the queue?"
 > **Domain expert:** "No — to avoid head-of-line blocking, the **Lifecycle** assigns a new ID and places expired-lease **Items** at the *tail* of the FIFO in that **Partition**. This ensures items already waiting in the queue take precedence over expired items."

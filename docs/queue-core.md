@@ -136,6 +136,26 @@ run, because a dead-letter move can block for `WriteTimeout`.
 * Each retry against a dead-letter queue that hangs blocks the source queue's loop for up to
   `WriteTimeout`, once per back-off interval, for as long as it hangs.
 
+A scheduled run enqueues every scheduled item whose `EnqueueAt` is at or before now, then sets the
+partition's next scheduled run to the earliest `EnqueueAt` still in storage (`LifeCycleInfo`'s
+`NextEnqueueAt`), or far in the future when nothing is scheduled. The `notify*` functions only see
+items produced or retried since the queue loaded, and only the earliest of each batch, so storage,
+not those notices, is what keeps a later item from being forgotten. For the same reason
+`prepareQueueState` runs one scheduled pass while the queue loads: items scheduled before a restart,
+including ones already overdue, are enqueued and the first timer is set from storage. A run that
+fails, or that finds a due item still scheduled after enqueuing, retries with `lifecycleBackOff`.
+Scheduled runs count their failures in `ScheduledFailures`, apart from the lifecycle's `Failures`,
+so neither run resets or raises the other's back-off, and a failed scheduled run leaves the
+partition in request distribution. Like `UnfinishedRuns`, it stops counting once the back-off
+reaches its maximum.
+
+Lease requests that found no items wait in `QueueState.Leases`. After each lifecycle and scheduled
+run, `leaseToWaitingConsumers` runs `handleHotRequests` with no new request, so items the run just
+enqueued or gave back reach those waiting consumers instead of waiting for the next client request.
+A waiting request goes to the partition `lastHealthyPartition` picks, by an un-leased count that
+includes items still scheduled, so on a queue with several partitions it can miss an item that came
+due in another partition (ENG-792).
+
 ## Dead-letter moves
 
 Items reach a dead-letter queue when they expire or reach `MaxAttempts`.

@@ -9,7 +9,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/dustin/go-humanize"
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/transport/reply"
@@ -499,8 +498,7 @@ func (l *Logical) prepareQueueState(state *QueueState) {
 			Store: p,
 			Lifecycle: PartitionLifecycleState{
 				NextLifecycleRun: now,
-				NextScheduledRun: now.Add(humanize.LongTime),
-				Failures:         0,
+				NextScheduledRun: now,
 			},
 		}
 
@@ -525,7 +523,9 @@ func (l *Logical) prepareQueueState(state *QueueState) {
 	}
 
 	state.LifecycleTimer = l.conf.Clock.NewTimer(0)
-	state.ScheduledTimer = l.conf.Clock.NewTimer(humanize.LongTime)
+
+	l.runScheduled(state)
+	state.ScheduledTimer = l.conf.Clock.NewTimer(l.minNextScheduledRun(state))
 
 	sortPartitionsByLoad(state.Partitions)
 
@@ -585,17 +585,26 @@ func (l *Logical) requestLoop() {
 		case <-lifecycleCh:
 			l.log.LogAttrs(context.Background(), LevelDebugAll, "lifecycle timer fired")
 			l.runLifecycle(&state)
+			l.leaseToWaitingConsumers(&state)
 			state.LifecycleTimer.Reset(l.minNextLifecycleRun(&state))
 
 		case <-scheduledCh:
 			l.log.LogAttrs(context.Background(), LevelDebugAll, "scheduled timer fired")
 			l.runScheduled(&state)
+			l.leaseToWaitingConsumers(&state)
 			state.ScheduledTimer.Reset(l.minNextScheduledRun(&state))
 
 		case <-maintenanceCh:
 			l.handleRequestTimeouts(&state)
 		}
 	}
+}
+
+func (l *Logical) leaseToWaitingConsumers(state *QueueState) {
+	if len(state.Leases.Requests) == 0 {
+		return
+	}
+	l.handleHotRequests(state, nil)
 }
 
 func (l *Logical) handleRequest(state *QueueState, req *Request) {

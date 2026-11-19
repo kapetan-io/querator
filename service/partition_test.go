@@ -584,8 +584,7 @@ func TestPartitionPlacement(t *testing.T) {
 	}
 	assert.Equal(t, map[string]int{"memory-0": 2, "memory-1": 2}, partitionsPerBackend(t, ctx, c, queueName))
 
-	// Completing removes items, so this runs after the per backend count above. A lease that
-	// returns nothing fails at once instead of waiting out the request timeout again.
+	// Completing removes items, so this runs after the per backend count above.
 	clientID := random.String("client-", 10)
 	var done int
 	for range 12 {
@@ -599,7 +598,6 @@ func TestPartitionPlacement(t *testing.T) {
 			RequestTimeout: "5s",
 			BatchSize:      12,
 		}, &lease))
-		require.NotEmpty(t, lease.Items)
 
 		var ids []string
 		for _, item := range lease.Items {

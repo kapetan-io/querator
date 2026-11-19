@@ -1425,6 +1425,168 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		assert.Equal(t, int32(0), p.Total)
 	})
 
+	t.Run("QueueClear/LeaseAfterNonDestructive", func(t *testing.T) {
+		var queueName = random.String("queue-", 10)
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+		c, ctx := d.MustClient(), d.Context()
+
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			LeaseTimeout:        LeaseTimeout,
+			ExpireTimeout:       ExpireTimeout,
+			QueueName:           queueName,
+			RequestedPartitions: 1,
+		})
+
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			QueueName:      queueName,
+			RequestTimeout: "1m",
+			Items:          []*pb.QueueProduceItem{{Reference: "A"}, {Reference: "B"}},
+		}))
+		var lease pb.QueueLeaseResponse
+		require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+			ClientId:       random.String("client-", 10),
+			RequestTimeout: "5s",
+			QueueName:      queueName,
+			BatchSize:      1,
+		}, &lease))
+		require.Len(t, lease.Items, 1)
+		assert.Equal(t, "A", lease.Items[0].Reference)
+
+		// Clear removes B, the next item a lease would have taken, and keeps the leased A
+		require.NoError(t, c.QueueClear(ctx, &pb.QueueClearRequest{QueueName: queueName, Queue: true}))
+
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			QueueName:      queueName,
+			RequestTimeout: "1m",
+			Items:          []*pb.QueueProduceItem{{Reference: "C"}},
+		}))
+		require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+			ClientId:       random.String("client-", 10),
+			RequestTimeout: "5s",
+			QueueName:      queueName,
+			BatchSize:      2,
+		}, &lease))
+		require.Len(t, lease.Items, 1)
+		assert.Equal(t, "C", lease.Items[0].Reference)
+	})
+
+	t.Run("QueueClear/LeaseAfterDestructive", func(t *testing.T) {
+		var queueName = random.String("queue-", 10)
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+		c, ctx := d.MustClient(), d.Context()
+
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			LeaseTimeout:        LeaseTimeout,
+			ExpireTimeout:       ExpireTimeout,
+			QueueName:           queueName,
+			RequestedPartitions: 1,
+		})
+
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			QueueName:      queueName,
+			RequestTimeout: "1m",
+			Items:          []*pb.QueueProduceItem{{Reference: "A"}, {Reference: "B"}},
+		}))
+		var lease pb.QueueLeaseResponse
+		require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+			ClientId:       random.String("client-", 10),
+			RequestTimeout: "5s",
+			QueueName:      queueName,
+			BatchSize:      1,
+		}, &lease))
+		require.Len(t, lease.Items, 1)
+		assert.Equal(t, "A", lease.Items[0].Reference)
+
+		require.NoError(t, c.QueueClear(ctx, &pb.QueueClearRequest{
+			QueueName:   queueName,
+			Destructive: true,
+			Queue:       true,
+		}))
+
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			QueueName:      queueName,
+			RequestTimeout: "1m",
+			Items:          []*pb.QueueProduceItem{{Reference: "C"}, {Reference: "D"}},
+		}))
+		require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+			ClientId:       random.String("client-", 10),
+			RequestTimeout: "5s",
+			QueueName:      queueName,
+			BatchSize:      3,
+		}, &lease))
+		require.Len(t, lease.Items, 2)
+		assert.Equal(t, "C", lease.Items[0].Reference)
+		assert.Equal(t, "D", lease.Items[1].Reference)
+	})
+
+	t.Run("StorageItemsImport/LeaseAfterImport", func(t *testing.T) {
+		var queueName = random.String("queue-", 10)
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+		c, ctx := d.MustClient(), d.Context()
+
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			LeaseTimeout:        LeaseTimeout,
+			ExpireTimeout:       ExpireTimeout,
+			QueueName:           queueName,
+			RequestedPartitions: 1,
+		})
+
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			QueueName:      queueName,
+			RequestTimeout: "1m",
+			Items:          []*pb.QueueProduceItem{{Reference: "A"}},
+		}))
+		var lease pb.QueueLeaseResponse
+		require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+			ClientId:       random.String("client-", 10),
+			RequestTimeout: "5s",
+			QueueName:      queueName,
+			BatchSize:      1,
+		}, &lease))
+		require.Len(t, lease.Items, 1)
+		assert.Equal(t, "A", lease.Items[0].Reference)
+
+		// The partition has nothing left to lease when the imported items arrive
+		expire := timestamppb.New(clock.Now().UTC().Add(24 * clock.Hour))
+		var res pb.StorageItemsImportResponse
+		require.NoError(t, c.StorageItemsImport(ctx, &pb.StorageItemsImportRequest{
+			QueueName: queueName,
+			Items: []*pb.StorageItem{
+				{ExpireDeadline: expire, Reference: "B"},
+				{
+					ExpireDeadline: expire,
+					LeaseDeadline:  timestamppb.New(clock.Now().UTC().Add(clock.Hour)),
+					IsLeased:       true,
+					Attempts:       1,
+					Reference:      "C",
+				},
+				{ExpireDeadline: expire, Reference: "D"},
+			},
+		}, &res))
+
+		require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+			ClientId:       random.String("client-", 10),
+			RequestTimeout: "5s",
+			QueueName:      queueName,
+			BatchSize:      3,
+		}, &lease))
+		require.Len(t, lease.Items, 2)
+		assert.Equal(t, "B", lease.Items[0].Reference)
+		assert.Equal(t, "D", lease.Items[1].Reference)
+	})
+
 	t.Run("QueueReload", func(t *testing.T) {
 		t.Run("BasicReload", func(t *testing.T) {
 			var queueName = random.String("queue-", 10)

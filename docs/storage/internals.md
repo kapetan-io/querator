@@ -91,23 +91,15 @@ into the queue by its ID alone does not need the rest of the item in the action,
 insert the item it is given or update the stored item in place, whichever the data store does best.
 
 **An item reads back exactly as it was returned.** The functional suite compares an item returned
-from produce with the same item read back through list, so a backend whose database keeps less
+from an import with the same item read back through list, so a backend whose database keeps less
 precision than Go's `time.Time` (PostgreSQL keeps microseconds) must return times at the precision it
 stores. The exception is the lease deadline on items a lease hands out, which keeps full precision
-while the stored copy is truncated. The [MongoDB tech spec](../features/ENG-48-mongodb-backend/tech-spec.md) has the full
-reasoning under "Time precision".
+while the stored copy is truncated. The
+[MongoDB tech spec](../features/ENG-48-mongodb-backend/tech-spec.md) has the full reasoning under
+"Time precision".
 
-## Where the backends differ
-
-These differences are known and not yet resolved, so a test that compares backends will see them.
-
-* With the `Queue` flag set, PostgreSQL and MongoDB `Clear` also removes scheduled items whose
-  `EnqueueAt` has passed. InMemory and Badger keep every scheduled item on a non-destructive clear,
-  and empty the whole partition, scheduled items included, when `Queue` and `Destructive` are both
-  set.
-* PostgreSQL and MongoDB `Stats` count a scheduled item whose `EnqueueAt` has passed as active, and
-  so in `Total`, as well as in `Scheduled`, even before the lifecycle moves it into the queue. InMemory and Badger count it as scheduled until it
-  moves.
+Backends differ today on how `Clear` and `Stats` treat scheduled items. See "Storage Backends
+Disagree on Scheduled Items" in [known-issues.md](../known-issues.md).
 
 ## Badger
 
@@ -121,8 +113,7 @@ retry, a scheduled item coming due) is written under a new ID
 ([ADR 0022](../adr/0022-managing-item-lifecycles.md)), and while every write that stores a leasable
 item moves the pivot back to that item when it sorts earlier. IDs made after a restart can sort
 before older ones, so new items need the pivot moved back too. Storage changed out of band (a queue
-reload) makes the pivot wrong, so `Stats`, which reads the whole partition, resets it, and a failed
-`Stats` clears it.
+reload) makes the pivot wrong, so anything that reads the whole partition must reset it.
 
 **A Badger lease stops at its context's deadline and keeps what it leased.** Produce and lease share
 one write deadline. When it ends, the lease commits what it already assigned and the next lease
@@ -144,11 +135,25 @@ through.
 The [MongoDB tech spec](../features/ENG-48-mongodb-backend/tech-spec.md) records the design: no
 multi-document transactions, no replica set required, insert-before-delete ordering, the
 partial-index layout, the non-unique `source_id` index, and dropping the collection on a destructive
-whole-queue `Clear`. Its account of `Complete` predates the code and is out of date. Two traps it
+whole-queue `Clear`. Its account of `Complete` predates the code and is out of date. The rules it
 does not cover follow.
 
 **An empty lease batch skips the query.** MongoDB reads a limit of 0 as "no limit", unlike SQL
 `LIMIT 0`, so a lease with nothing requested would otherwise read the whole collection.
+
+**`Retry` reads the whole document before it writes.** It must tell a missing or scheduled item,
+both reported as "does not exist", apart from one that is not leased, and an immediate retry
+rebuilds the item at a new tail ID from the document's fields. A single `FindOneAndDelete` would
+lose both.
+
+**Holding the client manager's lock across the connect retries is safe.** `mongo.Connect` returns at
+once and does no I/O on the calling goroutine, so the lock is never held while waiting on the
+server. It still sleeps between attempts when `Connect` itself returns an error.
+
+**A tail copy keeps every field of the item, `SourceID` included.** An expired lease moves its item
+to the tail under a new ID ([ADR 0022](../adr/0022-managing-item-lifecycles.md)). Duplicate
+detection after a dead-letter move depends on the `SourceID` surviving, and copying the whole item
+carries along any field added later.
 
 **Moving an item to the tail checks first that the item still exists.** The lifecycle scan and the
 action that follows it are separate steps, so another path may have moved the item in between.

@@ -50,9 +50,9 @@ requests and stops its timers, and cancelling the pause applies what it held.
 
 A paused queue drops each held dead-letter hand-off whose caller has stopped waiting. It checks
 each time it holds another hot request, so the newest abandoned hand-off stays held until the next
-check. The source queue sends a new hand-off each time its lifecycle runs again with back-off, so
-without the drop a paused dead-letter queue would hold one more copy every back-off interval for as
-long as the pause lasts. A held client produce is kept even after its caller gives up, and is
+check, and is applied when the pause is cancelled. The source queue sends a new hand-off each time
+its lifecycle runs again with back-off, so without the drop a paused dead-letter queue would hold
+one more copy every back-off interval for as long as the pause lasts. A held client produce is kept even after its caller gives up, and is
 applied when the pause is cancelled.
 
 ## Shutdown
@@ -61,8 +61,8 @@ Shutdown must answer every hot request's caller, including requests the loop is 
 the queue is paused or every partition has failed. A caller left unanswered keeps shutdown waiting
 until its context ends. A caller can be counted as waiting before its request reaches the loop, so
 shutdown waits for its count of waiting hot callers to reach zero, not for the request channel to
-empty. Cold requests are not counted, so one that reaches the channel after the count is zero
-waits until its own context ends (ENG-816).
+empty. Cold requests are not counted, so one still in the channel when the count is zero is never
+answered and waits until its own context ends (ENG-816).
 
 `QueuesManager.Shutdown` must not hold its mutex while it waits for a Logical Queue to stop. Holding
 it would deadlock: a request loop in the middle of a lifecycle run can move dead items to a
@@ -76,9 +76,14 @@ this deadlock (ENG-782).
 ## Partition distribution
 
 Produce uses opportunistic distribution ([ADR-0019](adr/0019-partition-item-distribution.md)). A
-produce request goes to the healthy partition with the fewest unleased items, and a lease request
-to the healthy partition with the most. A failed partition takes no new produce or lease requests,
-and when every partition has failed a produce request waits unassigned.
+produce request is meant to go to the healthy partition with the fewest unleased items, and a lease
+request to the healthy partition with the most. A failed partition takes no new produce or lease
+requests, and when every partition has failed a produce request waits unassigned.
+
+Produce assignment assumes the list of partitions is sorted with failed partitions last, and checks
+only the first. A partition that fails while it is first stays first until the next assignment
+re-sorts the list, and until then produce requests wait unassigned although another partition is
+healthy (ENG-818).
 
 Complete and retry requests name the partition the lease came from, so they cannot be moved to
 another one. When that partition is missing or failing, the client gets a retry error.
@@ -99,16 +104,23 @@ time. The run moves forward when the write's time is earlier, so expiry is notic
 scanning storage on every pass.
 
 A lifecycle run that leaves due work undone runs again with back-off. That covers a dead-letter move
-or a lifecycle action (`TakeAction`) that failed, and a deadline still at or before now after the run. The back-off is measured from the end of the run, because
-a dead-letter move can block for `WriteTimeout`.
+or a lifecycle action (`TakeAction`) that failed, and a deadline still at or before now after the
+run. A partition reports only its earliest lease and expire deadlines, and the next run is set from
+deadlines in the future. An item stuck in a failed move keeps the earliest deadline in the past, so
+without counting it as undone work the lifecycle would never run again and every later deadline
+would be missed. The back-off is measured from the end of the run, because a dead-letter move can
+block for `WriteTimeout`.
 
 * An unfinished run leaves the partition in request distribution, because the fault may lie with
   the dead-letter queue and the partition can still serve requests. A failed scan or storage read
   takes the partition out of distribution until it recovers.
-* Every attempt count passed to the back-off must be capped. Past about 58 attempts the back-off
-  overflows its conversion to a `Duration` and returns a wrong interval. For the partition's
-  `Failures` count, cap the value passed in, not the counter, because queue stats report the
-  counter.
+* Every attempt count passed to the back-off must be capped. After enough attempts the back-off
+  overflows its conversion to a `Duration`. On amd64 the result is negative and the back-off returns
+  its minimum, so an uncapped partition that kept failing would go back to retrying every 500ms.
+  For the partition's `Failures` count, cap the value passed in, not the counter, because queue
+  stats report the counter.
+* A successful stats read during recovery resets `Failures`, so a scan or deadline read that keeps
+  failing behind a working stats read never climbs past the first back-off step.
 * A dead-letter queue that hangs blocks the source queue's loop for up to `WriteTimeout` once per
   back-off interval, and each retry rescans the source partition on the request loop while produce,
   lease and complete wait. This cost has not been measured.
@@ -130,7 +142,9 @@ partitions it can miss an item that came due in another one (ENG-792).
 Items reach a dead-letter queue when they expire or reach `MaxAttempts`.
 
 * The source items are deleted only after the dead-letter queue's loop confirms the produce
-  (delete-after-confirm), so an item is never lost between the two queues.
+  (delete-after-confirm), so an item is not lost between the two queues. A failed storage write in
+  the dead-letter queue is still confirmed as success today, so the source items are deleted and
+  lost (ENG-771).
 * A dead-letter queue whose request channel is full answers at once with an overloaded error
   instead of making the source queue wait. A saturated dead-letter queue never stalls the source
   queue's loop. The source item stays where it is and the lifecycle runs again with back-off.

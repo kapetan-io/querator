@@ -61,9 +61,7 @@ Shutdown must answer every caller, including requests the loop is holding becaus
 the queue is paused or every partition has failed. A caller left unanswered keeps shutdown waiting
 until its context ends. A caller can be counted as waiting before its request reaches the loop, so
 shutdown waits for its count of waiting callers to reach zero, not for the request channel to
-empty. Cold callers are counted apart from hot ones, because the queue stats report the hot count.
-Every caller that passes the shutdown check is answered; a cold caller left uncounted waits until
-its own context ends. Merging the two counts would change what the queue stats report.
+empty.
 
 `QueuesManager.Shutdown` must not hold its mutex while it waits for a Logical Queue to stop. Holding
 it would deadlock: a request loop in the middle of a lifecycle run can move dead items to a

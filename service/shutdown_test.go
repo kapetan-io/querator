@@ -451,81 +451,6 @@ func testShutdown(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		}
 	})
 
-	t.Run("ShutdownAnswersStatsRequestsWaitingBehindDrain", func(t *testing.T) {
-		queueName := random.String("queue-", 10)
-		storage := setup()
-		defer tearDown()
-
-		d := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: storage})
-		defer d.cancel()
-		c, ctx := d.MustClient(), d.Context()
-
-		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
-			QueueName:           queueName,
-			LeaseTimeout:        "1m0s",
-			ExpireTimeout:       "24h0m0s",
-			RequestedPartitions: 1,
-		})
-
-		require.NoError(t, d.Service().PauseQueue(ctx, queueName))
-
-		const numProducers = 10
-		const numStats = 8
-		statsErrs := make([]error, numStats)
-		produceDone := make(chan struct{})
-		statsDone := make(chan struct{})
-		statsCtx, cancelStats := context.WithTimeout(ctx, 30*time.Second)
-		defer cancelStats()
-
-		go func() {
-			defer close(produceDone)
-			concurrently(numProducers, func(int) {
-				_ = c.QueueProduce(ctx, &pb.QueueProduceRequest{
-					QueueName:      queueName,
-					RequestTimeout: "20s",
-					Items:          produceRandomItems(1_000),
-				})
-			})
-		}()
-
-		require.Eventually(t, func() bool {
-			var resp pb.QueueStatsResponse
-			require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &resp))
-			return resp.LogicalQueues[0].ProduceWaiting == numProducers
-		}, 10*time.Second, 100*time.Millisecond)
-
-		// The loop applies the buffered produces after the resume is accepted, so stats
-		// requests sent now wait in the request channel behind that work.
-		require.NoError(t, d.Service().ResumeQueue(ctx, queueName))
-		go func() {
-			defer close(statsDone)
-			concurrently(numStats, func(i int) {
-				statsErrs[i] = c.QueueStats(statsCtx, &pb.QueueStatsRequest{QueueName: queueName},
-					&pb.QueueStatsResponse{})
-			})
-		}()
-
-		// Stats has no observable "queued" state, so give the requests time to reach the channel.
-		time.Sleep(300 * time.Millisecond)
-
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		require.NoError(t, d.d.Shutdown(shutdownCtx))
-
-		select {
-		case <-statsDone:
-		case <-time.After(5 * time.Second):
-			t.Fatal("stats requests did not return after shutdown")
-		}
-		<-produceDone
-
-		for _, err := range statsErrs {
-			if err != nil {
-				assert.ErrorContains(t, err, "is shutting down")
-			}
-		}
-	})
-
 	t.Run("ShutdownDuringActiveRequests", func(t *testing.T) {
 		queueName := random.String("queue-", 10)
 		storage := setup()
@@ -692,6 +617,84 @@ func shutdownWithAdminRequestWaiting(t *testing.T) {
 	for _, err := range []error{statsErr, produceErr} {
 		if err != nil {
 			assert.ErrorContains(t, err, "queue is shutting down")
+		}
+	}
+}
+
+// TestShutdownAnswersStatsRequestsWaitingInQueue sits outside TestShutdown because it wraps the
+// in-memory partition store so a storage list can hold the request loop while stats requests wait
+// in the queue. It calls the service directly, since the HTTP client can cancel a call on its own
+// side before the queue answers it.
+func TestShutdownAnswersStatsRequestsWaitingInQueue(t *testing.T) {
+	const numStats = 8
+	entered, release := make(chan struct{}), make(chan struct{})
+	var armed atomic.Bool
+
+	conf := setupMemoryStorage(store.Config{})
+	conf.PartitionStorage[0].PartitionStore = heldListStore{
+		PartitionStore: conf.PartitionStorage[0].PartitionStore,
+		hold: func(ctx context.Context) error {
+			if !armed.CompareAndSwap(true, false) {
+				return nil
+			}
+			close(entered)
+			select {
+			case <-release:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		},
+	}
+	d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+	c, ctx := d.MustClient(), d.Context()
+	var calls sync.WaitGroup
+	defer func() {
+		d.cancel()
+		calls.Wait()
+	}()
+
+	queueName := random.String("queue-", 10)
+	createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+		QueueName:           queueName,
+		LeaseTimeout:        "1m0s",
+		ExpireTimeout:       "24h0m0s",
+		RequestedPartitions: 1,
+	})
+	armed.Store(true)
+
+	var listErr, shutdownErr error
+	calls.Go(func() {
+		listErr = c.StorageItemsList(ctx, queueName, 0, &pb.StorageItemsListResponse{}, &querator.ListOptions{Limit: 10})
+	})
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		require.FailNow(t, "storage list never reached the partition")
+	}
+
+	statsCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	statsErrs := make([]error, numStats)
+	for i := range numStats {
+		calls.Go(func() {
+			statsErrs[i] = d.Service().QueueStats(statsCtx, &pb.QueueStatsRequest{QueueName: queueName},
+				&pb.QueueStatsResponse{})
+		})
+	}
+	clock.Sleep(100 * clock.Millisecond)
+	calls.Go(func() {
+		shutdownErr = d.d.Shutdown(ctx)
+	})
+	clock.Sleep(100 * clock.Millisecond)
+	close(release)
+	calls.Wait()
+
+	require.NoError(t, listErr)
+	require.NoError(t, shutdownErr)
+	for _, err := range statsErrs {
+		if err != nil {
+			assert.ErrorContains(t, err, "is shutting down")
 		}
 	}
 }

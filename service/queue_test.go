@@ -2525,7 +2525,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				now.Freeze(clock.Now())
 				defer now.UnFreeze()
 
-				var fault produceFault
+				var fault partitionFault
 				d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: fault.Wrap(storage), Clock: now})
 				defer d.Shutdown(t)
 				c, ctx := d.MustClient(), d.Context()

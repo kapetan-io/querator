@@ -24,6 +24,7 @@ import (
 	"github.com/kapetan-io/querator/daemon"
 	"github.com/kapetan-io/querator/internal"
 	"github.com/kapetan-io/querator/internal/store"
+	"github.com/kapetan-io/querator/internal/types"
 	pb "github.com/kapetan-io/querator/proto"
 	svc "github.com/kapetan-io/querator/service"
 	"github.com/kapetan-io/tackle/clock"
@@ -874,4 +875,48 @@ func waitForLifecycleRun(t *testing.T, ctx context.Context, c *querator.Client, 
 		next, err := clock.ParseDuration(stats.LogicalQueues[0].Partitions[0].NextLifecycleRun)
 		return err == nil && next > 0
 	}, 5*clock.Second, 20*clock.Millisecond)
+}
+
+// ---------------------------------------------------------------------
+// Partition storage fault injection
+// ---------------------------------------------------------------------
+
+var errProduceWriteFailed = errors.New("injected produce write failure")
+
+// produceFault makes partition storage refuse produce writes on demand. While failing is set,
+// every partition that Wrap's config hands out fails Produce without writing anything. Every
+// other call reaches the real backend.
+type produceFault struct {
+	failing atomic.Bool
+}
+
+func (f *produceFault) Wrap(conf store.Config) store.Config {
+	wrapped := make([]store.PartitionStorage, len(conf.PartitionStorage))
+	for i, ps := range conf.PartitionStorage {
+		ps.PartitionStore = faultyPartitionStore{PartitionStore: ps.PartitionStore, failing: &f.failing}
+		wrapped[i] = ps
+	}
+	conf.PartitionStorage = wrapped
+	return conf
+}
+
+type faultyPartitionStore struct {
+	store.PartitionStore
+	failing *atomic.Bool
+}
+
+func (f faultyPartitionStore) Get(info types.PartitionInfo) store.Partition {
+	return faultyPartition{Partition: f.PartitionStore.Get(info), failing: f.failing}
+}
+
+type faultyPartition struct {
+	store.Partition
+	failing *atomic.Bool
+}
+
+func (f faultyPartition) Produce(ctx context.Context, batch types.ProduceBatch, now clock.Time) error {
+	if f.failing.Load() {
+		return errProduceWriteFailed
+	}
+	return f.Partition.Produce(ctx, batch, now)
 }

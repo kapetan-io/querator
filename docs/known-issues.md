@@ -146,13 +146,24 @@ probes can reach `/metrics` and `/health`.
 **Component**: `internal/distribution.go`, `internal/logical.go`
 
 [ADR-0019](adr/0019-partition-item-distribution.md) decides that when a write to a partition
-fails, Querator retries the request on another partition until the client's `request_timeout`.
+fails, Querator retries the request on another partition until the client's `request_timeout`,
+and [ADR-0020](adr/0020-api-semantics.md) says produce and lease keep trying until then.
 The Logical Queue does not do this yet. It writes each partition's batch once per pass and in
 turn, one partition after another.
 
 * A storage error during a pass is logged. Produce and lease requests on that partition are not
-  moved to another partition. Complete and retry requests get a retry error. A failed produce
-  write is reported to the client as success (ENG-771).
+  moved to another partition. Produce, complete and retry requests get a retry error at once,
+  without waiting for their request timeout. A lease request waits for a later pass or its
+  request timeout.
+* A failed produce write is reported as failed for the whole request, even when the backend
+  stored some or all of it. MongoDB inserts a batch unordered, so some items can be stored when
+  others fail, and any backend can return an error after its write landed, as when `WriteTimeout`
+  ends after a commit. The client gets a retry error for items that are stored, and when it sends
+  the produce again they are stored a second time. Until the queue reloads or the partition
+  recovers from a failure, the partition's `un_leased` leaves those items out, and on MongoDB a
+  lease in the same pass that took some of them is left out of `total_leased`.
+  Dead-letter hand-offs carry a source ID, and a dead letter queue's single partition skips an
+  item whose source ID it already holds, so a dead-letter move is not stored twice.
 * A partition only counts as failed when a read fails during load, reload or a lifecycle run. A
   failed write does not mark it, and nothing tells a slow partition from a failed one.
 * Partitions are written one after another, so one slow partition delays every other partition

@@ -249,14 +249,26 @@ func (l *Logical) applyToPartitions(state *QueueState) {
 		if len(p.ProduceRequests.Requests) != 0 {
 			if err := p.Store.Produce(ctx, p.ProduceRequests, l.conf.Clock.Now().UTC()); err != nil {
 				l.log.Error("while calling store.Partition.Produce()",
-					"partition", p.Info.PartitionNum, "error", err)
-			}
-			p.State.MostRecentDeadline = l.conf.Clock.Now().UTC().Add(l.conf.ExpireTimeout)
-			if l.notifyScheduled(p) {
-				scheduledUpdated = true
-			}
-			if l.notifyExpired(p) {
-				lifecycleUpdated = true
+					"partition", p.Info.PartitionNum,
+					"queueName", l.conf.Name,
+					"error", err)
+
+				var unstored int
+				for _, req := range p.ProduceRequests.Requests {
+					unstored += len(req.Items)
+					req.Err = ErrInternalRetry
+				}
+				overLeased := max(0, unstored-p.State.UnLeased)
+				p.State.UnLeased -= unstored - overLeased
+				p.State.NumLeased -= overLeased
+			} else {
+				p.State.MostRecentDeadline = l.conf.Clock.Now().UTC().Add(l.conf.ExpireTimeout)
+				if l.notifyScheduled(p) {
+					scheduledUpdated = true
+				}
+				if l.notifyExpired(p) {
+					lifecycleUpdated = true
+				}
 			}
 		}
 

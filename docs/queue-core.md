@@ -142,8 +142,11 @@ run, because a dead-letter move can block for `WriteTimeout`.
   `recoverPartition` succeeds. An unfinished run leaves `State.Failures` alone, because the fault may
   lie with the dead-letter queue and the partition can still serve requests.
 * `Failures` is capped differently from `UnfinishedRuns` and `ScheduledFailures`. Queue stats report
-  it as the total number of failures, so it keeps counting while the partition keeps failing, and
-  the back-off is given at most `lifecycleBackOffAttemptLimit` (32) attempts instead. Past about 58
+  it as the total number of failures, so the counter is left alone and the back-off is given at most
+  `lifecycleBackOffAttemptLimit` (32) attempts instead. `recoverPartition` resets `Failures` whenever
+  its stats read succeeds, so the count only climbs that high while the stats read itself keeps
+  failing. A scan or `LifeCycleInfo` read that keeps failing behind a working stats read stays at
+  the first back-off step, 750ms. Past about 58
   attempts `IntervalBackOff.Next` overflows its conversion to a `Duration`. On amd64 the overflow
   is negative and `Next` returns its 500ms minimum, so an uncapped partition that kept failing
   would go back to running every 500ms.

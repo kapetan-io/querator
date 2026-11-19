@@ -35,6 +35,10 @@ in the batch for retry, and the client retries it. Each request touches one part
 ([ADR 0020](../adr/0020-api-semantics.md)). A backend without transactions may already have removed
 some of the items, so the retried request reports those as "does not exist".
 
+**An error from `Produce` fails the whole batch.** The logical queue answers every request in the
+batch with a retry error and counts none of their items, so a backend returns an error only when it
+cannot say the batch was stored.
+
 **A problem with one request goes on that request.** An invalid, missing, scheduled or not-leased
 item ID is recorded on its request, and the method still returns nil. The returned error is only for
 a storage failure.

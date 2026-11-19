@@ -883,17 +883,21 @@ func waitForLifecycleRun(t *testing.T, ctx context.Context, c *querator.Client, 
 
 var errProduceWriteFailed = errors.New("injected produce write failure")
 
-// failingProduceStorage wraps every partition backend in conf so that, while the returned flag is set,
-// each partition's Produce fails without writing anything. Everything else reaches the real backend.
-func failingProduceStorage(conf store.Config) (store.Config, *atomic.Bool) {
-	failing := &atomic.Bool{}
+// produceFault makes partition storage refuse produce writes on demand. While failing is set,
+// every partition that Wrap's config hands out fails Produce without writing anything. Every
+// other call reaches the real backend.
+type produceFault struct {
+	failing atomic.Bool
+}
+
+func (f *produceFault) Wrap(conf store.Config) store.Config {
 	wrapped := make([]store.PartitionStorage, len(conf.PartitionStorage))
 	for i, ps := range conf.PartitionStorage {
-		ps.PartitionStore = faultyPartitionStore{PartitionStore: ps.PartitionStore, failing: failing}
+		ps.PartitionStore = faultyPartitionStore{PartitionStore: ps.PartitionStore, failing: &f.failing}
 		wrapped[i] = ps
 	}
 	conf.PartitionStorage = wrapped
-	return conf, failing
+	return conf
 }
 
 type faultyPartitionStore struct {

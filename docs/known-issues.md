@@ -156,10 +156,12 @@ turn, one partition after another.
   without waiting for their request timeout. A lease request waits for a later pass or its
   request timeout.
 * A failed produce write is reported as failed for the whole request, even when the backend
-  stored part of it. MongoDB inserts a batch unordered, so some items can be stored when others
-  fail. Those items are left out of the partition's `un_leased` until the queue reloads or the
-  partition recovers from a failure, and when the client sends the produce again they are stored
-  a second time.
+  stored some or all of it. MongoDB inserts a batch unordered, so some items can be stored when
+  others fail, and any backend can return an error after its write landed, as when `WriteTimeout`
+  ends after a commit. The client gets a retry error for items that are stored, and when it sends
+  the produce again they are stored a second time. Until the queue reloads or the partition
+  recovers from a failure, the partition's `un_leased` leaves those items out, and on MongoDB a
+  lease in the same pass that took some of them is left out of `total_leased`.
   Dead-letter hand-offs carry a source ID, and a dead letter queue's single partition skips an
   item whose source ID it already holds, so a dead-letter move is not stored twice.
 * A partition only counts as failed when a read fails during load, reload or a lifecycle run. A

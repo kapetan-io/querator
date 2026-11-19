@@ -354,14 +354,17 @@ paths:
                         lease_timeout: 60m
                         expire_timeout: 24h
                         max_attempts: 20
-                        requested_partitions: 1025
+                        requested_partitions: 100
           headers: {}
       security: []
   /v1/queues.create:
     post:
       summary: Create a queue
       deprecated: false
-      description: Create a new queue with the provided characteristics
+      description: >-
+        Create a new queue with the provided characteristics.
+        `requested_partitions` may be at most 1024; larger requests are
+        rejected with an invalid-option error (HTTP 400).
       operationId: post-v1-queues.create
       tags:
         - Querator V1
@@ -1315,6 +1318,10 @@ components:
             The number of partitions this queue has requested. This might be
             different than the number of currently active partitions as the
             system grows or contracts the number of partitions.
+            `/queues.create` rejects a value greater than 1024 with HTTP 400.
+            Queues stored with more partitions keep working, so responses can
+            report a larger value. `/queues.update` stores a new value without
+            adding or removing partitions.
         partitions:
           type: array
           description: >-

@@ -404,7 +404,11 @@ func setupQueueStorage(ctx context.Context, file File, conf *Config) error {
 
 		info := queue.ToQueueInfo()
 		if len(queue.Partitions) == 0 {
-			info.PartitionInfo = store.PlacePartitions(conf.Service.StorageConfig.PartitionStorage, info)
+			placed, err := store.PlacePartitions(conf.Service.StorageConfig.PartitionStorage, info)
+			if err != nil {
+				return fmt.Errorf("invalid queue '%s'; %w", queue.Name, err)
+			}
+			info.PartitionInfo = placed
 		}
 
 		if err := conf.Service.StorageConfig.Queues.Add(ctx, info); err != nil {

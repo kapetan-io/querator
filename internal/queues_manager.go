@@ -86,7 +86,11 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Que
 		return nil, err
 	}
 
-	info.PartitionInfo = store.PlacePartitions(qm.conf.StorageConfig.PartitionStorage, info)
+	placed, err := store.PlacePartitions(qm.conf.StorageConfig.PartitionStorage, info)
+	if err != nil {
+		return nil, err
+	}
+	info.PartitionInfo = placed
 	for _, p := range info.PartitionInfo {
 		qm.log.LogAttrs(ctx, LevelDebugAll, "Partition Assigned",
 			slog.String("queue", p.Queue.Name), slog.String("storage", p.StorageName),

@@ -34,7 +34,7 @@ func init() {
 	createCommand.Flags().StringVar(&flags.ReferenceCreate, "reference",
 		"", "Queue reference/owner")
 	createCommand.Flags().Int32Var(&flags.Partitions, "partitions",
-		1, "Number of requested partitions (defaults to 1)")
+		1, "Number of requested partitions, at most 1024 (defaults to 1)")
 }
 
 func RunCreate(flags FlagParams, queueName string) error {

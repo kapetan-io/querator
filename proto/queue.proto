@@ -229,6 +229,7 @@ message QueueInfo {
 
   // The number of partitions the queue is requesting. This might be different than the
   // actual partitions if the requested partition count was recently changed via rebalance request.
+  // Creating a queue with more than 1024 partitions is rejected.
   int32 requestedPartitions = 9 [json_name = "requested_partitions"];
 
   // The partitions of this queue and the storage backend which holds each one.

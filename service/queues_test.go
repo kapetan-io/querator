@@ -806,6 +806,39 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					Code: duh.CodeBadRequest,
 				},
 				{
+					Name: "PartitionsGreaterThanMax",
+					Req: &pb.QueueInfo{
+						QueueName:           random.String("queue-", 10),
+						LeaseTimeout:        "1m",
+						ExpireTimeout:       "10m",
+						RequestedPartitions: 1_025,
+					},
+					Msg:  "partitions is invalid; cannot be greater than 1024",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "PartitionsZero",
+					Req: &pb.QueueInfo{
+						QueueName:           random.String("queue-", 10),
+						LeaseTimeout:        "1m",
+						ExpireTimeout:       "10m",
+						RequestedPartitions: 0,
+					},
+					Msg:  "partitions is invalid; cannot be less than 1",
+					Code: duh.CodeBadRequest,
+				},
+				{
+					Name: "PartitionsNegative",
+					Req: &pb.QueueInfo{
+						QueueName:           random.String("queue-", 10),
+						LeaseTimeout:        "1m",
+						ExpireTimeout:       "10m",
+						RequestedPartitions: -1,
+					},
+					Msg:  "partitions is invalid; cannot be less than 1",
+					Code: duh.CodeBadRequest,
+				},
+				{
 					Name: "NamespaceContainsTilde",
 					Req: &pb.QueueInfo{
 						QueueName: random.String("queue-", 10),

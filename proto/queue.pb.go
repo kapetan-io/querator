@@ -910,6 +910,7 @@ type QueueInfo struct {
 	MaxAttempts int32 `protobuf:"varint,8,opt,name=maxAttempts,json=max_attempts,proto3" json:"maxAttempts,omitempty"`
 	// The number of partitions the queue is requesting. This might be different than the
 	// actual partitions if the requested partition count was recently changed via rebalance request.
+	// Creating a queue with more than 1024 partitions is rejected.
 	RequestedPartitions int32 `protobuf:"varint,9,opt,name=requestedPartitions,json=requested_partitions,proto3" json:"requestedPartitions,omitempty"`
 	// The partitions of this queue and the storage backend which holds each one.
 	// Set by Querator; ignored on create and update.

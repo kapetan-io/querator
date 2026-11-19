@@ -215,6 +215,18 @@ func TestApplyConfigFileErrs(t *testing.T) {
 			},
 			expectedErr: "invalid partition storage; queue 'test-queue' references 'non-existent' which is undefined",
 		},
+		{
+			name: "QueueRequestsMoreThanMaxPartitions",
+			file: daemon.File{
+				PartitionStorage: []daemon.PartitionStorage{
+					{Name: "test", Memory: &daemon.MemoryConfig{}, Affinity: 1},
+				},
+				Queues: []daemon.Queue{
+					{Name: "test-queue", RequestedPartitions: 1_025},
+				},
+			},
+			expectedErr: "invalid queue 'test-queue'; partitions is invalid; cannot be greater than 1024",
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			conf := &daemon.Config{}

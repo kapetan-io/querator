@@ -26,16 +26,16 @@ cannot move to different partitions and will remain associated with their origin
 entire lifecycle.
 
 ### Implementation
-Querator will use `LifeCycle` to monitor and report scheduled items that need to be enqueued at their
-designated times. `LifeCycle` will implement a secondary timer—independent of the main lifecycle timer—to
-track when scheduled items are due for enqueueing. This approach avoids scanning the entire partition
-queue for lifecycle actions when only scheduled item actions are needed, streamlining the movement of
-scheduled items independently of other lifecycle actions.
+Querator uses the Logical Queue's lifecycle to find scheduled items that need to be enqueued at
+their designated times. The lifecycle keeps a scheduled timer, independent of the main lifecycle
+timer, to track when scheduled items are due for enqueueing. This avoids reading the partition for
+other lifecycle actions when only scheduled items are due.
 
-`LifeCycle` will generate scheduled actions of type `ActionQueueScheduledItem`, each containing the ID
-of the scheduled item. These actions will be passed to `Logical`, which will then forward
-them to the storage implementation, which is responsible for moving items from the scheduled queue
-to the partition queue.
+The lifecycle generates scheduled actions of type `ActionQueueScheduledItem`, each containing the ID
+of the scheduled item. `Logical` writes these actions to the storage implementation on its request
+loop, one page at a time (see [22. Managing item lifecycles](0022-managing-item-lifecycles.md)). The
+storage implementation is responsible for moving items from the scheduled queue to the partition
+queue.
 
 #### Data Store Implementation
 The data store implementation should attempt to move items atomically whenever possible. If atomic

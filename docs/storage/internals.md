@@ -82,9 +82,17 @@ imported item is exempt and keeps the `EnqueueAt` it was given.
 never by comparing the deadline against a sentinel value.
 
 **A deadline equal to now is due.** The lifecycle scan yields an action when a deadline is at or
-before the time it is given, never only after it. The logical queue treats a deadline at or before
-now as work left undone, so a deadline equal to now that the scan skipped would cost a back-off
-before the item is acted on. The same holds for a scheduled item's `EnqueueAt`.
+before the time it is given, never only after it. The scan reports only later deadlines for the
+logical queue to schedule the next pass from, so a deadline equal to now that the scan neither acted
+on nor reported would wait for some later deadline to bring the lifecycle round again. The same
+holds for a scheduled item's `EnqueueAt`.
+
+**A lifecycle scan reads one page and ends the pass at its last item.** Each scan reads at most one
+page after the pivot, and nothing after the item that was last when the pass began. A scan that
+reaches that item must end the pass, on that read or the next, or the logical queue keeps running
+pages with no end. A scan that reads more than a page holds the logical queue's request loop for
+longer than a page, and one that reads past the pass's last item lets a busy producer keep a pass
+from ending.
 
 **The lifecycle scan removes a leased item at `MaxAttempts`.** A leased item whose lease has not
 expired but whose attempts reached the queue's `MaxAttempts` goes to the dead-letter queue, or is
@@ -126,6 +134,14 @@ it, and the lifecycle scans, which do not, cannot be relied on to.
 one write deadline. When it ends, the lease commits what it already assigned and the next lease
 resumes where it stopped. A lone consumer on a quiet queue can therefore get "no items are in the
 queue" while free items wait further on, and each new lease gets further.
+
+**A Badger lifecycle write may commit in more than one transaction, but never splits an action.** A
+page of actions can exceed Badger's transaction size. Moving an item to the tail is two writes, the
+item under its new ID and the delete of the old one, so committing whatever fits when Badger reports
+the transaction too big would commit half an action and leave a duplicate. `TakeAction` commits the
+whole actions before the one that did not fit, then starts a new transaction with it. A failure
+partway leaves the earlier actions committed, and the next run reads the page again and finds the
+rest.
 
 **A Badger lifecycle delete needs the item's `SourceID` in the action.** Badger frees the `SourceID`
 from the action's copy of the item, not the stored one, so a delete action without it leaves the

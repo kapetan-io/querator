@@ -10,6 +10,8 @@ import (
 	"github.com/kapetan-io/querator/transport/reply"
 )
 
+const immediateRetryWindow = 100 * time.Millisecond
+
 func (l *Logical) assignToPartitions(state *QueueState) {
 	for _, req := range state.LifeCycles.Requests {
 		p := state.GetPartition(req.PartitionNum)
@@ -44,11 +46,7 @@ func (l *Logical) notifyScheduled(p *Partition) bool {
 	}
 
 	now := l.conf.Clock.Now().UTC()
-	if earliestScheduled.After(now) && earliestScheduled.Before(p.Lifecycle.NextScheduledRun) {
-		p.Lifecycle.NextScheduledRun = earliestScheduled
-		return true
-	}
-	return false
+	return earliestScheduled.After(now) && p.Lifecycle.RunScheduledBy(earliestScheduled)
 }
 
 func (l *Logical) notifyScheduledRetry(p *Partition) bool {
@@ -67,11 +65,7 @@ func (l *Logical) notifyScheduledRetry(p *Partition) bool {
 	}
 
 	now := l.conf.Clock.Now().UTC()
-	if earliestScheduled.After(now) && earliestScheduled.Before(p.Lifecycle.NextScheduledRun) {
-		p.Lifecycle.NextScheduledRun = earliestScheduled
-		return true
-	}
-	return false
+	return earliestScheduled.After(now) && p.Lifecycle.RunScheduledBy(earliestScheduled)
 }
 
 func (l *Logical) notifyExpired(p *Partition) bool {
@@ -88,11 +82,7 @@ func (l *Logical) notifyExpired(p *Partition) bool {
 	}
 
 	now := l.conf.Clock.Now().UTC()
-	if earliestExpire.After(now) && earliestExpire.Before(p.Lifecycle.NextLifecycleRun) {
-		p.Lifecycle.NextLifecycleRun = earliestExpire
-		return true
-	}
-	return false
+	return earliestExpire.After(now) && p.Lifecycle.RunLifecycleBy(earliestExpire)
 }
 
 func (l *Logical) assignProduceRequests(state *QueueState) {
@@ -283,8 +273,7 @@ func (l *Logical) applyToPartitions(state *QueueState) {
 			p.SettleLeases()
 			p.State.MostRecentDeadline = leaseDeadline
 
-			if leaseDeadline.Before(p.Lifecycle.NextLifecycleRun) {
-				p.Lifecycle.NextLifecycleRun = leaseDeadline
+			if p.Lifecycle.RunLifecycleBy(leaseDeadline) {
 				lifecycleUpdated = true
 			}
 
@@ -310,7 +299,16 @@ func (l *Logical) applyToPartitions(state *QueueState) {
 			}
 		}
 
-		if err := p.Store.Retry(ctx, p.RetryRequests); err != nil {
+		err := p.Store.Retry(ctx, p.RetryRequests)
+		immediate := l.conf.Clock.Now().UTC().Add(immediateRetryWindow)
+		for _, req := range p.RetryRequests.Requests {
+			for _, item := range req.Items {
+				if !item.Dead && item.RetryAt.Before(immediate) {
+					p.Lifecycle.ItemMoved(item.ID)
+				}
+			}
+		}
+		if err != nil {
 			l.log.Error("while calling store.Partition.Retry()",
 				"partition", p.Info.PartitionNum,
 				"queueName", l.conf.Name,

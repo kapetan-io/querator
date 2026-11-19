@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"iter"
 	"log/slog"
 	"sort"
 	"strings"
@@ -360,80 +359,98 @@ func (m *MemoryPartition) UpdateQueueInfo(info types.QueueInfo) {
 	m.info.Queue = info
 }
 
-func (m *MemoryPartition) ScanForScheduled(_ context.Context, now clock.Time) iter.Seq2[types.Action, error] {
+func (m *MemoryPartition) ScanForScheduled(_ context.Context, scan *types.LifeCycleScan, now clock.Time) error {
+	defer m.mu.RUnlock()
 	m.mu.RLock()
-	memCopy := make([]types.Item, len(m.mem))
-	copy(memCopy, m.mem)
-	m.mu.RUnlock()
 
-	return func(yield func(types.Action, error) bool) {
-		for _, item := range memCopy {
-			if item.EnqueueAt.IsZero() {
-				continue
-			}
-
-			if !item.EnqueueAt.After(now) {
-				if !yield(types.Action{
-					Action:       types.ActionQueueScheduledItem,
-					PartitionNum: m.info.PartitionNum,
-					Queue:        m.info.Queue.Name,
-					Item:         item,
-				}, nil) {
-					return
-				}
-			}
+	page := m.lifeCyclePage(scan)
+	for _, item := range page {
+		if item.EnqueueAt.IsZero() {
+			continue
 		}
+		if item.EnqueueAt.After(now) {
+			scan.SeeEnqueueAt(item.EnqueueAt)
+			continue
+		}
+		scan.Add(types.Action{
+			Action:       types.ActionQueueScheduledItem,
+			PartitionNum: m.info.PartitionNum,
+			Queue:        m.info.Queue.Name,
+			Item:         item,
+		})
 	}
+	return nil
 }
 
-func (m *MemoryPartition) ScanForActions(_ context.Context, now clock.Time) iter.Seq2[types.Action, error] {
+func (m *MemoryPartition) ScanForActions(_ context.Context, scan *types.LifeCycleScan, now clock.Time) error {
+	defer m.mu.RUnlock()
 	m.mu.RLock()
-	memCopy := make([]types.Item, len(m.mem))
-	copy(memCopy, m.mem)
-	m.mu.RUnlock()
 
-	return func(yield func(types.Action, error) bool) {
-		for _, item := range memCopy {
-			if !item.EnqueueAt.IsZero() {
-				continue
-			}
-			if item.IsLeased {
-				if !item.LeaseDeadline.After(now) {
-					if !yield(types.Action{
-						Action:       types.ActionLeaseExpired,
-						PartitionNum: m.info.PartitionNum,
-						Queue:        m.info.Queue.Name,
-						Item:         item,
-					}, nil) {
-						return
-					}
-					continue
-				}
-				if m.info.Queue.MaxAttempts != 0 && item.Attempts >= m.info.Queue.MaxAttempts {
-					if !yield(types.Action{
-						Action:       types.ActionItemMaxAttempts,
-						PartitionNum: m.info.PartitionNum,
-						Queue:        m.info.Queue.Name,
-						Item:         item,
-					}, nil) {
-						return
-					}
-					continue
-				}
-			}
-			if !item.ExpireDeadline.After(now) {
-				if !yield(types.Action{
-					Action:       types.ActionItemExpired,
+	page := m.lifeCyclePage(scan)
+	for _, item := range page {
+		if !item.EnqueueAt.IsZero() {
+			continue
+		}
+		if item.IsLeased {
+			if !item.LeaseDeadline.After(now) {
+				scan.Add(types.Action{
+					Action:       types.ActionLeaseExpired,
 					PartitionNum: m.info.PartitionNum,
 					Queue:        m.info.Queue.Name,
 					Item:         item,
-				}, nil) {
-					return
-				}
+				})
 				continue
 			}
+			if m.info.Queue.MaxAttempts != 0 && item.Attempts >= m.info.Queue.MaxAttempts {
+				scan.Add(types.Action{
+					Action:       types.ActionItemMaxAttempts,
+					PartitionNum: m.info.PartitionNum,
+					Queue:        m.info.Queue.Name,
+					Item:         item,
+				})
+				continue
+			}
+			scan.SeeLeaseDeadline(item.LeaseDeadline)
 		}
+		if !item.ExpireDeadline.After(now) {
+			scan.Add(types.Action{
+				Action:       types.ActionItemExpired,
+				PartitionNum: m.info.PartitionNum,
+				Queue:        m.info.Queue.Name,
+				Item:         item,
+			})
+			continue
+		}
+		scan.SeeExpireDeadline(item.ExpireDeadline)
 	}
+	return nil
+}
+
+func (m *MemoryPartition) lifeCyclePage(scan *types.LifeCycleScan) []types.Item {
+	if len(m.mem) == 0 {
+		scan.EndPass()
+		return nil
+	}
+	if !scan.MidPass() {
+		scan.Last = m.mem[len(m.mem)-1].ID
+	}
+	start := sort.Search(len(m.mem), func(i int) bool {
+		return bytes.Compare(m.mem[i].ID, scan.Pivot) > 0
+	})
+	end := sort.Search(len(m.mem), func(i int) bool {
+		return bytes.Compare(m.mem[i].ID, scan.Last) > 0
+	})
+	if start >= end {
+		scan.EndPass()
+		return nil
+	}
+	last := min(end, start+LifeCyclePageSize)
+	if last == end {
+		scan.EndPass()
+	} else {
+		scan.Pivot = m.mem[last-1].ID
+	}
+	return m.mem[start:last]
 }
 
 func (m *MemoryPartition) TakeAction(_ context.Context, batch types.LifeCycleBatch,
@@ -499,44 +516,6 @@ func (m *MemoryPartition) TakeAction(_ context.Context, batch types.LifeCycleBat
 				assert.Unreachable(fmt.Sprintf("undefined action kind '0x%X'", int(a.Action)))
 			}
 		}
-	}
-	return nil
-}
-
-func (m *MemoryPartition) LifeCycleInfo(ctx context.Context, info *types.LifeCycleInfo) error {
-	defer m.mu.RUnlock()
-	m.mu.RLock()
-	nextLease := theFuture
-	nextExpire := theFuture
-	nextEnqueue := theFuture
-
-	for _, item := range m.mem {
-		if !item.EnqueueAt.IsZero() {
-			if item.EnqueueAt.Before(nextEnqueue) {
-				nextEnqueue = item.EnqueueAt
-			}
-			continue
-		}
-
-		if item.IsLeased && !item.LeaseDeadline.IsZero() && item.LeaseDeadline.Before(nextLease) {
-			nextLease = item.LeaseDeadline
-		}
-
-		if !item.ExpireDeadline.IsZero() && item.ExpireDeadline.Before(nextExpire) {
-			nextExpire = item.ExpireDeadline
-		}
-	}
-
-	if nextLease != theFuture {
-		info.NextLeaseExpiry = nextLease
-	}
-
-	if nextExpire != theFuture {
-		info.NextExpireDeadline = nextExpire
-	}
-
-	if nextEnqueue != theFuture {
-		info.NextEnqueueAt = nextEnqueue
 	}
 	return nil
 }

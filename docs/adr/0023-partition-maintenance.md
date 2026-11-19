@@ -22,9 +22,10 @@ operations. This is considered the "normal" operating state for the partition.
 
 ### Error
 If a partition is marked as "Error" this means there was some issue with the underlying storage
-such that the partition is unavailable for interaction. When in this state `LifeCycle` will continually
-attempt to recover the partition into an "Available" state. Today this is the partition's failure count
-(`PartitionState.Failures != 0`); no separate state value exists.
+such that the partition is unavailable for interaction. When in this state the Logical Queue's
+lifecycle will continually attempt to recover the partition into an "Available" state, with
+back-off. Today this is the partition's failure count (`PartitionState.Failures != 0`); no separate
+state value exists.
 
 ### Draining
 If a partition is marked as "Draining" the partition refuses production of new items into the partition,

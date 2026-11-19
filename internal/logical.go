@@ -578,6 +578,32 @@ func (l *Logical) requestLoop() {
 			lifecycleCh, scheduledCh, maintenanceCh = nil, nil, nil
 		}
 
+		if !state.Paused && l.timedRunDue(&state) {
+			for range len(l.requestCh) {
+				select {
+				case req := <-l.requestCh:
+					l.handleRequest(&state, req)
+				default:
+				}
+			}
+			select {
+			case req := <-l.shutdownCh:
+				l.handleShutdown(&state, req)
+				return
+			case <-maintenanceCh:
+				l.handleRequestTimeouts(&state)
+			default:
+			}
+			if !state.Paused {
+				l.runLifecycle(&state)
+				l.runScheduled(&state)
+				l.leaseToWaitingConsumers(&state)
+			}
+			state.LifecycleTimer.Reset(l.minNextLifecycleRun(&state))
+			state.ScheduledTimer.Reset(l.minNextScheduledRun(&state))
+			continue
+		}
+
 		select {
 		case req := <-l.requestCh:
 			l.handleRequest(&state, req)
@@ -597,6 +623,7 @@ func (l *Logical) requestLoop() {
 			l.runScheduled(&state)
 			l.leaseToWaitingConsumers(&state)
 			state.ScheduledTimer.Reset(l.minNextScheduledRun(&state))
+			state.LifecycleTimer.Reset(l.minNextLifecycleRun(&state))
 
 		case <-maintenanceCh:
 			l.handleRequestTimeouts(&state)
@@ -663,8 +690,7 @@ func (l *Logical) handleHotRequests(state *QueueState, req *Request) *Request {
 	for _, p := range state.Partitions {
 		if p.State.NumLeased != 0 {
 			now := l.conf.Clock.Now().UTC()
-			if p.State.MostRecentDeadline.After(now) && p.State.MostRecentDeadline.Before(p.Lifecycle.NextLifecycleRun) {
-				p.Lifecycle.NextLifecycleRun = p.State.MostRecentDeadline
+			if p.State.MostRecentDeadline.After(now) && p.Lifecycle.RunLifecycleBy(p.State.MostRecentDeadline) {
 				lifecycleUpdated = true
 			}
 		}

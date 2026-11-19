@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"iter"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -1174,164 +1173,122 @@ func (p *MongoPartition) Stats(ctx context.Context, stats *types.PartitionStats,
 	return nil
 }
 
-func (p *MongoPartition) ScanForScheduled(ctx context.Context, now clock.Time) iter.Seq2[types.Action, error] {
-	return func(yield func(types.Action, error) bool) {
-		batchSize := p.conf.ScanBatchSize
-		if batchSize == 0 {
-			batchSize = 1000
+func (p *MongoPartition) ScanForScheduled(ctx context.Context, scan *types.LifeCycleScan, now clock.Time) error {
+	return p.readLifeCyclePage(ctx, scan, bson.M{"enqueue_at": bson.M{"$exists": true}}, func(item types.Item) {
+		if item.EnqueueAt.After(now) {
+			scan.SeeEnqueueAt(item.EnqueueAt)
+			return
 		}
-		nowMicros := toMicros(now)
-		var lastID string
-
-		for ctx.Err() == nil {
-			client, err := p.conf.getOrCreateClient(ctx)
-			if err != nil {
-				yield(types.Action{}, err)
-				return
-			}
-
-			if err := p.ensureCollection(ctx, client); err != nil {
-				yield(types.Action{}, err)
-				return
-			}
-
-			cur, err := p.collection(client).Find(ctx,
-				bson.M{
-					"enqueue_at": bson.M{"$exists": true, "$lte": nowMicros},
-					"_id":        bson.M{"$gt": lastID},
-				},
-				options.Find().SetSort(bson.D{{Key: "_id", Value: 1}}).SetLimit(int64(batchSize)))
-			if err != nil {
-				yield(types.Action{}, err)
-				return
-			}
-
-			var docs []mongoItem
-			if err := cur.All(ctx, &docs); err != nil {
-				yield(types.Action{}, err)
-				return
-			}
-
-			if len(docs) == 0 {
-				return
-			}
-
-			for i := range docs {
-				item := docs[i].toItem()
-				lastID = string(item.ID)
-				if !yield(types.Action{
-					Action:       types.ActionQueueScheduledItem,
-					PartitionNum: p.info.PartitionNum,
-					Queue:        p.info.Queue.Name,
-					Item:         *item,
-				}, nil) {
-					return
-				}
-			}
-
-			if len(docs) < batchSize {
-				return
-			}
-		}
-		yield(types.Action{}, ctx.Err())
-	}
+		scan.Add(types.Action{
+			Action:       types.ActionQueueScheduledItem,
+			PartitionNum: p.info.PartitionNum,
+			Queue:        p.info.Queue.Name,
+			Item:         item,
+		})
+	})
 }
 
-func (p *MongoPartition) ScanForActions(ctx context.Context, now clock.Time) iter.Seq2[types.Action, error] {
-	return func(yield func(types.Action, error) bool) {
-		batchSize := p.conf.ScanBatchSize
-		if batchSize == 0 {
-			batchSize = 1000
+func (p *MongoPartition) ScanForActions(ctx context.Context, scan *types.LifeCycleScan, now clock.Time) error {
+	p.mu.RLock()
+	maxAttempts := p.info.Queue.MaxAttempts
+	p.mu.RUnlock()
+
+	filter := bson.M{"$or": bson.A{
+		bson.M{"enqueue_at": bson.M{"$exists": false}},
+		bson.M{"enqueue_at": bson.M{"$lte": toMicros(now)}},
+	}}
+	return p.readLifeCyclePage(ctx, scan, filter, func(item types.Item) {
+		if item.IsLeased && !item.LeaseDeadline.After(now) {
+			scan.Add(types.Action{
+				Action:       types.ActionLeaseExpired,
+				PartitionNum: p.info.PartitionNum,
+				Queue:        p.info.Queue.Name,
+				Item:         item,
+			})
+			return
 		}
-		nowMicros := toMicros(now)
-		var lastID string
 
-		for ctx.Err() == nil {
-			client, err := p.conf.getOrCreateClient(ctx)
-			if err != nil {
-				yield(types.Action{}, err)
-				return
-			}
-
-			if err := p.ensureCollection(ctx, client); err != nil {
-				yield(types.Action{}, err)
-				return
-			}
-
-			cur, err := p.collection(client).Find(ctx,
-				bson.M{
-					"$or": bson.A{
-						bson.M{"enqueue_at": bson.M{"$exists": false}},
-						bson.M{"enqueue_at": bson.M{"$lte": nowMicros}},
-					},
-					"_id": bson.M{"$gt": lastID},
-				},
-				options.Find().SetSort(bson.D{{Key: "_id", Value: 1}}).SetLimit(int64(batchSize)))
-			if err != nil {
-				yield(types.Action{}, err)
-				return
-			}
-
-			var docs []mongoItem
-			if err := cur.All(ctx, &docs); err != nil {
-				yield(types.Action{}, err)
-				return
-			}
-
-			if len(docs) == 0 {
-				return
-			}
-
-			p.mu.RLock()
-			maxAttempts := p.info.Queue.MaxAttempts
-			p.mu.RUnlock()
-
-			for i := range docs {
-				item := docs[i].toItem()
-				lastID = string(item.ID)
-
-				if item.IsLeased && !item.LeaseDeadline.After(now) {
-					if !yield(types.Action{
-						Action:       types.ActionLeaseExpired,
-						PartitionNum: p.info.PartitionNum,
-						Queue:        p.info.Queue.Name,
-						Item:         *item,
-					}, nil) {
-						return
-					}
-					continue
-				}
-
-				if item.IsLeased && maxAttempts != 0 && item.Attempts >= maxAttempts {
-					if !yield(types.Action{
-						Action:       types.ActionItemMaxAttempts,
-						PartitionNum: p.info.PartitionNum,
-						Queue:        p.info.Queue.Name,
-						Item:         *item,
-					}, nil) {
-						return
-					}
-					continue
-				}
-
-				if !item.ExpireDeadline.After(now) {
-					if !yield(types.Action{
-						Action:       types.ActionItemExpired,
-						PartitionNum: p.info.PartitionNum,
-						Queue:        p.info.Queue.Name,
-						Item:         *item,
-					}, nil) {
-						return
-					}
-				}
-			}
-
-			if len(docs) < batchSize {
-				return
-			}
+		if item.IsLeased && maxAttempts != 0 && item.Attempts >= maxAttempts {
+			scan.Add(types.Action{
+				Action:       types.ActionItemMaxAttempts,
+				PartitionNum: p.info.PartitionNum,
+				Queue:        p.info.Queue.Name,
+				Item:         item,
+			})
+			return
 		}
-		yield(types.Action{}, ctx.Err())
+		if item.IsLeased {
+			scan.SeeLeaseDeadline(item.LeaseDeadline)
+		}
+
+		if !item.ExpireDeadline.After(now) {
+			scan.Add(types.Action{
+				Action:       types.ActionItemExpired,
+				PartitionNum: p.info.PartitionNum,
+				Queue:        p.info.Queue.Name,
+				Item:         item,
+			})
+			return
+		}
+		scan.SeeExpireDeadline(item.ExpireDeadline)
+	})
+}
+
+func (p *MongoPartition) readLifeCyclePage(ctx context.Context, scan *types.LifeCycleScan,
+	filter bson.M, visit func(types.Item)) error {
+
+	client, err := p.conf.getOrCreateClient(ctx)
+	if err != nil {
+		return err
 	}
+
+	if err := p.ensureCollection(ctx, client); err != nil {
+		return err
+	}
+	coll := p.collection(client)
+
+	tail := string(scan.Last)
+	if !scan.MidPass() {
+		var last struct {
+			ID string `bson:"_id"`
+		}
+		err := coll.FindOne(ctx, bson.M{}, options.FindOne().
+			SetSort(bson.D{{Key: "_id", Value: -1}}).
+			SetProjection(bson.M{"_id": 1})).Decode(&last)
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			scan.EndPass()
+			return nil
+		}
+		if err != nil {
+			return errors.Errorf("query partition tail: %w", err)
+		}
+		tail = last.ID
+	}
+
+	limit := min(LifeCyclePageSize, p.conf.ScanBatchSize)
+
+	filter["_id"] = bson.M{"$gt": string(scan.Pivot), "$lte": tail}
+	cur, err := coll.Find(ctx, filter,
+		options.Find().SetSort(bson.D{{Key: "_id", Value: 1}}).SetLimit(int64(limit)))
+	if err != nil {
+		return err
+	}
+
+	var docs []mongoItem
+	if err := cur.All(ctx, &docs); err != nil {
+		return err
+	}
+
+	for i := range docs {
+		visit(*docs[i].toItem())
+	}
+
+	if len(docs) < limit {
+		scan.EndPass()
+		return nil
+	}
+	scan.Pivot, scan.Last = docs[len(docs)-1].toItem().ID, types.ItemID(tail)
+	return nil
 }
 
 func (p *MongoPartition) TakeAction(ctx context.Context, batch types.LifeCycleBatch, _ *types.PartitionState) error {
@@ -1395,65 +1352,6 @@ func (p *MongoPartition) TakeAction(ctx context.Context, batch types.LifeCycleBa
 			}
 		}
 	}
-	return nil
-}
-
-func (p *MongoPartition) LifeCycleInfo(ctx context.Context, info *types.LifeCycleInfo) error {
-	client, err := p.conf.getOrCreateClient(ctx)
-	if err != nil {
-		return err
-	}
-
-	if err := p.ensureCollection(ctx, client); err != nil {
-		return err
-	}
-
-	coll := p.collection(client)
-	now := toMicros(clock.Now().UTC())
-
-	var leaseDoc struct {
-		LeaseDeadline *int64 `bson:"lease_deadline"`
-	}
-	err = coll.FindOne(ctx, bson.M{"is_leased": true},
-		options.FindOne().
-			SetSort(bson.D{{Key: "lease_deadline", Value: 1}}).
-			SetProjection(bson.M{"lease_deadline": 1})).Decode(&leaseDoc)
-	if err == nil && leaseDoc.LeaseDeadline != nil {
-		info.NextLeaseExpiry = fromMicros(*leaseDoc.LeaseDeadline)
-	} else if err != nil && !errors.Is(err, mongo.ErrNoDocuments) {
-		return errors.Errorf("query lifecycle lease info: %w", err)
-	}
-
-	var expireDoc struct {
-		ExpireDeadline int64 `bson:"expire_deadline"`
-	}
-	err = coll.FindOne(ctx,
-		bson.M{"$or": bson.A{
-			bson.M{"enqueue_at": bson.M{"$exists": false}},
-			bson.M{"enqueue_at": bson.M{"$lte": now}},
-		}},
-		options.FindOne().
-			SetSort(bson.D{{Key: "expire_deadline", Value: 1}}).
-			SetProjection(bson.M{"expire_deadline": 1})).Decode(&expireDoc)
-	if err == nil {
-		info.NextExpireDeadline = fromMicros(expireDoc.ExpireDeadline)
-	} else if !errors.Is(err, mongo.ErrNoDocuments) {
-		return errors.Errorf("query lifecycle expire info: %w", err)
-	}
-
-	var enqueueDoc struct {
-		EnqueueAt int64 `bson:"enqueue_at"`
-	}
-	err = coll.FindOne(ctx, bson.M{"enqueue_at": bson.M{"$exists": true}},
-		options.FindOne().
-			SetSort(bson.D{{Key: "enqueue_at", Value: 1}}).
-			SetProjection(bson.M{"enqueue_at": 1})).Decode(&enqueueDoc)
-	if err == nil {
-		info.NextEnqueueAt = fromMicros(enqueueDoc.EnqueueAt)
-	} else if !errors.Is(err, mongo.ErrNoDocuments) {
-		return errors.Errorf("query lifecycle scheduled info: %w", err)
-	}
-
 	return nil
 }
 

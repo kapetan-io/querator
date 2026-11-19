@@ -1708,6 +1708,43 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		}()
 		c, ctx := d.MustClient(), d.Context()
 
+		t.Run("OmittedTimeoutsAreKept", func(t *testing.T) {
+			queueName := random.String("queue-", 10)
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				QueueName:           queueName,
+				LeaseTimeout:        "1m0s",
+				ExpireTimeout:       ExpireTimeout,
+				RequestedPartitions: 1,
+			})
+			require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+				QueueName:   queueName,
+				MaxAttempts: 5,
+			}))
+
+			ref := random.String("ref-", 10)
+			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+				QueueName:      queueName,
+				RequestTimeout: "1m",
+				Items:          []*pb.QueueProduceItem{{Reference: ref, Bytes: []byte("test payload")}},
+			}))
+			var lease pb.QueueLeaseResponse
+			require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+				ClientId:       random.String("client-", 10),
+				RequestTimeout: "5s",
+				QueueName:      queueName,
+				BatchSize:      1,
+			}, &lease))
+			require.Len(t, lease.Items, 1)
+
+			var resp pb.StorageItemsListResponse
+			require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &resp, nil))
+			item := findInStorageList(ref, &resp)
+			require.NotNil(t, item)
+			start := now.Now().UTC()
+			assert.Equal(t, start.Add(24*clock.Hour), item.ExpireDeadline.AsTime())
+			assert.Equal(t, start.Add(clock.Minute), item.LeaseDeadline.AsTime())
+		})
+
 		t.Run("MaxAttempts", func(t *testing.T) {
 			// Baseline test to verify lifecycle works (mirrors MaxAttemptsWithDLQ)
 			t.Run("BaselineWithDLQ", func(t *testing.T) {

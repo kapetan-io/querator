@@ -160,7 +160,8 @@ turn, one partition after another.
   others fail, and any backend can return an error after its write landed, as when `WriteTimeout`
   ends after a commit. The client gets a retry error for items that are stored, and when it sends
   the produce again they are stored a second time. Until the queue reloads or the partition
-  recovers from a failure, the partition's `un_leased` leaves those items out.
+  recovers from a failure, the partition's `un_leased` leaves those items out, and a lease in a later
+  pass that takes them leaves them out of `total_leased`.
   Dead-letter hand-offs carry a source ID, and a dead letter queue's single partition skips an
   item whose source ID it already holds, so a dead-letter move is not stored twice.
 * A partition only counts as failed when a read fails during load, reload or a lifecycle run. A

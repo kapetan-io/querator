@@ -1741,8 +1741,8 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			item := findInStorageList(ref, &resp)
 			require.NotNil(t, item)
 			start := now.Now().UTC()
-			assert.WithinDuration(t, start.Add(24*clock.Hour), item.ExpireDeadline.AsTime(), clock.Millisecond)
-			assert.WithinDuration(t, start.Add(clock.Minute), item.LeaseDeadline.AsTime(), clock.Millisecond)
+			assert.WithinDuration(t, start.Add(24*clock.Hour), item.ExpireDeadline.AsTime(), clock.Microsecond)
+			assert.WithinDuration(t, start.Add(clock.Minute), item.LeaseDeadline.AsTime(), clock.Microsecond)
 		})
 
 		t.Run("MaxAttempts", func(t *testing.T) {

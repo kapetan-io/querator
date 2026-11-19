@@ -121,8 +121,8 @@ dead-letter queue loop are always distinct goroutines, and the dead-letter queue
 
 - ADR-0003 (R/W sync point) — the invariant being restored.
 - ADR-0019 (partition item distribution) — the dead-letter produce now distributes opportunistically.
-- ADR-0022 (item lifecycles) — the lifecycle runs on the source queue's request loop and delegates
-  every write outside its own partitions; this change makes the dead-letter write a true delegation.
+- ADR-0022 (item lifecycles) — the lifecycle goroutine reads directly but delegates all writes; this
+  change makes the dead-letter write a true delegation.
 - `validateDeadQueue` (`queues_manager.go`) — the no-self-reference / no-chain guarantee the
   deadlock-freedom argument rests on. Must remain in force.
 

@@ -237,6 +237,39 @@ func testLifecycle(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		}, 5*clock.Second, 20*clock.Millisecond)
 	})
 
+	t.Run("ScheduledWriteFailingPartwayRemovesExpiredItem", func(t *testing.T) {
+		now := clock.NewProvider()
+		now.Freeze(clock.Now())
+		defer now.UnFreeze()
+
+		spy := &lifecycleSpy{}
+		d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: spy.Wrap(setup()), Clock: now})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+		c, ctx := d.MustClient(), d.Context()
+
+		// Both items expire after 24 hours but are not enqueued until 48 hours, so no lifecycle pass
+		// sees them while they are scheduled.
+		queueName := random.String("queue-", 10)
+		createOnePartitionQueue(t, ctx, c, queueName)
+		produceScheduled(t, ctx, c, queueName, 2, now.Now().UTC().Add(48*clock.Hour))
+		now.Advance(24*clock.Hour + clock.Second)
+		nextLifecycleRun(t, ctx, c, queueName)
+
+		// The scheduled write enqueues item-00000 and then fails, so the item is no longer scheduled
+		// and its expire deadline has passed. Only a lifecycle pass removes it.
+		spy.FailScheduledWritesAfterFirstItem()
+		now.Advance(24*clock.Hour + clock.Second)
+		require.Eventually(t, func() bool {
+			return scheduledCount(ctx, c, queueName) == 1
+		}, 5*clock.Second, 20*clock.Millisecond)
+		require.Eventually(t, func() bool {
+			return partitionTotal(t, ctx, c, queueName) == 0
+		}, 5*clock.Second, 20*clock.Millisecond)
+	})
+
 	t.Run("RequestsAreServedBetweenPages", func(t *testing.T) {
 		now := clock.NewProvider()
 		now.Freeze(clock.Now())
@@ -844,6 +877,7 @@ type lifecycleSpy struct {
 	actions        []int
 	pages          int
 	failScans      atomic.Bool
+	failScheduled  atomic.Bool
 }
 
 func (s *lifecycleSpy) Wrap(conf store.Config) store.Config {
@@ -895,6 +929,12 @@ func (s *lifecycleSpy) FailScans() {
 
 func (s *lifecycleSpy) StopFailingScans() {
 	s.failScans.Store(false)
+}
+
+// FailScheduledWritesAfterFirstItem makes each scheduled write enqueue only its first item and
+// then fail, as a backend does when a write commits partway.
+func (s *lifecycleSpy) FailScheduledWritesAfterFirstItem() {
+	s.failScheduled.Store(true)
 }
 
 func (s *lifecycleSpy) Events() []string {
@@ -990,6 +1030,19 @@ func (p spyPartition) ScanForActions(ctx context.Context, scan *types.LifeCycleS
 func (p spyPartition) Produce(ctx context.Context, batch types.ProduceBatch, now clock.Time) error {
 	p.spy.produce()
 	return p.Partition.Produce(ctx, batch, now)
+}
+
+func (p spyPartition) TakeAction(ctx context.Context, batch types.LifeCycleBatch, state *types.PartitionState) error {
+	if !p.spy.failScheduled.Load() || len(batch.Requests) == 0 || len(batch.Requests[0].Actions) == 0 ||
+		batch.Requests[0].Actions[0].Action != types.ActionQueueScheduledItem {
+		return p.Partition.TakeAction(ctx, batch, state)
+	}
+	first := *batch.Requests[0]
+	first.Actions = first.Actions[:1]
+	if err := p.Partition.TakeAction(ctx, types.LifeCycleBatch{Requests: []*types.LifeCycleRequest{&first}}, state); err != nil {
+		return err
+	}
+	return errors.New("scheduled write failed by test after its first item")
 }
 
 func (p spyPartition) ScanForScheduled(ctx context.Context, scan *types.LifeCycleScan, now clock.Time) error {

@@ -128,25 +128,15 @@ never holds the loop for longer than one page. A pass stops at the item that was
 so items produced during the pass wait for the next one. A deadline the pass cannot read, such as a
 lease granted on an item before the pivot or an item the pass requeues past its last item, sets when
 the next pass starts, so it is not missed. This holds when a write fails partway too, because the
-actions before the failure stay committed. Storage does not say which actions committed, so a
-scheduled write that keeps failing with an expired item on its page starts a pass each time it
-fails, and most of those passes find nothing to do. A retry carries no expire deadline, so an
-immediate retry of an item the pass has not read yet starts the next pass as soon as this one ends.
-What counts as immediate must match the rule storage uses to move a retry to the tail.
-
-A pass that is mid-way is always due, so the request loop must not wait on a timer between pages,
-and requests, shutdown and request timeouts must get their turn between pages. Otherwise they wait
-until the pass ends, because Go's `select` gives a ready timer no lower priority than a waiting
-request. A new pass is due only once its time has passed, not when it equals the current time. Tests
-that freeze the clock rely on this, because a queue's first lifecycle run must wait for the clock to
-move.
+actions before the failure stay committed. A retry carries no expire deadline, so an immediate retry
+of an item the pass has not read yet starts the next pass as soon as this one ends. What counts as
+immediate must match the rule storage uses to move a retry to the tail.
 
 A pass that leaves due work undone runs again with back-off. That covers a dead-letter move or a
-lifecycle action (`TakeAction`) that failed. An item stuck in a failed move is due on every pass,
-so without counting it as undone work the next pass would be set only from future deadlines and the
+lifecycle action (`TakeAction`) that failed. An item stuck in a failed move is due on every pass, so
+without counting it as undone work the next pass would be set only from future deadlines and the
 stuck item would wait for one of them. The back-off is measured from the end of the run, because a
-dead-letter move can block for `WriteTimeout`. A page whose actions failed to write must be read
-again, or its due items wait for the next pass.
+dead-letter move can block for `WriteTimeout`.
 
 * An unfinished run leaves the partition in request distribution, because the fault may lie with
   the dead-letter queue and the partition can still serve requests. A failed scan or storage read
@@ -156,21 +146,12 @@ again, or its due items wait for the next pass.
   its minimum, so an uncapped partition that kept failing would go back to retrying every 500ms.
   For the partition's `Failures` count, cap the value passed in, not the counter, because queue
   stats report the counter.
-* A successful stats read during recovery does not reset `Failures`. A read that keeps failing
-  behind a working stats read must still climb the back-off; only a read that succeeds resets it.
-* A dead-letter queue that hangs blocks the source queue's loop for up to `WriteTimeout` once per
-  back-off interval, and each retry reads a page of the source partition on the request loop while
-  produce, lease and complete wait. This cost has not been measured. After one failed hand-off the
-  rest of the pass leaves dead items for the next pass, and that pass waits for the back-off even
-  when an earlier deadline is due, so the hung queue is called once per pass, not once per page.
-  Lease expiry on that partition can therefore run up to the back-off late.
 
 Storage, not the writes that brought a run forward, decides when the next scheduled run happens.
 Those writes are only the ones made since the queue loaded, so a scheduled item written before a
-restart would be forgotten otherwise. For the same reason the queue starts a scheduled pass while it
-loads, so items already overdue at startup are enqueued. Scheduled runs count their failures apart
-from the lifecycle's, so neither run resets or raises the other's back-off, and a failed scheduled
-run leaves the partition in request distribution.
+restart would be forgotten otherwise. Scheduled runs count their failures apart from the
+lifecycle's, so neither run resets or raises the other's back-off, and a failed scheduled run leaves
+the partition in request distribution.
 
 After each lifecycle and scheduled run, lease requests that are waiting for items are tried again,
 so items the run just enqueued or gave back reach those consumers without waiting for the next

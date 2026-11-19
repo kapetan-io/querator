@@ -20,11 +20,10 @@ items that require action. In the second phase it writes those actions to the pa
 items bound for a dead letter to the QueuesManager.
 
 The life cycle must not hold the request loop for longer than one bounded storage call. Each life
-cycle run reads one page of one partition (at most 1,000 items, fewer on PostgreSQL and MongoDB when
-`scan-batch-size` is smaller) and acts on what that page found. The Logical Queue remembers a pivot,
-the last item the page read, and the next run continues after it. Between pages the request loop
-handles any produce, lease, complete or retry requests that are waiting. A full pass over a
-partition is therefore many short runs, not one long one.
+cycle run reads one page of one partition and acts on what that page found. The Logical Queue
+remembers a pivot, the last item the page read, and the next run continues after it. Between pages
+the request loop handles any produce, lease, complete or retry requests that are waiting. A full
+pass over a partition is therefore many short runs, not one long one.
 
 Because the life cycle runs on the request loop, the Logical Queue remains the only reader and
 writer of its partitions, and a partition store does not have to be safe for concurrent use.
@@ -60,11 +59,10 @@ the source partition only after that produce is confirmed.
     - If the queue has no dead letter, log the expired item and delete it.
 -  Find any items scheduled for enqueue and distribute them to the current Logical queue
 
-If moving an item to the dead letter or writing an action fails, the life cycle runs again for
-that partition with back-off (750ms rising to 5s, then every 5s until it succeeds). The partition
-is not marked faulty and stays in the request distribution, since the fault may lie with the dead
-letter queue. A read that fails also backs off, and the partition leaves the request distribution
-until a read succeeds.
+If moving an item to the dead letter or writing an action fails, the life cycle runs again for that
+partition with back-off. The partition is not marked faulty and stays in the request distribution,
+since the fault may lie with the dead letter queue. A read that fails also backs off, and the
+partition leaves the request distribution until a read succeeds.
 
 ### Reading a partition
 Each partition has its own life cycle timing, so a degraded partition backs off without delaying
@@ -91,10 +89,10 @@ with an index on `lease_deadline` and `expire_deadline`, may return only those. 
 that cannot must still examine no more than one page per call.
 
 We considered running the life cycle read in a separate Go routine per partition so that it never
-waits on the request loop, and built it that way first. It required every data store to be safe
-for a reader concurrent with the request loop's writes, and it needed a hand-off between the life
-cycle and the Logical Queue for every write and every change in partition health. Once a read is
-one page, it is no larger than a lease, and the separate Go routine buys nothing.
+waits on the request loop. It required every data store to be safe for a reader concurrent with the
+request loop's writes, and it needed a hand-off between the life cycle and the Logical Queue for
+every write and every change in partition health. Once a read is one page, it is no larger than a
+lease, and the separate Go routine buys nothing.
 
 ### Avoid Head of line blocking
 When an item exceeds its `leased_deadline`, the naive solution might be to simply reset the
@@ -161,4 +159,4 @@ is preserved while not blocking other items in the queue waiting to be processed
 I consider the Order of Operation problem distinct from the FIFO (First In, First Out) problem. At first glance,
 it might seem that a FIFO solution addresses this issue, but due to the impossibility of achieving Exactly
 One Delivery (EOD), any FIFO system will eventually violate the Order of Operation. Therefore, Querator is
-not currently designed to solve the Order of Operation problem.
+not designed to solve the Order of Operation problem.

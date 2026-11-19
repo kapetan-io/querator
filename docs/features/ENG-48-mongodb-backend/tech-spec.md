@@ -28,7 +28,7 @@ type MongoConfig struct {
     Database string
     // MaxPoolSize caps the driver connection pool per client. 0 = driver default.
     MaxPoolSize uint64
-    // ScanBatchSize caps the page size for ScanForActions/ScanForScheduled, which is never more than 1000. Default 1000.
+    // ScanBatchSize is the page size for ScanForActions/ScanForScheduled. Default 1000.
     ScanBatchSize int
     // Log defaults to slog.Default().
     Log *slog.Logger
@@ -166,8 +166,9 @@ The backend therefore stores item timestamps as **int64 microseconds-since-epoch
 | `TakeAction` (lease expired) | insert new tail doc → delete old |
 | `TakeAction` (expired/delete) | `deleteOne` |
 | `TakeAction` (scheduled ready) | `updateOne` `$unset enqueue_at` |
-| `ScanForActions/Scheduled` | one page per call: `find` sort `_id`, key-set on `_id` after the pass's pivot; READ-ONLY (lifecycle, on the request loop) |
+| `ScanForActions/Scheduled` | paginated `find` sort `_id`, key-set on `_id`; READ-ONLY (lifecycle goroutine) |
 | `Stats` | aggregation `$group` with `$sum`/`$cond` |
+| `LifeCycleInfo` | aggregation: min `lease_deadline` where leased, min `expire_deadline` where active |
 | `List/ListScheduled` | `find` filtered, sort `_id`, key-set pagination on `_id` |
 | `Clear` | `Drop()` collection (destructive whole-queue) + reset once-guard; else `deleteMany` |
 
@@ -209,7 +210,7 @@ There is no general Mongo-error→store-error table; only the two cases above ar
 
 ## Observability
 
-Reuse the optional `OnQueryComplete(operation, duration, err)` hook pattern from `PostgresConfig` if carried over. `Stats` already exposes partition-level counts via the existing `types.PartitionStats` surface — no new observability API is required because the functional suite asserts behavior through these existing surfaces.
+Reuse the optional `OnQueryComplete(operation, duration, err)` hook pattern from `PostgresConfig` if carried over. `Stats` and `LifeCycleInfo` already expose partition-level counts via the existing `types.PartitionStats`/`types.LifeCycleInfo` surfaces — no new observability API is required because the functional suite asserts behavior through these existing surfaces.
 
 ## Performance and Scale
 

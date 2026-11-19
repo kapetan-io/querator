@@ -34,11 +34,13 @@ func TestBadgerLease(t *testing.T) {
 func testBadgerLease(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	defer goleak.VerifyNone(t, goleakOptions...)
 
-	t.Run("FailedLeaseReturnsNoItems", func(t *testing.T) {
+	t.Run("LeaseTooBigForOneTransaction", func(t *testing.T) {
 		const (
 			numRequests = 10
 			numPerReq   = 100
+			numItems    = numRequests * numPerReq
 			payloadSize = 20_000
+			maxAttempts = 20
 		)
 		var queueName = random.String("queue-", 10)
 		d := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: setup()})
@@ -56,12 +58,15 @@ func testBadgerLease(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		})
 
 		// 1,000 items of 20KB each is about 20MB, more than BadgerDB writes in one
-		// transaction, so leasing all of them in one batch fails part way through.
+		// transaction, so one lease of all of them can save only part of them.
 		payload := []byte(strings.Repeat("x", payloadSize))
-		for range numRequests {
+		var want []string
+		for r := range numRequests {
 			items := make([]*pb.QueueProduceItem, 0, numPerReq)
-			for range numPerReq {
-				items = append(items, &pb.QueueProduceItem{Bytes: payload})
+			for i := range numPerReq {
+				ref := fmt.Sprintf("R%03d", r*numPerReq+i)
+				want = append(want, ref)
+				items = append(items, &pb.QueueProduceItem{Reference: ref, Bytes: payload})
 			}
 			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
 				QueueName:      queueName,
@@ -70,25 +75,35 @@ func testBadgerLease(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			}))
 		}
 
-		// The consumer gets nothing and waits until its request times out
-		var lease pb.QueueLeaseResponse
-		err := c.QueueLease(ctx, &pb.QueueLeaseRequest{
-			ClientId:       random.String("client-", 10),
-			RequestTimeout: "100ms",
-			QueueName:      queueName,
-			BatchSize:      numRequests * numPerReq,
-		}, &lease)
-		require.Error(t, err)
-		var e duh.Error
-		require.True(t, errors.As(err, &e))
-		assert.Equal(t, querator.MsgRequestTimeout, e.Message())
+		// Each lease gets the items that fit in one transaction, and the next lease starts
+		// at the first item not saved, so every item arrives once, in order.
+		var got []string
+		var leases int
+		for range maxAttempts {
+			var lease pb.QueueLeaseResponse
+			require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+				ClientId:       random.String("client-", 10),
+				RequestTimeout: "5s",
+				QueueName:      queueName,
+				BatchSize:      numItems,
+			}, &lease))
+			leases++
+			for _, item := range lease.Items {
+				got = append(got, item.Reference)
+			}
+			if len(got) >= numItems {
+				break
+			}
+		}
+		assert.Greater(t, leases, 1)
+		assert.Equal(t, want, got)
 
 		var list pb.StorageItemsListResponse
 		require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list,
-			&querator.ListOptions{Limit: numRequests * numPerReq}))
-		require.Len(t, list.Items, numRequests*numPerReq)
+			&querator.ListOptions{Limit: numItems}))
+		require.Len(t, list.Items, numItems)
 		for _, item := range list.Items {
-			assert.False(t, item.IsLeased)
+			assert.True(t, item.IsLeased)
 		}
 	})
 

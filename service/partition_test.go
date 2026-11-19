@@ -686,3 +686,88 @@ func partitionsPerBackend(t *testing.T, ctx context.Context, c *querator.Client,
 	}
 	return counts
 }
+
+func TestPartitionAffinity(t *testing.T) {
+	defer goleak.VerifyNone(t, goleakOptions...)
+	conf := setupMemoryStorage(store.Config{})
+	conf.PartitionStorage = []store.PartitionStorage{
+		{
+			PartitionStore: store.NewMemoryPartitionStore(conf, log),
+			Name:           "memory-0",
+			Affinity:       1,
+		},
+		{
+			PartitionStore: store.NewMemoryPartitionStore(conf, log),
+			Name:           "memory-1",
+			Affinity:       1,
+		},
+	}
+
+	d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+	defer d.Shutdown(t)
+	c, ctx := d.MustClient(), d.Context()
+
+	t.Run("ProduceLeaseCompleteAcrossBackends", func(t *testing.T) {
+		var queueName = random.String("queue-", 10)
+		ClientID := random.String("client-", 10)
+
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			QueueName:           queueName,
+			Reference:           "CreateTestRef",
+			LeaseTimeout:        "1m",
+			ExpireTimeout:       "10m",
+			MaxAttempts:         10,
+			RequestedPartitions: 4,
+		})
+
+		require.Equal(t, map[string]int{"memory-0": 2, "memory-1": 2}, partitionsPerBackend(t, ctx, c, queueName))
+
+		// Each produce request lands in a single partition (ADR-0019), so produce
+		// one request per partition to ensure both backends receive items.
+		for range 4 {
+			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+				Items:          produceRandomItems(3),
+				QueueName:      queueName,
+				RequestTimeout: "1m",
+			}))
+		}
+
+		for partition := range 4 {
+			var list pb.StorageItemsListResponse
+			require.NoError(t, c.StorageItemsList(ctx, queueName, partition, &list, nil))
+			assert.NotEmpty(t, list.Items)
+		}
+
+		var done int
+		for attempt := 0; done < 12 && attempt < 10; attempt++ {
+			var lease pb.QueueLeaseResponse
+			require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+				QueueName:      queueName,
+				ClientId:       ClientID,
+				RequestTimeout: "5s",
+				BatchSize:      12,
+			}, &lease))
+
+			var ids []string
+			for _, item := range lease.Items {
+				ids = append(ids, item.Id)
+			}
+
+			require.NoError(t, c.QueueComplete(ctx, &pb.QueueCompleteRequest{
+				QueueName:      queueName,
+				RequestTimeout: "5s",
+				Partition:      lease.Partition,
+				Ids:            ids,
+			}))
+
+			done += len(lease.Items)
+		}
+		assert.Equal(t, 12, done)
+
+		for partition := range 4 {
+			var list pb.StorageItemsListResponse
+			require.NoError(t, c.StorageItemsList(ctx, queueName, partition, &list, nil))
+			assert.Empty(t, list.Items)
+		}
+	})
+}

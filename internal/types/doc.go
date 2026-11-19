@@ -28,7 +28,9 @@ limitations under the License.
 // ProduceBatch.Reset keeps the requests that were not yet assigned a partition, so they
 // wait for the next pass of the request loop instead of being dropped. Code that drops lease requests
 // while iterating a LeaseBatch calls MarkNil and then FilterNils after the loop; marking
-// in place is cheaper and safer than removing entries mid-iteration.
+// in place is cheaper and safer than removing entries mid-iteration. LeaseBatch.Unassign
+// takes particular items back off their requests when a backend could not save their
+// leases, so a consumer receives only items storage shows as leased.
 //
 // # Partition state
 //

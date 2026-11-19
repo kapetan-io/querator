@@ -281,6 +281,7 @@ func (l *Logical) applyToPartitions(state *QueueState) {
 					"partition", p.Info.PartitionNum,
 					"error", err)
 			}
+			p.SettleLeases()
 			p.State.MostRecentDeadline = leaseDeadline
 
 			if leaseDeadline.Before(p.Lifecycle.NextLifecycleRun) {

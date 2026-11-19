@@ -80,6 +80,11 @@ produce request is meant to go to the healthy partition with the fewest unleased
 request to the healthy partition with the most. A failed partition takes no new produce or lease
 requests, and when every partition has failed a produce request waits unassigned.
 
+A lease request moves its partition's in-memory un-leased and leased counts by an estimate when it
+is assigned, so later requests in the same pass spread by load. Once storage answers, the part of
+the estimate storage did not lease is given back. Otherwise a failed lease write moves the counts
+for items nobody leased, and a lease request that keeps waiting moves them again on later passes.
+
 Produce assignment assumes the list of partitions is sorted with failed partitions last, and checks
 only the first. A partition that fails while it is first stays first until an assigned lease or a
 queue load re-sorts the list, and until then produce requests wait unassigned although another

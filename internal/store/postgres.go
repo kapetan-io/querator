@@ -787,6 +787,7 @@ func (p *PostgresPartition) Lease(ctx context.Context, batch types.LeaseBatch, o
 
 	batchIter := batch.Iterator()
 	pgxBatch := &pgx.Batch{}
+	var placed []*types.Item
 
 	for _, item := range items {
 		item.LeaseDeadline = opts.LeaseDeadline
@@ -799,6 +800,7 @@ func (p *PostgresPartition) Lease(ctx context.Context, batch types.LeaseBatch, o
 		if !batchIter.Next(itemPtr) {
 			break
 		}
+		placed = append(placed, itemPtr)
 
 		pgxBatch.Queue(`
 			UPDATE `+p.tableName()+`
@@ -812,10 +814,15 @@ func (p *PostgresPartition) Lease(ctx context.Context, batch types.LeaseBatch, o
 	}
 
 	if err := tx.SendBatch(ctx, pgxBatch).Close(); err != nil {
+		batch.Unassign(placed)
 		return errors.Errorf("update leased item: %w", err)
 	}
 
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		batch.Unassign(placed)
+		return errors.Errorf("commit leased items: %w", err)
+	}
+	return nil
 }
 
 func (p *PostgresPartition) Complete(ctx context.Context, batch types.CompleteBatch) error {

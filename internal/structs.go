@@ -31,6 +31,7 @@ type Partition struct {
 	State             types.PartitionState
 	Lifecycle         PartitionLifecycleState
 	Info              types.PartitionInfo
+	estimatedLeases   int
 }
 
 func (p *Partition) Reset() {
@@ -39,6 +40,7 @@ func (p *Partition) Reset() {
 	p.CompleteRequests.Reset()
 	p.RetryRequests.Reset()
 	p.LifeCycleRequests.Reset()
+	p.estimatedLeases = 0
 }
 
 func (p *Partition) Produce(req *types.ProduceRequest) {
@@ -51,8 +53,23 @@ func (p *Partition) Lease(req *types.LeaseRequest) {
 	lease := min(p.State.UnLeased, req.NumRequested)
 	p.State.NumLeased += lease
 	p.State.UnLeased -= lease
+	p.estimatedLeases += lease
 	req.Partition = p.Info.PartitionNum
 	p.LeaseRequests.Add(req)
+}
+
+func (p *Partition) SettleLeases() {
+	var leased int
+	for _, req := range p.LeaseRequests.Requests {
+		if req != nil {
+			leased += len(req.Items)
+		}
+	}
+	if unsaved := p.estimatedLeases - leased; unsaved > 0 {
+		p.State.NumLeased -= unsaved
+		p.State.UnLeased += unsaved
+	}
+	p.estimatedLeases = 0
 }
 
 type Request struct {

@@ -92,6 +92,12 @@ from storage. A failed produce in the same pass takes all its items out of the u
 even those the lease estimate already counted as leased. The estimate gives those back when
 storage answers the lease, so the produce must not give them back as well.
 
+An unassigned client produce is dropped before a partition takes it once its request timeout has
+passed, answered with a retry error, or once its client has gone, so a running queue does not
+write items for a client that stopped waiting ([ADR-0009](adr/0009-client-timeouts.md)). A paused
+queue is the exception described under Pause. A dead-letter hand-off has no request timeout and its
+deadline is zero, so the deadline check must skip it or it would expire at once.
+
 Produce assignment assumes the list of partitions is sorted with failed partitions last, and checks
 only the first. A partition that fails while it is first stays first until an assigned lease or a
 queue load re-sorts the list, and until then produce requests wait unassigned although another

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"iter"
 	"strings"
 
 	"io"
@@ -271,16 +272,17 @@ func newDaemon(t *testing.T, duration clock.Duration, conf svc.Config) *testDaem
 // ---------------------------------------------------------------------
 
 type badgerTestSetup struct {
-	Dir string
+	Dir  string
+	data string
 }
 
 func (b *badgerTestSetup) Setup(bc store.BadgerConfig) store.Config {
 	if !dirExists(b.Dir) {
 		tigerassert.NoError(os.Mkdir(b.Dir, 0777), "failed to create badger test directory")
 	}
-	b.Dir = filepath.Join(b.Dir, random.String("test-data-", 10))
-	tigerassert.NoError(os.Mkdir(b.Dir, 0777), "failed to create badger test data directory")
-	bc.StorageDir = b.Dir
+	b.data = filepath.Join(b.Dir, random.String("test-data-", 10))
+	tigerassert.NoError(os.Mkdir(b.data, 0777), "failed to create badger test data directory")
+	bc.StorageDir = b.data
 	bc.Log = log
 
 	var conf store.Config
@@ -301,7 +303,7 @@ func (b *badgerTestSetup) Setup(bc store.BadgerConfig) store.Config {
 }
 
 func (b *badgerTestSetup) Teardown() {
-	tigerassert.NoError(os.RemoveAll(b.Dir), "failed to remove badger test data directory")
+	tigerassert.NoError(os.RemoveAll(b.data), "failed to remove badger test data directory")
 }
 
 // ---------------------------------------------------------------------
@@ -888,10 +890,13 @@ var (
 
 // partitionFault makes partition storage refuse produce or lease writes on demand. While
 // failingProduce or failingLease is set, every partition that Wrap's config hands out fails
-// that call without writing anything. Every other call reaches the real backend.
+// that call without writing anything. While scanFailing holds a queue name, that queue's
+// partitions fail the lifecycle scan, so each lifecycle run marks them failed. Every other call
+// reaches the real backend.
 type partitionFault struct {
 	failingProduce atomic.Bool
 	failingLease   atomic.Bool
+	scanFailing    atomic.Pointer[string]
 }
 
 func (f *partitionFault) Wrap(conf store.Config) store.Config {
@@ -930,4 +935,15 @@ func (f faultyPartition) Lease(ctx context.Context, batch types.LeaseBatch, opts
 		return errLeaseWriteFailed
 	}
 	return f.Partition.Lease(ctx, batch, opts)
+}
+
+var errScanFailed = errors.New("injected lifecycle scan failure")
+
+func (f faultyPartition) ScanForActions(ctx context.Context, now clock.Time) iter.Seq2[types.Action, error] {
+	if queue := f.fault.scanFailing.Load(); queue != nil && *queue == f.Info().Queue.Name {
+		return func(yield func(types.Action, error) bool) {
+			yield(types.Action{}, errScanFailed)
+		}
+	}
+	return f.Partition.ScanForActions(ctx, now)
 }

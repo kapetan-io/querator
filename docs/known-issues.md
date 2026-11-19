@@ -171,9 +171,14 @@ turn, one partition after another.
 * Time spent waiting on a slow partition is not checked against the waiting clients' request
   deadlines before they are answered.
 * `QueuesManager` keeps routing clients to a Logical Queue whose partitions have all failed.
-* When every partition has failed, a produce request stays in the Logical Queue unassigned. It is
-  tried again only when another produce, lease, complete or retry request arrives, and it is not
-  answered when its request timeout passes.
+* When every partition has failed, a produce request stays in the Logical Queue unassigned. A
+  partition that recovers does not retry it. It is tried again only when another produce, lease,
+  complete or retry request arrives. A produce still unassigned at its request timeout gets a retry
+  error and its items are not written.
+* A produce whose request timeout passes while its write is under way can still be stored. The
+  timeout is checked only while a produce waits unassigned, and a client that stops waiting on its
+  own clock never learns the write landed. Produce has no idempotency ID, so a client that retries
+  then stores the same items twice.
 * Partition health is a failure count. [ADR-0023](adr/0023-partition-maintenance.md) describes a
   partition status that distribution should check instead.
 

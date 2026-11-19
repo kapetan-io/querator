@@ -57,8 +57,9 @@ every item for lease and expiry work. Both scans stop at the first error they yi
   scheduled item on a non-destructive `Queue` clear, and empty the whole partition, scheduled
   items included, when `Queue` and `Destructive` are both set.
 - `Produce` and `Add` skip an item whose `SourceID` matches one already in the partition. Removing
-  an item by `Complete`, `Delete` or `Clear` frees its `SourceID` again. On InMemory and Badger, a
-  lifecycle delete through `TakeAction` does not (ENG-777).
+  an item by `Complete`, `Delete`, `Clear` or a lifecycle delete through `TakeAction` frees its
+  `SourceID` again. InMemory and Badger read the `SourceID` to free from the stored item and from
+  the `Action`'s item respectively.
 - `LifeCycleInfo` leaves `NextLeaseExpiry` or `NextExpireDeadline` zero when there is none.
 - `PlacePartitions` returns no partitions when every backend's affinity is 0 or less. Its callers
   check `CanPlacePartitions` first, so a queue that requests partitions always gets them. The
@@ -80,6 +81,11 @@ write, a scan and a move for no benefit. `Retry` uses the same 100ms rule for `R
 `is_leased` flag, never by comparing the deadline against a sentinel. `theFuture` in `store.go`
 marks "nothing found yet" when InMemory and Badger compute `LifeCycleInfo`, and no backend writes
 it.
+
+**A deadline equal to now is due.** `ScanForActions` yields a lease or expire action when the
+deadline is at or before the time it is given, never only after it. `runLifecycle` treats a
+deadline from `LifeCycleInfo` at or before now as work left undone, so a deadline equal to now that
+the scan skipped would cost a back-off before the item is acted on.
 
 **The lifecycle scan removes a leased item at `MaxAttempts`.** `ScanForActions` yields
 `ActionItemMaxAttempts` for a leased item whose lease has not expired but whose `Attempts` reached

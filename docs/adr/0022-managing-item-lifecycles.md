@@ -40,7 +40,7 @@ NOTE: The life cycle go routine will only READ from the partition directly. Any 
 preformed will be delegated to the logical queue or queues manager.
 
 #### Life Cycle Responsibilities 
-- Find all the lease items in the partition which have exceeded their `lease_deadline` and 
+- Find all the lease items in the partition whose `lease_deadline` is at or before now and
   increment `attempts` then reset the item to un-leased state and clear the deadline.
 - If any items have exceeded their `max_attempts`
     - If the queue has a dead letter, then send the item to the dead letter if possible
@@ -55,6 +55,11 @@ preformed will be delegated to the logical queue or queues manager.
           the attempts)
     - If the queue has no dead letter, log the expired item and delete it.
 -  Find any items scheduled for enqueue and distribute them to the current Logical queue
+
+If moving an item to the dead letter or writing an action fails, or a deadline is still at or
+before now after the life cycle has run, the life cycle runs again for that partition with
+back-off (750ms rising to 5s, then every 5s until it succeeds). The partition is not marked
+faulty and stays in the request distribution, since the fault may lie with the dead letter queue.
 
 ### Life Cycle per partition
 Each partition is assigned a dedicated Go routine to manage its item life cycle. This routine periodically

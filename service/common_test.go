@@ -808,3 +808,66 @@ func createQueueAndWait(t *testing.T, ctx context.Context, c *querator.Client, i
 	})
 	require.NoError(t, err)
 }
+
+func leaseOne(t *testing.T, ctx context.Context, c *querator.Client, queueName string) *pb.QueueLeaseItem {
+	t.Helper()
+	var lease pb.QueueLeaseResponse
+	require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+		ClientId:       random.String("client-", 10),
+		RequestTimeout: "3s",
+		QueueName:      queueName,
+		BatchSize:      1,
+	}, &lease))
+	require.Len(t, lease.Items, 1)
+	return lease.Items[0]
+}
+
+func isLeased(t *testing.T, ctx context.Context, c *querator.Client, queueName, ref string) bool {
+	t.Helper()
+	var resp pb.StorageItemsListResponse
+	require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &resp, nil))
+	item := findInStorageList(ref, &resp)
+	require.NotNil(t, item)
+	return item.IsLeased
+}
+
+// isUnLeased reports whether the item is in the queue and not leased. It takes no t and returns
+// false on any error so it can be polled from require.Eventually.
+func isUnLeased(ctx context.Context, c *querator.Client, queueName, ref string) bool {
+	var resp pb.StorageItemsListResponse
+	if err := c.StorageItemsList(ctx, queueName, 0, &resp, nil); err != nil {
+		return false
+	}
+	item := findInStorageList(ref, &resp)
+	return item != nil && !item.IsLeased
+}
+
+// nextLifecycleRun returns how long until the lifecycle next runs on the queue's only partition.
+func nextLifecycleRun(t *testing.T, ctx context.Context, c *querator.Client, queueName string) clock.Duration {
+	t.Helper()
+	var stats pb.QueueStatsResponse
+	require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats))
+	require.Len(t, stats.LogicalQueues, 1)
+	require.Len(t, stats.LogicalQueues[0].Partitions, 1)
+	next, err := clock.ParseDuration(stats.LogicalQueues[0].Partitions[0].NextLifecycleRun)
+	require.NoError(t, err)
+	return next
+}
+
+// waitForLifecycleRun waits until the next lifecycle run of the queue's only partition is in
+// the future again, which happens only after a due run has finished and rescheduled itself.
+// Call it right after advancing a frozen clock past the next run; otherwise it returns at once.
+func waitForLifecycleRun(t *testing.T, ctx context.Context, c *querator.Client, queueName string) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		var stats pb.QueueStatsResponse
+		if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats); err != nil {
+			return false
+		}
+		if len(stats.LogicalQueues) != 1 || len(stats.LogicalQueues[0].Partitions) != 1 {
+			return false
+		}
+		next, err := clock.ParseDuration(stats.LogicalQueues[0].Partitions[0].NextLifecycleRun)
+		return err == nil && next > 0
+	}, 5*clock.Second, 20*clock.Millisecond)
+}

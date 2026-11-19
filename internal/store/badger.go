@@ -750,7 +750,7 @@ func (b *BadgerPartition) ScanForActions(_ context.Context, now clock.Time) iter
 				}
 
 				if item.IsLeased {
-					if now.After(item.LeaseDeadline) {
+					if !item.LeaseDeadline.After(now) {
 						if !yield(types.Action{
 							Action:       types.ActionLeaseExpired,
 							PartitionNum: b.info.PartitionNum,
@@ -773,7 +773,7 @@ func (b *BadgerPartition) ScanForActions(_ context.Context, now clock.Time) iter
 						continue
 					}
 				}
-				if now.After(item.ExpireDeadline) {
+				if !item.ExpireDeadline.After(now) {
 					if !yield(types.Action{
 						Action:       types.ActionItemExpired,
 						PartitionNum: b.info.PartitionNum,
@@ -849,6 +849,11 @@ func (b *BadgerPartition) TakeAction(_ context.Context, batch types.LifeCycleBat
 					}
 
 				case types.ActionDeleteItem:
+					if a.Item.SourceID != nil {
+						if err := txn.Delete([]byte("source:" + string(a.Item.SourceID))); err != nil {
+							return err
+						}
+					}
 					if err := txn.Delete(a.Item.ID); err != nil {
 						return err
 					}

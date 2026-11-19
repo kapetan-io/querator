@@ -119,6 +119,23 @@ of these is earlier than the partition's next run, the next run moves forward an
 reset, so expiry is noticed on time without scanning storage on every pass. `runLifecycle` and
 `runScheduled` run on the `requestLoop` goroutine, not a goroutine of their own.
 
+A lifecycle run that leaves due work undone runs again with back-off. That covers a dead-letter move
+or a `TakeAction` that failed, and a deadline from `LifeCycleInfo` still at or before now after the
+run, which is how an item stuck in a failed move stops hiding later deadlines. The next run is the
+earlier of the next future deadline and the back-off (`lifecycleBackOff`, 750ms rising to 5s), and a
+move that keeps failing tries again every 5s forever. The back-off is measured from the end of the
+run, because a dead-letter move can block for `WriteTimeout`.
+
+* `PartitionLifecycleState.UnfinishedRuns` counts those runs and resets on a run that leaves
+  nothing due. It stops counting once the back-off reaches its maximum, since `IntervalBackOff.Next`
+  overflows its conversion to a `Duration` after enough attempts.
+* `PartitionLifecycleState.Failures` is different. It counts failed scans and `LifeCycleInfo` reads,
+  is copied to `State.Failures`, and takes the partition out of request distribution until
+  `recoverPartition` succeeds. An unfinished run leaves `State.Failures` alone, because the fault may
+  lie with the dead-letter queue and the partition can still serve requests.
+* Each retry against a dead-letter queue that hangs blocks the source queue's loop for up to
+  `WriteTimeout`, once per back-off interval, for as long as it hangs.
+
 ## Dead-letter moves
 
 Items reach a dead-letter queue when they expire or reach `MaxAttempts`.
@@ -132,17 +149,18 @@ Items reach a dead-letter queue when they expire or reach `MaxAttempts`.
   (delete-after-confirm), so an item is never lost between the two queues.
 * When the dead-letter queue's `requestCh` is full, `ProduceDeadLetter` returns at once with an
   overloaded error instead of waiting. A saturated dead-letter queue never stalls the source queue's
-  loop. The source item stays where it is and a later lifecycle run finds it again. When no other
-  deadline on the partition brings that run forward, the retry can wait indefinitely (ENG-779).
+  loop. The source item stays where it is and the lifecycle runs again with back-off.
 * `ProduceDeadLetter` stops waiting when its context ends, and the lifecycle bounds that context
   with `WriteTimeout`, so a stalled dead-letter queue cannot block the source loop indefinitely.
 * Before the move, each item's `SourceID` is set to its original ID, its `ID` is cleared so the
-  dead-letter queue's storage assigns a new one, and its lease state and attempts are reset. The
-  original IDs are collected before `ID` is cleared, because deleting the items from the source
-  partition after the move needs them.
-* If deleting the source items fails after a confirmed move, `LifeCycle` logs the error and returns
-  success. The items are already in the dead-letter queue. A later lifecycle run finds the source
-  items again and the dead-letter queue drops the duplicate by `SourceID`.
+  dead-letter queue's storage assigns a new one, and its lease state and attempts are reset. These
+  changes are made to copies, so the request's `Actions` keep the original IDs that the delete from
+  the source partition needs.
+* The source items are deleted through `TakeAction` with `ActionDeleteItem`, not `Complete`.
+  `Complete` refuses an item that is not leased, and an item can expire without ever being leased.
+* If deleting the source items fails after a confirmed move, `LifeCycle` returns the error, so the
+  lifecycle runs again with back-off. The items are already in the dead-letter queue. The next run
+  finds the source items again and the dead-letter queue drops the duplicate by `SourceID`.
 
 `validateDeadQueue` checks the name's format before it looks the queue up, because the lookup
 (`QueuesManager.get`) loads the queue from storage and can start a Logical Queue for it. Besides the

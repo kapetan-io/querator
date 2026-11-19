@@ -1263,7 +1263,7 @@ func (p *MongoPartition) ScanForActions(ctx context.Context, now clock.Time) ite
 				item := docs[i].toItem()
 				lastID = string(item.ID)
 
-				if item.IsLeased && now.After(item.LeaseDeadline) {
+				if item.IsLeased && !item.LeaseDeadline.After(now) {
 					if !yield(types.Action{
 						Action:       types.ActionLeaseExpired,
 						PartitionNum: p.info.PartitionNum,
@@ -1287,7 +1287,7 @@ func (p *MongoPartition) ScanForActions(ctx context.Context, now clock.Time) ite
 					continue
 				}
 
-				if now.After(item.ExpireDeadline) {
+				if !item.ExpireDeadline.After(now) {
 					if !yield(types.Action{
 						Action:       types.ActionItemExpired,
 						PartitionNum: p.info.PartitionNum,

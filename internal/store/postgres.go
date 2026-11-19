@@ -1565,7 +1565,7 @@ func (p *PostgresPartition) ScanForActions(ctx context.Context, now clock.Time) 
 			}
 
 			for _, item := range items {
-				if item.IsLeased && now.After(item.LeaseDeadline) {
+				if item.IsLeased && !item.LeaseDeadline.After(now) {
 					if !yield(types.Action{
 						Action:       types.ActionLeaseExpired,
 						PartitionNum: p.info.PartitionNum,
@@ -1593,7 +1593,7 @@ func (p *PostgresPartition) ScanForActions(ctx context.Context, now clock.Time) 
 					continue
 				}
 
-				if now.After(item.ExpireDeadline) {
+				if !item.ExpireDeadline.After(now) {
 					if !yield(types.Action{
 						Action:       types.ActionItemExpired,
 						PartitionNum: p.info.PartitionNum,

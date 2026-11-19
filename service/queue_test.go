@@ -3167,6 +3167,292 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 	})
 
+	t.Run("LifecycleMissedWork", func(t *testing.T) {
+		t.Run("LeaseExpiredAtExactDeadlineIsRequeued", func(t *testing.T) {
+			now := clock.NewProvider()
+			now.Freeze(clock.Now())
+			defer now.UnFreeze()
+
+			d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup(), Clock: now})
+			defer func() {
+				d.Shutdown(t)
+				tearDown()
+			}()
+			c, ctx := d.MustClient(), d.Context()
+
+			queueName := random.String("queue-", 10)
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				QueueName:           queueName,
+				LeaseTimeout:        "1m0s",
+				ExpireTimeout:       ExpireTimeout,
+				RequestedPartitions: 1,
+			})
+			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+				QueueName:      queueName,
+				RequestTimeout: "5s",
+				Items:          []*pb.QueueProduceItem{{Reference: "boundary", Bytes: []byte("x")}},
+			}))
+			require.Equal(t, "boundary", leaseOne(t, ctx, c, queueName).Reference)
+
+			// The clock lands exactly on the lease deadline and stays there.
+			now.Advance(clock.Minute)
+			require.Eventually(t, func() bool {
+				return isUnLeased(ctx, c, queueName, "boundary")
+			}, 5*clock.Second, 20*clock.Millisecond)
+			assert.Equal(t, "boundary", leaseOne(t, ctx, c, queueName).Reference)
+		})
+
+		t.Run("StuckDeadLetterMoveDoesNotDelayLaterLeaseExpiry", func(t *testing.T) {
+			now := clock.NewProvider()
+			now.Freeze(clock.Now())
+			defer now.UnFreeze()
+
+			d := newDaemon(t, 20*clock.Second, svc.Config{
+				StorageConfig: setup(),
+				Clock:         now,
+				WriteTimeout:  200 * clock.Millisecond,
+			})
+			defer func() {
+				d.Shutdown(t)
+				tearDown()
+			}()
+			c, ctx := d.MustClient(), d.Context()
+
+			queueName := random.String("queue-", 10)
+			dlqName := random.String("dlq-", 10)
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				QueueName:           dlqName,
+				LeaseTimeout:        "1m0s",
+				ExpireTimeout:       ExpireTimeout,
+				RequestedPartitions: 1,
+			})
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				QueueName:           queueName,
+				LeaseTimeout:        "1m0s",
+				ExpireTimeout:       ExpireTimeout,
+				MaxAttempts:         2,
+				DeadQueue:           dlqName,
+				RequestedPartitions: 1,
+			})
+
+			// A's second lease reaches MaxAttempts=2. B is leased 30s later, so B's lease
+			// deadline is 30s after A's.
+			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+				QueueName:      queueName,
+				RequestTimeout: "5s",
+				Items:          []*pb.QueueProduceItem{{Reference: "A", Bytes: []byte("a")}},
+			}))
+			require.Equal(t, "A", leaseOne(t, ctx, c, queueName).Reference)
+			now.Advance(clock.Minute + clock.Second)
+			require.Eventually(t, func() bool {
+				return isUnLeased(ctx, c, queueName, "A")
+			}, 5*clock.Second, 20*clock.Millisecond)
+
+			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+				QueueName:      queueName,
+				RequestTimeout: "5s",
+				Items:          []*pb.QueueProduceItem{{Reference: "B", Bytes: []byte("b")}},
+			}))
+			require.Equal(t, "A", leaseOne(t, ctx, c, queueName).Reference)
+			now.Advance(30 * clock.Second)
+			require.Equal(t, "B", leaseOne(t, ctx, c, queueName).Reference)
+
+			// The produce to a paused dead letter queue blocks past WriteTimeout, so moving A
+			// fails and A stays in the source queue with its lease deadline in the past.
+			require.NoError(t, d.Service().PauseQueue(ctx, dlqName))
+			defer func() { require.NoError(t, d.Service().ResumeQueue(ctx, dlqName)) }()
+			now.Advance(31 * clock.Second)
+			waitForLifecycleRun(t, ctx, c, queueName)
+			assert.True(t, isLeased(t, ctx, c, queueName, "A"))
+
+			// Past B's deadline, B must be requeued even though A is still stuck.
+			now.Advance(clock.Minute)
+			assert.Eventually(t, func() bool {
+				return isUnLeased(ctx, c, queueName, "B")
+			}, 5*clock.Second, 20*clock.Millisecond)
+		})
+
+		t.Run("FailedDeadLetterMoveIsRetried", func(t *testing.T) {
+			now := clock.NewProvider()
+			now.Freeze(clock.Now())
+			defer now.UnFreeze()
+
+			d := newDaemon(t, 20*clock.Second, svc.Config{
+				StorageConfig: setup(),
+				Clock:         now,
+				WriteTimeout:  200 * clock.Millisecond,
+			})
+			defer func() {
+				d.Shutdown(t)
+				tearDown()
+			}()
+			c, ctx := d.MustClient(), d.Context()
+
+			queueName := random.String("queue-", 10)
+			dlqName := random.String("dlq-", 10)
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				QueueName:           dlqName,
+				LeaseTimeout:        "1m0s",
+				ExpireTimeout:       ExpireTimeout,
+				RequestedPartitions: 1,
+			})
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				QueueName:           queueName,
+				LeaseTimeout:        "1m0s",
+				ExpireTimeout:       ExpireTimeout,
+				MaxAttempts:         1,
+				DeadQueue:           dlqName,
+				RequestedPartitions: 1,
+			})
+			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+				QueueName:      queueName,
+				RequestTimeout: "5s",
+				Items:          []*pb.QueueProduceItem{{Reference: "dead", Bytes: []byte("x")}},
+			}))
+			require.Equal(t, "dead", leaseOne(t, ctx, c, queueName).Reference)
+
+			// The produce to a paused dead letter queue blocks past WriteTimeout, so the move fails.
+			require.NoError(t, d.Service().PauseQueue(ctx, dlqName))
+			now.Advance(2 * clock.Minute)
+			waitForLifecycleRun(t, ctx, c, queueName)
+			assert.True(t, isLeased(t, ctx, c, queueName, "dead"))
+
+			// Unlike DeadLetterQueue/.../RetainsItemOnFailedMove, this checks when the retry runs:
+			// within lifecycleBackOff.Max (5s), not at the item's ExpireDeadline, and not at once.
+			next := nextLifecycleRun(t, ctx, c, queueName)
+			assert.Greater(t, next, clock.Duration(0))
+			assert.LessOrEqual(t, next, 5*clock.Second)
+
+			// Resuming lets the blocked produce land in the dead letter queue. The source item is
+			// deleted only by a later lifecycle run, whose second produce the dead letter queue
+			// drops because the SourceID matches, so it holds exactly one copy.
+			require.NoError(t, d.Service().ResumeQueue(ctx, dlqName))
+			now.Advance(5 * clock.Second)
+			require.Eventually(t, func() bool {
+				var resp pb.StorageItemsListResponse
+				if err := c.StorageItemsList(ctx, queueName, 0, &resp, nil); err != nil {
+					return false
+				}
+				return len(resp.Items) == 0
+			}, 5*clock.Second, 20*clock.Millisecond)
+
+			var resp pb.StorageItemsListResponse
+			require.NoError(t, c.StorageItemsList(ctx, dlqName, 0, &resp, nil))
+			require.Len(t, resp.Items, 1)
+			assert.Equal(t, "dead", resp.Items[0].Reference)
+		})
+
+		t.Run("ExpiredUnLeasedItemLeavesSourceQueue", func(t *testing.T) {
+			now := clock.NewProvider()
+			now.Freeze(clock.Now())
+			defer now.UnFreeze()
+
+			d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup(), Clock: now})
+			defer func() {
+				d.Shutdown(t)
+				tearDown()
+			}()
+			c, ctx := d.MustClient(), d.Context()
+
+			queueName := random.String("queue-", 10)
+			dlqName := random.String("dlq-", 10)
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				QueueName:           dlqName,
+				LeaseTimeout:        "1m0s",
+				ExpireTimeout:       ExpireTimeout,
+				RequestedPartitions: 1,
+			})
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				QueueName:           queueName,
+				LeaseTimeout:        "1m0s",
+				ExpireTimeout:       "1m0s",
+				DeadQueue:           dlqName,
+				RequestedPartitions: 1,
+			})
+			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+				QueueName:      queueName,
+				RequestTimeout: "5s",
+				Items:          []*pb.QueueProduceItem{{Reference: "expired", Bytes: []byte("x")}},
+			}))
+
+			// The item expires without ever being leased, so the move must delete an un-leased item.
+			now.Advance(2 * clock.Minute)
+			require.Eventually(t, func() bool {
+				var resp pb.StorageItemsListResponse
+				if err := c.StorageItemsList(ctx, queueName, 0, &resp, nil); err != nil {
+					return false
+				}
+				return len(resp.Items) == 0
+			}, 5*clock.Second, 20*clock.Millisecond)
+
+			var resp pb.StorageItemsListResponse
+			require.NoError(t, c.StorageItemsList(ctx, dlqName, 0, &resp, nil))
+			require.Len(t, resp.Items, 1)
+			assert.Equal(t, "expired", resp.Items[0].Reference)
+		})
+
+		t.Run("StuckDeadLetterMoveBacksOff", func(t *testing.T) {
+			now := clock.NewProvider()
+			now.Freeze(clock.Now())
+			defer now.UnFreeze()
+
+			d := newDaemon(t, 20*clock.Second, svc.Config{
+				StorageConfig: setup(),
+				Clock:         now,
+				WriteTimeout:  200 * clock.Millisecond,
+			})
+			defer func() {
+				d.Shutdown(t)
+				tearDown()
+			}()
+			c, ctx := d.MustClient(), d.Context()
+
+			queueName := random.String("queue-", 10)
+			dlqName := random.String("dlq-", 10)
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				QueueName:           dlqName,
+				LeaseTimeout:        "1m0s",
+				ExpireTimeout:       ExpireTimeout,
+				RequestedPartitions: 1,
+			})
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				QueueName:           queueName,
+				LeaseTimeout:        "1m0s",
+				ExpireTimeout:       ExpireTimeout,
+				MaxAttempts:         1,
+				DeadQueue:           dlqName,
+				RequestedPartitions: 1,
+			})
+			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+				QueueName:      queueName,
+				RequestTimeout: "5s",
+				Items:          []*pb.QueueProduceItem{{Reference: "dead", Bytes: []byte("x")}},
+			}))
+			require.Equal(t, "dead", leaseOne(t, ctx, c, queueName).Reference)
+
+			// The dead letter queue stays paused, so every lifecycle run fails the move again.
+			require.NoError(t, d.Service().PauseQueue(ctx, dlqName))
+			defer func() { require.NoError(t, d.Service().ResumeQueue(ctx, dlqName)) }()
+			now.Advance(2 * clock.Minute)
+			waitForLifecycleRun(t, ctx, c, queueName)
+			first := nextLifecycleRun(t, ctx, c, queueName)
+
+			now.Advance(first)
+			waitForLifecycleRun(t, ctx, c, queueName)
+			second := nextLifecycleRun(t, ctx, c, queueName)
+
+			now.Advance(second)
+			waitForLifecycleRun(t, ctx, c, queueName)
+			third := nextLifecycleRun(t, ctx, c, queueName)
+
+			// Each failed run waits longer than the one before, up to the back-off's 5s maximum.
+			assert.Greater(t, second, first)
+			assert.Greater(t, third, second)
+			assert.LessOrEqual(t, third, 5*clock.Second)
+			assert.True(t, isLeased(t, ctx, c, queueName, "dead"))
+		})
+	})
+
 	t.Run("SourceID", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
 		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})

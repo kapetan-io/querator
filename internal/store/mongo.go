@@ -1414,6 +1414,19 @@ func (p *MongoPartition) LifeCycleInfo(ctx context.Context, info *types.LifeCycl
 		return errors.Errorf("query lifecycle expire info: %w", err)
 	}
 
+	var enqueueDoc struct {
+		EnqueueAt int64 `bson:"enqueue_at"`
+	}
+	err = coll.FindOne(ctx, bson.M{"enqueue_at": bson.M{"$exists": true}},
+		options.FindOne().
+			SetSort(bson.D{{Key: "enqueue_at", Value: 1}}).
+			SetProjection(bson.M{"enqueue_at": 1})).Decode(&enqueueDoc)
+	if err == nil {
+		info.NextEnqueueAt = fromMicros(enqueueDoc.EnqueueAt)
+	} else if !errors.Is(err, mongo.ErrNoDocuments) {
+		return errors.Errorf("query lifecycle scheduled info: %w", err)
+	}
+
 	return nil
 }
 

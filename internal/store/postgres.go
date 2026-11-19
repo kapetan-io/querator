@@ -1743,11 +1743,12 @@ func (p *PostgresPartition) LifeCycleInfo(ctx context.Context, info *types.LifeC
 	query := `
 		SELECT
 			COALESCE(MIN(lease_deadline) FILTER (WHERE is_leased = true), '9999-12-31 23:59:59.999999+00'::timestamptz),
-			COALESCE(MIN(expire_deadline) FILTER (WHERE enqueue_at IS NULL OR enqueue_at <= NOW()), '9999-12-31 23:59:59.999999+00'::timestamptz)
+			COALESCE(MIN(expire_deadline) FILTER (WHERE enqueue_at IS NULL OR enqueue_at <= NOW()), '9999-12-31 23:59:59.999999+00'::timestamptz),
+			COALESCE(MIN(enqueue_at), '9999-12-31 23:59:59.999999+00'::timestamptz)
 		FROM ` + p.tableName()
 
-	var nextLeaseExpiry, nextExpireDeadline time.Time
-	err = pool.QueryRow(ctx, query).Scan(&nextLeaseExpiry, &nextExpireDeadline)
+	var nextLeaseExpiry, nextExpireDeadline, nextEnqueueAt time.Time
+	err = pool.QueryRow(ctx, query).Scan(&nextLeaseExpiry, &nextExpireDeadline, &nextEnqueueAt)
 	if err != nil {
 		return errors.Errorf("query lifecycle info: %w", err)
 	}
@@ -1759,6 +1760,10 @@ func (p *PostgresPartition) LifeCycleInfo(ctx context.Context, info *types.LifeC
 
 	if nextExpireDeadline.Before(sentinel) {
 		info.NextExpireDeadline = nextExpireDeadline
+	}
+
+	if nextEnqueueAt.Before(sentinel) {
+		info.NextEnqueueAt = nextEnqueueAt
 	}
 
 	return nil

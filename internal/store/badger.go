@@ -695,7 +695,7 @@ func (b *BadgerPartition) ScanForScheduled(_ context.Context, now clock.Time) it
 					continue
 				}
 
-				if now.After(item.EnqueueAt) {
+				if !item.EnqueueAt.After(now) {
 					if !yield(types.Action{
 						Action:       types.ActionQueueScheduledItem,
 						PartitionNum: b.info.PartitionNum,
@@ -921,6 +921,7 @@ func (b *BadgerPartition) LifeCycleInfo(_ context.Context, info *types.LifeCycle
 	return db.View(func(txn *badger.Txn) error {
 		nextLease := theFuture
 		nextExpire := theFuture
+		nextEnqueue := theFuture
 
 		iter := txn.NewIterator(badger.DefaultIteratorOptions)
 		defer iter.Close()
@@ -944,6 +945,9 @@ func (b *BadgerPartition) LifeCycleInfo(_ context.Context, info *types.LifeCycle
 			}
 
 			if !item.EnqueueAt.IsZero() {
+				if item.EnqueueAt.Before(nextEnqueue) {
+					nextEnqueue = item.EnqueueAt
+				}
 				continue
 			}
 
@@ -962,6 +966,10 @@ func (b *BadgerPartition) LifeCycleInfo(_ context.Context, info *types.LifeCycle
 
 		if nextExpire != theFuture {
 			info.NextExpireDeadline = nextExpire
+		}
+
+		if nextEnqueue != theFuture {
+			info.NextEnqueueAt = nextEnqueue
 		}
 		return nil
 	})

@@ -372,7 +372,7 @@ func (m *MemoryPartition) ScanForScheduled(_ context.Context, now clock.Time) it
 				continue
 			}
 
-			if now.After(item.EnqueueAt) {
+			if !item.EnqueueAt.After(now) {
 				if !yield(types.Action{
 					Action:       types.ActionQueueScheduledItem,
 					PartitionNum: m.info.PartitionNum,
@@ -508,9 +508,13 @@ func (m *MemoryPartition) LifeCycleInfo(ctx context.Context, info *types.LifeCyc
 	m.mu.RLock()
 	nextLease := theFuture
 	nextExpire := theFuture
+	nextEnqueue := theFuture
 
 	for _, item := range m.mem {
 		if !item.EnqueueAt.IsZero() {
+			if item.EnqueueAt.Before(nextEnqueue) {
+				nextEnqueue = item.EnqueueAt
+			}
 			continue
 		}
 
@@ -529,6 +533,10 @@ func (m *MemoryPartition) LifeCycleInfo(ctx context.Context, info *types.LifeCyc
 
 	if nextExpire != theFuture {
 		info.NextExpireDeadline = nextExpire
+	}
+
+	if nextEnqueue != theFuture {
+		info.NextEnqueueAt = nextEnqueue
 	}
 	return nil
 }

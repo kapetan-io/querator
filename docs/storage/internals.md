@@ -43,6 +43,7 @@ is only for a storage failure.
 scheduled item into the queue, separate from `ScanForActions`. Scheduled items run on their own
 timer and their own times, and a separate scan lets the logical queue check them without walking
 every item for lease and expiry work. Both scans stop at the first error they yield.
+`ScanForScheduled` treats an item as due when its `EnqueueAt` is at or before `now`.
 
 **The methods a name does not explain:**
 
@@ -61,6 +62,10 @@ every item for lease and expiry work. Both scans stop at the first error they yi
   `SourceID` again. InMemory and Badger read the `SourceID` to free from the stored item and from
   the `Action`'s item respectively.
 - `LifeCycleInfo` leaves `NextLeaseExpiry` or `NextExpireDeadline` zero when there is none.
+  `NextEnqueueAt` is the earliest `EnqueueAt` of every scheduled item still in the partition,
+  including items already due, or zero when none remain. An item enqueued by
+  `ActionQueueScheduledItem` must stop counting as scheduled. Otherwise the logical queue sees a
+  due item that was never enqueued and retries the scheduled run with back-off.
 - `PlacePartitions` returns no partitions when every backend's affinity is 0 or less. Its callers
   check `CanPlacePartitions` first, so a queue that requests partitions always gets them. The
   `QueuesManager` refuses to create a queue, and the daemon refuses a configured queue with no

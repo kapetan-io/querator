@@ -14,10 +14,11 @@ const (
 )
 
 type PartitionLifecycleState struct {
-	NextLifecycleRun clock.Time
-	NextScheduledRun clock.Time
-	Failures         int
-	UnfinishedRuns   int
+	NextLifecycleRun  clock.Time
+	NextScheduledRun  clock.Time
+	Failures          int
+	UnfinishedRuns    int
+	ScheduledFailures int
 }
 
 type Partition struct {

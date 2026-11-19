@@ -172,9 +172,10 @@ turn, one partition after another.
   deadlines before they are answered.
 * `QueuesManager` keeps routing clients to a Logical Queue whose partitions have all failed.
 * When every partition has failed, a produce request stays in the Logical Queue unassigned. A
-  partition that recovers retries it only when a lease request is also waiting. Otherwise it is
-  tried again only when another produce, lease, complete or retry request arrives. A produce still
-  unassigned at its request timeout gets a retry error and its items are not written.
+  lifecycle run that recovers a partition retries it only when a lease request is also waiting.
+  Otherwise it is tried again only when another produce, lease, complete or retry request arrives.
+  A produce still unassigned at its request timeout gets a retry error and its items are not
+  written.
 * A produce whose request timeout passes while its write is under way can still be stored. The
   timeout is checked only while a produce waits unassigned, and a client that stops waiting on its
   own clock never learns the write landed. Produce has no idempotency ID, so a client that retries

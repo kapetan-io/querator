@@ -1,6 +1,40 @@
 # Querator Domain Context
 
-Querator is a lease-based FIFO queue system providing Almost Exactly Once Delivery (AEOD). This context defines the domain language used throughout the codebase, API, and documentation.
+> **No implementation detail in this file.** This page holds only what the code cannot say: purpose,
+> domain terms, why a choice was made, the rules that must stay true, and traps a reader would not
+> see from one function. If reading the code would tell you this, it does not belong here. Step-by-step flows,
+> lists of functions, fields or methods, timings, constants and per-backend mechanics stay in the
+> code. A reason with no place on this page goes in an ADR under `docs/adr/` or in the package
+> comment (`doc.go`).
+
+This page states what Querator is for and defines the domain language used throughout the codebase,
+API, and documentation. A term is defined by what it means to a user of Querator, not by how the
+code builds it.
+
+## Purpose
+
+Querator is a lease-based FIFO queue system providing Almost Exactly Once Delivery (AEOD), for
+developers building event-driven, resilient, distributed applications. When a consumer takes an
+item it gets a lease, an exclusive claim on that item. Completing the item removes it. If the
+consumer crashes, the lease runs out and another consumer gets the item. An item may be processed
+twice after a failure, but a crash never loses it. An item that expires or runs out of attempts goes
+to the dead letter queue, or is deleted when the queue has none. Querator coordinates producers and consumers
+itself, and keeps its queues in any database that can keep rows in primary key order.
+
+## Use cases
+
+- **Work queue with proof of processing.** A consumer holds an item until it has finished the work,
+  then completes it, so the producer knows the item was delivered and processed.
+- **Saga pattern.** Coordinate the steps of a distributed transaction through leased items.
+- **Ordered delivery.** A queue with one partition delivers items in strict first-in-first-out
+  order. More partitions trade that order for throughput.
+- **Limited lockable resources.** Items in a queue stand for a limited set of resources, and a lease
+  is the lock on one of them.
+- **Scheduled delivery.** An item, or a retry, stays hidden until a chosen time.
+- **Isolating bad items.** A failed item goes to the back of the queue, and one that keeps failing
+  moves to a dead letter queue, so a poison item cannot block the items behind it.
+- **Many teams on one deployment.** Namespaces and roles keep each team's or tenant's queues apart.
+- **Library or service.** Embed Querator in a Go program, or run it as a server speaking HTTP.
 
 ## Language
 
@@ -27,17 +61,17 @@ The act of releasing a lease and returning an item to the queue for reprocessing
 _Avoid_: Nack, reject, requeue
 
 **Dead Letter**:
-A destination queue for items that have exceeded their maximum retry attempts or dead deadline.
+A destination queue for items that reached their maximum attempts or expired.
 _Avoid_: DLQ (in prose), poison queue
 
 ### Architecture
 
 **Partition**:
-A single storage-backed segment of a queue. Each partition maps to one table/collection/bucket in the backing store.
+A single storage-backed segment of a queue, kept in one storage backend. Items in one partition are delivered in order.
 _Avoid_: Shard, segment, bucket (when referring to the logical concept)
 
 **Logical Queue**:
-A single-threaded synchronization point that manages a subset of partitions and their assigned consumers. Multiple logical queues can compose a single queue for horizontal scaling.
+A single-threaded synchronization point that manages a subset of partitions and their assigned consumers. Each queue has one logical queue today. The design lets several compose a single queue for horizontal scaling (ADR 0016).
 _Avoid_: Worker, coordinator, handler
 
 **Queue**:
@@ -53,7 +87,7 @@ The top-level coordinator that manages the lifecycle of all queues, their logica
 _Avoid_: Orchestrator, registry
 
 **Lifecycle**:
-A per-partition goroutine that scans for items needing action (expired leases, exceeded attempts, scheduled enqueue times) and delegates writes to the logical queue.
+The work a queue does on its own as time passes: it returns items whose lease expired to the queue, moves items that expired or reached their maximum attempts to the dead letter queue (or deletes them when the queue has none), and enqueues scheduled items when their time arrives. The logical queue that owns a partition runs that partition's lifecycle.
 _Avoid_: GC, janitor, sweeper
 
 ### Time Semantics
@@ -73,11 +107,11 @@ _Avoid_: Delay, defer, schedule (as nouns)
 ### Auth & Multi-Tenancy
 
 **API Key**:
-The sole credential type, formatted as `qtr-[tag]-[entropy]`. Stored as SHA-256 hashes; raw value returned only at creation.
+The sole credential type. Its raw value is shown only once, when the key is created.
 _Avoid_: Token, secret, password
 
 **Role**:
-A named collection of permissions (e.g., `NamespaceOwner`, `QueueProducer`). Standard roles are code-defined and synced at startup.
+A named collection of permissions (e.g., `NamespaceOwner`, `QueueProducer`). Querator ships a set of standard roles.
 _Avoid_: Policy, group
 
 **Role Binding**:
@@ -105,7 +139,7 @@ _Avoid_: Consumer ID, subscriber ID
 ### Storage
 
 **Storage Backend**:
-A pluggable implementation of the storage interface (InMemory, BadgerDB, PostgreSQL). Each partition is backed by exactly one backend instance.
+A database Querator can keep partitions in (InMemory, BadgerDB, PostgreSQL, MongoDB). Each partition is kept in exactly one backend.
 _Avoid_: Driver, adapter, plugin
 
 ## Relationships
@@ -116,7 +150,7 @@ _Avoid_: Driver, adapter, plugin
 - A **Partition** is backed by exactly one **Storage Backend**
 - An **Item** lives in exactly one **Partition** for its entire lifecycle
 - A **Lease** grants one consumer exclusive access to one **Item** until its **Deadline**
-- A **Lifecycle** goroutine monitors exactly one **Partition**
+- The **Logical Queue** runs the **Lifecycle** of each **Partition** it manages
 - A **User** authenticates via one or more **API Keys**
 - A **Role Binding** associates one **User** with one **Role** in one **Namespace**
 - The **_system Namespace** cascades permissions to all other **Namespaces**
@@ -124,13 +158,13 @@ _Avoid_: Driver, adapter, plugin
 ## Example Dialogue
 
 > **Dev:** "When a **Producer** calls produce with an **EnqueueAt** in the future, does the **Item** go into the **Partition** immediately?"
-> **Domain expert:** "Yes — the **Item** is written to the **Partition's** scheduled storage immediately. But it won't appear in the main queue until the **Lifecycle** detects that its **EnqueueAt** has arrived and moves it."
+> **Domain expert:** "Yes — the **Item** is stored in the **Partition** immediately, but no consumer can **Lease** it until the **Lifecycle** enqueues it once its **EnqueueAt** has arrived."
 
 > **Dev:** "If a **Lease** expires, does the **Item** stay at its original position in the queue?"
-> **Domain expert:** "No — to avoid head-of-line blocking, the **Lifecycle** assigns a new ID and places expired-lease **Items** at the *tail* of the FIFO in that **Partition**. This ensures items already waiting in the queue take precedence over expired items."
+> **Domain expert:** "No — to avoid head-of-line blocking, the **Lifecycle** puts an **Item** whose **Lease** expired at the *tail* of its **Partition**. Items already waiting in the queue go first."
 
 > **Dev:** "Can a scoped **API Key** access queues in a different **Namespace** if the **User** has a **Role Binding** there?"
-> **Domain expert:** "Never. A scoped key's namespace acts as a hard boolean filter — it's mathematically impossible regardless of the user's permissions elsewhere."
+> **Domain expert:** "No. A scoped key reaches only its own **Namespace**, whatever the user's permissions elsewhere. The one exception is the **_system Namespace**, where it has only the permissions the user holds through **_system** role bindings."
 
 ## Flagged Ambiguities
 

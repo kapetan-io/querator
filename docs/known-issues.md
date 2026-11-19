@@ -170,3 +170,19 @@ turn, one partition after another.
 wait or fail instead, and a slow partition raises latency for the whole queue.
 
 **Workaround**: None. Clients retry on the retry error or after their request timeout.
+
+## Storage Backends Disagree on Scheduled Items
+
+**Severity**: Low  
+**Component**: `internal/store`
+
+The backends treat scheduled items differently in `Clear` and `Stats`, so a test that compares
+backends will see different results.
+
+* With the `Queue` flag set, PostgreSQL and MongoDB `Clear` also removes scheduled items whose
+  `EnqueueAt` has passed. InMemory and Badger keep every scheduled item on a non-destructive clear,
+  and empty the whole partition, scheduled items included, when `Queue` and `Destructive` are both
+  set.
+* PostgreSQL and MongoDB `Stats` count a scheduled item whose `EnqueueAt` has passed as active, and
+  so in `Total`, as well as in `Scheduled`, even before the lifecycle moves it into the queue.
+  InMemory and Badger count it as scheduled until it moves.

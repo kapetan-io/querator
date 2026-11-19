@@ -114,6 +114,10 @@ the tests are all nested under a single test function.
 - You MUST use `github.com/stretchr/testify/assert` and `github.com/stretchr/testify/require` instead of `if` for assertions
 - All tests MUST be in the `XXXX_test` package and NOT in the same package which is under test
 
+### Documentation
+- `docs/CONTEXT.md`, `docs/queue-core.md` and `docs/storage/internals.md` hold no implementation detail: only purpose, domain terms, reasons, rules that must stay true and traps. If reading the code would tell you something, it does not belong there.
+- Tiger (the static checker, `GOTOOLCHAIN=go1.26.10 tiger check ./...`) allows no comments below the `package` line, so a reason that has no place in those pages goes in an ADR under `docs/adr/` or in the package comment (`doc.go`).
+
 ### Naming Conventions
 - Follow `docs/NAMING.md` guidelines
 - Use `const` for unchanging values

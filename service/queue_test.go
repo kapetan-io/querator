@@ -2450,6 +2450,56 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				assert.Len(t, list.Items, 2)
 			})
 
+			t.Run("FirstPartitionFailed", func(t *testing.T) {
+				now := clock.NewProvider()
+				now.Freeze(clock.Now())
+				defer now.UnFreeze()
+
+				var fault partitionFault
+				d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: fault.Wrap(storage), Clock: now})
+				defer d.Shutdown(t)
+				c, ctx := d.MustClient(), d.Context()
+
+				queueName := random.String("queue-", 10)
+				createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+					LeaseTimeout:        LeaseTimeout,
+					ExpireTimeout:       ExpireTimeout,
+					QueueName:           queueName,
+					RequestedPartitions: 2,
+				})
+
+				// Both partitions are empty, so partition 0 has the fewest unleased items and sorts first.
+				fault.scanFailingOnly.Store(1)
+				fault.scanFailing.Store(&queueName)
+				now.Advance(clock.Millisecond)
+				var stats pb.QueueStatsResponse
+				require.Eventually(t, func() bool {
+					if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats); err != nil {
+						return false
+					}
+					for _, p := range stats.LogicalQueues[0].Partitions {
+						if p.Partition == 0 {
+							return p.Failures != 0
+						}
+					}
+					return false
+				}, 5*clock.Second, 20*clock.Millisecond)
+
+				produceCtx, cancel := context.WithTimeout(ctx, 3*clock.Second)
+				defer cancel()
+				require.NoError(t, c.QueueProduce(produceCtx, &pb.QueueProduceRequest{
+					QueueName:      queueName,
+					RequestTimeout: "5s",
+					Items:          produceRandomItems(2),
+				}))
+
+				var list pb.StorageItemsListResponse
+				require.NoError(t, c.StorageItemsList(ctx, queueName, 1, &list, nil))
+				assert.Len(t, list.Items, 2)
+				require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, nil))
+				assert.Empty(t, list.Items)
+			})
+
 			t.Run("ClientGoneWhilePartitionFailed", func(t *testing.T) {
 				now := clock.NewProvider()
 				now.Freeze(clock.Now())

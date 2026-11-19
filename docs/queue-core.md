@@ -104,10 +104,10 @@ described under Pause.
 A dead-letter hand-off has no request timeout and its deadline is zero, so the deadline check must
 skip it or it would expire at once.
 
-Produce assignment assumes the list of partitions is sorted with failed partitions last, and checks
-only the first. A partition that fails while it is first stays first until an assigned lease or a
-queue load re-sorts the list, and until then produce requests wait unassigned although another
-partition is healthy (ENG-818).
+A partition's failure count changes outside produce and lease assignment, so the list is re-sorted
+at the start of every produce assignment. Failed partitions then sort last, and a produce goes to
+the healthy partition with the fewest unleased items even when the partition that failed was first.
+Only when every partition has failed do produce requests wait unassigned.
 
 Complete and retry requests name the partition the lease came from, so they cannot be moved to
 another one. When that partition is missing or failing, the client gets a retry error.

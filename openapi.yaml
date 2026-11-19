@@ -1315,9 +1315,7 @@ components:
         requested_partitions:
           type: integer
           description: >-
-            The number of partitions this queue has requested. This might be
-            different than the number of currently active partitions as the
-            system grows or contracts the number of partitions.
+            The number of partitions this queue has requested.
             `/queues.create` rejects a value greater than 1024 with HTTP 400.
             Queues stored with more partitions keep working, so responses can
             report a larger value. `/queues.update` does not add or remove

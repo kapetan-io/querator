@@ -68,27 +68,25 @@ func testShutdown(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	t.Run("ConcurrentFirstListThenShutdown", func(t *testing.T) {
 		const numLists = 20
 		storage := setup()
-		d := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: storage})
 		defer tearDown()
+		d := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: storage})
+		defer d.Shutdown(t)
 		c, ctx := d.MustClient(), d.Context()
 
 		var wg sync.WaitGroup
-		errs := make(chan error, numLists)
-		for range numLists {
+		errs := make([]error, numLists)
+		for i := range numLists {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
 				var list pb.QueuesListResponse
-				errs <- c.QueuesList(ctx, &list, &querator.ListOptions{Limit: 10})
+				errs[i] = c.QueuesList(ctx, &list, &querator.ListOptions{Limit: 10})
 			}()
 		}
 		wg.Wait()
-		close(errs)
-		for err := range errs {
-			require.NoError(t, err)
+		for i := range errs {
+			require.NoError(t, errs[i])
 		}
-
-		d.Shutdown(t)
 	})
 
 	t.Run("ProduceThenShutdown", func(t *testing.T) {

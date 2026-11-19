@@ -152,9 +152,7 @@ func (c *PostgresConfig) Ping(ctx context.Context) error {
 
 type PostgresQueues struct {
 	QueuesValidation
-	conf       PostgresConfig
-	tableMu    sync.Mutex
-	tableReady bool
+	conf PostgresConfig
 }
 
 var _ Queues = &PostgresQueues{}
@@ -169,13 +167,11 @@ func (p *PostgresQueues) Config() PostgresConfig {
 	return p.conf
 }
 
-func (p *PostgresQueues) ensureTable(_ context.Context, pool *pgxpool.Pool) error {
-	p.tableMu.Lock()
-	defer p.tableMu.Unlock()
-	if p.tableReady {
-		return nil
-	}
+func isCreateTableRace(code string) bool {
+	return code == "23505" || code == "42P07" || code == "42710"
+}
 
+func (p *PostgresQueues) ensureTable(_ context.Context, pool *pgxpool.Pool) error {
 	bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -195,10 +191,13 @@ func (p *PostgresQueues) ensureTable(_ context.Context, pool *pgxpool.Pool) erro
 		)`
 
 	_, err := pool.Exec(bgCtx, query)
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && isCreateTableRace(pgErr.Code) {
+		_, err = pool.Exec(bgCtx, query)
+	}
 	if err != nil {
 		return errors.Errorf("create queues table: %w", err)
 	}
-	p.tableReady = true
 	return nil
 }
 

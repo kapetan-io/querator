@@ -26,153 +26,155 @@ import (
 func TestPostgresCommit(t *testing.T) {
 	defer goleak.VerifyNone(t, goleakOptions...)
 
-	t.Run("QueueProduce", func(t *testing.T) {
-		var postgres postgresTestSetup
-		defer postgres.Teardown()
-		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: postgres.Setup(store.PostgresConfig{})})
-		defer d.Shutdown(t)
-		c, ctx := d.MustClient(), d.Context()
+	t.Run("Errors", func(t *testing.T) {
+		t.Run("QueueProduce", func(t *testing.T) {
+			var postgres postgresTestSetup
+			defer postgres.Teardown()
+			d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: postgres.Setup(store.PostgresConfig{})})
+			defer d.Shutdown(t)
+			c, ctx := d.MustClient(), d.Context()
 
-		queueName := random.String("queue-", 10)
-		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
-			LeaseTimeout:        LeaseTimeout,
-			ExpireTimeout:       ExpireTimeout,
-			QueueName:           queueName,
-			RequestedPartitions: 1,
+			queueName := random.String("queue-", 10)
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				LeaseTimeout:        LeaseTimeout,
+				ExpireTimeout:       ExpireTimeout,
+				QueueName:           queueName,
+				RequestedPartitions: 1,
+			})
+			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+				QueueName:      queueName,
+				RequestTimeout: "5s",
+				Items:          produceRandomItems(1),
+			}))
+
+			failCommits(t, ctx, postgres.dsn, insertStatement)
+			err := c.QueueProduce(ctx, &pb.QueueProduceRequest{
+				QueueName:      queueName,
+				RequestTimeout: "5s",
+				Items:          produceRandomItems(3),
+			})
+			var e duh.Error
+			require.True(t, errors.As(err, &e))
+			assert.Equal(t, duh.CodeRetryRequest, e.Code())
+			assert.Equal(t, "internal error, try your request again", e.Message())
+
+			var list pb.StorageItemsListResponse
+			require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, nil))
+			assert.Len(t, list.Items, 1)
 		})
-		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
-			QueueName:      queueName,
-			RequestTimeout: "5s",
-			Items:          produceRandomItems(1),
-		}))
 
-		failCommits(t, ctx, postgres.dsn, insertStatement)
-		err := c.QueueProduce(ctx, &pb.QueueProduceRequest{
-			QueueName:      queueName,
-			RequestTimeout: "5s",
-			Items:          produceRandomItems(3),
+		t.Run("QueueProduceConnectionLost", func(t *testing.T) {
+			var postgres postgresTestSetup
+			defer postgres.Teardown()
+			d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: postgres.Setup(store.PostgresConfig{})})
+			defer d.Shutdown(t)
+			c, ctx := d.MustClient(), d.Context()
+
+			queueName := random.String("queue-", 10)
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				LeaseTimeout:        LeaseTimeout,
+				ExpireTimeout:       ExpireTimeout,
+				QueueName:           queueName,
+				RequestedPartitions: 1,
+			})
+			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+				QueueName:      queueName,
+				RequestTimeout: "5s",
+				Items:          produceRandomItems(1),
+			}))
+
+			dropConnectionOnCommit(t, ctx, postgres.dsn, insertStatement)
+			err := c.QueueProduce(ctx, &pb.QueueProduceRequest{
+				QueueName:      queueName,
+				RequestTimeout: "5s",
+				Items:          produceRandomItems(3),
+			})
+			var e duh.Error
+			require.True(t, errors.As(err, &e))
+			assert.Equal(t, duh.CodeRetryRequest, e.Code())
+			assert.Equal(t, "internal error, try your request again", e.Message())
+
+			var list pb.StorageItemsListResponse
+			require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, nil))
+			assert.Len(t, list.Items, 1)
 		})
-		var e duh.Error
-		require.True(t, errors.As(err, &e))
-		assert.Equal(t, duh.CodeRetryRequest, e.Code())
-		assert.Equal(t, "internal error, try your request again", e.Message())
 
-		var list pb.StorageItemsListResponse
-		require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, nil))
-		assert.Len(t, list.Items, 1)
-	})
+		t.Run("StorageItemsImport", func(t *testing.T) {
+			var postgres postgresTestSetup
+			defer postgres.Teardown()
+			d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: postgres.Setup(store.PostgresConfig{})})
+			defer d.Shutdown(t)
+			c, ctx := d.MustClient(), d.Context()
 
-	t.Run("QueueProduceConnectionLost", func(t *testing.T) {
-		var postgres postgresTestSetup
-		defer postgres.Teardown()
-		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: postgres.Setup(store.PostgresConfig{})})
-		defer d.Shutdown(t)
-		c, ctx := d.MustClient(), d.Context()
+			queueName := random.String("queue-", 10)
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				LeaseTimeout:        LeaseTimeout,
+				ExpireTimeout:       ExpireTimeout,
+				QueueName:           queueName,
+				RequestedPartitions: 1,
+			})
+			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+				QueueName:      queueName,
+				RequestTimeout: "5s",
+				Items:          produceRandomItems(1),
+			}))
 
-		queueName := random.String("queue-", 10)
-		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
-			LeaseTimeout:        LeaseTimeout,
-			ExpireTimeout:       ExpireTimeout,
-			QueueName:           queueName,
-			RequestedPartitions: 1,
-		})
-		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
-			QueueName:      queueName,
-			RequestTimeout: "5s",
-			Items:          produceRandomItems(1),
-		}))
-
-		dropConnectionOnCommit(t, ctx, postgres.dsn, insertStatement)
-		err := c.QueueProduce(ctx, &pb.QueueProduceRequest{
-			QueueName:      queueName,
-			RequestTimeout: "5s",
-			Items:          produceRandomItems(3),
-		})
-		var e duh.Error
-		require.True(t, errors.As(err, &e))
-		assert.Equal(t, duh.CodeRetryRequest, e.Code())
-		assert.Equal(t, "internal error, try your request again", e.Message())
-
-		var list pb.StorageItemsListResponse
-		require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, nil))
-		assert.Len(t, list.Items, 1)
-	})
-
-	t.Run("StorageItemsImport", func(t *testing.T) {
-		var postgres postgresTestSetup
-		defer postgres.Teardown()
-		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: postgres.Setup(store.PostgresConfig{})})
-		defer d.Shutdown(t)
-		c, ctx := d.MustClient(), d.Context()
-
-		queueName := random.String("queue-", 10)
-		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
-			LeaseTimeout:        LeaseTimeout,
-			ExpireTimeout:       ExpireTimeout,
-			QueueName:           queueName,
-			RequestedPartitions: 1,
-		})
-		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
-			QueueName:      queueName,
-			RequestTimeout: "5s",
-			Items:          produceRandomItems(1),
-		}))
-
-		failCommits(t, ctx, postgres.dsn, insertStatement)
-		var resp pb.StorageItemsImportResponse
-		err := c.StorageItemsImport(ctx, &pb.StorageItemsImportRequest{
-			QueueName: queueName,
-			Items: []*pb.StorageItem{
-				{
-					ExpireDeadline: timestamppb.New(clock.Now().UTC().Add(clock.Hour)),
-					Reference:      "import",
-					Payload:        []byte("x"),
+			failCommits(t, ctx, postgres.dsn, insertStatement)
+			var resp pb.StorageItemsImportResponse
+			err := c.StorageItemsImport(ctx, &pb.StorageItemsImportRequest{
+				QueueName: queueName,
+				Items: []*pb.StorageItem{
+					{
+						ExpireDeadline: timestamppb.New(clock.Now().UTC().Add(clock.Hour)),
+						Reference:      "import",
+						Payload:        []byte("x"),
+					},
 				},
-			},
-		}, &resp)
-		var e duh.Error
-		require.True(t, errors.As(err, &e))
-		assert.Equal(t, duh.CodeInternalError, e.Code())
+			}, &resp)
+			var e duh.Error
+			require.True(t, errors.As(err, &e))
+			assert.Equal(t, duh.CodeInternalError, e.Code())
 
-		var list pb.StorageItemsListResponse
-		require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, nil))
-		assert.Len(t, list.Items, 1)
-	})
-
-	t.Run("StorageItemsDelete", func(t *testing.T) {
-		var postgres postgresTestSetup
-		defer postgres.Teardown()
-		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: postgres.Setup(store.PostgresConfig{})})
-		defer d.Shutdown(t)
-		c, ctx := d.MustClient(), d.Context()
-
-		queueName := random.String("queue-", 10)
-		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
-			LeaseTimeout:        LeaseTimeout,
-			ExpireTimeout:       ExpireTimeout,
-			QueueName:           queueName,
-			RequestedPartitions: 1,
+			var list pb.StorageItemsListResponse
+			require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, nil))
+			assert.Len(t, list.Items, 1)
 		})
-		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
-			QueueName:      queueName,
-			RequestTimeout: "5s",
-			Items:          produceRandomItems(2),
-		}))
-		var list pb.StorageItemsListResponse
-		require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, nil))
-		require.Len(t, list.Items, 2)
 
-		failCommits(t, ctx, postgres.dsn, deleteStatement)
-		err := c.StorageItemsDelete(ctx, &pb.StorageItemsDeleteRequest{
-			QueueName: queueName,
-			Ids:       querator.CollectIDs(list.Items),
+		t.Run("StorageItemsDelete", func(t *testing.T) {
+			var postgres postgresTestSetup
+			defer postgres.Teardown()
+			d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: postgres.Setup(store.PostgresConfig{})})
+			defer d.Shutdown(t)
+			c, ctx := d.MustClient(), d.Context()
+
+			queueName := random.String("queue-", 10)
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				LeaseTimeout:        LeaseTimeout,
+				ExpireTimeout:       ExpireTimeout,
+				QueueName:           queueName,
+				RequestedPartitions: 1,
+			})
+			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+				QueueName:      queueName,
+				RequestTimeout: "5s",
+				Items:          produceRandomItems(2),
+			}))
+			var list pb.StorageItemsListResponse
+			require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, nil))
+			require.Len(t, list.Items, 2)
+
+			failCommits(t, ctx, postgres.dsn, deleteStatement)
+			err := c.StorageItemsDelete(ctx, &pb.StorageItemsDeleteRequest{
+				QueueName: queueName,
+				Ids:       querator.CollectIDs(list.Items),
+			})
+			var e duh.Error
+			require.True(t, errors.As(err, &e))
+			assert.Equal(t, duh.CodeInternalError, e.Code())
+
+			require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, nil))
+			assert.Len(t, list.Items, 2)
 		})
-		var e duh.Error
-		require.True(t, errors.As(err, &e))
-		assert.Equal(t, duh.CodeInternalError, e.Code())
-
-		require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, nil))
-		assert.Len(t, list.Items, 2)
 	})
 }
 

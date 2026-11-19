@@ -24,10 +24,6 @@ import (
 	"github.com/segmentio/ksuid"
 )
 
-// ---------------------------------------------
-// Global Pool Manager
-// ---------------------------------------------
-
 type postgresPoolManager struct {
 	pool     *pgxpool.Pool
 	refCount atomic.Int32
@@ -103,10 +99,6 @@ func releasePool(connString string) {
 	}
 }
 
-// ---------------------------------------------
-// PostgreSQL Configuration
-// ---------------------------------------------
-
 type PostgresConfig struct {
 	ConnectionString string
 	MaxConns         int32
@@ -126,7 +118,6 @@ func (c *PostgresConfig) getOrCreatePool(_ context.Context) (*pgxpool.Pool, erro
 		c.connString = c.ConnectionString
 	}
 
-	// Only acquire the pool once per config instance
 	if !c.poolAcquired {
 		pool, err := acquirePool(c.ConnectionString, c.MaxConns, c.Log)
 		if err != nil {
@@ -136,7 +127,6 @@ func (c *PostgresConfig) getOrCreatePool(_ context.Context) (*pgxpool.Pool, erro
 		return pool, nil
 	}
 
-	// Return the existing pool without incrementing refCount
 	globalPoolMu.Lock()
 	defer globalPoolMu.Unlock()
 
@@ -163,10 +153,6 @@ func (c *PostgresConfig) Ping(ctx context.Context) error {
 	return pool.Ping(ctx)
 }
 
-// ---------------------------------------------
-// PostgreSQL Queues Implementation
-// ---------------------------------------------
-
 type PostgresQueues struct {
 	QueuesValidation
 	conf PostgresConfig
@@ -185,7 +171,6 @@ func (p *PostgresQueues) Config() PostgresConfig {
 }
 
 func (p *PostgresQueues) ensureTable(_ context.Context, pool *pgxpool.Pool) error {
-	// Use a context with reasonable timeout for table creation
 	bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -470,10 +455,6 @@ func (p *PostgresQueues) Close(ctx context.Context) error {
 	return nil
 }
 
-// ---------------------------------------------
-// PostgreSQL Partition Store Implementation
-// ---------------------------------------------
-
 type PostgresPartitionStore struct {
 	conf PostgresConfig
 }
@@ -497,10 +478,6 @@ func (p *PostgresPartitionStore) Get(info types.PartitionInfo) Partition {
 		info: info,
 	}
 }
-
-// ---------------------------------------------
-// PostgreSQL Partition Implementation
-// ---------------------------------------------
 
 type PostgresPartition struct {
 	info      types.PartitionInfo
@@ -543,8 +520,6 @@ func (p *PostgresPartition) tableName() string {
 
 func (p *PostgresPartition) ensureTable(_ context.Context, pool *pgxpool.Pool) error {
 	p.tableOnce.Do(func() {
-		// Use a separate context with a reasonable timeout for table creation
-		// Don't use the passed context as it might have a short timeout
 		bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		p.tableErr = p.createTableAndIndexes(bgCtx, pool)
@@ -587,7 +562,6 @@ func (p *PostgresPartition) createTableAndIndexes(ctx context.Context, pool *pgx
 		return errors.Errorf("create table: %w", err)
 	}
 
-	// Add partial unique index for source_id
 	sourceIdxName := pgx.Identifier{fmt.Sprintf("idx_%s_%d_src", hash, p.info.PartitionNum)}.Sanitize()
 	_, err = pool.Exec(ctx, fmt.Sprintf(`
 		CREATE UNIQUE INDEX IF NOT EXISTS %s ON %s (source_id) WHERE source_id IS NOT NULL`, sourceIdxName, table))
@@ -634,12 +608,10 @@ func timeToNullable(t time.Time) interface{} {
 	if t.IsZero() {
 		return nil
 	}
-	// Truncate to microseconds to match PostgreSQL TIMESTAMPTZ precision
 	return t.Truncate(time.Microsecond)
 }
 
 func timeToMicroseconds(t time.Time) time.Time {
-	// Truncate to microseconds to match PostgreSQL TIMESTAMPTZ precision
 	return t.Truncate(time.Microsecond)
 }
 
@@ -667,7 +639,6 @@ func (p *PostgresPartition) Produce(ctx context.Context, batch types.ProduceBatc
 				item.EnqueueAt = time.Time{}
 			}
 
-			// Truncate timestamps to microseconds to match PostgreSQL precision
 			item.ExpireDeadline = timeToMicroseconds(item.ExpireDeadline)
 			item.CreatedAt = timeToMicroseconds(item.CreatedAt)
 			if !item.LeaseDeadline.IsZero() {
@@ -1016,7 +987,6 @@ func (p *PostgresPartition) retryItems(ctx context.Context, tx pgx.Tx, req *type
 				return errors.Errorf("during Retry() delete dead: %w", err)
 			}
 		case !retryItem.RetryAt.IsZero() && !retryItem.RetryAt.Before(clock.Now().UTC().Add(time.Millisecond*100)):
-			// Schedule for future retry — position is irrelevant while scheduled
 			_, err = tx.Exec(ctx, `
 			UPDATE `+p.tableName()+`
 			SET is_leased = false,
@@ -1028,7 +998,6 @@ func (p *PostgresPartition) retryItems(ctx context.Context, tx pgx.Tx, req *type
 				return errors.Errorf("during Retry() schedule: %w", err)
 			}
 		default:
-			// Immediate retry (no RetryAt, or RetryAt within 100ms): assign new KSUID and place at tail (ADR 0022)
 			p.uid = p.uid.Next()
 			newID := p.uid.String()
 			_, err = tx.Exec(ctx, `DELETE FROM `+p.tableName()+` WHERE id = $1`, retryItem.ID)
@@ -1231,7 +1200,6 @@ func (p *PostgresPartition) Add(ctx context.Context, items []*types.Item, now cl
 		item.ID = []byte(p.uid.String())
 		item.CreatedAt = now
 
-		// Truncate timestamps to microseconds to match PostgreSQL precision
 		item.ExpireDeadline = timeToMicroseconds(item.ExpireDeadline)
 		item.CreatedAt = timeToMicroseconds(item.CreatedAt)
 		if !item.LeaseDeadline.IsZero() {
@@ -1666,7 +1634,6 @@ func (p *PostgresPartition) TakeAction(ctx context.Context, batch types.LifeCycl
 		for _, action := range batch.Requests[i].Actions {
 			switch action.Action {
 			case types.ActionLeaseExpired:
-				// Check if the item still exists before processing
 				var exists bool
 				err := tx.QueryRow(ctx,
 					`SELECT EXISTS(SELECT 1 FROM `+p.tableName()+` WHERE id = $1)`,
@@ -1684,11 +1651,9 @@ func (p *PostgresPartition) TakeAction(ctx context.Context, batch types.LifeCycl
 					continue
 				}
 
-				// Generate new ID for the requeued item
 				p.uid = p.uid.Next()
 				newID := p.uid.String()
 
-				// Truncate timestamps to microseconds to match PostgreSQL precision
 				createdAt := timeToMicroseconds(action.Item.CreatedAt)
 				expireDeadline := timeToMicroseconds(action.Item.ExpireDeadline)
 				enqueueAt := action.Item.EnqueueAt
@@ -1701,14 +1666,12 @@ func (p *PostgresPartition) TakeAction(ctx context.Context, batch types.LifeCycl
 					sourceID = string(action.Item.SourceID)
 				}
 
-				// Delete the old row
 				_, err = tx.Exec(ctx, `DELETE FROM `+p.tableName()+` WHERE id = $1`, action.Item.ID)
 				if err != nil {
 					p.mu.Unlock()
 					return errors.Errorf("delete expired item: %w", err)
 				}
 
-				// Insert new row with new ID and reset lease fields
 				_, err = tx.Exec(ctx, `
 					INSERT INTO `+p.tableName()+` (
 						id, source_id, is_leased, lease_deadline, enqueue_at,
@@ -1777,7 +1740,6 @@ func (p *PostgresPartition) LifeCycleInfo(ctx context.Context, info *types.LifeC
 		return err
 	}
 
-	// Query for both lease expiry and item expiry
 	query := `
 		SELECT
 			COALESCE(MIN(lease_deadline) FILTER (WHERE is_leased = true), '9999-12-31 23:59:59.999999+00'::timestamptz),

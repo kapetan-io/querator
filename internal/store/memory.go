@@ -21,10 +21,6 @@ import (
 
 var bucketName = []byte("partition")
 
-// ---------------------------------------------
-// Partition Implementation
-// ---------------------------------------------
-
 type MemoryPartition struct {
 	info       types.PartitionInfo
 	conf       Config
@@ -41,10 +37,8 @@ func (m *MemoryPartition) Produce(_ context.Context, batch types.ProduceBatch, n
 
 	for _, r := range batch.Requests {
 		for _, item := range r.Items {
-			// Check for duplicate SourceID
 			if item.SourceID != nil {
 				if _, exists := m.bySourceID[string(item.SourceID)]; exists {
-					// Skip item - duplicate SourceID (idempotent)
 					continue
 				}
 			}
@@ -53,22 +47,12 @@ func (m *MemoryPartition) Produce(_ context.Context, batch types.ProduceBatch, n
 			item.ID = []byte(m.uid.String())
 			item.CreatedAt = now
 
-			// If the EnqueueAt is less than 100 milliseconds from now, we want to enqueue
-			// the item immediately. This avoids unnecessary work for something that will be moved into the
-			// queue less than a few milliseconds from now. Programmers may want to be "complete", so they may
-			// include an EnqueueAt time when producing items, which is set to now or near to now, due to clock
-			// drift between systems. Because of this, Querator may end up doing more work and be less efficient
-			// simply because of programmers who desire to completely fill out the pb.QueueProduceItem{} struct
-			// with every possible field, regardless of whether the field is needed.
-
-			// If EnqueueAt dates are in the past, enqueue the item instead of adding it as a scheduled item.
 			if item.EnqueueAt.Before(now.Add(time.Millisecond * 100)) {
 				item.EnqueueAt = time.Time{}
 			}
 
 			m.mem = append(m.mem, *item)
 
-			// Add to SourceID index if set
 			if item.SourceID != nil {
 				m.bySourceID[string(item.SourceID)] = struct{}{}
 			}
@@ -85,7 +69,6 @@ func (m *MemoryPartition) Lease(_ context.Context, batch types.LeaseBatch, opts 
 	var count int
 
 	for i, item := range m.mem {
-		// If the item is leased, or is a scheduled item
 		if item.IsLeased || !item.EnqueueAt.IsZero() {
 			continue
 		}
@@ -95,14 +78,10 @@ func (m *MemoryPartition) Lease(_ context.Context, batch types.LeaseBatch, opts 
 		item.Attempts++
 		count++
 
-		// Item returned gets the public StorageID
-		itemPtr := new(types.Item) // TODO: Memory Pool
+		itemPtr := new(types.Item)
 		*itemPtr = item
 
-		// Assign the item to the next waiting lease in the batch,
-		// returns false if there are no more leases available to fill
 		if batchIter.Next(itemPtr) {
-			// If assignment was a success, put the updated item into the array
 			m.mem[i] = item
 			continue
 		}
@@ -134,7 +113,6 @@ func (m *MemoryPartition) completeItems(ctx context.Context, req *types.Complete
 			return
 		}
 
-		// This should not happen, but we need to handle it anyway.
 		if !m.mem[idx].EnqueueAt.IsZero() {
 			m.log.LogAttrs(ctx, slog.LevelWarn, "attempted to complete a scheduled item; reported does not exist",
 				slog.String("id", string(m.mem[idx].ID)))
@@ -150,7 +128,6 @@ func (m *MemoryPartition) completeItems(ctx context.Context, req *types.Complete
 		if m.mem[idx].SourceID != nil {
 			delete(m.bySourceID, string(m.mem[idx].SourceID))
 		}
-		// Remove the item from the array
 		m.mem = append(m.mem[:idx], m.mem[idx+1:]...)
 	}
 }
@@ -178,7 +155,6 @@ func (m *MemoryPartition) retryItems(ctx context.Context, req *types.RetryReques
 			return
 		}
 
-		// This should not happen, but we need to handle it anyway.
 		if !m.mem[idx].EnqueueAt.IsZero() {
 			m.log.LogAttrs(ctx, slog.LevelWarn, "attempted to retry a scheduled item; reported does not exist",
 				slog.String("id", string(m.mem[idx].ID)))
@@ -199,10 +175,8 @@ func (m *MemoryPartition) retryItems(ctx context.Context, req *types.RetryReques
 			}
 			m.mem = append(m.mem[:idx], m.mem[idx+1:]...)
 		case !retryItem.RetryAt.IsZero():
-			// If RetryAt is in the past or less than 100ms from now, treat as immediate retry
 			now := clock.Now().UTC()
 			if retryItem.RetryAt.Before(now.Add(time.Millisecond * 100)) {
-				// Immediate retry: assign new KSUID and place at tail (ADR 0022)
 				item := m.mem[idx]
 				item.IsLeased = false
 				item.LeaseDeadline = clock.Time{}
@@ -212,13 +186,11 @@ func (m *MemoryPartition) retryItems(ctx context.Context, req *types.RetryReques
 				m.mem = append(m.mem[:idx], m.mem[idx+1:]...)
 				m.mem = append(m.mem, item)
 			} else {
-				// Schedule for future retry — position is irrelevant while scheduled
 				m.mem[idx].IsLeased = false
 				m.mem[idx].LeaseDeadline = clock.Time{}
 				m.mem[idx].EnqueueAt = retryItem.RetryAt
 			}
 		default:
-			// Immediate retry (no RetryAt): assign new KSUID and place at tail (ADR 0022)
 			item := m.mem[idx]
 			item.IsLeased = false
 			item.LeaseDeadline = clock.Time{}
@@ -254,7 +226,6 @@ func (m *MemoryPartition) List(_ context.Context, items *[]*types.Item, opts typ
 			return nil
 		}
 
-		// Do not report scheduled items in the queued items list
 		if !item.EnqueueAt.IsZero() {
 			continue
 		}
@@ -281,7 +252,6 @@ func (m *MemoryPartition) ListScheduled(_ context.Context, items *[]*types.Item,
 			return nil
 		}
 
-		// Do not report scheduled items in the queued items list
 		if item.EnqueueAt.IsZero() {
 			continue
 		}
@@ -301,10 +271,8 @@ func (m *MemoryPartition) Add(_ context.Context, items []*types.Item, now clock.
 	}
 
 	for _, item := range items {
-		// Check for duplicate SourceID
 		if item.SourceID != nil {
 			if _, exists := m.bySourceID[string(item.SourceID)]; exists {
-				// Skip item - duplicate SourceID (idempotent)
 				continue
 			}
 		}
@@ -315,7 +283,6 @@ func (m *MemoryPartition) Add(_ context.Context, items []*types.Item, now clock.
 
 		m.mem = append(m.mem, *item)
 
-		// Add to SourceID index if set
 		if item.SourceID != nil {
 			m.bySourceID[string(item.SourceID)] = struct{}{}
 		}
@@ -337,12 +304,10 @@ func (m *MemoryPartition) Delete(_ context.Context, ids []types.ItemID) error {
 			continue
 		}
 
-		// Remove from SourceID index if set
 		if m.mem[idx].SourceID != nil {
 			delete(m.bySourceID, string(m.mem[idx].SourceID))
 		}
 
-		// Remove the item from the array
 		m.mem = append(m.mem[:idx], m.mem[idx+1:]...)
 	}
 	return nil
@@ -362,12 +327,10 @@ func (m *MemoryPartition) Clear(_ context.Context, req types.ClearRequest) error
 	for _, item := range m.mem {
 		shouldKeep := true
 
-		// Clear scheduled items
 		if req.Scheduled && !item.EnqueueAt.IsZero() {
 			shouldKeep = false
 		}
 
-		// Clear queue items (those with EnqueueAt zero or in past)
 		if req.Queue && item.EnqueueAt.IsZero() {
 			if req.Destructive || !item.IsLeased {
 				shouldKeep = false
@@ -377,7 +340,6 @@ func (m *MemoryPartition) Clear(_ context.Context, req types.ClearRequest) error
 		if shouldKeep {
 			mem = append(mem, item)
 		} else if item.SourceID != nil {
-			// Remove from SourceID index if set
 			delete(m.bySourceID, string(item.SourceID))
 		}
 	}
@@ -406,13 +368,10 @@ func (m *MemoryPartition) ScanForScheduled(_ context.Context, now clock.Time) it
 
 	return func(yield func(types.Action, error) bool) {
 		for _, item := range memCopy {
-			// Skip non-scheduled items
 			if item.EnqueueAt.IsZero() {
 				continue
 			}
 
-			// NOTE: Different implementations might not include the entire item in the action if
-			// only the id is needed to enqueue the item in place.
 			if now.After(item.EnqueueAt) {
 				if !yield(types.Action{
 					Action:       types.ActionQueueScheduledItem,
@@ -435,11 +394,9 @@ func (m *MemoryPartition) ScanForActions(_ context.Context, now clock.Time) iter
 
 	return func(yield func(types.Action, error) bool) {
 		for _, item := range memCopy {
-			// Skip scheduled items
 			if !item.EnqueueAt.IsZero() {
 				continue
 			}
-			// Is the leased item expired?
 			if item.IsLeased {
 				if now.After(item.LeaseDeadline) {
 					if !yield(types.Action{
@@ -452,10 +409,6 @@ func (m *MemoryPartition) ScanForActions(_ context.Context, now clock.Time) iter
 					}
 					continue
 				}
-				// NOTE: This wll catch any items which may have been left in the data store
-				// due to a failed /queue.retry call. This could happen if there is a dead letter queue
-				// defined and retry inserted the item into the dead letter, but failed to remove it
-				// due to partition error or catastrophic failure of querator before it could be removed.
 				if m.info.Queue.MaxAttempts != 0 && item.Attempts >= m.info.Queue.MaxAttempts {
 					if !yield(types.Action{
 						Action:       types.ActionItemMaxAttempts,
@@ -468,7 +421,6 @@ func (m *MemoryPartition) ScanForActions(_ context.Context, now clock.Time) iter
 					continue
 				}
 			}
-			// Is the item expired?
 			if now.After(item.ExpireDeadline) {
 				if !yield(types.Action{
 					Action:       types.ActionItemExpired,
@@ -504,32 +456,22 @@ func (m *MemoryPartition) TakeAction(_ context.Context, batch types.LifeCycleBat
 						"id", a.Item.ID, "action", types.ActionToString(a.Action))
 					continue
 				}
-				// make a copy of the item and mark as un-leased
 				item := m.mem[idx]
 				item.LeaseDeadline = clock.Time{}
 				item.IsLeased = false
 
-				// Assign a new ID to the item so it sorts after all existing items,
-				// placing it at the tail of the queue to avoid head-of-line blocking.
-				// See docs/adr/0022-managing-item-lifecycles.md for an explanation.
 				m.uid = m.uid.Next()
 				item.ID = []byte(m.uid.String())
 
-				// Remove the item from the array
 				m.mem = append(m.mem[:idx], m.mem[idx+1:]...)
-				// Add the item to the tail of the array
 				m.mem = append(m.mem, item)
 			case types.ActionDeleteItem:
 				idx, ok := m.findID(a.Item.ID)
 				if !ok {
 					continue
 				}
-				// Remove the item from the array
 				m.mem = append(m.mem[:idx], m.mem[idx+1:]...)
 			case types.ActionQueueScheduledItem:
-				// NOTE: Different implementations might take the item provided and insert the item into
-				// the partition, or they could update the item in place depending upon the capabilities
-				// of the data store used.
 				idx, ok := m.findID(a.Item.ID)
 				if !ok {
 					m.log.Warn("assertion failed; scheduled item is should be in partition; action ignored",
@@ -537,7 +479,6 @@ func (m *MemoryPartition) TakeAction(_ context.Context, batch types.LifeCycleBat
 					continue
 				}
 
-				// Make a copy of the item, then remove it
 				item := m.mem[idx]
 				if item.EnqueueAt.IsZero() {
 					m.log.Warn("assertion failed; expected to be a scheduled item; action ignored",
@@ -546,12 +487,10 @@ func (m *MemoryPartition) TakeAction(_ context.Context, batch types.LifeCycleBat
 				}
 				m.mem = append(m.mem[:idx], m.mem[idx+1:]...)
 
-				// Assign a new id, and add the item to the tail
 				m.uid = m.uid.Next()
 				item.EnqueueAt = clock.Time{}
 				item.ID = []byte(m.uid.String())
 				m.mem = append(m.mem, item)
-				// Tell the partition it gained a new un-leased item.
 				state.UnLeased++
 			default:
 				assert.Unreachable(fmt.Sprintf("undefined action kind '0x%X'", int(a.Action)))
@@ -567,9 +506,7 @@ func (m *MemoryPartition) LifeCycleInfo(ctx context.Context, info *types.LifeCyc
 	nextLease := theFuture
 	nextExpire := theFuture
 
-	// Find the item that will expire next (lease or item expiry)
 	for _, item := range m.mem {
-		// Skip scheduled items
 		if !item.EnqueueAt.IsZero() {
 			continue
 		}
@@ -598,7 +535,6 @@ func (m *MemoryPartition) Stats(_ context.Context, stats *types.PartitionStats, 
 	m.mu.RLock()
 
 	for _, item := range m.mem {
-		// Count scheduled and do not include them in other stats
 		if !item.EnqueueAt.IsZero() {
 			stats.Scheduled++
 			continue
@@ -628,8 +564,6 @@ func (m *MemoryPartition) Close(_ context.Context) error {
 	return nil
 }
 
-// findID attempts to find the provided id in q.mem. If found returns the index and true.
-// If not found returns the index of the first item that sorts after the target.
 func (m *MemoryPartition) findID(id []byte) (int, bool) {
 	for i, item := range m.mem {
 		lex := bytes.Compare(item.ID, id)
@@ -642,10 +576,6 @@ func (m *MemoryPartition) findID(id []byte) (int, bool) {
 	}
 	return len(m.mem), false
 }
-
-// ---------------------------------------------
-// Queues Implementation
-// ---------------------------------------------
 
 type MemoryQueues struct {
 	QueuesValidation
@@ -783,8 +713,6 @@ func (s *MemoryQueues) Close(_ context.Context) error {
 	return nil
 }
 
-// findQueue attempts to find the provided queue in s.mem. If found returns the index and true.
-// If not found returns the index of the first item that sorts after the target.
 func (s *MemoryQueues) findQueue(name string) (int, bool) {
 	nearestIdx := len(s.mem)
 	for i, queue := range s.mem {
@@ -798,10 +726,6 @@ func (s *MemoryQueues) findQueue(name string) (int, bool) {
 	}
 	return nearestIdx, false
 }
-
-// ---------------------------------------------
-// PartitionStore Implementation
-// ---------------------------------------------
 
 type MemoryPartitionStore struct {
 	partitions map[types.PartitionHash]*MemoryPartition
@@ -836,10 +760,6 @@ func (m MemoryPartitionStore) Get(info types.PartitionInfo) Partition {
 	}
 	return p
 }
-
-// ---------------------------------------------
-// Namespaces Implementation
-// ---------------------------------------------
 
 type MemoryNamespaces struct {
 	mu  sync.RWMutex
@@ -945,8 +865,6 @@ func (s *MemoryNamespaces) Close(_ context.Context) error {
 	return nil
 }
 
-// findNamespace attempts to find the provided namespace in s.mem. If found returns the index and true.
-// If not found returns the index of the first item that sorts after the target.
 func (s *MemoryNamespaces) findNamespace(name string) (int, bool) {
 	nearestIdx := len(s.mem)
 	for i, ns := range s.mem {
@@ -961,12 +879,8 @@ func (s *MemoryNamespaces) findNamespace(name string) (int, bool) {
 	return nearestIdx, false
 }
 
-// ---------------------------------------------
-// Users Implementation
-// ---------------------------------------------
-
 type MemoryUsers struct {
-	byUsername map[string]string // username -> ID index
+	byUsername map[string]string
 	users      map[string]types.User
 	mu         sync.RWMutex
 	log        *slog.Logger
@@ -1108,13 +1022,9 @@ func (m *MemoryUsers) Close(_ context.Context) error {
 	return nil
 }
 
-// ---------------------------------------------
-// API Keys Implementation
-// ---------------------------------------------
-
 type MemoryAPIKeys struct {
-	byHash map[string]string   // keyHash -> ID index
-	byUser map[string][]string // userID -> []ID index
+	byHash map[string]string
+	byUser map[string][]string
 	keys   map[string]types.APIKey
 	mu     sync.RWMutex
 	log    *slog.Logger
@@ -1288,7 +1198,6 @@ func (m *MemoryAPIKeys) Delete(_ context.Context, id string) error {
 	delete(m.byHash, key.KeyHash)
 	delete(m.keys, id)
 
-	// Remove from user index
 	userKeys := m.byUser[key.UserID]
 	for i, k := range userKeys {
 		if k == id {
@@ -1342,12 +1251,8 @@ func (m *MemoryAPIKeys) Close(_ context.Context) error {
 	return nil
 }
 
-// ---------------------------------------------
-// Roles Implementation
-// ---------------------------------------------
-
 type MemoryRoles struct {
-	byNamespaceName map[string]string // "namespace:name" -> ID index
+	byNamespaceName map[string]string
 	roles           map[string]types.Role
 	mu              sync.RWMutex
 	log             *slog.Logger
@@ -1441,7 +1346,6 @@ func (m *MemoryRoles) Update(_ context.Context, role types.Role) error {
 		return types.NewErrRoleNotExist(role.ID)
 	}
 
-	// Update permissions only, keep other fields
 	existing.Permissions = role.Permissions
 	m.roles[role.ID] = existing
 	return nil
@@ -1514,14 +1418,10 @@ func (m *MemoryRoles) Close(_ context.Context) error {
 	return nil
 }
 
-// ---------------------------------------------
-// RoleBindings Implementation
-// ---------------------------------------------
-
 type MemoryRoleBindings struct {
-	byUserNamespaceRole map[string]string   // "userID\x00namespace\x00roleID" -> ID (for uniqueness)
-	byUser              map[string][]string // userID -> []binding IDs
-	byRole              map[string][]string // roleID -> []binding IDs
+	byUserNamespaceRole map[string]string
+	byUser              map[string][]string
+	byRole              map[string][]string
 	bindings            map[string]types.RoleBinding
 	mu                  sync.RWMutex
 	log                 *slog.Logger
@@ -1576,7 +1476,6 @@ func (m *MemoryRoleBindings) Add(_ context.Context, binding types.RoleBinding) e
 		return reply.NewInvalidOption("role binding namespace is invalid; cannot be empty")
 	}
 
-	// Check for duplicate (same user, namespace, role combination)
 	uniqueKey := binding.UserID + "\x00" + binding.Namespace + "\x00" + binding.RoleID
 	if _, ok := m.byUserNamespaceRole[uniqueKey]; ok {
 		return types.NewErrRoleBindingAlreadyExists(binding)
@@ -1723,12 +1622,10 @@ func (m *MemoryRoleBindings) Delete(_ context.Context, id string) error {
 		return types.NewErrRoleBindingNotExist(id)
 	}
 
-	// Remove from uniqueness index
 	uniqueKey := binding.UserID + "\x00" + binding.Namespace + "\x00" + binding.RoleID
 	delete(m.byUserNamespaceRole, uniqueKey)
 	delete(m.bindings, id)
 
-	// Remove from user index
 	userBindings := m.byUser[binding.UserID]
 	for i, bid := range userBindings {
 		if bid == id {
@@ -1737,7 +1634,6 @@ func (m *MemoryRoleBindings) Delete(_ context.Context, id string) error {
 		}
 	}
 
-	// Remove from role index
 	roleBindings := m.byRole[binding.RoleID]
 	for i, bid := range roleBindings {
 		if bid == id {
@@ -1760,12 +1656,10 @@ func (m *MemoryRoleBindings) DeleteByUser(_ context.Context, userID string) erro
 
 	for _, id := range ids {
 		if binding, ok := m.bindings[id]; ok {
-			// Remove from uniqueness index
 			uniqueKey := binding.UserID + "\x00" + binding.Namespace + "\x00" + binding.RoleID
 			delete(m.byUserNamespaceRole, uniqueKey)
 			delete(m.bindings, id)
 
-			// Remove from role index
 			roleBindings := m.byRole[binding.RoleID]
 			for i, bid := range roleBindings {
 				if bid == id {

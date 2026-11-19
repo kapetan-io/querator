@@ -158,5 +158,6 @@ The 10-character base62 hash ensures table names stay well under the limit while
 ## Next Steps
 
 - Review backend-specific documentation for detailed configuration options
+- Read [Storage Backend Internals](internals.md) before changing or adding a backend
 - See [example.yaml](../../example.yaml) for complete configuration examples
 - Check the [Quick Start](../../README.md#quick-start) guide for getting started with Docker

@@ -2186,6 +2186,42 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		storage := setup()
 		defer tearDown()
 
+		t.Run("QueueClear", func(t *testing.T) {
+			t.Run("StorageFails", func(t *testing.T) {
+				var fault partitionFault
+				d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: fault.Wrap(storage)})
+				defer d.Shutdown(t)
+				c, ctx := d.MustClient(), d.Context()
+
+				queueName := random.String("queue-", 10)
+				createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+					LeaseTimeout:        LeaseTimeout,
+					ExpireTimeout:       ExpireTimeout,
+					QueueName:           queueName,
+					RequestedPartitions: 2,
+				})
+				_ = writeRandomItems(t, ctx, c, queueName, 10)
+
+				fault.failingClear.Store(true)
+				start := clock.Now().UTC()
+				err := c.QueueClear(ctx, &pb.QueueClearRequest{QueueName: queueName, Queue: true, Destructive: true})
+				require.Error(t, err)
+				assert.Less(t, clock.Now().UTC().Sub(start), 5*clock.Second)
+				var e duh.Error
+				require.True(t, errors.As(err, &e))
+				assert.Equal(t, duh.CodeInternalError, e.Code())
+
+				// A clear after storage recovers empties every partition.
+				fault.failingClear.Store(false)
+				require.NoError(t, c.QueueClear(ctx, &pb.QueueClearRequest{QueueName: queueName, Queue: true, Destructive: true}))
+				for partition := range 2 {
+					var list pb.StorageItemsListResponse
+					require.NoError(t, c.StorageItemsList(ctx, queueName, partition, &list, nil))
+					assert.Empty(t, list.Items)
+				}
+			})
+		})
+
 		t.Run("QueueProduce", func(t *testing.T) {
 			t.Run("WriteFails", func(t *testing.T) {
 				var fault partitionFault

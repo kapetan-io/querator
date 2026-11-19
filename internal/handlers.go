@@ -118,9 +118,8 @@ func (l *Logical) handleClear(_ *QueueState, req *Request) {
 
 	if cr.Queue || cr.Scheduled {
 		for _, p := range l.conf.StoragePartitions {
-			if err := p.Clear(req.Context, *cr); err != nil {
+			if err := p.Clear(req.Context, *cr); err != nil && req.Err == nil {
 				req.Err = err
-				return
 			}
 		}
 	}

@@ -177,6 +177,29 @@ func testBadgerClear(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		assert.Equal(t, int32(1_806), p.Total)
 	})
 
+	t.Run("ClearDestructiveKeepsScheduledAcrossPages", func(t *testing.T) {
+		var queueName = random.String("queue-", 10)
+		d := newDaemon(t, 2*clock.Minute, svc.Config{StorageConfig: setup()})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+		c, ctx := d.MustClient(), d.Context()
+		createOnePartitionQueue(t, ctx, c, queueName)
+		fillPagedPartition(t, ctx, c, queueName)
+
+		require.NoError(t, c.QueueClear(ctx, &pb.QueueClearRequest{
+			QueueName:   queueName,
+			Queue:       true,
+			Destructive: true,
+		}))
+
+		p := partitionStats(t, ctx, c, queueName)
+		assert.Equal(t, int32(600), p.Scheduled)
+		assert.Equal(t, int32(0), p.Total)
+		assert.Empty(t, listPartition(t, ctx, c, queueName))
+	})
+
 	t.Run("ClearScheduledAndQueueAcrossPages", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
 		d := newDaemon(t, 2*clock.Minute, svc.Config{StorageConfig: setup()})

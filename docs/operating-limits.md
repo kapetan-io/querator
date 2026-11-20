@@ -28,8 +28,8 @@ authenticate, check storage first.
 
 Querator caches who a key belongs to, not what that user may do, so every request reads the user's role
 bindings and the roles they name from storage. Latency grows with the number of bindings a user holds.
-Only a bounded number of a user's bindings in one namespace are read, so a user with very many bindings
-there can be denied a permission one of the unread bindings grants.
+A user can hold at most 100 role bindings in one namespace, and creating a 101st is refused. The same
+user can still be given bindings in another namespace.
 
 **Workaround**: Keep each user to a few role bindings per namespace. Bind users to broad roles in a
 namespace rather than to many narrow ones.
@@ -40,8 +40,9 @@ When Querator starts with auth turned on and storage for users, roles and role b
 Open Door mode. A config file with an `auth` section always starts this way. Open Door binds the anonymous
 user to the Admin role in the `_system` namespace, so any request without an API key has full
 administrative access. A warning is logged when the binding is created. The binding is created again at
-every start, so deleting it closes the door only until the next restart. The standard roles are also
-written again at every start, replacing any change made to them.
+every start, so deleting it closes the door only until the next restart, unless the anonymous user
+already holds 100 other bindings in `_system`. Then it is not created, and a warning is logged. The
+standard roles are also written again at every start, replacing any change made to them.
 
 Without an `auth` section, the default, Querator checks no permissions, so any client that can reach
 the API port can do anything.
@@ -76,12 +77,9 @@ that holds its items.
   queue, by up to the storage write timeout each time, which has no setting in the server config. On
   BadgerDB a slow write is not cut short at the write timeout. A reply can arrive after the request's
   `request_timeout`.
-* When every partition of a queue has failed, produce requests wait. A partition that recovers while no
-  lease request is waiting does not pick up the waiting produce requests until another produce, lease,
-  complete or retry request arrives, so on an idle queue they get a retry error at their request timeout
-  and their items are not written.
-* The leased count `/queue.stats` reports only goes up, so once items are completed it overstates the
-  items leased (ENG-826). After a failed write the unleased count can be wrong too.
+* The leased count `/queue.stats` reports does not drop when the lifecycle deletes or dead-letters a
+  leased item that ran out of attempts, so on a queue with `max_attempts` set it overstates the items
+  leased (ENG-774). After a failed write the unleased count can be wrong.
 
 **Workaround**: Clients resend on a retry error or after their request timeout, and consumers must
 tolerate duplicate items. Reload a queue with `/v1/queue.reload` to recount it from storage.
@@ -113,16 +111,27 @@ in the queue" while unleased items wait further on.
 
 **Workaround**: Lease again. Repeated leases reach the waiting items.
 
-## Storage backends disagree on scheduled items that are due but not yet enqueued
+## Stats and reload on a large BadgerDB partition hold up the queue
+
+On BadgerDB, `/v1/queue.stats`, `/v1/queue.reload`, a queue's start-up and a failed partition's recovery
+scan every item in the partition, at about 75,000 items a second on a laptop. The queue answers none of
+its other requests until the scan finishes, so produces, leases and completes on a queue with a 500,000
+item partition wait about 7 seconds behind each stats call. The scan runs past the read timeout
+(`ReadTimeout` in the embedded server's `service.Config`, 3 seconds by default) rather than failing the
+partition. A server shutdown waits for a scan in progress, or gives up at its own deadline while the scan
+runs on. ENG-867 is the design that removes the full scan.
+
+**Workaround**: Poll `/v1/queue.stats` rarely on queues with large BadgerDB partitions, and reload them
+only when their counts look wrong.
+
+## Storage backends count due scheduled items differently in stats
 
 A scheduled item is due once its enqueue time passes, and it stays scheduled until Querator moves it into
 the queue moments later. During that window, PostgreSQL and MongoDB count it in a partition's total in
-`/queue.stats` and remove it on a `/v1/queue.clear` with `queue` set. InMemory and BadgerDB count it only
-as scheduled and keep it. A destructive clear of the queue on InMemory and BadgerDB also removes
-scheduled items that are not yet due, which PostgreSQL and MongoDB keep unless `scheduled` is also set.
+`/queue.stats`. InMemory and BadgerDB count it only as scheduled.
 
-**Workaround**: Before comparing stats across backends, or clearing a queue that holds scheduled items,
-wait a few seconds past their enqueue time so they have moved into the queue.
+**Workaround**: Before comparing stats across backends, wait a few seconds past the items' enqueue time
+so they have moved into the queue.
 
 ## Changing queues holds up requests on a node with many queues
 

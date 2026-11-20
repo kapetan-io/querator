@@ -450,7 +450,7 @@ paths:
             schema:
               $ref: '#/components/schemas/QueuesInfoRequest'
             example:
-              name: queue-name
+              queue_name: queue-name
       responses:
         '200':
           description: ''
@@ -569,8 +569,8 @@ paths:
       summary: Clear a queue
       deprecated: false
       description: >-
-        Clears all data from a queue, optionally clears all retry and scheduled
-        items
+        Clears items from a queue. Items scheduled for retry are scheduled
+        items, and only the `scheduled` flag removes them.
       tags:
         - Querator V1
       parameters: []
@@ -582,7 +582,6 @@ paths:
               $ref: '#/components/schemas/QueueClearRequest'
             example:
               queue_name: queue-name
-              retry: false
               scheduled: false
               queue: true
               destructive: true
@@ -810,17 +809,14 @@ components:
         queue_name:
           type: string
           description: The name of the queue to clear
-        retry:
-          type: boolean
-          description: >-
-            Indicates the 'retry' queue will be cleared. If true, any items
-            scheduled to be retried at a future date will be removed.
         scheduled:
           type: boolean
           description: >-
             Indicates any 'scheduled' items in the queue will be cleared. If
-            true, any items scheduled to be enqueued at a future date will be
-            removed.
+            true, every item still waiting to be enqueued is removed, including
+            one whose enqueue time has passed but which has not yet moved into
+            the queue, and items scheduled for retry. Only this flag removes
+            scheduled items.
         queue:
           type: boolean
           description: >-
@@ -830,8 +826,9 @@ components:
         destructive:
           type: boolean
           description: >-
-            Indicates the Retry, Scheduled, Queue operations should be destructive
-            in that all data regardless of status will be removed.
+            Indicates the Queue operation should be destructive in that items
+            are removed regardless of lease status. Scheduled items are kept
+            unless Scheduled is also set.
 
             For example, if used with ClearRequest.Queue = true, then ALL items
             in the queue regardless of lease status will be removed. This
@@ -840,7 +837,6 @@ components:
             knowledge of those items.
       required:
         - queue_name
-        - retry
         - scheduled
         - queue
         - destructive
@@ -862,11 +858,11 @@ components:
     QueuesInfoRequest:
       type: object
       properties:
-        name:
+        queue_name:
           type: string
           description: The name of the queue to retrieve info about
       required:
-        - name
+        - queue_name
     QueuesDeleteRequest:
       type: object
       properties:

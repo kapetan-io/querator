@@ -783,6 +783,7 @@ func (p *MongoPartition) completeItems(ctx context.Context, coll *mongo.Collecti
 		res := coll.FindOneAndDelete(ctx, bson.M{"_id": string(id), "is_leased": true})
 		switch err := res.Err(); {
 		case err == nil:
+			req.Completed++
 		case errors.Is(err, mongo.ErrNoDocuments):
 			e := coll.FindOne(ctx, bson.M{"_id": string(id)},
 				options.FindOne().SetProjection(bson.M{"_id": 1})).Err()
@@ -890,7 +891,9 @@ func (p *MongoPartition) retryItems(ctx context.Context, coll *mongo.Collection,
 			if _, err := coll.DeleteOne(ctx, bson.M{"_id": string(retryItem.ID)}); err != nil {
 				return errors.Errorf("during Retry() delete for tail placement: %w", err)
 			}
+			req.UnLeased++
 		}
+		req.Retried++
 	}
 	return nil
 }
@@ -1066,7 +1069,6 @@ func (p *MongoPartition) Clear(ctx context.Context, req types.ClearRequest) erro
 	}
 
 	coll := p.collection(client)
-	now := toMicros(clock.Now().UTC())
 
 	if req.Queue && req.Destructive && req.Scheduled {
 		if err := coll.Drop(ctx); err != nil {
@@ -1083,14 +1085,11 @@ func (p *MongoPartition) Clear(ctx context.Context, req types.ClearRequest) erro
 	}
 
 	if req.Queue {
-		ready := bson.M{"$or": bson.A{
-			bson.M{"enqueue_at": bson.M{"$exists": false}},
-			bson.M{"enqueue_at": bson.M{"$lte": now}},
-		}}
+		queued := bson.M{"enqueue_at": bson.M{"$exists": false}}
 		if req.Destructive {
-			conditions = append(conditions, ready)
+			conditions = append(conditions, queued)
 		} else {
-			conditions = append(conditions, bson.M{"$and": bson.A{ready, bson.M{"is_leased": false}}})
+			conditions = append(conditions, bson.M{"$and": bson.A{queued, bson.M{"is_leased": false}}})
 		}
 	}
 
@@ -1291,7 +1290,7 @@ func (p *MongoPartition) readLifeCyclePage(ctx context.Context, scan *types.Life
 	return nil
 }
 
-func (p *MongoPartition) TakeAction(ctx context.Context, batch types.LifeCycleBatch, _ *types.PartitionState) error {
+func (p *MongoPartition) TakeAction(ctx context.Context, batch types.LifeCycleBatch, state *types.PartitionState) error {
 	client, err := p.conf.getOrCreateClient(ctx)
 	if err != nil {
 		return err
@@ -1330,6 +1329,7 @@ func (p *MongoPartition) TakeAction(ctx context.Context, batch types.LifeCycleBa
 				if _, err := coll.DeleteOne(ctx, bson.M{"_id": string(action.Item.ID)}); err != nil {
 					return errors.Errorf("delete expired item: %w", err)
 				}
+				state.LeasesExpired(1)
 
 			case types.ActionItemExpired, types.ActionItemMaxAttempts:
 				if _, err := coll.DeleteOne(ctx, bson.M{"_id": string(action.Item.ID)}); err != nil {

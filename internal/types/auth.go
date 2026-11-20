@@ -80,6 +80,8 @@ func (r *Role) ToProto(p *proto.Role) *proto.Role {
 	return p
 }
 
+const MaxRoleBindingsPerUserInNamespace = 100
+
 type RoleBinding struct {
 	CreatedAt clock.Time
 	Namespace string

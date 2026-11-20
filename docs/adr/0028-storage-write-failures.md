@@ -39,6 +39,22 @@ have been saved as leased. They stay leased with no consumer until the lease run
 the item one attempt. That is safe. Handing out an item whose lease was not saved is not, because a
 second consumer could lease it while the first is still working on it.
 
+**A complete or retry records how many items storage applied.** A request stops at its first refused
+item after applying the ones before it, so the items a request carried overstate what left the lease.
+The queue moves the partition's leased and unleased counts by what storage applied. A backend whose
+failed write rolls back records that nothing applied, and a backend without transactions keeps what it
+applied before the failure.
+
+**The leased count never goes below zero.** A lease write whose outcome is unknown gives every item
+back to the unleased count, though storage may hold some as leased. When those leases expire, the
+queue has already given them back, so it gives back no more than the leased count holds. Keeping them
+counted as leased instead would leave the count too high forever when the write did not apply, since
+no lease would ever expire.
+
+**The unleased count never goes below zero either.** Storage can lease more items than the queue
+estimated, such as a scheduled item that came due on a backend that does not count it as waiting. The
+leased count takes the extra items, and the unleased count stops at zero rather than going negative.
+
 ## Consequences
 
 A client that resends a failed produce can store its items twice, since some or all of them may

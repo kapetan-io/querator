@@ -29,8 +29,9 @@ const (
 )
 
 type BadgerConfig struct {
-	StorageDir string
-	Log        *slog.Logger
+	StorageDir   string
+	Log          *slog.Logger
+	MemTableSize int64
 }
 
 type BadgerPartitionStore struct {
@@ -272,12 +273,14 @@ func (b *BadgerPartition) Complete(_ context.Context, batch types.CompleteBatch)
 
 	for _, req := range batch.Requests {
 		if err = b.completeItems(txn, req); err != nil {
+			batch.MarkRolledBack()
 			return err
 		}
 	}
 
 	err = txn.Commit()
 	if err != nil {
+		batch.MarkRolledBack()
 		return errors.Errorf("during Commit(): %w", err)
 	}
 
@@ -325,6 +328,7 @@ func (b *BadgerPartition) completeItems(txn *badger.Txn, req *types.CompleteRequ
 		if err = txn.Delete(id); err != nil {
 			return errors.Errorf("during Delete(%s): %w", id, err)
 		}
+		req.Completed++
 	}
 	return nil
 }
@@ -347,12 +351,14 @@ func (b *BadgerPartition) Retry(_ context.Context, batch types.RetryBatch) error
 
 	for _, req := range batch.Requests {
 		if err = b.retryItems(txn, req); err != nil {
+			batch.MarkRolledBack()
 			return err
 		}
 	}
 
 	err = txn.Commit()
 	if err != nil {
+		batch.MarkRolledBack()
 		return errors.Errorf("during Commit(): %w", err)
 	}
 
@@ -420,6 +426,7 @@ func (b *BadgerPartition) retryItems(txn *badger.Txn, req *types.RetryRequest) e
 				if err := txn.Delete(retryItem.ID); err != nil {
 					return errors.Errorf("during Delete(%s): %w", retryItem.ID, err)
 				}
+				req.UnLeased++
 			} else {
 				item.IsLeased = false
 				item.LeaseDeadline = clock.Time{}
@@ -448,7 +455,9 @@ func (b *BadgerPartition) retryItems(txn *badger.Txn, req *types.RetryRequest) e
 			if err := txn.Delete(retryItem.ID); err != nil {
 				return errors.Errorf("during Delete(%s): %w", retryItem.ID, err)
 			}
+			req.UnLeased++
 		}
+		req.Retried++
 	}
 	return nil
 }
@@ -673,7 +682,7 @@ func (b *BadgerPartition) Clear(ctx context.Context, req types.ClearRequest) err
 		return err
 	}
 
-	if req.Destructive && req.Queue {
+	if req.Destructive && req.Queue && req.Scheduled {
 		if err := db.DropAll(); err != nil {
 			return errors.Errorf("during destructive DropAll(): %w", err)
 		}
@@ -902,6 +911,7 @@ type badgerWrite struct {
 type actionWriteSet struct {
 	writes   []badgerWrite
 	unLeased int
+	expired  int
 }
 
 func (b *BadgerPartition) TakeAction(_ context.Context, batch types.LifeCycleBatch,
@@ -964,6 +974,7 @@ func commitActions(txn *badger.Txn, pending []actionWriteSet, state *types.Parti
 	}
 	for _, action := range pending {
 		state.UnLeased += action.unLeased
+		state.LeasesExpired(action.expired)
 	}
 	return nil
 }
@@ -1006,7 +1017,7 @@ func (b *BadgerPartition) actionWrites(txn *badger.Txn, a types.Action) (actionW
 			return actionWriteSet{}, err
 		}
 		b.lowerLeasePivot(item.ID)
-		return actionWriteSet{writes: []badgerWrite{
+		return actionWriteSet{expired: 1, writes: []badgerWrite{
 			{key: item.ID, value: buf.Bytes()},
 			{key: a.Item.ID, delete: true},
 		}}, nil
@@ -1067,65 +1078,85 @@ func getItem(txn *badger.Txn, id []byte) (*types.Item, error) {
 	return item, err
 }
 
-func (b *BadgerPartition) Stats(_ context.Context, stats *types.PartitionStats, now clock.Time) error {
+func (b *BadgerPartition) Stats(ctx context.Context, stats *types.PartitionStats, now clock.Time) error {
 	db, err := b.getDB()
 	if err != nil {
 		return err
 	}
 
-	pivot := sourcePrefix
-	err = db.View(func(txn *badger.Txn) error {
-
-		iter := txn.NewIterator(badger.DefaultIteratorOptions)
-		defer iter.Close()
-
-		for iter.Rewind(); iter.Valid(); iter.Next() {
-			key := iter.Item().Key()
-
-			if bytes.HasPrefix(key, []byte("source:")) {
-				continue
-			}
-
-			var v []byte
-			v, err := iter.Item().ValueCopy(v)
-			if err != nil {
-				return errors.Errorf("during GetByPartition value: %w", err)
-			}
-
-			item := new(types.Item)
-			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(item); err != nil {
-				return errors.Errorf("during Decode(): %w", err)
-			}
-
-			if !item.EnqueueAt.IsZero() {
-				stats.Scheduled++
-				continue
-			}
-
-			stats.Total++
-			stats.AverageAge += now.Sub(item.CreatedAt)
-			if item.IsLeased {
-				stats.AverageLeasedAge += item.LeaseDeadline.Sub(now)
-				stats.NumLeased++
-			} else if bytes.Equal(pivot, sourcePrefix) {
-				pivot = iter.Item().KeyCopy(nil)
-			}
+	untilCancel, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	defer cancel()
+	stopWatching := context.AfterFunc(ctx, func() {
+		if errors.Is(ctx.Err(), context.Canceled) {
+			cancel()
 		}
-
-		if stats.Total != 0 {
-			stats.AverageAge = clock.Duration(int64(stats.AverageAge) / int64(stats.Total))
-		}
-		if stats.NumLeased != 0 {
-			stats.AverageLeasedAge = clock.Duration(int64(stats.AverageLeasedAge) / int64(stats.NumLeased))
-		}
-		return nil
 	})
+	defer stopWatching()
+
+	var pivot []byte
+	err = db.View(func(txn *badger.Txn) error {
+		pivot, err = countPartition(untilCancel, txn, stats, now)
+		return err
+	})
+	if err == nil && errors.Is(ctx.Err(), context.Canceled) {
+		err = ctx.Err()
+	}
 	if err != nil {
 		b.leasePivot = nil
 		return err
 	}
 	b.leasePivot = pivot
 	return nil
+}
+
+func countPartition(ctx context.Context, txn *badger.Txn, stats *types.PartitionStats, now clock.Time) ([]byte, error) {
+	iter := txn.NewIterator(badger.DefaultIteratorOptions)
+	defer iter.Close()
+
+	pivot := sourcePrefix
+	for iter.Rewind(); iter.Valid() && ctx.Err() == nil; iter.Next() {
+		key := iter.Item().Key()
+
+		if bytes.HasPrefix(key, []byte("source:")) {
+			continue
+		}
+
+		var v []byte
+		v, err := iter.Item().ValueCopy(v)
+		if err != nil {
+			return nil, errors.Errorf("during GetByPartition value: %w", err)
+		}
+
+		item := new(types.Item)
+		if err := gob.NewDecoder(bytes.NewReader(v)).Decode(item); err != nil {
+			return nil, errors.Errorf("during Decode(): %w", err)
+		}
+
+		if !item.EnqueueAt.IsZero() {
+			stats.Scheduled++
+			continue
+		}
+
+		stats.Total++
+		stats.AverageAge += now.Sub(item.CreatedAt)
+		if item.IsLeased {
+			stats.AverageLeasedAge += item.LeaseDeadline.Sub(now)
+			stats.NumLeased++
+		} else if bytes.Equal(pivot, sourcePrefix) {
+			pivot = iter.Item().KeyCopy(nil)
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	if stats.Total != 0 {
+		stats.AverageAge = clock.Duration(int64(stats.AverageAge) / int64(stats.Total))
+	}
+	if stats.NumLeased != 0 {
+		stats.AverageLeasedAge = clock.Duration(int64(stats.AverageLeasedAge) / int64(stats.NumLeased))
+	}
+	return pivot, nil
 }
 
 func (b *BadgerPartition) Close(_ context.Context) error {
@@ -1158,6 +1189,10 @@ func (b *BadgerPartition) getDB() (*badger.DB, error) {
 
 	opts := badger.DefaultOptions(dir)
 	opts.Logger = newBadgerLogger(b.conf.Log)
+	if b.conf.MemTableSize != 0 {
+		opts.MemTableSize = b.conf.MemTableSize
+		opts.ValueThreshold = min(opts.ValueThreshold, badgerTransactionLimit(opts.MemTableSize))
+	}
 	db, err := badger.Open(opts)
 	if err != nil {
 		b.mu.Unlock()
@@ -1166,6 +1201,10 @@ func (b *BadgerPartition) getDB() (*badger.DB, error) {
 	b.db = db
 	b.mu.Unlock()
 	return db, nil
+}
+
+func badgerTransactionLimit(memTableSize int64) int64 {
+	return 15 * memTableSize / 100
 }
 
 type BadgerQueues struct {
@@ -2782,6 +2821,16 @@ func (b *BadgerRoleBindings) Add(_ context.Context, binding types.RoleBinding) e
 			return errors.Errorf("during uniqueness check: %w", err)
 		}
 
+		userIDs, err := b.getUserBindingIDs(txn, binding.UserID)
+		if err != nil {
+			return errors.Errorf("during getUserBindingIDs(): %w", err)
+		}
+		var held []types.RoleBinding
+		b.listInNamespace(txn, bindingsInNamespace{IDs: userIDs, Namespace: binding.Namespace}, &held, types.MaxRoleBindingsPerUserInNamespace)
+		if len(held) >= types.MaxRoleBindingsPerUserInNamespace {
+			return types.NewErrRoleBindingLimitReached(binding)
+		}
+
 		var buf bytes.Buffer
 		if err := gob.NewEncoder(&buf).Encode(binding); err != nil {
 			return errors.Errorf("during gob.Encode(): %w", err)
@@ -2795,10 +2844,6 @@ func (b *BadgerRoleBindings) Add(_ context.Context, binding types.RoleBinding) e
 			return errors.Errorf("during Set(): %w", err)
 		}
 
-		userIDs, err := b.getUserBindingIDs(txn, binding.UserID)
-		if err != nil {
-			return errors.Errorf("during getUserBindingIDs(): %w", err)
-		}
 		userIDs = append(userIDs, binding.ID)
 		var userBuf bytes.Buffer
 		if err := gob.NewEncoder(&userBuf).Encode(userIDs); err != nil {
@@ -2932,32 +2977,41 @@ func (b *BadgerRoleBindings) ListByUser(_ context.Context, user UserInNamespace,
 			return nil
 		}
 
-		for _, id := range ids {
-			if len(*bindings) >= limit {
-				break
-			}
-			kvItem, err := txn.Get([]byte("rolebinding:" + id))
-			if err != nil {
-				continue
-			}
-
-			var v []byte
-			v, err = kvItem.ValueCopy(v)
-			if err != nil {
-				continue
-			}
-
-			var binding types.RoleBinding
-			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(&binding); err != nil {
-				continue
-			}
-			if binding.Namespace != namespace {
-				continue
-			}
-			*bindings = append(*bindings, binding)
-		}
+		b.listInNamespace(txn, bindingsInNamespace{IDs: ids, Namespace: namespace}, bindings, limit)
 		return nil
 	})
+}
+
+type bindingsInNamespace struct {
+	Namespace string
+	IDs       []string
+}
+
+func (b *BadgerRoleBindings) listInNamespace(txn *badger.Txn, from bindingsInNamespace, bindings *[]types.RoleBinding, limit int) {
+	for _, id := range from.IDs {
+		if len(*bindings) >= limit {
+			return
+		}
+		kvItem, err := txn.Get([]byte("rolebinding:" + id))
+		if err != nil {
+			continue
+		}
+
+		var v []byte
+		v, err = kvItem.ValueCopy(v)
+		if err != nil {
+			continue
+		}
+
+		var binding types.RoleBinding
+		if err := gob.NewDecoder(bytes.NewReader(v)).Decode(&binding); err != nil {
+			continue
+		}
+		if binding.Namespace != from.Namespace {
+			continue
+		}
+		*bindings = append(*bindings, binding)
+	}
 }
 
 func (b *BadgerRoleBindings) ListByRole(_ context.Context, roleID string, bindings *[]types.RoleBinding, limit int) error {

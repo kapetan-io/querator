@@ -41,8 +41,8 @@ the buffer is full it is thrown away.
 
 | Decision | What it protects | What it costs |
 |---|---|---|
-| Read a bounded number of bindings | No request scans storage without limit | A binding past the bound is never read, so a permission granted only by it is denied. Nothing stops an admin creating such a binding yet (ENG-853). |
-| One shared lookup per key | Storage is not hit fifty times at once | A caller waits up to the lookup's own 10-second limit, whatever its deadline, and one storage error answers every waiting caller with an invalid-key error |
+| Read a bounded number of bindings | No request scans storage without limit | A binding past the bound is never read, so a permission granted only by it is denied |
+| One shared lookup per key | Storage is not hit fifty times at once | A caller waits up to the lookup's own time limit, whatever its deadline, and one storage error answers every waiting caller with an invalid-key error |
 | Drop last-used writes when busy | A request never waits on bookkeeping | A key's last-used time can be behind |
 
 A key's last-used time is behind by up to the cache time, because a request answered from the cache

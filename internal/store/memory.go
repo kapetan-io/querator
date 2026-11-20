@@ -128,6 +128,7 @@ func (m *MemoryPartition) completeItems(ctx context.Context, req *types.Complete
 			delete(m.bySourceID, string(m.mem[idx].SourceID))
 		}
 		m.mem = append(m.mem[:idx], m.mem[idx+1:]...)
+		req.Completed++
 	}
 }
 
@@ -184,6 +185,7 @@ func (m *MemoryPartition) retryItems(ctx context.Context, req *types.RetryReques
 				item.ID = []byte(m.uid.String())
 				m.mem = append(m.mem[:idx], m.mem[idx+1:]...)
 				m.mem = append(m.mem, item)
+				req.UnLeased++
 			} else {
 				m.mem[idx].IsLeased = false
 				m.mem[idx].LeaseDeadline = clock.Time{}
@@ -197,7 +199,9 @@ func (m *MemoryPartition) retryItems(ctx context.Context, req *types.RetryReques
 			item.ID = []byte(m.uid.String())
 			m.mem = append(m.mem[:idx], m.mem[idx+1:]...)
 			m.mem = append(m.mem, item)
+			req.UnLeased++
 		}
+		req.Retried++
 	}
 }
 
@@ -316,7 +320,7 @@ func (m *MemoryPartition) Clear(_ context.Context, req types.ClearRequest) error
 	defer m.mu.Unlock()
 	m.mu.Lock()
 
-	if req.Destructive && req.Queue {
+	if req.Destructive && req.Queue && req.Scheduled {
 		m.mem = make([]types.Item, 0, 1_000)
 		m.bySourceID = make(map[string]struct{})
 		return nil
@@ -482,6 +486,7 @@ func (m *MemoryPartition) TakeAction(_ context.Context, batch types.LifeCycleBat
 
 				m.mem = append(m.mem[:idx], m.mem[idx+1:]...)
 				m.mem = append(m.mem, item)
+				state.LeasesExpired(1)
 			case types.ActionDeleteItem:
 				idx, ok := m.findID(a.Item.ID)
 				if !ok {
@@ -1473,6 +1478,16 @@ func (m *MemoryRoleBindings) Add(_ context.Context, binding types.RoleBinding) e
 
 	if _, ok := m.bindings[binding.ID]; ok {
 		return types.NewErrRoleBindingAlreadyExists(binding)
+	}
+
+	var held int
+	for _, id := range m.byUser[binding.UserID] {
+		if m.bindings[id].Namespace == binding.Namespace {
+			held++
+		}
+	}
+	if held >= types.MaxRoleBindingsPerUserInNamespace {
+		return types.NewErrRoleBindingLimitReached(binding)
 	}
 
 	m.bindings[binding.ID] = binding

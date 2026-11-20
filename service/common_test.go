@@ -394,8 +394,10 @@ func (s *sharedMongoContainer) Start(ctx context.Context) (err error) {
 	}()
 
 	// A standalone mongod (no replica set) is used deliberately: it is the practical proof that the
-	// non-transactional MongoDB backend design holds.
-	container, err := mongodb.Run(ctx, "mongo:7")
+	// non-transactional MongoDB backend design holds. Test commands let a test make a write apply
+	// and still report an error, which no other fault a test can add does.
+	container, err := mongodb.Run(ctx, "mongo:7",
+		testcontainers.WithCmdArgs("--setParameter", "enableTestCommands=1"))
 	if err != nil {
 		return fmt.Errorf("failed to start mongo container: %w", err)
 	}
@@ -901,6 +903,18 @@ type partitionFault struct {
 	// scanFailingOnly narrows scanFailing to the one partition whose number it holds, plus one. Zero fails every partition.
 	scanFailingOnly atomic.Int32
 	holdClear       atomic.Pointer[clearHold]
+	// statsPastDeadline makes each Stats call that has a deadline wait until the deadline passes
+	// before it reaches the backend, the way a scan longer than the read timeout outlasts it.
+	statsPastDeadline atomic.Bool
+	// statsCancelled hands each Stats call a context that is already cancelled, the way a caller
+	// that gave up does.
+	statsCancelled atomic.Bool
+	// statsCancelAfter, when above zero, cancels each Stats call's context that long after the call
+	// starts, the way a caller that gives up partway through a scan does.
+	statsCancelAfter atomic.Int64
+	// statsHung makes each Stats call that has a deadline wait until the deadline passes and
+	// return its error without reaching the backend, the way a hung database does.
+	statsHung atomic.Bool
 }
 
 // clearHold stops a Clear partway through. On the Clear's After-th check of its context it
@@ -998,6 +1012,29 @@ func (f faultyPartition) Clear(ctx context.Context, req types.ClearRequest) erro
 
 var errScanFailed = errors.New("injected lifecycle scan failure")
 
+func (f faultyPartition) Stats(ctx context.Context, stats *types.PartitionStats, now clock.Time) error {
+	if _, ok := ctx.Deadline(); ok && f.fault.statsHung.Load() {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	if _, ok := ctx.Deadline(); ok && f.fault.statsPastDeadline.Load() {
+		<-ctx.Done()
+	}
+	if after := clock.Duration(f.fault.statsCancelAfter.Load()); after > 0 {
+		cancellable, cancel := context.WithCancel(ctx)
+		defer cancel()
+		timer := clock.AfterFunc(after, cancel)
+		defer timer.Stop()
+		return f.Partition.Stats(cancellable, stats, now)
+	}
+	if f.fault.statsCancelled.Load() {
+		cancelled, cancel := context.WithCancel(ctx)
+		cancel()
+		return f.Partition.Stats(cancelled, stats, now)
+	}
+	return f.Partition.Stats(ctx, stats, now)
+}
+
 func (f faultyPartition) ScanForActions(ctx context.Context, scan *types.LifeCycleScan, now clock.Time) error {
 	if queue := f.fault.scanFailing.Load(); queue != nil && *queue == f.Info().Queue.Name {
 		if only := f.fault.scanFailingOnly.Load(); only != 0 && int(only)-1 != f.Info().PartitionNum {
@@ -1025,10 +1062,6 @@ type lifecycleSpy struct {
 	failScans      atomic.Bool
 	failScheduled  atomic.Bool
 	failDeadLetter atomic.Bool
-	scans          atomic.Int32
-	holdProduce    atomic.Bool
-	produceHeld    chan struct{}
-	produceRelease chan struct{}
 }
 
 func (s *lifecycleSpy) Wrap(conf store.Config) store.Config {
@@ -1095,35 +1128,6 @@ func (s *lifecycleSpy) FailScheduledWritesAfterFirstItem() {
 // a later transaction fails.
 func (s *lifecycleSpy) FailNextDeadLetterWriteAfterFirstItem() {
 	s.failDeadLetter.Store(true)
-}
-
-// HoldNextProduce makes the next produce write wait until ReleaseProduce, which holds the
-// queue's request loop while other requests queue behind it.
-func (s *lifecycleSpy) HoldNextProduce() {
-	s.produceHeld = make(chan struct{})
-	s.produceRelease = make(chan struct{})
-	s.holdProduce.Store(true)
-}
-
-// WaitForProduceHeld returns once the held produce write has started.
-func (s *lifecycleSpy) WaitForProduceHeld(t *testing.T, ctx context.Context) {
-	t.Helper()
-	select {
-	case <-s.produceHeld:
-	case <-ctx.Done():
-		require.FailNow(t, "the daemon stopped before a produce write was held")
-	case <-clock.After(holdWait):
-		require.FailNowf(t, "no produce write was held", "no produce write started within %s", holdWait)
-	}
-}
-
-func (s *lifecycleSpy) ReleaseProduce() {
-	close(s.produceRelease)
-}
-
-// Scans is the number of lifecycle page reads that have finished on any partition.
-func (s *lifecycleSpy) Scans() int32 {
-	return s.scans.Load()
 }
 
 func (s *lifecycleSpy) Events() []string {
@@ -1213,20 +1217,11 @@ func (p spyPartition) ScanForActions(ctx context.Context, scan *types.LifeCycleS
 		return err
 	}
 	p.spy.afterPage(scan)
-	p.spy.scans.Add(1)
 	return nil
 }
 
 func (p spyPartition) Produce(ctx context.Context, batch types.ProduceBatch, now clock.Time) error {
 	p.spy.produce()
-	if p.spy.holdProduce.CompareAndSwap(true, false) {
-		close(p.spy.produceHeld)
-		select {
-		case <-p.spy.produceRelease:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
 	if len(batch.Requests) == 0 || !batch.Requests[0].DeadLetterHandOff || !p.spy.failDeadLetter.CompareAndSwap(true, false) {
 		return p.Partition.Produce(ctx, batch, now)
 	}

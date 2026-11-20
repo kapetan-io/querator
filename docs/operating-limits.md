@@ -43,7 +43,8 @@ bindings, it starts in Open Door mode. The `querator server` command cannot set 
 applies only when embedding. Open Door binds the anonymous user to the Admin role in the `_system`
 namespace, so any request without an API key has full administrative access. A warning is logged when
 the binding is created. The binding is created again at every start, so deleting it closes the door only
-until the next restart. The standard roles are also written again at every start, replacing any change
+until the next restart, unless the anonymous user already holds 100 other bindings in `_system`. Then
+the start logs a warning and leaves the door closed. The standard roles are also written again at every start, replacing any change
 made to them.
 
 With the `none` auth driver, the default, Querator checks no permissions, so any client that can reach

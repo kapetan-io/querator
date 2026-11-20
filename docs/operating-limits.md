@@ -150,6 +150,10 @@ that leaves `dead_queue` out, or sends it unchanged, is refused. The same holds 
 dead-letter setup breaks the rules in another way, such as a `dead_queue` that does not exist. Older releases
 saved such queues, and queues loaded from the config file are saved without these checks.
 
-**Workaround**: When updating such a queue, send `"dead_queue": ""` to clear it, or point it at an
-existing single-partition queue with no dead-letter queue of its own. For a dead-letter queue saved with
-more than one partition, clear or change its source queue's `dead_queue` first.
+**Workaround**: Fix the dead-letter setup in the same update.
+
+* A queue whose `dead_queue` does not exist or has its own dead-letter queue: send `"dead_queue": ""`, or
+  name an existing single-partition queue with no dead-letter queue of its own.
+* A dead-letter queue that has its own `dead_queue`: send `"dead_queue": ""`.
+* A dead-letter queue saved with more than one partition: clear or change its source queue's `dead_queue`
+  first.

@@ -1426,6 +1426,352 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		assert.Equal(t, int32(0), p.Total)
 	})
 
+	t.Run("QueueClear/DestructiveKeepsScheduled", func(t *testing.T) {
+		now := clock.NewProvider()
+		now.Freeze(clock.Now())
+		defer now.UnFreeze()
+
+		var queueName = random.String("queue-", 10)
+		d := newDaemon(t, 60*clock.Second, svc.Config{
+			StorageConfig: setup(),
+			Clock:         now,
+		})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+		c, ctx := d.MustClient(), d.Context()
+
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			RequestedPartitions: 1,
+			LeaseTimeout:        "1m0s",
+			ExpireTimeout:       "24h0m0s",
+			QueueName:           queueName,
+		})
+
+		const numRegular = 10
+		const numScheduled = 20
+		var regular []*pb.QueueProduceItem
+		for i := 0; i < numRegular; i++ {
+			regular = append(regular, &pb.QueueProduceItem{
+				Reference: random.String("regular-", 10),
+				Utf8:      fmt.Sprintf("regular-%d", i),
+			})
+		}
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			RequestTimeout: "1m",
+			QueueName:      queueName,
+			Items:          regular,
+		}))
+
+		var scheduled []*pb.QueueProduceItem
+		for i := 0; i < numScheduled; i++ {
+			scheduled = append(scheduled, &pb.QueueProduceItem{
+				Reference: random.String("scheduled-", 10),
+				Utf8:      fmt.Sprintf("scheduled-%d", i),
+				EnqueueAt: timestamppb.New(now.Now().Add(5 * clock.Minute)),
+			})
+		}
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			RequestTimeout: "1m",
+			QueueName:      queueName,
+			Items:          scheduled,
+		}))
+
+		var lease pb.QueueLeaseResponse
+		require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+			ClientId:       random.String("client-", 10),
+			RequestTimeout: "5s",
+			QueueName:      queueName,
+			BatchSize:      2,
+		}, &lease))
+		require.Len(t, lease.Items, 2)
+
+		require.NoError(t, c.QueueClear(ctx, &pb.QueueClearRequest{
+			QueueName:   queueName,
+			Queue:       true,
+			Destructive: true,
+		}))
+
+		var items pb.StorageItemsListResponse
+		require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &items, nil))
+		assert.Len(t, items.Items, 0)
+
+		var list pb.StorageItemsListResponse
+		require.NoError(t, c.StorageScheduledList(ctx, queueName, 0, &list, nil))
+		assert.Len(t, list.Items, numScheduled)
+	})
+
+	t.Run("QueueClear/QueueKeepsDueScheduled", func(t *testing.T) {
+		// The daemon's clock runs an hour behind real time, so the item's time has passed
+		// by real time but the lifecycle never moves it. A backend that compares against
+		// real time instead of asking whether the item has moved picks the wrong set.
+		now := clock.NewProvider()
+		now.Freeze(clock.Now().Add(-clock.Hour))
+		defer now.UnFreeze()
+
+		var queueName = random.String("queue-", 10)
+		d := newDaemon(t, 60*clock.Second, svc.Config{
+			StorageConfig: setup(),
+			Clock:         now,
+		})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+		c, ctx := d.MustClient(), d.Context()
+
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			RequestedPartitions: 1,
+			LeaseTimeout:        "1m0s",
+			ExpireTimeout:       "24h0m0s",
+			QueueName:           queueName,
+		})
+
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			RequestTimeout: "1m",
+			QueueName:      queueName,
+			Items: []*pb.QueueProduceItem{
+				{Reference: random.String("regular-", 10), Utf8: "regular"},
+			},
+		}))
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			RequestTimeout: "1m",
+			QueueName:      queueName,
+			Items: []*pb.QueueProduceItem{{
+				Reference: random.String("scheduled-", 10),
+				Utf8:      "scheduled",
+				EnqueueAt: timestamppb.New(now.Now().Add(5 * clock.Minute)),
+			}},
+		}))
+
+		require.NoError(t, c.QueueClear(ctx, &pb.QueueClearRequest{
+			QueueName: queueName,
+			Queue:     true,
+		}))
+
+		var items pb.StorageItemsListResponse
+		require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &items, nil))
+		assert.Len(t, items.Items, 0)
+
+		var list pb.StorageItemsListResponse
+		require.NoError(t, c.StorageScheduledList(ctx, queueName, 0, &list, nil))
+		assert.Len(t, list.Items, 1)
+	})
+
+	t.Run("QueueClear/ScheduledRemovesDueScheduled", func(t *testing.T) {
+		// The daemon's clock runs an hour behind real time, so the item's time has passed
+		// by real time but the lifecycle never moves it. A backend that compares against
+		// real time instead of asking whether the item has moved picks the wrong set.
+		now := clock.NewProvider()
+		now.Freeze(clock.Now().Add(-clock.Hour))
+		defer now.UnFreeze()
+
+		var queueName = random.String("queue-", 10)
+		d := newDaemon(t, 60*clock.Second, svc.Config{
+			StorageConfig: setup(),
+			Clock:         now,
+		})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+		c, ctx := d.MustClient(), d.Context()
+
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			RequestedPartitions: 1,
+			LeaseTimeout:        "1m0s",
+			ExpireTimeout:       "24h0m0s",
+			QueueName:           queueName,
+		})
+
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			RequestTimeout: "1m",
+			QueueName:      queueName,
+			Items: []*pb.QueueProduceItem{
+				{Reference: random.String("regular-", 10), Utf8: "regular"},
+			},
+		}))
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			RequestTimeout: "1m",
+			QueueName:      queueName,
+			Items: []*pb.QueueProduceItem{{
+				Reference: random.String("scheduled-", 10),
+				Utf8:      "scheduled",
+				EnqueueAt: timestamppb.New(now.Now().Add(5 * clock.Minute)),
+			}},
+		}))
+
+		require.NoError(t, c.QueueClear(ctx, &pb.QueueClearRequest{
+			QueueName: queueName,
+			Scheduled: true,
+		}))
+
+		var items pb.StorageItemsListResponse
+		require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &items, nil))
+		assert.Len(t, items.Items, 1)
+
+		var list pb.StorageItemsListResponse
+		require.NoError(t, c.StorageScheduledList(ctx, queueName, 0, &list, nil))
+		assert.Len(t, list.Items, 0)
+	})
+
+	t.Run("QueueClear/ScheduledAndQueueKeepsLeased", func(t *testing.T) {
+		now := clock.NewProvider()
+		now.Freeze(clock.Now())
+		defer now.UnFreeze()
+
+		var queueName = random.String("queue-", 10)
+		d := newDaemon(t, 60*clock.Second, svc.Config{
+			StorageConfig: setup(),
+			Clock:         now,
+		})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+		c, ctx := d.MustClient(), d.Context()
+
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			RequestedPartitions: 1,
+			LeaseTimeout:        "1m0s",
+			ExpireTimeout:       "24h0m0s",
+			QueueName:           queueName,
+		})
+
+		const numRegular = 10
+		const numScheduled = 20
+		var regular []*pb.QueueProduceItem
+		for i := 0; i < numRegular; i++ {
+			regular = append(regular, &pb.QueueProduceItem{
+				Reference: random.String("regular-", 10),
+				Utf8:      fmt.Sprintf("regular-%d", i),
+			})
+		}
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			RequestTimeout: "1m",
+			QueueName:      queueName,
+			Items:          regular,
+		}))
+
+		var scheduled []*pb.QueueProduceItem
+		for i := 0; i < numScheduled; i++ {
+			scheduled = append(scheduled, &pb.QueueProduceItem{
+				Reference: random.String("scheduled-", 10),
+				Utf8:      fmt.Sprintf("scheduled-%d", i),
+				EnqueueAt: timestamppb.New(now.Now().Add(5 * clock.Minute)),
+			})
+		}
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			RequestTimeout: "1m",
+			QueueName:      queueName,
+			Items:          scheduled,
+		}))
+
+		var lease pb.QueueLeaseResponse
+		require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+			ClientId:       random.String("client-", 10),
+			RequestTimeout: "5s",
+			QueueName:      queueName,
+			BatchSize:      2,
+		}, &lease))
+		require.Len(t, lease.Items, 2)
+
+		require.NoError(t, c.QueueClear(ctx, &pb.QueueClearRequest{
+			QueueName: queueName,
+			Scheduled: true,
+			Queue:     true,
+		}))
+
+		var items pb.StorageItemsListResponse
+		require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &items, nil))
+		require.Len(t, items.Items, 2)
+		for _, item := range items.Items {
+			assert.True(t, item.IsLeased)
+		}
+
+		var list pb.StorageItemsListResponse
+		require.NoError(t, c.StorageScheduledList(ctx, queueName, 0, &list, nil))
+		assert.Len(t, list.Items, 0)
+	})
+
+	t.Run("QueueClear/ScheduledAndQueueDestructive", func(t *testing.T) {
+		now := clock.NewProvider()
+		now.Freeze(clock.Now())
+		defer now.UnFreeze()
+
+		var queueName = random.String("queue-", 10)
+		d := newDaemon(t, 60*clock.Second, svc.Config{
+			StorageConfig: setup(),
+			Clock:         now,
+		})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+		c, ctx := d.MustClient(), d.Context()
+
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			RequestedPartitions: 1,
+			LeaseTimeout:        "1m0s",
+			ExpireTimeout:       "24h0m0s",
+			QueueName:           queueName,
+		})
+
+		const numRegular = 10
+		const numScheduled = 20
+		var regular []*pb.QueueProduceItem
+		for i := 0; i < numRegular; i++ {
+			regular = append(regular, &pb.QueueProduceItem{
+				Reference: random.String("regular-", 10),
+				Utf8:      fmt.Sprintf("regular-%d", i),
+			})
+		}
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			RequestTimeout: "1m",
+			QueueName:      queueName,
+			Items:          regular,
+		}))
+
+		var scheduled []*pb.QueueProduceItem
+		for i := 0; i < numScheduled; i++ {
+			scheduled = append(scheduled, &pb.QueueProduceItem{
+				Reference: random.String("scheduled-", 10),
+				Utf8:      fmt.Sprintf("scheduled-%d", i),
+				EnqueueAt: timestamppb.New(now.Now().Add(5 * clock.Minute)),
+			})
+		}
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			RequestTimeout: "1m",
+			QueueName:      queueName,
+			Items:          scheduled,
+		}))
+
+		var lease pb.QueueLeaseResponse
+		require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+			ClientId:       random.String("client-", 10),
+			RequestTimeout: "5s",
+			QueueName:      queueName,
+			BatchSize:      2,
+		}, &lease))
+		require.Len(t, lease.Items, 2)
+
+		require.NoError(t, c.QueueClear(ctx, &pb.QueueClearRequest{
+			QueueName:   queueName,
+			Scheduled:   true,
+			Queue:       true,
+			Destructive: true,
+		}))
+
+		var items pb.StorageItemsListResponse
+		require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &items, nil))
+		assert.Len(t, items.Items, 0)
+
+		var list pb.StorageItemsListResponse
+		require.NoError(t, c.StorageScheduledList(ctx, queueName, 0, &list, nil))
+		assert.Len(t, list.Items, 0)
+	})
+
 	t.Run("QueueClear/LeaseAfterNonDestructive", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
 		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})

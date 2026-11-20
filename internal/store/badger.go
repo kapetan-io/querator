@@ -674,7 +674,7 @@ func (b *BadgerPartition) Clear(ctx context.Context, req types.ClearRequest) err
 		return err
 	}
 
-	if req.Destructive && req.Queue {
+	if req.Destructive && req.Queue && req.Scheduled {
 		if err := db.DropAll(); err != nil {
 			return errors.Errorf("during destructive DropAll(): %w", err)
 		}

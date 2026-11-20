@@ -1305,9 +1305,9 @@ func (p *PostgresPartition) Clear(ctx context.Context, req types.ClearRequest) e
 
 	if req.Queue {
 		if req.Destructive {
-			conditions = append(conditions, `(enqueue_at IS NULL OR enqueue_at <= NOW())`)
+			conditions = append(conditions, `enqueue_at IS NULL`)
 		} else {
-			conditions = append(conditions, `(enqueue_at IS NULL OR enqueue_at <= NOW()) AND is_leased = false`)
+			conditions = append(conditions, `enqueue_at IS NULL AND is_leased = false`)
 		}
 	}
 

@@ -1095,15 +1095,18 @@ type QueueClearRequest struct {
 	// The name of the queue
 	QueueName string `protobuf:"bytes,1,opt,name=queueName,json=queue_name,proto3" json:"queueName,omitempty"`
 	// Scheduled indicates any 'scheduled' items in the queue will be
-	// cleared. If true, any items scheduled to be enqueued at a future date
-	// will be removed. This includes items scheduled for retry.
+	// cleared. If true, every item still waiting to be enqueued is removed,
+	// including one whose enqueue time has passed but which has not yet moved
+	// into the queue, and items scheduled for retry. Only this flag removes
+	// scheduled items.
 	Scheduled bool `protobuf:"varint,3,opt,name=scheduled,proto3" json:"scheduled,omitempty"`
 	// Queue indicates any items currently waiting in the FIFO queue will
 	// clear. If true, any items in the queue which have NOT been leased
 	// will be removed.
 	Queue bool `protobuf:"varint,4,opt,name=queue,proto3" json:"queue,omitempty"`
-	// Destructive indicates the Retry, Scheduled, Queue operations should be
-	// destructive in that all data regardless of status will be removed.
+	// Destructive indicates the Queue operation should be destructive in that
+	// items are removed regardless of lease status. Scheduled items are kept
+	// unless Scheduled is also set.
 	// For example, if used with ClearRequest.Queue = true, then ALL items
 	// in the queue regardless of lease status will be removed. This means
 	// that clients who currently have ownership of those items will not be able

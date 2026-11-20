@@ -1066,7 +1066,6 @@ func (p *MongoPartition) Clear(ctx context.Context, req types.ClearRequest) erro
 	}
 
 	coll := p.collection(client)
-	now := toMicros(clock.Now().UTC())
 
 	if req.Queue && req.Destructive && req.Scheduled {
 		if err := coll.Drop(ctx); err != nil {
@@ -1083,14 +1082,11 @@ func (p *MongoPartition) Clear(ctx context.Context, req types.ClearRequest) erro
 	}
 
 	if req.Queue {
-		ready := bson.M{"$or": bson.A{
-			bson.M{"enqueue_at": bson.M{"$exists": false}},
-			bson.M{"enqueue_at": bson.M{"$lte": now}},
-		}}
+		queued := bson.M{"enqueue_at": bson.M{"$exists": false}}
 		if req.Destructive {
-			conditions = append(conditions, ready)
+			conditions = append(conditions, queued)
 		} else {
-			conditions = append(conditions, bson.M{"$and": bson.A{ready, bson.M{"is_leased": false}}})
+			conditions = append(conditions, bson.M{"$and": bson.A{queued, bson.M{"is_leased": false}}})
 		}
 	}
 

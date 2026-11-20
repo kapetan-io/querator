@@ -114,16 +114,14 @@ in the queue" while unleased items wait further on.
 
 **Workaround**: Lease again. Repeated leases reach the waiting items.
 
-## Storage backends disagree on scheduled items that are due but not yet enqueued
+## Storage backends count due scheduled items differently in stats
 
 A scheduled item is due once its enqueue time passes, and it stays scheduled until Querator moves it into
 the queue moments later. During that window, PostgreSQL and MongoDB count it in a partition's total in
-`/queue.stats` and remove it on a `/v1/queue.clear` with `queue` set. InMemory and BadgerDB count it only
-as scheduled and keep it. A destructive clear of the queue on InMemory and BadgerDB also removes
-scheduled items that are not yet due, which PostgreSQL and MongoDB keep unless `scheduled` is also set.
+`/queue.stats`. InMemory and BadgerDB count it only as scheduled.
 
-**Workaround**: Before comparing stats across backends, or clearing a queue that holds scheduled items,
-wait a few seconds past their enqueue time so they have moved into the queue.
+**Workaround**: Before comparing stats across backends, wait a few seconds past the items' enqueue time
+so they have moved into the queue.
 
 ## Changing queues holds up requests on a node with many queues
 

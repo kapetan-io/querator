@@ -316,7 +316,7 @@ func (m *MemoryPartition) Clear(_ context.Context, req types.ClearRequest) error
 	defer m.mu.Unlock()
 	m.mu.Lock()
 
-	if req.Destructive && req.Queue {
+	if req.Destructive && req.Queue && req.Scheduled {
 		m.mem = make([]types.Item, 0, 1_000)
 		m.bySourceID = make(map[string]struct{})
 		return nil

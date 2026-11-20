@@ -819,8 +819,10 @@ components:
           type: boolean
           description: >-
             Indicates any 'scheduled' items in the queue will be cleared. If
-            true, any items scheduled to be enqueued at a future date will be
-            removed.
+            true, every item still waiting to be enqueued is removed, including
+            one whose enqueue time has passed but which has not yet moved into
+            the queue, and items scheduled for retry. Only this flag removes
+            scheduled items.
         queue:
           type: boolean
           description: >-
@@ -830,8 +832,9 @@ components:
         destructive:
           type: boolean
           description: >-
-            Indicates the Retry, Scheduled, Queue operations should be destructive
-            in that all data regardless of status will be removed.
+            Indicates the Queue operation should be destructive in that items
+            are removed regardless of lease status. Scheduled items are kept
+            unless Scheduled is also set.
 
             For example, if used with ClearRequest.Queue = true, then ALL items
             in the queue regardless of lease status will be removed. This

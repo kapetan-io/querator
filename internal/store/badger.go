@@ -1078,65 +1078,85 @@ func getItem(txn *badger.Txn, id []byte) (*types.Item, error) {
 	return item, err
 }
 
-func (b *BadgerPartition) Stats(_ context.Context, stats *types.PartitionStats, now clock.Time) error {
+func (b *BadgerPartition) Stats(ctx context.Context, stats *types.PartitionStats, now clock.Time) error {
 	db, err := b.getDB()
 	if err != nil {
 		return err
 	}
 
-	pivot := sourcePrefix
-	err = db.View(func(txn *badger.Txn) error {
-
-		iter := txn.NewIterator(badger.DefaultIteratorOptions)
-		defer iter.Close()
-
-		for iter.Rewind(); iter.Valid(); iter.Next() {
-			key := iter.Item().Key()
-
-			if bytes.HasPrefix(key, []byte("source:")) {
-				continue
-			}
-
-			var v []byte
-			v, err := iter.Item().ValueCopy(v)
-			if err != nil {
-				return errors.Errorf("during GetByPartition value: %w", err)
-			}
-
-			item := new(types.Item)
-			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(item); err != nil {
-				return errors.Errorf("during Decode(): %w", err)
-			}
-
-			if !item.EnqueueAt.IsZero() {
-				stats.Scheduled++
-				continue
-			}
-
-			stats.Total++
-			stats.AverageAge += now.Sub(item.CreatedAt)
-			if item.IsLeased {
-				stats.AverageLeasedAge += item.LeaseDeadline.Sub(now)
-				stats.NumLeased++
-			} else if bytes.Equal(pivot, sourcePrefix) {
-				pivot = iter.Item().KeyCopy(nil)
-			}
+	untilCancel, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	defer cancel()
+	stopWatching := context.AfterFunc(ctx, func() {
+		if errors.Is(ctx.Err(), context.Canceled) {
+			cancel()
 		}
-
-		if stats.Total != 0 {
-			stats.AverageAge = clock.Duration(int64(stats.AverageAge) / int64(stats.Total))
-		}
-		if stats.NumLeased != 0 {
-			stats.AverageLeasedAge = clock.Duration(int64(stats.AverageLeasedAge) / int64(stats.NumLeased))
-		}
-		return nil
 	})
+	defer stopWatching()
+
+	var pivot []byte
+	err = db.View(func(txn *badger.Txn) error {
+		pivot, err = countPartition(untilCancel, txn, stats, now)
+		return err
+	})
+	if err == nil && errors.Is(ctx.Err(), context.Canceled) {
+		err = ctx.Err()
+	}
 	if err != nil {
 		b.leasePivot = nil
 		return err
 	}
 	b.leasePivot = pivot
 	return nil
+}
+
+func countPartition(ctx context.Context, txn *badger.Txn, stats *types.PartitionStats, now clock.Time) ([]byte, error) {
+	iter := txn.NewIterator(badger.DefaultIteratorOptions)
+	defer iter.Close()
+
+	pivot := sourcePrefix
+	for iter.Rewind(); iter.Valid() && ctx.Err() == nil; iter.Next() {
+		key := iter.Item().Key()
+
+		if bytes.HasPrefix(key, []byte("source:")) {
+			continue
+		}
+
+		var v []byte
+		v, err := iter.Item().ValueCopy(v)
+		if err != nil {
+			return nil, errors.Errorf("during GetByPartition value: %w", err)
+		}
+
+		item := new(types.Item)
+		if err := gob.NewDecoder(bytes.NewReader(v)).Decode(item); err != nil {
+			return nil, errors.Errorf("during Decode(): %w", err)
+		}
+
+		if !item.EnqueueAt.IsZero() {
+			stats.Scheduled++
+			continue
+		}
+
+		stats.Total++
+		stats.AverageAge += now.Sub(item.CreatedAt)
+		if item.IsLeased {
+			stats.AverageLeasedAge += item.LeaseDeadline.Sub(now)
+			stats.NumLeased++
+		} else if bytes.Equal(pivot, sourcePrefix) {
+			pivot = iter.Item().KeyCopy(nil)
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	if stats.Total != 0 {
+		stats.AverageAge = clock.Duration(int64(stats.AverageAge) / int64(stats.Total))
+	}
+	if stats.NumLeased != 0 {
+		stats.AverageLeasedAge = clock.Duration(int64(stats.AverageLeasedAge) / int64(stats.NumLeased))
+	}
+	return pivot, nil
 }
 
 func (b *BadgerPartition) Close(_ context.Context) error {

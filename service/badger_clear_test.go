@@ -65,10 +65,7 @@ func testBadgerClear(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				cleared = c.QueueClear(short, &pb.QueueClearRequest{QueueName: queueName, Queue: true})
 			},
 			While: func() {
-				select {
-				case <-hold.Reached:
-				case <-ctx.Done():
-				}
+				hold.WaitReached(t, ctx)
 			},
 		}.run()
 		require.ErrorContains(t, cleared, "context deadline exceeded")
@@ -114,10 +111,7 @@ func testBadgerClear(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				cleared = c.QueueClear(ctx, &pb.QueueClearRequest{QueueName: queueName, Queue: true})
 			},
 			While: func() {
-				select {
-				case <-hold.Reached:
-				case <-ctx.Done():
-				}
+				hold.WaitReached(t, ctx)
 				stop, cancel := context.WithTimeout(ctx, 2*clock.Second)
 				defer cancel()
 				stopped = d.d.Shutdown(stop)

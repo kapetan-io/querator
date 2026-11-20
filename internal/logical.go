@@ -601,7 +601,7 @@ func (l *Logical) requestLoop() {
 			if !state.Paused {
 				l.runLifecycle(&state)
 				l.runScheduled(&state)
-				l.leaseToWaitingConsumers(&state)
+				l.assignWaitingRequests(&state)
 			}
 			state.LifecycleTimer.Reset(l.minNextLifecycleRun(&state))
 			state.ScheduledTimer.Reset(l.minNextScheduledRun(&state))
@@ -619,13 +619,13 @@ func (l *Logical) requestLoop() {
 		case <-lifecycleCh:
 			l.log.LogAttrs(context.Background(), LevelDebugAll, "lifecycle timer fired")
 			l.runLifecycle(&state)
-			l.leaseToWaitingConsumers(&state)
+			l.assignWaitingRequests(&state)
 			state.LifecycleTimer.Reset(l.minNextLifecycleRun(&state))
 
 		case <-scheduledCh:
 			l.log.LogAttrs(context.Background(), LevelDebugAll, "scheduled timer fired")
 			l.runScheduled(&state)
-			l.leaseToWaitingConsumers(&state)
+			l.assignWaitingRequests(&state)
 			state.ScheduledTimer.Reset(l.minNextScheduledRun(&state))
 			state.LifecycleTimer.Reset(l.minNextLifecycleRun(&state))
 
@@ -635,7 +635,7 @@ func (l *Logical) requestLoop() {
 	}
 }
 
-func (l *Logical) leaseToWaitingConsumers(state *QueueState) {
+func (l *Logical) assignWaitingRequests(state *QueueState) {
 	if len(state.Leases.Requests) == 0 && len(state.Producers.Requests) == 0 {
 		return
 	}

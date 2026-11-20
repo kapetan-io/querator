@@ -2761,8 +2761,10 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 				// No lease is waiting, so only the lifecycle run that recovers the partition can
 				// assign the waiting produce.
+				produceCtx, produceCancel := context.WithCancel(ctx)
+				defer produceCancel()
 				var produceErr error
-				duringCalls(func() {}, func() {
+				duringCalls(produceCancel, func() {
 					require.Eventually(t, func() bool {
 						if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats); err != nil {
 							return false
@@ -2779,7 +2781,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 						return stats.LogicalQueues[0].ProduceWaiting == 0
 					}, 5*clock.Second, 20*clock.Millisecond)
 				}, func() {
-					produceErr = c.QueueProduce(ctx, &pb.QueueProduceRequest{
+					produceErr = c.QueueProduce(produceCtx, &pb.QueueProduceRequest{
 						QueueName:      queueName,
 						RequestTimeout: "10m",
 						Items:          produceRandomItems(3),

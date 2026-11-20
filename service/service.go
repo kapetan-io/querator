@@ -1310,6 +1310,11 @@ func (s *Service) bootstrapAnonymousAdminBinding(ctx context.Context) error {
 		Namespace: auth.SystemNamespace,
 		CreatedAt: s.conf.Clock.Now().UTC(),
 	})
+	if errors.Is(err, types.ErrRoleBindingLimitReached) {
+		s.conf.Log.Warn("Open Door binding not granted; the anonymous user already holds the most role bindings "+
+			"one user can hold in _system", "error", err)
+		return nil
+	}
 	if err != nil && !errors.Is(err, types.ErrRoleBindingAlreadyExists) {
 		return err
 	}

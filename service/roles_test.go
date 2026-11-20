@@ -1,6 +1,7 @@
 package service_test
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 
@@ -881,6 +882,137 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 				var duhErr duh.Error
 				require.ErrorAs(t, err, &duhErr)
 				assert.Contains(t, duhErr.Message(), "role binding already exists")
+			})
+
+			t.Run("LimitPerNamespace", func(t *testing.T) {
+				const limit = 100
+				d := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
+				defer d.Shutdown(t)
+				c, ctx := d.MustClient(), d.Context()
+
+				ns := random.String("ns-", 10)
+				require.NoError(t, c.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: ns}))
+				other := random.String("ns-", 10)
+				require.NoError(t, c.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: other}))
+
+				var userRes pb.UserCreateResponse
+				require.NoError(t, c.UsersCreate(ctx, &pb.UserCreateRequest{
+					Username: "rb-limit-user-" + random.String("", 5),
+				}, &userRes))
+
+				// A binding is unique per user, namespace and role, so each binding needs its own role
+				for i := range limit + 1 {
+					require.NoError(t, c.RolesCreate(ctx, &pb.RoleCreateRequest{
+						Permissions: []string{auth.QueueList},
+						Namespace:   ns,
+						Name:        fmt.Sprintf("rb-limit-role-%d", i),
+					}, &pb.RoleCreateResponse{}))
+				}
+
+				for i := range limit {
+					require.NoError(t, c.RoleBindingsCreate(ctx, &pb.RoleBindingCreateRequest{
+						Namespace: ns,
+						RoleName:  fmt.Sprintf("rb-limit-role-%d", i),
+						UserId:    userRes.Id,
+					}, &pb.RoleBindingCreateResponse{}))
+				}
+
+				err := c.RoleBindingsCreate(ctx, &pb.RoleBindingCreateRequest{
+					Namespace: ns,
+					RoleName:  fmt.Sprintf("rb-limit-role-%d", limit),
+					UserId:    userRes.Id,
+				}, &pb.RoleBindingCreateResponse{})
+				require.Error(t, err)
+				var duhErr duh.Error
+				require.ErrorAs(t, err, &duhErr)
+				assert.Equal(t, duh.CodeBadRequest, duhErr.Code())
+				assert.Equal(t, fmt.Sprintf("user_id is invalid; user '%s' already holds %d role bindings in "+
+					"namespace '%s', the most one user can hold in one namespace", userRes.Id, limit, ns), duhErr.Message())
+
+				var list pb.RoleBindingsListResponse
+				require.NoError(t, c.RoleBindingsList(ctx, ns, &list, &querator.ListOptions{Limit: limit * 2}))
+				assert.Len(t, list.Items, limit)
+
+				// The limit is per user, so another user can still be bound in the full namespace
+				var secondRes pb.UserCreateResponse
+				require.NoError(t, c.UsersCreate(ctx, &pb.UserCreateRequest{
+					Username: "rb-limit-second-" + random.String("", 5),
+				}, &secondRes))
+				require.NoError(t, c.RoleBindingsCreate(ctx, &pb.RoleBindingCreateRequest{
+					Namespace: ns,
+					RoleName:  fmt.Sprintf("rb-limit-role-%d", limit),
+					UserId:    secondRes.Id,
+				}, &pb.RoleBindingCreateResponse{}))
+
+				require.NoError(t, c.RolesCreate(ctx, &pb.RoleCreateRequest{
+					Permissions: []string{auth.QueueList},
+					Namespace:   other,
+					Name:        "rb-limit-other-role",
+				}, &pb.RoleCreateResponse{}))
+				require.NoError(t, c.RoleBindingsCreate(ctx, &pb.RoleBindingCreateRequest{
+					Namespace: other,
+					RoleName:  "rb-limit-other-role",
+					UserId:    userRes.Id,
+				}, &pb.RoleBindingCreateResponse{}))
+			})
+
+			t.Run("LimitUnderConcurrentCreates", func(t *testing.T) {
+				const limit = 100
+				const racing = 20
+				d := newDaemon(t, clock.Minute*10, svc.Config{StorageConfig: setup()})
+				defer d.Shutdown(t)
+				c, ctx := d.MustClient(), d.Context()
+
+				ns := random.String("ns-", 10)
+				require.NoError(t, c.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: ns}))
+
+				var userRes pb.UserCreateResponse
+				require.NoError(t, c.UsersCreate(ctx, &pb.UserCreateRequest{
+					Username: "rb-race-user-" + random.String("", 5),
+				}, &userRes))
+
+				for i := range limit + racing {
+					require.NoError(t, c.RolesCreate(ctx, &pb.RoleCreateRequest{
+						Permissions: []string{auth.QueueList},
+						Namespace:   ns,
+						Name:        fmt.Sprintf("rb-race-role-%d", i),
+					}, &pb.RoleCreateResponse{}))
+				}
+
+				for i := range limit - racing/2 {
+					require.NoError(t, c.RoleBindingsCreate(ctx, &pb.RoleBindingCreateRequest{
+						Namespace: ns,
+						RoleName:  fmt.Sprintf("rb-race-role-%d", i),
+						UserId:    userRes.Id,
+					}, &pb.RoleBindingCreateResponse{}))
+				}
+
+				// Connections the burst dials but never sends on would hold up daemon shutdown for 5 seconds
+				conf := querator.WithNoTLS(d.d.Listener.Addr().String())
+				defer conf.Client.CloseIdleConnections()
+				racer, err := querator.NewClient(conf)
+				require.NoError(t, err)
+
+				// Twice as many creates as free slots race, so an unguarded count would land past the limit.
+				// BadgerDB answers a create that loses a transaction conflict with an internal error, so
+				// each racer retries until it is accepted or refused, or the free slots would never fill
+				concurrently(racing, func(i int) {
+					for range 50 {
+						err := racer.RoleBindingsCreate(ctx, &pb.RoleBindingCreateRequest{
+							Namespace: ns,
+							RoleName:  fmt.Sprintf("rb-race-role-%d", limit-racing/2+i),
+							UserId:    userRes.Id,
+						}, &pb.RoleBindingCreateResponse{})
+						var duhErr duh.Error
+						if err == nil || !errors.As(err, &duhErr) || duhErr.Code() != duh.CodeInternalError {
+							return
+						}
+					}
+				})
+
+				var list pb.RoleBindingsListResponse
+				require.NoError(t, c.RoleBindingsList(ctx, ns, &list, &querator.ListOptions{Limit: limit * 2}))
+				assert.Equal(t, limit, len(list.Items))
 			})
 		})
 

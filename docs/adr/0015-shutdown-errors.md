@@ -29,9 +29,9 @@ Querator or refresh its network topology in an attempt to re-establish contact. 
 (Retry Request) as the service might not be available at this address or port and continued attempts to retry could
 be in vain.
 
-Shutdown answers every caller, including produce requests a Logical Queue holds while every one of
-its partitions has failed. A caller left unanswered keeps shutdown waiting until the caller's context or shutdown's own
-ends.
+Shutdown answers every waiting caller, including a produce that is waiting because every partition of
+its queue has failed. A caller nobody answers keeps shutdown waiting until that caller gives up or
+shutdown's own deadline passes.
 
 ## Consequences
 

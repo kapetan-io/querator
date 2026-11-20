@@ -8,33 +8,41 @@ Accepted
 
 ## Context
 
-The Logical Queue batches the produce, lease, complete and retry requests waiting on it, and sends each
-kind to a partition as one storage call, with dead-letter hand-offs in a produce call of their own ([3.
-RW Sync Point](0003-rw-sync-point.md)). A storage call that fails can leave the batch fully written,
-partly written or not written, and a backend that loses its connection during a commit cannot tell which.
-Each backend reports a failure to the Logical Queue, which decides how to answer the clients.
+Requests waiting on a queue are written to storage in batches ([3. RW Sync Point](0003-rw-sync-point.md)).
+Say three clients each send a produce while the queue is busy. The Logical Queue sends all three to
+the partition as one storage call. Leases, completes and retries are batched the same way, each kind
+in its own call, and dead-letter hand-offs go in a produce call of their own.
+
+When that call fails, storage may have written all of the batch, part of it, or none of it. A backend
+that loses its connection while committing cannot tell which.
 
 ## Decision
 
-A storage error fails every request in that call. Produce, complete and retry requests are answered with
-a retry error and the client sends them again ([20. API semantics](0020-api-semantics.md)). Lease
-requests keep waiting and are tried again until their request timeout. A problem with one request, such
-as an unknown or not-leased item ID, is reported on that request and is not a storage error.
+**A failed call fails every request in it, and the client decides what to do next.**
 
-A backend returns an error from produce only when it cannot say the batch was stored. The Logical Queue
-does not add the items of a failed produce to the partition's unleased count. The exception is a batch of
-only dead-letter hand-offs, which a backend may store in parts. It records on each request how many of
-its leading items were stored, and the Logical Queue counts those ([27. Dead-letter
-queues](0027-dead-letter-queues.md)).
+| Request | What the client gets when the call fails |
+|---|---|
+| Produce, complete, retry | A retry error. The client sends the request again ([20. API semantics](0020-api-semantics.md)). |
+| Lease | Nothing yet. The lease keeps waiting and is tried again until its request timeout. |
 
-A failed lease hands out no item whose lease was not saved. A backend that cannot tell whether a lease
-write applied takes back every item it marked leased for a request. An item whose lease did save then
-stays leased with no consumer until the lease expires, and that lease counts as one of its attempts. That
-is safe. Handing out an item whose lease did not save is not, because a second consumer could lease it
-while the first works on it.
+A problem with one request, such as an item ID that does not exist or is not leased, is reported on
+that request alone. It is not a storage error and does not fail the others.
+
+**A produce fails only when the backend cannot say the batch was stored.** The queue does not count
+the items of a failed produce as waiting in the partition. A batch of only dead-letter hand-offs is
+the exception. A backend may store it in parts, records how many items of each request it stored, and
+the queue counts those ([27. Dead-letter queues](0027-dead-letter-queues.md)).
+
+**A failed lease never hands out an item whose lease was not saved.** If a backend cannot tell whether
+a lease write applied, it takes back every item it marked leased for that request. Some of those may
+have been saved as leased. They stay leased with no consumer until the lease runs out, and that costs
+the item one attempt. That is safe. Handing out an item whose lease was not saved is not, because a
+second consumer could lease it while the first is still working on it.
 
 ## Consequences
 
-A client that retries a failed produce can store its items twice, since some or all of them may have been
-stored. A client that retries a failed complete or retry on a backend without transactions sees "does not
+A client that resends a failed produce can store its items twice, since some or all of them may
+already be stored.
+
+A client that resends a failed complete or retry on a backend without transactions gets "does not
 exist" for the items the first attempt already removed.

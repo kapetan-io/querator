@@ -1048,7 +1048,7 @@ func (s *lifecycleSpy) WaitForFirstPage(t *testing.T, ctx context.Context) {
 	select {
 	case <-s.reached:
 	case <-ctx.Done():
-		require.FailNow(t, "the lifecycle never read its first page")
+		require.FailNow(t, "the daemon stopped before the lifecycle read its first page")
 	case <-clock.After(holdWait):
 		require.FailNowf(t, "the lifecycle never read its first page", "no page read within %s", holdWait)
 	}

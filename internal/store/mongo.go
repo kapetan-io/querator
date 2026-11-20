@@ -399,6 +399,7 @@ func (q *MongoQueues) Update(ctx context.Context, info types.QueueInfo) error {
 			"requested_partitions": found.RequestedPartitions,
 			"partition_info":       partitionInfoJSON,
 			"updated_at":           toMicros(found.UpdatedAt),
+			"namespace":            found.Namespace,
 		}})
 	if err != nil {
 		return errors.Errorf("update queue: %w", err)

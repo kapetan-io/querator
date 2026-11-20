@@ -1027,6 +1027,106 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		assert.Equal(t, "head", info.Reference)
 	})
 
+	t.Run("StoredQueueNamesMissingDeadQueue", func(t *testing.T) {
+		conf := setup()
+		stored := random.String("stored-", 10)
+		missing := random.String("missing-", 10)
+		other := random.String("other-", 10)
+
+		// The API refuses a dead_queue that does not exist, so this queue is written
+		// to storage before the daemon starts, as an older server would have left it
+		for _, link := range []struct{ name, dead string }{{other, ""}, {stored, missing}} {
+			info := types.QueueInfo{
+				Name:                link.name,
+				DeadQueue:           link.dead,
+				LeaseTimeout:        clock.Minute,
+				ExpireTimeout:       10 * clock.Minute,
+				RequestedPartitions: 1,
+			}
+			placed, err := store.PlacePartitions(conf.PartitionStorage, info)
+			require.NoError(t, err)
+			info.PartitionInfo = placed
+			require.NoError(t, conf.Queues.Add(context.Background(), info))
+		}
+
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+		c, ctx := d.MustClient(), d.Context()
+
+		err := c.QueuesCreate(ctx, &pb.QueueInfo{
+			QueueName:           missing,
+			ExpireTimeout:       "10m",
+			LeaseTimeout:        "1m",
+			RequestedPartitions: 2,
+		})
+		require.Error(t, err)
+		var duhErr duh.Error
+		require.True(t, errors.As(err, &duhErr))
+		assert.Equal(t, duh.CodeBadRequest, duhErr.Code())
+		assert.Contains(t, duhErr.Message(), "'"+missing+"' is the dead_queue of '"+stored+"' and must have a single partition")
+
+		// other exists and nothing names it, so only the stored queue can cause the refusal
+		err = c.QueuesCreate(ctx, &pb.QueueInfo{
+			QueueName:           missing,
+			DeadQueue:           other,
+			ExpireTimeout:       "10m",
+			LeaseTimeout:        "1m",
+			RequestedPartitions: 1,
+		})
+		require.Error(t, err)
+		require.True(t, errors.As(err, &duhErr))
+		assert.Equal(t, duh.CodeBadRequest, duhErr.Code())
+		assert.Contains(t, duhErr.Message(), "'"+missing+"' is the dead_queue of '"+stored+"' and cannot have its own dead_queue")
+
+		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+			QueueName:           missing,
+			ExpireTimeout:       "10m",
+			LeaseTimeout:        "1m",
+			RequestedPartitions: 1,
+		}))
+	})
+
+	t.Run("DeleteDeadQueueNamedAfterFirstPage", func(t *testing.T) {
+		conf := setup()
+		dead := "a-dead-queue"
+		source := "z-source-queue"
+
+		// sourceQueueOf reads 1,000 queues per page (pageSize in internal/queues_manager.go).
+		// The source sorts last, so filler must stay above that size or this stops testing paging.
+		const filler = 1500
+		infos := []types.QueueInfo{{Name: dead}}
+		for i := 0; i < filler; i++ {
+			infos = append(infos, types.QueueInfo{Name: fmt.Sprintf("filler-%05d", i)})
+		}
+		infos = append(infos, types.QueueInfo{Name: source, DeadQueue: dead})
+		for _, info := range infos {
+			info.LeaseTimeout = clock.Minute
+			info.ExpireTimeout = 10 * clock.Minute
+			info.RequestedPartitions = 1
+			placed, err := store.PlacePartitions(conf.PartitionStorage, info)
+			require.NoError(t, err)
+			info.PartitionInfo = placed
+			require.NoError(t, conf.Queues.Add(context.Background(), info))
+		}
+
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+		c, ctx := d.MustClient(), d.Context()
+
+		err := c.QueuesDelete(ctx, &pb.QueuesDeleteRequest{QueueName: dead})
+		require.Error(t, err)
+		var duhErr duh.Error
+		require.True(t, errors.As(err, &duhErr))
+		assert.Equal(t, duh.CodeBadRequest, duhErr.Code())
+		assert.Contains(t, duhErr.Message(), "it is the dead_queue of '"+source+"'")
+	})
+
 	t.Run("List", func(t *testing.T) {
 		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
 		defer func() {

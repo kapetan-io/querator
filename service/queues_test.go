@@ -5,22 +5,27 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 
 	"github.com/duh-rpc/duh-go"
+	v1 "github.com/duh-rpc/duh-go/proto/v1"
 	"github.com/duh-rpc/duh-go/retry"
 	"github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
 	pb "github.com/kapetan-io/querator/proto"
 	svc "github.com/kapetan-io/querator/service"
+	"github.com/kapetan-io/querator/transport"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/random"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 type countedQueues struct {
@@ -172,9 +177,9 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 			t.Run("MaxAttempts", func(t *testing.T) {
 				l := queues[31]
-				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
 					QueueName:   l.QueueName,
-					MaxAttempts: l.MaxAttempts + 1,
+					MaxAttempts: new(int32(l.MaxAttempts + 1)),
 				}))
 
 				var list pb.QueuesListResponse
@@ -200,7 +205,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				require.NoError(t, err)
 				rt += 10 * clock.Second
 
-				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
 					QueueName:    l.QueueName,
 					LeaseTimeout: rt.String(),
 				}))
@@ -227,7 +232,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				require.NoError(t, err)
 				dt += 20 * clock.Second
 
-				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
 					QueueName:     l.QueueName,
 					ExpireTimeout: dt.String(),
 				}))
@@ -250,9 +255,9 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			t.Run("Reference", func(t *testing.T) {
 				l := queues[33]
 
-				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
 					QueueName: l.QueueName,
-					Reference: "SomethingElse",
+					Reference: new("SomethingElse"),
 				}))
 
 				var list pb.QueuesListResponse
@@ -282,10 +287,10 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				require.NoError(t, err)
 				rt += 5 * clock.Second
 
-				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
 					QueueName:     l.QueueName,
-					Reference:     "FriendshipIsMagic",
-					MaxAttempts:   l.MaxAttempts + 1,
+					Reference:     new("FriendshipIsMagic"),
+					MaxAttempts:   new(int32(l.MaxAttempts + 1)),
 					LeaseTimeout:  rt.String(),
 					ExpireTimeout: dt.String(),
 				}))
@@ -330,13 +335,13 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				var before pb.QueueInfo
 				require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &before))
 
-				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
 					QueueName:           queueName,
 					LeaseTimeout:        "2m",
 					ExpireTimeout:       "20m",
-					MaxAttempts:         5,
-					DeadQueue:           deadName,
-					Reference:           "updated",
+					MaxAttempts:         new(int32(5)),
+					DeadQueue:           new(deadName),
+					Reference:           new("updated"),
 					RequestedPartitions: 2,
 				}))
 
@@ -394,9 +399,9 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					RequestedPartitions: 1,
 				}))
 
-				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
 					QueueName: queueName,
-					Reference: "only-reference",
+					Reference: new("only-reference"),
 				}))
 
 				require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
@@ -563,9 +568,9 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 						RequestedPartitions: 1,
 					}))
 
-					err := c.QueuesUpdate(ctx, &pb.QueueInfo{
+					err := c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
 						QueueName: queueName,
-						DeadQueue: dlqName,
+						DeadQueue: new(dlqName),
 					})
 					require.Error(t, err)
 					var duhErr duh.Error
@@ -589,9 +594,9 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					}
 
 					// B gains a dead-letter queue of its own after it was loaded, so it can no longer be named as one
-					require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+					require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
 						QueueName: queueB,
-						DeadQueue: queueC,
+						DeadQueue: new(queueC),
 					}))
 
 					err := c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -620,7 +625,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					}))
 
 					// The dead-letter queue gains a second requested partition after it was loaded, so it can no longer be named as one
-					require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+					require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
 						QueueName:           dlqName,
 						RequestedPartitions: 2,
 					}))
@@ -652,14 +657,14 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 						}))
 					}
 
-					require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+					require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
 						QueueName: queueA,
-						DeadQueue: queueB,
+						DeadQueue: new(queueB),
 					}))
 
-					err := c.QueuesUpdate(ctx, &pb.QueueInfo{
+					err := c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
 						QueueName: queueB,
-						DeadQueue: queueA,
+						DeadQueue: new(queueA),
 					})
 					require.Error(t, err)
 					var duhErr duh.Error
@@ -690,9 +695,9 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 						RequestedPartitions: 1,
 					}))
 
-					err := c.QueuesUpdate(ctx, &pb.QueueInfo{
+					err := c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
 						QueueName: queueA,
-						DeadQueue: queueB,
+						DeadQueue: new(queueB),
 					})
 					require.Error(t, err)
 					var duhErr duh.Error
@@ -727,9 +732,9 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					}))
 
 					// B is A's dead queue, so giving B a dead queue of its own would form the chain A→B→C
-					err := c.QueuesUpdate(ctx, &pb.QueueInfo{
+					err := c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
 						QueueName: queueB,
-						DeadQueue: queueC,
+						DeadQueue: new(queueC),
 					})
 					require.Error(t, err)
 					var duhErr duh.Error
@@ -760,7 +765,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 						RequestedPartitions: 1,
 					}))
 
-					err := c.QueuesUpdate(ctx, &pb.QueueInfo{
+					err := c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
 						QueueName:           dlqName,
 						RequestedPartitions: 2,
 					})
@@ -771,10 +776,10 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					assert.Contains(t, duhErr.Message(), "is the dead_queue of '"+queueName+"'")
 
 					// Update replaces dead_queue, so the source queue must stay updatable when it re-sends its dead_queue
-					require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+					require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
 						QueueName: queueName,
-						DeadQueue: dlqName,
-						Reference: "still-updatable",
+						DeadQueue: new(dlqName),
+						Reference: new("still-updatable"),
 					}))
 
 					var info pb.QueueInfo
@@ -811,9 +816,9 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: dlqName}, &info))
 					assert.Equal(t, dlqName, info.QueueName)
 
-					require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+					require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
 						QueueName: queueName,
-						DeadQueue: "",
+						DeadQueue: new(""),
 					}))
 					require.NoError(t, c.QueuesDelete(ctx, &pb.QueuesDeleteRequest{QueueName: dlqName}))
 				})
@@ -832,15 +837,15 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 						}))
 					}
 
-					require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+					require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
 						QueueName: queueB,
-						DeadQueue: queueC,
+						DeadQueue: new(queueC),
 					}))
 
 					// The tail link is formed first, so pointing A at B would complete the chain A→B→C
-					err := c.QueuesUpdate(ctx, &pb.QueueInfo{
+					err := c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
 						QueueName: queueA,
-						DeadQueue: queueB,
+						DeadQueue: new(queueB),
 					})
 					require.Error(t, err)
 					var duhErr duh.Error
@@ -975,10 +980,10 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		}()
 		c, ctx := d.MustClient(), d.Context()
 
-		err := c.QueuesUpdate(ctx, &pb.QueueInfo{
+		err := c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
 			QueueName: queueB,
-			DeadQueue: queueC,
-			Reference: "middle",
+			DeadQueue: new(queueC),
+			Reference: new("middle"),
 		})
 		require.Error(t, err)
 		var duhErr duh.Error
@@ -987,10 +992,10 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		assert.Contains(t, duhErr.Message(), "'"+queueB+"' is the dead_queue of '"+queueA+"'")
 		assert.Contains(t, duhErr.Message(), "clear or change dead_queue on '"+queueA+"' first")
 
-		err = c.QueuesUpdate(ctx, &pb.QueueInfo{
+		err = c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
 			QueueName: queueA,
-			DeadQueue: queueB,
-			Reference: "head",
+			DeadQueue: new(queueB),
+			Reference: new("head"),
 		})
 		require.Error(t, err)
 		require.True(t, errors.As(err, &duhErr))
@@ -998,19 +1003,38 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		assert.Contains(t, duhErr.Message(), "'"+queueB+"' already has its own dead_queue configured")
 		assert.Contains(t, duhErr.Message(), "clear or change dead_queue on '"+queueB+"' first")
 
-		// Clearing the middle queue's dead_queue breaks the chain, after which both queues update
-		require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+		// Leaving dead_queue out keeps the link, so the update is checked against the saved chain
+		err = c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
 			QueueName: queueB,
-			DeadQueue: "",
-		}))
-		require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
-			QueueName: queueB,
-			Reference: "middle",
-		}))
-		require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+			Reference: new("middle"),
+		})
+		require.Error(t, err)
+		require.True(t, errors.As(err, &duhErr))
+		assert.Equal(t, duh.CodeBadRequest, duhErr.Code())
+		assert.Contains(t, duhErr.Message(), "'"+queueB+"' is the dead_queue of '"+queueA+"'")
+
+		err = c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
 			QueueName: queueA,
-			DeadQueue: queueB,
-			Reference: "head",
+			Reference: new("head"),
+		})
+		require.Error(t, err)
+		require.True(t, errors.As(err, &duhErr))
+		assert.Equal(t, duh.CodeBadRequest, duhErr.Code())
+		assert.Contains(t, duhErr.Message(), "'"+queueB+"' already has its own dead_queue configured")
+
+		// Clearing the middle queue's dead_queue breaks the chain, after which both queues update
+		require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
+			QueueName: queueB,
+			DeadQueue: new(""),
+		}))
+		require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
+			QueueName: queueB,
+			Reference: new("middle"),
+		}))
+		require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
+			QueueName: queueA,
+			DeadQueue: new(queueB),
+			Reference: new("head"),
 		}))
 
 		var info pb.QueueInfo
@@ -1051,14 +1075,24 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		}()
 		c, ctx := d.MustClient(), d.Context()
 
-		err := c.QueuesCreate(ctx, &pb.QueueInfo{
+		// Leaving dead_queue out keeps the link, so the saved dead_queue must still be valid
+		err := c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
+			QueueName: stored,
+			Reference: new("owner"),
+		})
+		require.Error(t, err)
+		var duhErr duh.Error
+		require.True(t, errors.As(err, &duhErr))
+		assert.Equal(t, duh.CodeBadRequest, duhErr.Code())
+		assert.Contains(t, duhErr.Message(), "dead_queue does not exist; '"+missing+"' was not found")
+
+		err = c.QueuesCreate(ctx, &pb.QueueInfo{
 			QueueName:           missing,
 			ExpireTimeout:       "10m",
 			LeaseTimeout:        "1m",
 			RequestedPartitions: 2,
 		})
 		require.Error(t, err)
-		var duhErr duh.Error
 		require.True(t, errors.As(err, &duhErr))
 		assert.Equal(t, duh.CodeBadRequest, duhErr.Code())
 		assert.Contains(t, duhErr.Message(), "'"+missing+"' is the dead_queue of '"+stored+"' and must have a single partition")
@@ -1082,6 +1116,16 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			LeaseTimeout:        "1m",
 			RequestedPartitions: 1,
 		}))
+
+		require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
+			QueueName: stored,
+			DeadQueue: new(""),
+			Reference: new("owner"),
+		}))
+		var info pb.QueueInfo
+		require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: stored}, &info))
+		assert.Equal(t, "", info.DeadQueue)
+		assert.Equal(t, "owner", info.Reference)
 	})
 
 	t.Run("DeleteDeadQueueNamedAfterFirstPage", func(t *testing.T) {
@@ -1541,19 +1585,19 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		t.Run("QueuesUpdate", func(t *testing.T) {
 			for _, test := range []struct {
 				Name string
-				Req  *pb.QueueInfo
+				Req  *pb.QueuesUpdateRequest
 				Msg  string
 				Code int
 			}{
 				{
 					Name: "EmptyRequest",
-					Req:  &pb.QueueInfo{},
+					Req:  &pb.QueuesUpdateRequest{},
 					Msg:  "queue name is invalid; queue name cannot be empty",
 					Code: duh.CodeBadRequest,
 				},
 				{
 					Name: "InvalidQueue",
-					Req: &pb.QueueInfo{
+					Req: &pb.QueuesUpdateRequest{
 						QueueName: "invalid~queue",
 					},
 					Msg:  "queue name is invalid; 'invalid~queue' cannot contain '~' character",
@@ -1561,7 +1605,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				},
 				{
 					Name: "NoSuchQueue",
-					Req: &pb.QueueInfo{
+					Req: &pb.QueuesUpdateRequest{
 						QueueName: "noSuchQueue",
 					},
 					Msg:  "queue does not exist; no such queue named 'noSuchQueue'",
@@ -1569,7 +1613,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				},
 				{
 					Name: "QueueNameMaxLength",
-					Req: &pb.QueueInfo{
+					Req: &pb.QueuesUpdateRequest{
 						QueueName: random.String("", 2_001),
 					},
 					Msg:  "queue name is invalid; cannot be greater than '512' characters",
@@ -1577,7 +1621,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				},
 				{
 					Name: "QueueWhiteSpace",
-					Req: &pb.QueueInfo{
+					Req: &pb.QueuesUpdateRequest{
 						LeaseTimeout:        LeaseTimeout,
 						ExpireTimeout:       ExpireTimeout,
 						QueueName:           "Friendship is Magic",
@@ -1588,16 +1632,16 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				},
 				{
 					Name: "ReferenceMaxLength",
-					Req: &pb.QueueInfo{
+					Req: &pb.QueuesUpdateRequest{
 						QueueName: queueName,
-						Reference: random.String("", 2_001),
+						Reference: new(random.String("", 2_001)),
 					},
 					Msg:  "reference field is invalid; cannot be greater than '2000' characters",
 					Code: duh.CodeBadRequest,
 				},
 				{
 					Name: "LeaseTimeoutTooLong",
-					Req: &pb.QueueInfo{
+					Req: &pb.QueuesUpdateRequest{
 						QueueName:     queueName,
 						LeaseTimeout:  "1h0m0s",
 						ExpireTimeout: "30m0s",
@@ -1607,7 +1651,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				},
 				{
 					Name: "InvalidLeaseTimeout",
-					Req: &pb.QueueInfo{
+					Req: &pb.QueuesUpdateRequest{
 						QueueName:    queueName,
 						LeaseTimeout: "foo",
 					},
@@ -1616,7 +1660,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				},
 				{
 					Name: "InvalidExpireTimeout",
-					Req: &pb.QueueInfo{
+					Req: &pb.QueuesUpdateRequest{
 						QueueName:     queueName,
 						ExpireTimeout: "foo",
 					},
@@ -1625,7 +1669,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				},
 				{
 					Name: "ExpireTimeoutMaxLength",
-					Req: &pb.QueueInfo{
+					Req: &pb.QueuesUpdateRequest{
 						QueueName:     "ExpireTimeoutMaxLength",
 						ExpireTimeout: random.String("", 2_001),
 					},
@@ -1634,7 +1678,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				},
 				{
 					Name: "DeadQueueMaxLength",
-					Req: &pb.QueueInfo{
+					Req: &pb.QueuesUpdateRequest{
 						QueueName:     "ExpireTimeoutMaxLength",
 						ExpireTimeout: random.String("", 2_001),
 					},
@@ -1643,9 +1687,9 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				},
 				{
 					Name: "InvalidDeadLetterQueue",
-					Req: &pb.QueueInfo{
+					Req: &pb.QueuesUpdateRequest{
 						QueueName: queueName,
-						DeadQueue: "invalid~deadLetter",
+						DeadQueue: new("invalid~deadLetter"),
 					},
 					Msg:  "dead queue is invalid; 'invalid~deadLetter' cannot contain '~' character",
 					Code: duh.CodeBadRequest,
@@ -1653,18 +1697,18 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				{
 					// TODO: This might be allowed later to indicate infinite retries
 					Name: "InvalidMinAttempts",
-					Req: &pb.QueueInfo{
+					Req: &pb.QueuesUpdateRequest{
 						QueueName:   queueName,
-						MaxAttempts: -1,
+						MaxAttempts: new(int32(-1)),
 					},
 					Msg:  "max attempts is invalid; cannot be negative number",
 					Code: duh.CodeBadRequest,
 				},
 				{
 					Name: "InvalidMaxAttempts",
-					Req: &pb.QueueInfo{
+					Req: &pb.QueuesUpdateRequest{
 						QueueName:   queueName,
-						MaxAttempts: math.MaxInt32,
+						MaxAttempts: new(int32(math.MaxInt32)),
 					},
 					Msg:  "max attempts is invalid; cannot be greater than 65536",
 					Code: duh.CodeBadRequest,
@@ -1816,9 +1860,9 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				ExpireTimeout:       ExpireTimeout,
 				RequestedPartitions: 1,
 			})
-			require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+			require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
 				QueueName:   queueName,
-				MaxAttempts: 5,
+				MaxAttempts: new(int32(5)),
 			}))
 
 			ref := random.String("ref-", 10)
@@ -1843,6 +1887,132 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			start := now.Now().UTC()
 			assert.WithinDuration(t, start.Add(24*clock.Hour), item.ExpireDeadline.AsTime(), clock.Microsecond)
 			assert.WithinDuration(t, start.Add(clock.Minute), item.LeaseDeadline.AsTime(), clock.Microsecond)
+		})
+
+		t.Run("OmittedSettingsAreKept", func(t *testing.T) {
+			dlqName := random.String("dlq-", 10)
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				QueueName:           dlqName,
+				LeaseTimeout:        LeaseTimeout,
+				ExpireTimeout:       ExpireTimeout,
+				RequestedPartitions: 1,
+			})
+			queueName := random.String("queue-", 10)
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				QueueName:           queueName,
+				LeaseTimeout:        "1m0s",
+				ExpireTimeout:       ExpireTimeout,
+				DeadQueue:           dlqName,
+				MaxAttempts:         7,
+				Reference:           "owner-1",
+				RequestedPartitions: 1,
+			})
+
+			for _, update := range []*pb.QueuesUpdateRequest{
+				{QueueName: queueName, LeaseTimeout: "2m0s"},
+				{QueueName: queueName, RequestedPartitions: 1},
+			} {
+				require.NoError(t, c.QueuesUpdate(ctx, update))
+
+				var info pb.QueueInfo
+				require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &info))
+				assert.Equal(t, "2m0s", info.LeaseTimeout)
+				assert.Equal(t, dlqName, info.DeadQueue)
+				assert.Equal(t, int32(7), info.MaxAttempts)
+				assert.Equal(t, "owner-1", info.Reference)
+			}
+		})
+
+		t.Run("ExplicitClear", func(t *testing.T) {
+			dlqName := random.String("dlq-", 10)
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				QueueName:           dlqName,
+				LeaseTimeout:        LeaseTimeout,
+				ExpireTimeout:       ExpireTimeout,
+				RequestedPartitions: 1,
+			})
+			queueName := random.String("queue-", 10)
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				QueueName:           queueName,
+				LeaseTimeout:        "1m0s",
+				ExpireTimeout:       ExpireTimeout,
+				DeadQueue:           dlqName,
+				MaxAttempts:         7,
+				Reference:           "owner-1",
+				RequestedPartitions: 1,
+			})
+
+			require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
+				QueueName:   queueName,
+				DeadQueue:   new(""),
+				MaxAttempts: new(int32(0)),
+				Reference:   new(""),
+			}))
+
+			var info pb.QueueInfo
+			require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &info))
+			assert.Equal(t, "", info.DeadQueue)
+			assert.Equal(t, int32(0), info.MaxAttempts)
+			assert.Equal(t, "", info.Reference)
+			assert.Equal(t, "1m0s", info.LeaseTimeout)
+
+			var list pb.QueuesListResponse
+			require.NoError(t, c.QueuesList(ctx, &list, &querator.ListOptions{Pivot: queueName, Limit: 1}))
+			require.Len(t, list.Items, 1)
+			assert.Equal(t, "", list.Items[0].DeadQueue)
+			assert.Equal(t, int32(0), list.Items[0].MaxAttempts)
+			assert.Equal(t, "", list.Items[0].Reference)
+		})
+
+		t.Run("JSONRequests", func(t *testing.T) {
+			dlqName := random.String("dlq-", 10)
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				QueueName:           dlqName,
+				LeaseTimeout:        LeaseTimeout,
+				ExpireTimeout:       ExpireTimeout,
+				RequestedPartitions: 1,
+			})
+			queueName := random.String("queue-", 10)
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				QueueName:           queueName,
+				LeaseTimeout:        "1m0s",
+				ExpireTimeout:       ExpireTimeout,
+				DeadQueue:           dlqName,
+				MaxAttempts:         7,
+				Reference:           "owner-1",
+				RequestedPartitions: 1,
+			})
+
+			endpoint := fmt.Sprintf("http://%s%s", d.d.Listener.Addr().String(), transport.RPCQueuesUpdate)
+			post := func(body string) {
+				r, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(body))
+				require.NoError(t, err)
+				r.Header.Set("Content-Type", duh.ContentTypeJSON)
+				require.NoError(t, duh.HTTP1Client.Do(r, &v1.Reply{}))
+			}
+
+			post(`{"queue_name":"` + queueName + `","lease_timeout":"2m0s"}`)
+			var info pb.QueueInfo
+			require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &info))
+			assert.Equal(t, "2m0s", info.LeaseTimeout)
+			assert.Equal(t, dlqName, info.DeadQueue)
+			assert.Equal(t, int32(7), info.MaxAttempts)
+			assert.Equal(t, "owner-1", info.Reference)
+
+			// A body copied from '/queues.info' is accepted, and its read-only fields are ignored
+			echo, err := protojson.Marshal(&info)
+			require.NoError(t, err)
+			post(string(echo))
+			require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &info))
+			assert.Equal(t, dlqName, info.DeadQueue)
+			assert.Len(t, info.Partitions, 1)
+
+			post(`{"queue_name":"` + queueName + `","dead_queue":"","max_attempts":0,"reference":""}`)
+			require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &info))
+			assert.Equal(t, "2m0s", info.LeaseTimeout)
+			assert.Equal(t, "", info.DeadQueue)
+			assert.Equal(t, int32(0), info.MaxAttempts)
+			assert.Equal(t, "", info.Reference)
 		})
 
 		t.Run("MaxAttempts", func(t *testing.T) {
@@ -1991,10 +2161,10 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 				// Update queue to MaxAttempts=2 (decrease from 5)
 				// NOTE: Must include DeadQueue to preserve DLQ config since Update replaces fields
-				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
 					QueueName:   queueName,
-					MaxAttempts: 2,
-					DeadQueue:   dlqName,
+					MaxAttempts: new(int32(2)),
+					DeadQueue:   new(dlqName),
 				}))
 
 				// Advance time past LeaseTimeout, wait for re-queue
@@ -2149,10 +2319,10 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 				// Update queue to MaxAttempts=5 (increase from 2)
 				// NOTE: Must include DeadQueue to preserve DLQ config since Update replaces fields
-				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
 					QueueName:   queueName,
-					MaxAttempts: 5,
-					DeadQueue:   dlqName,
+					MaxAttempts: new(int32(5)),
+					DeadQueue:   new(dlqName),
 				}))
 
 				// Advance time, let lease timeout
@@ -2254,10 +2424,10 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 				// Update queue to MaxAttempts=0 (unlimited)
 				// NOTE: Must include DeadQueue to preserve DLQ config since Update replaces fields
-				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
 					QueueName:   queueName,
-					MaxAttempts: 0,
-					DeadQueue:   dlqName,
+					MaxAttempts: new(int32(0)),
+					DeadQueue:   new(dlqName),
 				}))
 
 				// Loop 5+ times: lease, advance time, verify item re-queues
@@ -2337,7 +2507,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				}))
 
 				// Update queue to LeaseTimeout="1m"
-				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
 					QueueName:    queueName,
 					LeaseTimeout: "1m0s",
 				}))
@@ -2434,7 +2604,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				assert.True(t, actualDeadline.After(expectedDeadline.Add(-5*clock.Second)))
 
 				// Update queue to LeaseTimeout="1m"
-				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
 					QueueName:    queueName,
 					LeaseTimeout: "1m0s",
 				}))
@@ -2489,7 +2659,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				})
 
 				// Update queue to ExpireTimeout="2m"
-				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
 					QueueName:     queueName,
 					ExpireTimeout: "2m0s",
 				}))
@@ -2554,7 +2724,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				originalDeadline := item.ExpireDeadline.AsTime()
 
 				// Update queue to ExpireTimeout="2m"
-				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
 					QueueName:     queueName,
 					ExpireTimeout: "2m0s",
 				}))
@@ -2604,10 +2774,10 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				}))
 
 				// Update main queue to set DeadQueue
-				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
 					QueueName:   queueName,
-					MaxAttempts: 2,
-					DeadQueue:   dlqName,
+					MaxAttempts: new(int32(2)),
+					DeadQueue:   new(dlqName),
 				}))
 
 				// First lease: Attempts becomes 1
@@ -2771,10 +2941,10 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				require.NotNil(t, findInStorageList(ref1, &dlqAResp))
 
 				// Update main queue to set DeadQueue=DLQ-B
-				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
 					QueueName:   queueName,
-					MaxAttempts: 2,
-					DeadQueue:   dlqBName,
+					MaxAttempts: new(int32(2)),
+					DeadQueue:   new(dlqBName),
 				}))
 
 				// Produce item-2
@@ -2869,10 +3039,10 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				})
 
 				// Update main queue to remove DeadQueue
-				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
 					QueueName:   queueName,
-					MaxAttempts: 2,
-					DeadQueue:   "",
+					MaxAttempts: new(int32(2)),
+					DeadQueue:   new(""),
 				}))
 
 				// Produce item
@@ -2953,9 +3123,9 @@ func updateWhileReadingInfo(t *testing.T, ctx context.Context, c *querator.Clien
 	var wg sync.WaitGroup
 	wg.Go(func() {
 		for i := range updates {
-			assert.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+			assert.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
 				QueueName: queueName,
-				Reference: fmt.Sprintf("reference-%d", i),
+				Reference: new(fmt.Sprintf("reference-%d", i)),
 			}))
 		}
 	})

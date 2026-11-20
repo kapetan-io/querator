@@ -404,7 +404,11 @@ paths:
     post:
       summary: Update a queue
       deprecated: false
-      description: Update the details of a queue.
+      description: >-
+        Update the details of a queue. A field the request leaves out keeps its
+        current value. To remove the dead letter queue send `"dead_queue": ""`,
+        to remove the reference send `"reference": ""`, and to allow unlimited
+        attempts send `"max_attempts": 0`.
       operationId: post-v1-queues.update
       tags:
         - Querator V1
@@ -413,7 +417,8 @@ paths:
         required: true
         content:
           application/json:
-            schema: *ref_0
+            schema:
+              $ref: '#/components/schemas/QueuesUpdateRequest'
             example:
               queue_name: queue-name
               dead_queue: queue-name-dead
@@ -861,6 +866,74 @@ components:
         queue_name:
           type: string
           description: The name of the queue to retrieve info about
+      required:
+        - queue_name
+    QueuesUpdateRequest:
+      type: object
+      properties:
+        queue_name:
+          type: string
+          description: The name of the queue to update
+          examples:
+            - queue-name
+        dead_queue:
+          type: string
+          description: >-
+            The name of the dead letter queue for this queue. Left out, the
+            current dead letter queue is kept. An empty string removes it.
+          examples:
+            - queue-name-dead
+        reference:
+          type: string
+          description: >-
+            A user supplied field which could contain metadata or specify who
+            owns this queue. Left out, the current reference is kept. An empty
+            string removes it.
+          examples:
+            - account-12345
+        lease_timeout:
+          type: string
+          description: >-
+            The default lease timeout for this queue. Left out or empty, the
+            current lease timeout is kept.
+          examples:
+            - 60m
+        expire_timeout:
+          type: string
+          description: >-
+            How long an item can wait in the queue regardless of attempts before
+            it is moved to the dead letter queue. Left out or empty, the current
+            expire timeout is kept.
+          examples:
+            - 24h
+        max_attempts:
+          type: integer
+          description: >-
+            The maximum number of times an item can be retried by a consumer
+            before it is placed in the dead letter queue or removed. Left out,
+            the current limit is kept. '0' allows unlimited attempts.
+        requested_partitions:
+          type: integer
+          description: >-
+            The number of partitions this queue has requested. Left out or '0',
+            the current count is kept. `/queues.update` does not add or remove
+            partitions.
+        created_at:
+          type: string
+          format: date-time
+          description: Accepted so a request can carry back what `/queues.info` returned. Ignored.
+        updated_at:
+          type: string
+          format: date-time
+          description: Accepted so a request can carry back what `/queues.info` returned. Ignored.
+        namespace:
+          type: string
+          description: Accepted so a request can carry back what `/queues.info` returned. Ignored.
+        partitions:
+          type: array
+          description: Accepted so a request can carry back what `/queues.info` returned. Ignored.
+          items:
+            $ref: '#/components/schemas/PartitionInfo'
       required:
         - queue_name
     QueuesDeleteRequest:

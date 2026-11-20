@@ -146,7 +146,8 @@ changes pause traffic for as long as the read takes.
 
 Querator refuses a dead-letter queue that has its own dead-letter queue, but older releases did not check
 this when the second queue was updated. Such chains stay in storage. An update to a queue in the chain
-that sends its `dead_queue` unchanged is refused.
+that leaves `dead_queue` out, or sends it unchanged, is refused. The same holds for a queue an older release
+saved with a `dead_queue` that does not exist.
 
-**Workaround**: When updating a queue in such a chain, clear its `dead_queue` or point it at a queue with
-no dead-letter queue of its own.
+**Workaround**: When updating such a queue, send `"dead_queue": ""` to clear it, or point it at
+a queue with no dead-letter queue of its own.

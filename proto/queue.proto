@@ -196,6 +196,8 @@ message QueueRetryResponse {
   string message = 3;
 }
 
+// QueueInfo is the request of '/queues.create' and the response of '/queues.info' and '/queues.list'.
+// '/queues.update' takes QueuesUpdateRequest, which keeps any setting the request leaves out.
 message QueueInfo {
   // The name of the queue
   string queueName = 1  [json_name = "queue_name"];

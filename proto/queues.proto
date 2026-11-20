@@ -49,3 +49,43 @@ message QueuesInfoRequest {
   // The name of the queue to retrieve information about
   string queueName = 1 [json_name = "queue_name"];
 }
+
+// QueuesUpdateRequest changes the settings of an existing queue. A setting the request leaves
+// out keeps its current value. `dead_queue`, `reference` and `max_attempts` can be cleared by
+// sending them explicitly: `"dead_queue": ""` removes the dead letter queue, `"reference": ""`
+// removes the reference and `"max_attempts": 0` allows unlimited attempts.
+message QueuesUpdateRequest {
+  // The name of the queue to update
+  string queueName = 1 [json_name = "queue_name"];
+
+  // The name of the dead letter queue for this queue. Left out, the current dead letter queue
+  // is kept. An empty string removes it.
+  optional string deadQueue = 4 [json_name = "dead_queue"];
+
+  // A user supplied field which could contain metadata or specify who owns this queue.
+  // Left out, the current reference is kept. An empty string removes it.
+  optional string reference = 5;
+
+  // The lease timeout for this queue. Left out or empty, the current lease timeout is kept.
+  // Example: '60m', '24h', '10s'
+  string leaseTimeout = 6 [json_name = "lease_timeout"];
+
+  // How long the item can wait in the queue regardless of attempts before it is moved
+  // to the dead letter queue. Left out or empty, the current expire timeout is kept.
+  // Example: '24h', '60m', '10s'
+  string expireTimeout = 7 [json_name = "expire_timeout"];
+
+  // The maximum number of times an item can be retried by a consumer before it is placed in
+  // the dead letter queue or removed. Left out, the current limit is kept. '0' allows
+  // unlimited attempts.
+  optional int32 maxAttempts = 8 [json_name = "max_attempts"];
+
+  // The number of partitions the queue is requesting. Left out or '0', the current count is kept.
+  int32 requestedPartitions = 9 [json_name = "requested_partitions"];
+
+  // Accepted so a request can carry back what '/queues.info' returned. Ignored on update.
+  google.protobuf.Timestamp createdAt = 2 [json_name = "created_at"];
+  google.protobuf.Timestamp updatedAt = 3 [json_name = "updated_at"];
+  repeated PartitionInfo partitions = 10;
+  string namespace = 11;
+}

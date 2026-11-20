@@ -195,12 +195,21 @@ func (qm *QueuesManager) List(ctx context.Context, items *[]types.QueueInfo, opt
 	return qm.conf.StorageConfig.Queues.List(ctx, items, opts)
 }
 
-func (qm *QueuesManager) Update(ctx context.Context, info types.QueueInfo) error {
+func (qm *QueuesManager) Update(ctx context.Context, update types.QueueUpdate) error {
 	if qm.inShutdown.Load() {
 		return ErrServiceShutdown
 	}
 	defer qm.mutex.Unlock()
 	qm.mutex.Lock()
+
+	var current types.QueueInfo
+	if err := qm.conf.StorageConfig.Queues.Get(ctx, update.Name, &current); err != nil {
+		if errors.Is(err, store.ErrQueueNotExist) {
+			return err
+		}
+		return errors.Errorf("Queues.Get(): %w", err)
+	}
+	info := update.ApplyTo(current)
 
 	if err := qm.validateDeadQueue(ctx, info); err != nil {
 		return err

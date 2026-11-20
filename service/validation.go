@@ -176,28 +176,15 @@ func (s *Service) validateQueueRetryProto(in *proto.QueueRetryRequest, out *type
 }
 
 func (s *Service) validateQueueOptionsProto(in *proto.QueueInfo, out *types.QueueInfo) error {
-	var err error
-
 	if len(in.LeaseTimeout) > maxTimeoutLength {
 		return reply.NewInvalidOption("lease timeout is invalid; cannot be greater than '%d' characters", maxTimeoutLength)
 	}
-
-	if len(in.ExpireTimeout) > maxTimeoutLength {
-		return reply.NewInvalidOption("expire timeout is invalid; cannot be greater than '%d' characters", maxTimeoutLength)
+	var err error
+	if out.ExpireTimeout, err = parseExpireTimeout(in.ExpireTimeout); err != nil {
+		return err
 	}
-
-	if in.ExpireTimeout != "" {
-		out.ExpireTimeout, err = clock.ParseDuration(in.ExpireTimeout)
-		if err != nil {
-			return reply.NewInvalidOption("expire timeout is invalid; %s - expected format: 60m, 2h or 24h", err.Error())
-		}
-	}
-
-	if in.LeaseTimeout != "" {
-		out.LeaseTimeout, err = clock.ParseDuration(in.LeaseTimeout)
-		if err != nil {
-			return reply.NewInvalidOption("lease timeout is invalid; %s - expected format: 8m, 15m or 1h", err.Error())
-		}
+	if out.LeaseTimeout, err = parseLeaseTimeout(in.LeaseTimeout); err != nil {
+		return err
 	}
 
 	out.RequestedPartitions = int(in.RequestedPartitions)
@@ -212,6 +199,56 @@ func (s *Service) validateQueueOptionsProto(in *proto.QueueInfo, out *types.Queu
 	out.Reference = in.Reference
 	out.Name = in.QueueName
 	return nil
+}
+
+func (s *Service) validateQueueUpdateProto(in *proto.QueuesUpdateRequest, out *types.QueueUpdate) error {
+	if len(in.LeaseTimeout) > maxTimeoutLength {
+		return reply.NewInvalidOption("lease timeout is invalid; cannot be greater than '%d' characters", maxTimeoutLength)
+	}
+	var err error
+	if out.ExpireTimeout, err = parseExpireTimeout(in.ExpireTimeout); err != nil {
+		return err
+	}
+	if out.LeaseTimeout, err = parseLeaseTimeout(in.LeaseTimeout); err != nil {
+		return err
+	}
+
+	out.RequestedPartitions = int(in.RequestedPartitions)
+	if in.MaxAttempts != nil {
+		out.MaxAttempts = new(int(*in.MaxAttempts))
+	}
+	out.DeadQueue = in.DeadQueue
+	out.Reference = in.Reference
+	out.Name = in.QueueName
+	return nil
+}
+
+func parseLeaseTimeout(lease string) (clock.Duration, error) {
+	if len(lease) > maxTimeoutLength {
+		return 0, reply.NewInvalidOption("lease timeout is invalid; cannot be greater than '%d' characters", maxTimeoutLength)
+	}
+	if lease == "" {
+		return 0, nil
+	}
+	timeout, err := clock.ParseDuration(lease)
+	if err != nil {
+		return 0, reply.NewInvalidOption("lease timeout is invalid; %s - expected format: 8m, 15m or 1h", err.Error())
+	}
+	return timeout, nil
+}
+
+func parseExpireTimeout(expire string) (clock.Duration, error) {
+	if len(expire) > maxTimeoutLength {
+		return 0, reply.NewInvalidOption("expire timeout is invalid; cannot be greater than '%d' characters", maxTimeoutLength)
+	}
+	if expire == "" {
+		return 0, nil
+	}
+	timeout, err := clock.ParseDuration(expire)
+	if err != nil {
+		return 0, reply.NewInvalidOption("expire timeout is invalid; %s - expected format: 60m, 2h or 24h", err.Error())
+	}
+	return timeout, nil
 }
 
 func (s *Service) validateNamespaceProto(in *proto.NamespaceInfo, out *types.Namespace) error {

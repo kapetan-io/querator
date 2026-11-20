@@ -130,7 +130,7 @@ func (c *Client) QueuesList(ctx context.Context, res *pb.QueuesListResponse, opt
 	return c.do(ctx, doArgs{Path: transport.RPCQueuesList, Request: &req, Reply: res})
 }
 
-func (c *Client) QueuesUpdate(ctx context.Context, req *pb.QueueInfo) error {
+func (c *Client) QueuesUpdate(ctx context.Context, req *pb.QueuesUpdateRequest) error {
 	return c.do(ctx, doArgs{Path: transport.RPCQueuesUpdate, Request: req, Reply: &v1.Reply{}})
 }
 

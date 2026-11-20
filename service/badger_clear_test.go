@@ -3,8 +3,8 @@ package service_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
-	"time"
 
 	"github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/internal/store"
@@ -18,10 +18,9 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// TestBadgerClear holds clear tests that depend on how BadgerDB clears a partition: with default
-// options BadgerDB refuses a transaction of more than 104,855 writes, so a clear reads and deletes
-// at most 1,000 keys per transaction. Some partitions here are larger than that limit, and the
-// rest need several transactions. They run against BadgerDB only.
+// TestBadgerClear holds clear tests that depend on how BadgerDB clears a partition: BadgerDB
+// refuses a transaction that writes too many keys or too many bytes, so a clear deletes in many
+// small transactions. They run against BadgerDB only.
 func TestBadgerClear(t *testing.T) {
 	badgerdb := badgerTestSetup{Dir: t.TempDir()}
 	testBadgerClear(t, func() store.Config {
@@ -32,9 +31,10 @@ func TestBadgerClear(t *testing.T) {
 func testBadgerClear(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	defer goleak.VerifyNone(t, goleakOptions...)
 
-	t.Run("ClearLargePartition", func(t *testing.T) {
+	t.Run("ClearLongSourceIDs", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
-		d := newDaemon(t, 2*clock.Minute, svc.Config{StorageConfig: setup()})
+		var fault partitionFault
+		d := newDaemon(t, 2*clock.Minute, svc.Config{StorageConfig: fault.Wrap(setup())})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
@@ -42,7 +42,9 @@ func testBadgerClear(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		c, ctx := d.MustClient(), d.Context()
 		createOnePartitionQueue(t, ctx, c, queueName)
 
-		produceItems(t, ctx, c, queueName, 105_000)
+		// Each item carries a 50KB source id, as a dead letter item can, so deleting all of
+		// them in one transaction is more bytes than BadgerDB accepts.
+		importLongSourceIDs(t, ctx, c, queueName, sourceIDs{Count: 220})
 		var lease pb.QueueLeaseResponse
 		require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
 			ClientId:       random.String("client-", 10),
@@ -52,11 +54,25 @@ func testBadgerClear(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		}, &lease))
 		require.Len(t, lease.Items, 5)
 
-		// The client gives up long before the clear of 105,000 items finishes; the clear goes on.
-		short, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
-		err := c.QueueClear(short, &pb.QueueClearRequest{QueueName: queueName, Queue: true})
-		cancel()
-		require.ErrorContains(t, err, "context deadline exceeded")
+		// The clear is held partway through until the client has given up, then goes on.
+		hold := &clearHold{After: 50, Reached: make(chan struct{}), Release: make(chan struct{})}
+		fault.holdClear.Store(hold)
+		var cleared error
+		backgroundCall{
+			Call: func() {
+				short, cancel := context.WithTimeout(ctx, 200*clock.Millisecond)
+				defer cancel()
+				cleared = c.QueueClear(short, &pb.QueueClearRequest{QueueName: queueName, Queue: true})
+			},
+			While: func() {
+				select {
+				case <-hold.Reached:
+				case <-ctx.Done():
+				}
+			},
+		}.run()
+		require.ErrorContains(t, cleared, "context deadline exceeded")
+		close(hold.Release)
 
 		// The clear holds the queue's request loop, so this list waits until the clear finishes.
 		list := listPartition(t, ctx, c, queueName)
@@ -65,34 +81,18 @@ func testBadgerClear(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			assert.Equal(t, lease.Items[i].Id, item.Id)
 			assert.True(t, item.IsLeased)
 		}
-	})
-
-	t.Run("ClearLargeDeadLetterPartition", func(t *testing.T) {
-		var queueName = random.String("queue-", 10)
-		d := newDaemon(t, 2*clock.Minute, svc.Config{StorageConfig: setup()})
-		defer func() {
-			d.Shutdown(t)
-			tearDown()
-		}()
-		c, ctx := d.MustClient(), d.Context()
-		createOnePartitionQueue(t, ctx, c, queueName)
-
-		// Each item carries a source id, as a dead letter item does, so clearing it deletes two
-		// keys and 52,500 items need 105,000 deletes.
-		importSourcedItems(t, ctx, c, queueName, 52_500)
-
-		require.NoError(t, c.QueueClear(ctx, &pb.QueueClearRequest{QueueName: queueName, Queue: true}))
-		assert.Empty(t, listPartition(t, ctx, c, queueName))
 
 		// An import skips an item whose source id is already in the partition, so these
 		// come back only if the clear removed the source ids too.
-		importSourcedItems(t, ctx, c, queueName, 10)
-		assert.Len(t, listPartition(t, ctx, c, queueName), 10)
+		fault.holdClear.Store(nil)
+		importLongSourceIDs(t, ctx, c, queueName, sourceIDs{First: 100, Count: 3})
+		assert.Len(t, listPartition(t, ctx, c, queueName), 8)
 	})
 
 	t.Run("ClearAgainAfterShutdownStopsIt", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
-		conf := svc.Config{StorageConfig: setup()}
+		var fault partitionFault
+		conf := svc.Config{StorageConfig: fault.Wrap(setup())}
 		d := newDaemon(t, 2*clock.Minute, conf)
 		running := true
 		defer func() {
@@ -103,29 +103,40 @@ func testBadgerClear(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		}()
 		c, ctx := d.MustClient(), d.Context()
 		createOnePartitionQueue(t, ctx, c, queueName)
-		produceItems(t, ctx, c, queueName, 30_000)
+		produceItems(t, ctx, c, queueName, 2_500)
 
+		// The clear is held past its first transaction, and only shutdown lets it go on.
+		hold := &clearHold{After: 1_500, Reached: make(chan struct{}), Release: make(chan struct{})}
+		fault.holdClear.Store(hold)
 		var cleared, stopped error
 		backgroundCall{
 			Call: func() {
 				cleared = c.QueueClear(ctx, &pb.QueueClearRequest{QueueName: queueName, Queue: true})
 			},
 			While: func() {
-				time.Sleep(100 * time.Millisecond)
-				stop, cancel := context.WithTimeout(ctx, 2*time.Second)
+				select {
+				case <-hold.Reached:
+				case <-ctx.Done():
+				}
+				stop, cancel := context.WithTimeout(ctx, 2*clock.Second)
 				defer cancel()
 				stopped = d.d.Shutdown(stop)
+				close(hold.Release)
 			},
 		}.run()
 		running = false
 		require.NoError(t, stopped)
 		require.ErrorContains(t, cleared, "queue is shutting down")
 
+		fault.holdClear.Store(nil)
 		d = newDaemon(t, 2*clock.Minute, conf)
 		running = true
 		c, ctx = d.MustClient(), d.Context()
 
-		assert.NotEmpty(t, listPartition(t, ctx, c, queueName))
+		// Part of the partition is gone and the rest is still there.
+		list := listPartition(t, ctx, c, queueName)
+		require.NotEmpty(t, list)
+		assert.NotEqual(t, "ref-0", list[0].Reference)
 		require.NoError(t, c.QueueClear(ctx, &pb.QueueClearRequest{QueueName: queueName, Queue: true}))
 		assert.Empty(t, listPartition(t, ctx, c, queueName))
 	})
@@ -201,9 +212,9 @@ func testBadgerClear(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	})
 }
 
-// fillPagedPartition writes three rounds of 600 items, 200 scheduled items and 2 leased items,
-// 2,406 keys in all, so the leased and scheduled items sit on each of the three pages a clear
-// walks. It returns the references of the leased items in the order they were written.
+// fillPagedPartition writes three rounds of plain, scheduled and leased items, enough that a
+// clear needs several transactions and each holds all three kinds. It returns the references of
+// the leased items in the order they were written.
 func fillPagedPartition(t *testing.T, ctx context.Context, c *querator.Client, queueName string) []string {
 	t.Helper()
 	var leased []string
@@ -267,17 +278,24 @@ func produceItems(t *testing.T, ctx context.Context, c *querator.Client, queueNa
 	}
 }
 
-func importSourcedItems(t *testing.T, ctx context.Context, c *querator.Client, queueName string, count int) {
+// sourceIDs names the items importLongSourceIDs writes: Count items numbered from First.
+type sourceIDs struct {
+	First int
+	Count int
+}
+
+func importLongSourceIDs(t *testing.T, ctx context.Context, c *querator.Client, queueName string, ids sourceIDs) {
 	t.Helper()
 	expire := timestamppb.New(clock.Now().UTC().Add(clock.Hour))
-	for done := 0; done < count; done += 1_000 {
-		size := min(1_000, count-done)
+	padding := strings.Repeat("x", 50_000)
+	end := ids.First + ids.Count
+	for done := ids.First; done < end; done += 20 {
 		req := &pb.StorageItemsImportRequest{QueueName: queueName, Partition: 0}
-		for i := range size {
+		for i := done; i < min(done+20, end); i++ {
 			req.Items = append(req.Items, &pb.StorageItem{
-				SourceId:       fmt.Sprintf("source-%09d", done+i),
+				SourceId:       fmt.Sprintf("%s-%04d", padding, i),
 				ExpireDeadline: expire,
-				Reference:      fmt.Sprintf("ref-%d", done+i),
+				Reference:      fmt.Sprintf("ref-%d", i),
 			})
 		}
 		var resp pb.StorageItemsImportResponse

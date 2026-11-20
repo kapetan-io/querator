@@ -24,7 +24,10 @@ import (
 
 var sourcePrefix = []byte("source:")
 
-const clearPageSize = 1_000
+const (
+	clearPageSize  = 1_000
+	clearPageBytes = 1 << 20
+)
 
 type BadgerConfig struct {
 	StorageDir string
@@ -662,7 +665,7 @@ func clearPage(ctx context.Context, txn *badger.Txn, pivot []byte, req types.Cle
 	iter := txn.NewIterator(badger.DefaultIteratorOptions)
 	defer iter.Close()
 
-	var touched int
+	var touched, written int
 	for iter.Seek(pivot); iter.Valid() && ctx.Err() == nil; iter.Next() {
 		if touched >= clearPageSize {
 			return iter.Item().KeyCopy(nil), nil
@@ -688,9 +691,18 @@ func clearPage(ctx context.Context, txn *badger.Txn, pivot []byte, req types.Cle
 			continue
 		}
 
+		var sourceKey []byte
 		if item.SourceID != nil {
+			sourceKey = []byte("source:" + string(item.SourceID))
+		}
+		if written > 0 && written+len(k)+len(sourceKey) > clearPageBytes {
+			return k, nil
+		}
+		written += len(k) + len(sourceKey)
+
+		if sourceKey != nil {
 			touched++
-			if err := txn.Delete([]byte("source:" + string(item.SourceID))); err != nil {
+			if err := txn.Delete(sourceKey); err != nil {
 				return nil, errors.Errorf("deleting SourceID index: %w", err)
 			}
 		}

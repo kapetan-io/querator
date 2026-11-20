@@ -27,8 +27,10 @@ storage, while a client's produce is stored in one write and its outcome goes ba
 move never splits a produce, and neither one's failure fails the other.
 
 **A move that fails partway deletes the stored part from `orders` at once.** A failed move is sent
-again, and `orders-dead` skips an item it already stored. That check stops working once a consumer
-completes the stored copy, so waiting for the next run can store the item twice. The code does not
+again, and `orders-dead` skips an item it already stored. It stores each item and the record of its
+source ID together or not at all, because an item stored without that record is stored again by the
+next move. The skip stops working once a consumer completes the stored copy, so waiting for the next
+run can store the item twice. The code does not
 meet this yet when `orders` stops waiting at the write timeout (ENG-844).
 
 **A slow `orders-dead` never stalls `orders`.** `orders` waits a bounded time, keeps the items when the

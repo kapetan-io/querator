@@ -1333,8 +1333,7 @@ func (p *MongoPartition) TakeAction(ctx context.Context, batch types.LifeCycleBa
 				if _, err := coll.DeleteOne(ctx, bson.M{"_id": string(action.Item.ID)}); err != nil {
 					return errors.Errorf("delete expired item: %w", err)
 				}
-				state.NumLeased--
-				state.UnLeased++
+				state.LeasesExpired(1)
 
 			case types.ActionItemExpired, types.ActionItemMaxAttempts:
 				if _, err := coll.DeleteOne(ctx, bson.M{"_id": string(action.Item.ID)}); err != nil {

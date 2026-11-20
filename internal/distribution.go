@@ -308,7 +308,7 @@ func (l *Logical) applyToPartitions(state *QueueState) {
 		}
 
 		err := p.Store.Complete(ctx, p.CompleteRequests)
-		p.State.NumLeased -= p.CompleteRequests.Completed()
+		p.State.NumLeased = max(0, p.State.NumLeased-p.CompleteRequests.Completed())
 		if err != nil {
 			l.log.Error("while calling store.Partition.Complete()",
 				"partition", p.Info.PartitionNum,
@@ -321,7 +321,7 @@ func (l *Logical) applyToPartitions(state *QueueState) {
 		}
 
 		err = p.Store.Retry(ctx, p.RetryRequests)
-		p.State.NumLeased -= p.RetryRequests.Retried()
+		p.State.NumLeased = max(0, p.State.NumLeased-p.RetryRequests.Retried())
 		p.State.UnLeased += p.RetryRequests.UnLeased()
 		immediate := l.conf.Clock.Now().UTC().Add(immediateRetryWindow)
 		for _, req := range p.RetryRequests.Requests {

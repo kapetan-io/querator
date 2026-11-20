@@ -9,6 +9,7 @@ import (
 
 	"github.com/duh-rpc/duh-go"
 	"github.com/duh-rpc/duh-go/retry"
+	"github.com/jackc/pgx/v5"
 	"github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/internal/store"
 	pb "github.com/kapetan-io/querator/proto"
@@ -17,6 +18,9 @@ import (
 	"github.com/kapetan-io/tackle/random"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
+	mongoopts "go.mongodb.org/mongo-driver/mongo/options"
 	"go.uber.org/goleak"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -563,4 +567,141 @@ func storagePartitionLeaseCounts(t *testing.T, ctx context.Context, c *querator.
 		}
 	}
 	return counts
+}
+
+// TestLeaseCountsAfterWriteFailure checks the lease counts after a storage write fails. The
+// database itself must fail the write, so the tests run only against PostgreSQL and MongoDB,
+// where a test can add a rule to the table or turn on a MongoDB failpoint.
+func TestLeaseCountsAfterWriteFailure(t *testing.T) {
+	defer goleak.VerifyNone(t, goleakOptions...)
+
+	t.Run("MongoDB", func(t *testing.T) {
+		t.Run("LeaseOutcomeUnknownThenExpires", func(t *testing.T) {
+			mongoSetup := mongoTestSetup{}
+			queueName := random.String("queue-", 10)
+			d := startLeaseCountsQueue(t, func() store.Config { return mongoSetup.Setup(store.MongoConfig{}) },
+				svc.Config{}, &pb.QueueInfo{QueueName: queueName, LeaseTimeout: "300ms"})
+			defer func() {
+				d.Shutdown(t)
+				mongoSetup.Teardown()
+			}()
+			c, ctx := d.MustClient(), d.Context()
+			produceItems(t, ctx, c, queueName, 3)
+
+			// The failpoint lets the lease update apply and then reports a write concern error,
+			// so the backend cannot tell whether the leases saved and takes every item back.
+			failNextUpdate(t, ctx, `{"writeConcernError": {"code": 64, "errmsg": "lease outcome unknown"}}`)
+			var lease pb.QueueLeaseResponse
+			err := c.QueueLease(ctx, &pb.QueueLeaseRequest{
+				ClientId:       random.String("client-", 10),
+				RequestTimeout: "100ms",
+				QueueName:      queueName,
+				BatchSize:      3,
+			}, &lease)
+			var e duh.Error
+			require.True(t, errors.As(err, &e))
+			assert.Equal(t, querator.MsgRequestTimeout, e.Message())
+			require.Equal(t, leaseCounts{UnLeased: 0, TotalLeased: 3}, storagePartitionLeaseCounts(t, ctx, c, queueName, 0))
+
+			// The leases nobody holds expire and the lifecycle gives the items back.
+			require.NoError(t, retry.On(ctx, RetryTenTimes, func(ctx context.Context, i int) error {
+				if leased := storagePartitionLeaseCounts(t, ctx, c, queueName, 0).TotalLeased; leased != 0 {
+					return fmt.Errorf("storage still has %d leased items", leased)
+				}
+				return nil
+			}))
+			assert.Equal(t, leaseCounts{UnLeased: 3, TotalLeased: 0}, partitionLeaseCounts(t, ctx, c, queueName))
+		})
+	})
+
+	t.Run("PostgreSQL", func(t *testing.T) {
+		for _, test := range []struct {
+			Name   string
+			Settle func(t *testing.T, ctx context.Context, c *querator.Client, queueName string,
+				lease *pb.QueueLeaseResponse) error
+		}{
+			{
+				Name: "CompleteCommitFails",
+				Settle: func(t *testing.T, ctx context.Context, c *querator.Client, queueName string,
+					lease *pb.QueueLeaseResponse) error {
+					return c.QueueComplete(ctx, &pb.QueueCompleteRequest{
+						QueueName:      queueName,
+						Partition:      lease.Partition,
+						RequestTimeout: "5s",
+						Ids:            querator.CollectIDs(lease.Items),
+					})
+				},
+			},
+			{
+				Name: "RetryCommitFails",
+				Settle: func(t *testing.T, ctx context.Context, c *querator.Client, queueName string,
+					lease *pb.QueueLeaseResponse) error {
+					return c.QueueRetry(ctx, &pb.QueueRetryRequest{
+						QueueName: queueName,
+						Partition: lease.Partition,
+						Items:     []*pb.QueueRetryItem{{Id: lease.Items[0].Id}, {Id: lease.Items[1].Id}},
+					})
+				},
+			},
+		} {
+			t.Run(test.Name, func(t *testing.T) {
+				postgres := postgresTestSetup{}
+				queueName := random.String("queue-", 10)
+				d := startLeaseCountsQueue(t, func() store.Config { return postgres.Setup(store.PostgresConfig{}) },
+					svc.Config{}, &pb.QueueInfo{QueueName: queueName, LeaseTimeout: LeaseTimeout})
+				defer func() {
+					d.Shutdown(t)
+					postgres.Teardown()
+				}()
+				c, ctx := d.MustClient(), d.Context()
+				produceItems(t, ctx, c, queueName, 2)
+				lease := leaseItems(t, ctx, c, queueName, 2)
+
+				// Complete and an immediate retry both delete the leased row. A deferred
+				// constraint trigger refuses that delete only when the transaction commits, so
+				// the commit fails after storage counted each item it applied.
+				conn, err := pgx.Connect(ctx, postgres.dsn)
+				require.NoError(t, err)
+				defer func() { _ = conn.Close(ctx) }()
+				var table string
+				require.NoError(t, conn.QueryRow(ctx,
+					`SELECT tablename FROM pg_tables WHERE tablename LIKE 'items\_%'`).Scan(&table))
+				_, err = conn.Exec(ctx, `CREATE FUNCTION refuse_delete() RETURNS trigger AS $$
+					BEGIN
+						RAISE EXCEPTION 'delete refused';
+					END $$ LANGUAGE plpgsql`)
+				require.NoError(t, err)
+				_, err = conn.Exec(ctx, `CREATE CONSTRAINT TRIGGER refuse_delete AFTER DELETE ON `+
+					pgx.Identifier{table}.Sanitize()+
+					` DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION refuse_delete()`)
+				require.NoError(t, err)
+
+				var e duh.Error
+				require.True(t, errors.As(test.Settle(t, ctx, c, queueName, lease), &e))
+				assert.Equal(t, duh.CodeRetryRequest, e.Code())
+				require.Equal(t, leaseCounts{UnLeased: 0, TotalLeased: 2}, storagePartitionLeaseCounts(t, ctx, c, queueName, 0))
+				assert.Equal(t, leaseCounts{UnLeased: 0, TotalLeased: 2}, partitionLeaseCounts(t, ctx, c, queueName))
+			})
+		}
+	})
+}
+
+// failNextUpdate turns on MongoDB's failCommand failpoint for the next update command, with
+// the given failure as the failpoint's data.
+func failNextUpdate(t *testing.T, ctx context.Context, failure string) {
+	t.Helper()
+	container, err := getSharedMongoContainer()
+	require.NoError(t, err)
+	client, err := mongo.Connect(ctx, mongoopts.Client().ApplyURI(container.uri))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, client.Disconnect(ctx)) }()
+
+	var data bson.M
+	require.NoError(t, bson.UnmarshalExtJSON([]byte(failure), false, &data))
+	data["failCommands"] = bson.A{"update"}
+	require.NoError(t, client.Database("admin").RunCommand(ctx, bson.D{
+		{Key: "configureFailPoint", Value: "failCommand"},
+		{Key: "mode", Value: bson.M{"times": 1}},
+		{Key: "data", Value: data},
+	}).Err())
 }

@@ -486,8 +486,7 @@ func (m *MemoryPartition) TakeAction(_ context.Context, batch types.LifeCycleBat
 
 				m.mem = append(m.mem[:idx], m.mem[idx+1:]...)
 				m.mem = append(m.mem, item)
-				state.NumLeased--
-				state.UnLeased++
+				state.LeasesExpired(1)
 			case types.ActionDeleteItem:
 				idx, ok := m.findID(a.Item.ID)
 				if !ok {

@@ -908,9 +908,9 @@ type badgerWrite struct {
 }
 
 type actionWriteSet struct {
-	writes    []badgerWrite
-	unLeased  int
-	numLeased int
+	writes   []badgerWrite
+	unLeased int
+	expired  int
 }
 
 func (b *BadgerPartition) TakeAction(_ context.Context, batch types.LifeCycleBatch,
@@ -973,7 +973,7 @@ func commitActions(txn *badger.Txn, pending []actionWriteSet, state *types.Parti
 	}
 	for _, action := range pending {
 		state.UnLeased += action.unLeased
-		state.NumLeased += action.numLeased
+		state.LeasesExpired(action.expired)
 	}
 	return nil
 }
@@ -1016,7 +1016,7 @@ func (b *BadgerPartition) actionWrites(txn *badger.Txn, a types.Action) (actionW
 			return actionWriteSet{}, err
 		}
 		b.lowerLeasePivot(item.ID)
-		return actionWriteSet{unLeased: 1, numLeased: -1, writes: []badgerWrite{
+		return actionWriteSet{expired: 1, writes: []badgerWrite{
 			{key: item.ID, value: buf.Bytes()},
 			{key: a.Item.ID, delete: true},
 		}}, nil

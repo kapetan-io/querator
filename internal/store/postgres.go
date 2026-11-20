@@ -1665,8 +1665,7 @@ func (p *PostgresPartition) TakeAction(ctx context.Context, batch types.LifeCycl
 	if err := tx.Commit(ctx); err != nil {
 		return errors.Errorf("commit transaction: %w", err)
 	}
-	state.NumLeased -= expired
-	state.UnLeased += expired
+	state.LeasesExpired(expired)
 	return nil
 }
 

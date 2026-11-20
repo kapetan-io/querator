@@ -1,0 +1,12 @@
+#!/bin/sh
+# Runs Tiger before a push. Findings are printed but never block the push.
+# A missing Tiger blocks it, because the check can't run. `git push --no-verify` skips this hook.
+./scripts/tiger
+code=$?
+case $code in
+0) ;;
+1) echo "pre-push: tiger found issues (exit 1). Pushing anyway." ;;
+127) echo "pre-push: push stopped. Install tiger, then push again." >&2; exit 1 ;;
+*) echo "pre-push: tiger could not check the code (exit $code). Pushing anyway." ;;
+esac
+exit 0

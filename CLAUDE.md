@@ -8,6 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `make cover` - Generate test coverage report and open in browser
 - `make proto` - Generate protobuf files using buf
 - `make ci` - Run the full test suite and linter. Before running, stage the files you intend to commit (`git add`), then run `make ci`. Commit only after everything passes.
+- `make tiger` - Run the Tiger static analyzer over every package. Install it with `go install github.com/kapetan-io/tiger/cmd/tiger@latest`. Any `make` run turns on `.githooks/pre-push`, which runs Tiger before each push. `git push --no-verify` skips it.
 
 ### Functional Testing Strategy
 

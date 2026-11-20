@@ -920,15 +920,16 @@ type heldContext struct {
 }
 
 func (h *heldContext) Err() error {
+	ctx := h.Context
 	h.checks++
 	if h.checks == h.hold.After {
 		close(h.hold.Reached)
 		select {
 		case <-h.hold.Release:
-		case <-h.Done():
+		case <-ctx.Done():
 		}
 	}
-	return h.Context.Err()
+	return ctx.Err()
 }
 
 func (f *partitionFault) Wrap(conf store.Config) store.Config {

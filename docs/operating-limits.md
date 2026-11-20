@@ -77,13 +77,9 @@ that holds its items.
   queue, by up to the storage write timeout each time, which has no setting in the server config. On
   BadgerDB a slow write is not cut short at the write timeout. A reply can arrive after the request's
   `request_timeout`.
-* When every partition of a queue has failed, produce requests wait. A partition that recovers while no
-  lease request is waiting does not pick up the waiting produce requests until another produce, lease,
-  complete or retry request arrives, so on an idle queue they get a retry error at their request timeout
-  and their items are not written.
 * The leased count `/queue.stats` reports does not drop when the lifecycle deletes or dead-letters a
   leased item that ran out of attempts, so on a queue with `max_attempts` set it overstates the items
-  leased (ENG-774). After a failed write the unleased count can be too high until the lease expires.
+  leased (ENG-774). After a failed write the unleased count can be wrong.
 
 **Workaround**: Clients resend on a retry error or after their request timeout, and consumers must
 tolerate duplicate items. Reload a queue with `/v1/queue.reload` to recount it from storage.

@@ -47,8 +47,13 @@ applied before the failure.
 
 **The leased count never goes below zero.** A lease write whose outcome is unknown gives every item
 back to the unleased count, though storage may hold some as leased. When those leases expire, the
-queue has already given them back and gives back none again. Keeping them counted as leased instead
-would leave the count too high forever when the write did not apply, since no lease would ever expire.
+queue has already given them back, so it gives back no more than the leased count holds. Keeping them
+counted as leased instead would leave the count too high forever when the write did not apply, since
+no lease would ever expire.
+
+**The unleased count never goes below zero either.** Storage can lease more items than the queue
+estimated, such as a scheduled item that came due on a backend that does not count it as waiting. The
+leased count takes the extra items, and the unleased count stops at zero rather than going negative.
 
 ## Consequences
 

@@ -262,7 +262,7 @@ func (qm *QueuesManager) LifeCycle(ctx context.Context, req *types.LifeCycleRequ
 				"partition", req.PartitionNum)
 		}
 
-		if err := deleteDeadItems(ctx, req); err != nil {
+		if err := deleteDeadItems(ctx, req, len(deadItems)); err != nil {
 			return errors.Errorf("failed to delete items from source partition: %w", err)
 		}
 		return nil
@@ -276,24 +276,34 @@ func (qm *QueuesManager) LifeCycle(ctx context.Context, req *types.LifeCycleRequ
 		item.Attempts = 0
 	}
 
-	if err := qm.ProduceToQueue(ctx, deadQueueName, deadItems); err != nil {
+	stored, err := qm.ProduceToQueue(ctx, deadQueueName, deadItems)
+	if err != nil {
 		qm.log.Error("failed to produce to dead_queue",
 			"dead_queue", deadQueueName,
 			"source_queue", queueInfo.Name,
+			"stored", stored,
 			"error", err)
+		if stored != 0 {
+			if err := deleteDeadItems(ctx, req, stored); err != nil {
+				return errors.Errorf("failed to delete stored items from source partition after DLQ produce: %w", err)
+			}
+		}
 		return err
 	}
 
-	if err := deleteDeadItems(ctx, req); err != nil {
+	if err := deleteDeadItems(ctx, req, len(deadItems)); err != nil {
 		return errors.Errorf("failed to delete items from source partition after DLQ produce: %w", err)
 	}
 
 	return nil
 }
 
-func deleteDeadItems(ctx context.Context, req *types.LifeCycleRequest) error {
-	actions := make([]types.Action, 0, len(req.Actions))
+func deleteDeadItems(ctx context.Context, req *types.LifeCycleRequest, limit int) error {
+	actions := make([]types.Action, 0, limit)
 	for _, a := range req.Actions {
+		if len(actions) == limit {
+			break
+		}
 		if a.Action == types.ActionItemExpired || a.Action == types.ActionItemMaxAttempts {
 			a.Action = types.ActionDeleteItem
 			actions = append(actions, a)
@@ -304,23 +314,24 @@ func deleteDeadItems(ctx context.Context, req *types.LifeCycleRequest) error {
 	return req.PartitionStorage.TakeAction(ctx, batch, req.PartitionState)
 }
 
-func (qm *QueuesManager) ProduceToQueue(ctx context.Context, queueName string, items []*types.Item) error {
+func (qm *QueuesManager) ProduceToQueue(ctx context.Context, queueName string, items []*types.Item) (int, error) {
 	qm.mutex.Lock()
 	q, err := qm.get(ctx, queueName)
 	qm.mutex.Unlock()
 	if err != nil {
-		return errors.Errorf("failed to get queue '%s': %w", queueName, err)
+		return 0, errors.Errorf("failed to get queue '%s': %w", queueName, err)
 	}
 
 	logical := q.GetNext()
 	if logical == nil {
-		return errors.Errorf("queue '%s' has no available partitions", queueName)
+		return 0, errors.Errorf("queue '%s' has no available partitions", queueName)
 	}
-	if err := logical.ProduceDeadLetter(ctx, &types.ProduceRequest{Items: items}); err != nil {
-		return errors.Errorf("failed to produce to queue '%s': %w", queueName, err)
+	stored, err := logical.ProduceDeadLetter(ctx, &types.ProduceRequest{Items: items})
+	if err != nil {
+		return stored, errors.Errorf("failed to produce to queue '%s': %w", queueName, err)
 	}
 
-	return nil
+	return stored, nil
 }
 
 func (qm *QueuesManager) validateDeadQueue(ctx context.Context, info types.QueueInfo) error {

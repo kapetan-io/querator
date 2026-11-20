@@ -319,15 +319,15 @@ func (l *Logical) Retry(ctx context.Context, req *types.RetryRequest) error {
 	}
 }
 
-func (l *Logical) ProduceDeadLetter(ctx context.Context, req *types.ProduceRequest) error {
+func (l *Logical) ProduceDeadLetter(ctx context.Context, req *types.ProduceRequest) (int, error) {
 	l.inFlight.Add(1)
 	defer l.inFlight.Add(-1)
 	if l.inShutdown.Load() {
-		return ErrQueueShutdown
+		return 0, ErrQueueShutdown
 	}
 
 	if len(req.Items) == 0 {
-		return nil
+		return 0, nil
 	}
 
 	req.ReadyCh = make(chan struct{})
@@ -340,14 +340,14 @@ func (l *Logical) ProduceDeadLetter(ctx context.Context, req *types.ProduceReque
 		Request: req,
 	}:
 	default:
-		return reply.NewRetryRequest(MsgQueueOverLoaded)
+		return 0, reply.NewRetryRequest(MsgQueueOverLoaded)
 	}
 
 	select {
 	case <-req.ReadyCh:
-		return req.Err
+		return req.Stored, req.Err
 	case <-ctx.Done():
-		return ctx.Err()
+		return 0, ctx.Err()
 	}
 }
 

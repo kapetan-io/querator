@@ -70,50 +70,86 @@ func (b *BadgerPartition) Produce(_ context.Context, batch types.ProduceBatch, n
 		return err
 	}
 
-	return db.Update(func(txn *badger.Txn) error {
-		for _, r := range batch.Requests {
-			for _, item := range r.Items {
-				if item.SourceID != nil {
-					sourceKey := []byte("source:" + string(item.SourceID))
-					_, err := txn.Get(sourceKey)
-					if err == nil {
-						continue
-					}
-					if !errors.Is(err, badger.ErrKeyNotFound) {
-						return errors.Errorf("checking SourceID: %w", err)
-					}
-				}
+	splittable := batch.HandOffsOnly()
+	txn := db.NewTransaction(true)
+	defer func() { txn.Discard() }()
+	var pending []producedWrites
 
-				b.uid = b.uid.Next()
-				item.ID = []byte(b.uid.String())
-				item.CreatedAt = now
-
-				if item.EnqueueAt.Before(now.Add(time.Millisecond * 100)) {
-					item.EnqueueAt = clock.Time{}
+	for _, r := range batch.Requests {
+		r.Stored = 0
+		for _, item := range r.Items {
+			if item.SourceID != nil {
+				_, err := txn.Get([]byte("source:" + string(item.SourceID)))
+				if err == nil {
+					pending = append(pending, producedWrites{request: r})
+					continue
 				}
-
-				var buf bytes.Buffer
-				if err := gob.NewEncoder(&buf).Encode(item); err != nil {
-					return errors.Errorf("during gob.Encode(): %w", err)
-				}
-
-				if err := txn.Set(item.ID, buf.Bytes()); err != nil {
-					return errors.Errorf("during Set(): %w", err)
-				}
-				if item.EnqueueAt.IsZero() {
-					b.lowerLeasePivot(item.ID)
-				}
-
-				if item.SourceID != nil {
-					sourceKey := []byte("source:" + string(item.SourceID))
-					if err := txn.Set(sourceKey, item.ID); err != nil {
-						return errors.Errorf("setting SourceID index: %w", err)
-					}
+				if !errors.Is(err, badger.ErrKeyNotFound) {
+					return errors.Errorf("checking SourceID: %w", err)
 				}
 			}
+
+			b.uid = b.uid.Next()
+			item.ID = []byte(b.uid.String())
+			item.CreatedAt = now
+
+			if item.EnqueueAt.Before(now.Add(time.Millisecond * 100)) {
+				item.EnqueueAt = clock.Time{}
+			}
+
+			var buf bytes.Buffer
+			if err := gob.NewEncoder(&buf).Encode(item); err != nil {
+				return errors.Errorf("during gob.Encode(): %w", err)
+			}
+
+			produced := producedWrites{request: r, writes: []badgerWrite{{key: item.ID, value: buf.Bytes()}}}
+			if item.SourceID != nil {
+				produced.writes = append(produced.writes, badgerWrite{key: []byte("source:" + string(item.SourceID)), value: item.ID})
+			}
+
+			err := applyWrites(txn, produced.writes)
+			if errors.Is(err, badger.ErrTxnTooBig) && splittable {
+				txn.Discard()
+				if err := commitProducedInNewTransaction(db, pending); err != nil {
+					return errors.Errorf("during Commit(): %w", err)
+				}
+				pending = pending[:0]
+				txn = db.NewTransaction(true)
+				err = applyWrites(txn, produced.writes)
+			}
+			if err != nil {
+				return errors.Errorf("during Set(): %w", err)
+			}
+			pending = append(pending, produced)
+
+			if item.EnqueueAt.IsZero() {
+				b.lowerLeasePivot(item.ID)
+			}
 		}
-		return nil
-	})
+	}
+	return txn.Commit()
+}
+
+type producedWrites struct {
+	request *types.ProduceRequest
+	writes  []badgerWrite
+}
+
+func commitProducedInNewTransaction(db *badger.DB, pending []producedWrites) error {
+	txn := db.NewTransaction(true)
+	defer txn.Discard()
+	for _, produced := range pending {
+		if err := applyWrites(txn, produced.writes); err != nil {
+			return err
+		}
+	}
+	if err := txn.Commit(); err != nil {
+		return err
+	}
+	for _, produced := range pending {
+		produced.request.Stored++
+	}
+	return nil
 }
 
 func (b *BadgerPartition) Lease(ctx context.Context, batch types.LeaseBatch, opts LeaseOptions) error {

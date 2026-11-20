@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/kapetan-io/querator/internal/store"
+	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/transport/reply"
 )
 
@@ -230,6 +231,28 @@ func (l *Logical) finalizeRequests(state *QueueState) {
 	}
 }
 
+func (l *Logical) storeProduce(ctx context.Context, p *Partition, batch types.ProduceBatch) bool {
+	if len(batch.Requests) == 0 {
+		return false
+	}
+	if err := p.Store.Produce(ctx, batch, l.conf.Clock.Now().UTC()); err != nil {
+		l.log.Error("while calling store.Partition.Produce()",
+			"partition", p.Info.PartitionNum,
+			"queueName", l.conf.Name,
+			"error", err)
+
+		var unstored, stored int
+		for _, req := range batch.Requests {
+			unstored += len(req.Items) - req.Stored
+			stored += req.Stored
+			req.Err = ErrInternalRetry
+		}
+		p.State.UnLeased -= unstored
+		return stored != 0
+	}
+	return true
+}
+
 func (l *Logical) applyToPartitions(state *QueueState) {
 
 	scheduledUpdated := false
@@ -238,19 +261,15 @@ func (l *Logical) applyToPartitions(state *QueueState) {
 		ctx, cancel := context.WithTimeout(context.Background(), l.conf.WriteTimeout)
 
 		if len(p.ProduceRequests.Requests) != 0 {
-			if err := p.Store.Produce(ctx, p.ProduceRequests, l.conf.Clock.Now().UTC()); err != nil {
-				l.log.Error("while calling store.Partition.Produce()",
-					"partition", p.Info.PartitionNum,
-					"queueName", l.conf.Name,
-					"error", err)
-
-				var unstored int
-				for _, req := range p.ProduceRequests.Requests {
-					unstored += len(req.Items)
-					req.Err = ErrInternalRetry
-				}
-				p.State.UnLeased -= unstored
-			} else {
+			clients, handOffs := p.ProduceRequests, p.ProduceRequests.HandOffs()
+			if len(handOffs.Requests) != 0 {
+				clients = p.ProduceRequests.ClientProduces()
+			}
+			stored := l.storeProduce(ctx, p, clients)
+			if l.storeProduce(ctx, p, handOffs) {
+				stored = true
+			}
+			if stored {
 				p.State.MostRecentDeadline = l.conf.Clock.Now().UTC().Add(l.conf.ExpireTimeout)
 				if l.notifyScheduled(p) {
 					scheduledUpdated = true

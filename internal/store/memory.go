@@ -1475,6 +1475,16 @@ func (m *MemoryRoleBindings) Add(_ context.Context, binding types.RoleBinding) e
 		return types.NewErrRoleBindingAlreadyExists(binding)
 	}
 
+	var held int
+	for _, id := range m.byUser[binding.UserID] {
+		if m.bindings[id].Namespace == binding.Namespace {
+			held++
+		}
+	}
+	if held >= types.MaxRoleBindingsPerUserInNamespace {
+		return types.NewErrRoleBindingLimitReached(binding)
+	}
+
 	m.bindings[binding.ID] = binding
 	m.byUserNamespaceRole[uniqueKey] = binding.ID
 	m.byUser[binding.UserID] = append(m.byUser[binding.UserID], binding.ID)

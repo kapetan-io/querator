@@ -64,6 +64,10 @@ func NewErrRoleBindingAlreadyExists(binding RoleBinding) *reply.ErrInvalidOption
 	return reply.NewInvalidOptionKind(KindRoleBindingAlreadyExists, "role binding already exists; binding for user '%s' to role '%s' in namespace '%s' already exists", binding.UserID, binding.RoleID, binding.Namespace)
 }
 
+func NewErrRoleBindingLimitReached(binding RoleBinding) *reply.ErrInvalidOption {
+	return reply.NewInvalidOption("user_id is invalid; user '%s' already holds %d role bindings in namespace '%s', the most one user can hold in one namespace", binding.UserID, MaxRoleBindingsPerUserInNamespace, binding.Namespace)
+}
+
 func NewErrRoleHasBindings(name string) *reply.ErrInvalidOption {
 	return reply.NewInvalidOption("role has active bindings; '%s' has active bindings, delete bindings first", name)
 }

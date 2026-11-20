@@ -12,8 +12,6 @@ import (
 	"github.com/kapetan-io/tackle/set"
 )
 
-const maxRoleBindingsPerCheck = 100
-
 type AuthBackendConfig struct {
 	RoleBindings store.RoleBindings
 	APIKeys      store.APIKeys
@@ -91,7 +89,7 @@ type permissionCheckArgs struct {
 
 func (a *AuthBackend) checkPermissionInNamespace(ctx context.Context, check permissionCheckArgs) (bool, error) {
 	var bindings []types.RoleBinding
-	if err := a.roleBindings.ListByUser(ctx, store.UserInNamespace{Namespace: check.Namespace, UserID: check.UserID}, &bindings, maxRoleBindingsPerCheck); err != nil {
+	if err := a.roleBindings.ListByUser(ctx, store.UserInNamespace{Namespace: check.Namespace, UserID: check.UserID}, &bindings, types.MaxRoleBindingsPerUserInNamespace); err != nil {
 		return false, err
 	}
 

@@ -2782,6 +2782,16 @@ func (b *BadgerRoleBindings) Add(_ context.Context, binding types.RoleBinding) e
 			return errors.Errorf("during uniqueness check: %w", err)
 		}
 
+		userIDs, err := b.getUserBindingIDs(txn, binding.UserID)
+		if err != nil {
+			return errors.Errorf("during getUserBindingIDs(): %w", err)
+		}
+		var held []types.RoleBinding
+		b.listInNamespace(txn, bindingsInNamespace{IDs: userIDs, Namespace: binding.Namespace}, &held, types.MaxRoleBindingsPerUserInNamespace)
+		if len(held) >= types.MaxRoleBindingsPerUserInNamespace {
+			return types.NewErrRoleBindingLimitReached(binding)
+		}
+
 		var buf bytes.Buffer
 		if err := gob.NewEncoder(&buf).Encode(binding); err != nil {
 			return errors.Errorf("during gob.Encode(): %w", err)
@@ -2795,10 +2805,6 @@ func (b *BadgerRoleBindings) Add(_ context.Context, binding types.RoleBinding) e
 			return errors.Errorf("during Set(): %w", err)
 		}
 
-		userIDs, err := b.getUserBindingIDs(txn, binding.UserID)
-		if err != nil {
-			return errors.Errorf("during getUserBindingIDs(): %w", err)
-		}
 		userIDs = append(userIDs, binding.ID)
 		var userBuf bytes.Buffer
 		if err := gob.NewEncoder(&userBuf).Encode(userIDs); err != nil {
@@ -2932,32 +2938,41 @@ func (b *BadgerRoleBindings) ListByUser(_ context.Context, user UserInNamespace,
 			return nil
 		}
 
-		for _, id := range ids {
-			if len(*bindings) >= limit {
-				break
-			}
-			kvItem, err := txn.Get([]byte("rolebinding:" + id))
-			if err != nil {
-				continue
-			}
-
-			var v []byte
-			v, err = kvItem.ValueCopy(v)
-			if err != nil {
-				continue
-			}
-
-			var binding types.RoleBinding
-			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(&binding); err != nil {
-				continue
-			}
-			if binding.Namespace != namespace {
-				continue
-			}
-			*bindings = append(*bindings, binding)
-		}
+		b.listInNamespace(txn, bindingsInNamespace{IDs: ids, Namespace: namespace}, bindings, limit)
 		return nil
 	})
+}
+
+type bindingsInNamespace struct {
+	Namespace string
+	IDs       []string
+}
+
+func (b *BadgerRoleBindings) listInNamespace(txn *badger.Txn, from bindingsInNamespace, bindings *[]types.RoleBinding, limit int) {
+	for _, id := range from.IDs {
+		if len(*bindings) >= limit {
+			return
+		}
+		kvItem, err := txn.Get([]byte("rolebinding:" + id))
+		if err != nil {
+			continue
+		}
+
+		var v []byte
+		v, err = kvItem.ValueCopy(v)
+		if err != nil {
+			continue
+		}
+
+		var binding types.RoleBinding
+		if err := gob.NewDecoder(bytes.NewReader(v)).Decode(&binding); err != nil {
+			continue
+		}
+		if binding.Namespace != from.Namespace {
+			continue
+		}
+		*bindings = append(*bindings, binding)
+	}
 }
 
 func (b *BadgerRoleBindings) ListByRole(_ context.Context, roleID string, bindings *[]types.RoleBinding, limit int) error {

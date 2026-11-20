@@ -28,8 +28,10 @@ authenticate, check storage first.
 
 Querator caches who a key belongs to, not what that user may do, so every request reads the user's role
 bindings and the roles they name from storage. Latency grows with the number of bindings a user holds.
-Only a bounded number of a user's bindings in one namespace are read, so a user with very many bindings
-there can be denied a permission one of the unread bindings grants.
+A user can hold at most 100 role bindings in one namespace, and creating a 101st is refused with
+`user_id is invalid; user '<id>' already holds 100 role bindings in namespace '<namespace>', the most
+one user can hold in one namespace`. The limit is per namespace, so the same user can still be given bindings in
+another one.
 
 **Workaround**: Keep each user to a few role bindings per namespace. Bind users to broad roles in a
 namespace rather than to many narrow ones.

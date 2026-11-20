@@ -29,6 +29,13 @@ Each decision below keeps one of them from doing that.
 **A permission check reads a bounded number of a user's role bindings in one namespace.** A user with
 10,000 bindings cannot make every request they send read all 10,000 from storage.
 
+**Creating a role binding past that bound is refused.** A user can hold at most 100 role bindings in one
+namespace, the same number a permission check reads, so every binding the API accepts is one a check
+reads. The store counts the user's bindings in the namespace inside the same write that adds the new
+one, so two creates at once cannot both land the 101st. The Open Door binding goes through the same
+store write, so a start that finds the anonymous user holding 100 other bindings in `_system` and no
+Open Door binding fails with the limit error.
+
 **Requests that arrive together with the same key share one storage lookup.** Fifty requests with the
 same uncached key cause one lookup, which reads the key and its user once, and all fifty wait on it.
 That lookup runs on its own timer, not the first caller's, so when the first caller hangs up the other
@@ -41,7 +48,8 @@ the buffer is full it is thrown away.
 
 | Decision | What it protects | What it costs |
 |---|---|---|
-| Read a bounded number of bindings | No request scans storage without limit | A binding past the bound is never read, so a permission granted only by it is denied. Nothing stops an admin creating such a binding yet (ENG-853). |
+| Read a bounded number of bindings | No request scans storage without limit | A binding past the bound is never read, so a permission granted only by it is denied. Only bindings written by a Querator that did not refuse creates past the bound can be past it |
+| Refuse a binding past the bound | An admin cannot grant a permission a check will ignore | A user who needs more than 100 grants in one namespace must be bound to broader roles. Counting can read every binding the user holds in every namespace on each create |
 | One shared lookup per key | Storage is not hit fifty times at once | A caller waits up to the lookup's own 10-second limit, whatever its deadline, and one storage error answers every waiting caller with an invalid-key error |
 | Drop last-used writes when busy | A request never waits on bookkeeping | A key's last-used time can be behind |
 

@@ -40,7 +40,7 @@ partition-storage:
 #      connection-string: "postgres://user:pass@localhost:5432/querator"
 #      # Caps the pgx connection pool per client; omit for the driver default.
 #      max-conns: 50
-#      # Rows fetched per scan batch; omit to use the default (1000).
+#      # Rows the lifecycle reads per page, at most 1000; omit to use the default (1000).
 #      scan-batch-size: 1000
 
 # MongoDB partition storage. Non-transactional and standalone-compatible: a single mongod (no replica

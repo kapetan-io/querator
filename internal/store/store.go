@@ -3,11 +3,9 @@ package store
 import (
 	"cmp"
 	"context"
-	"iter"
 	"log/slog"
 	"math"
 	"slices"
-	"time"
 
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/transport/reply"
@@ -17,12 +15,13 @@ import (
 const (
 	LevelDebugAll = slog.LevelDebug
 	LevelDebug    = slog.LevelDebug + 1
+
+	LifeCyclePageSize = 1_000
 )
 
 var (
 	ErrQueueAlreadyExists = reply.NewInvalidOption("queue already exists")
 	ErrQueueNotExist      = reply.NewRequestFailed("queue does not exist")
-	theFuture             = time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.UTC)
 )
 
 type LeaseOptions struct {
@@ -64,13 +63,11 @@ type Partition interface {
 
 	Stats(ctx context.Context, stats *types.PartitionStats, now clock.Time) error
 
-	ScanForActions(ctx context.Context, now clock.Time) iter.Seq2[types.Action, error]
+	ScanForActions(ctx context.Context, scan *types.LifeCycleScan, now clock.Time) error
 
-	ScanForScheduled(ctx context.Context, now clock.Time) iter.Seq2[types.Action, error]
+	ScanForScheduled(ctx context.Context, scan *types.LifeCycleScan, now clock.Time) error
 
 	TakeAction(ctx context.Context, batch types.LifeCycleBatch, stats *types.PartitionState) error
-
-	LifeCycleInfo(ctx context.Context, info *types.LifeCycleInfo) error
 
 	Info() types.PartitionInfo
 

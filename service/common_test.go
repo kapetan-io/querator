@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"iter"
 	"strings"
 
 	"io"
@@ -950,14 +949,12 @@ func (f faultyPartition) Clear(ctx context.Context, req types.ClearRequest) erro
 
 var errScanFailed = errors.New("injected lifecycle scan failure")
 
-func (f faultyPartition) ScanForActions(ctx context.Context, now clock.Time) iter.Seq2[types.Action, error] {
+func (f faultyPartition) ScanForActions(ctx context.Context, scan *types.LifeCycleScan, now clock.Time) error {
 	if queue := f.fault.scanFailing.Load(); queue != nil && *queue == f.Info().Queue.Name {
 		if only := f.fault.scanFailingOnly.Load(); only != 0 && int(only)-1 != f.Info().PartitionNum {
-			return f.Partition.ScanForActions(ctx, now)
+			return f.Partition.ScanForActions(ctx, scan, now)
 		}
-		return func(yield func(types.Action, error) bool) {
-			yield(types.Action{}, errScanFailed)
-		}
+		return errScanFailed
 	}
-	return f.Partition.ScanForActions(ctx, now)
+	return f.Partition.ScanForActions(ctx, scan, now)
 }

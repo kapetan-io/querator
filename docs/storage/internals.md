@@ -81,11 +81,6 @@ imported item is exempt and keeps the `EnqueueAt` it was given.
 **An unleased item records no lease deadline.** Expiry scans select leased items by the leased flag,
 never by comparing the deadline against a sentinel value.
 
-**A deadline equal to now is due.** The lifecycle scan yields an action when a deadline is at or
-before the time it is given, never only after it. The logical queue treats a deadline at or before
-now as work left undone, so a deadline equal to now that the scan skipped would cost a back-off
-before the item is acted on. The same holds for a scheduled item's `EnqueueAt`.
-
 **The lifecycle scan removes a leased item at `MaxAttempts`.** A leased item whose lease has not
 expired but whose attempts reached the queue's `MaxAttempts` goes to the dead-letter queue, or is
 deleted when the queue has none. Because a lease counts the attempt when it hands the item out, this

@@ -185,8 +185,53 @@ func (i *QueueInfo) Update(r QueueInfo) bool {
 	return true
 }
 
-type LifeCycleInfo struct {
-	NextLeaseExpiry    clock.Time
-	NextExpireDeadline clock.Time
-	NextEnqueueAt      clock.Time
+type LifeCycleScan struct {
+	Pivot                  ItemID
+	Last                   ItemID
+	Actions                []Action
+	EarliestLeaseDeadline  clock.Time
+	EarliestExpireDeadline clock.Time
+	EarliestEnqueueAt      clock.Time
+}
+
+func (s *LifeCycleScan) MidPass() bool {
+	return s.Pivot != nil
+}
+
+func (s *LifeCycleScan) Unread(id ItemID) bool {
+	return s.MidPass() && bytes.Compare(id, s.Pivot) > 0 && bytes.Compare(id, s.Last) <= 0
+}
+
+func (s *LifeCycleScan) ResetPage() {
+	s.Actions = s.Actions[:0]
+	s.EarliestLeaseDeadline = clock.Time{}
+	s.EarliestExpireDeadline = clock.Time{}
+	s.EarliestEnqueueAt = clock.Time{}
+}
+
+func (s *LifeCycleScan) EndPass() {
+	s.Pivot = nil
+	s.Last = nil
+}
+
+func (s *LifeCycleScan) Add(a Action) {
+	s.Actions = append(s.Actions, a)
+}
+
+func (s *LifeCycleScan) SeeLeaseDeadline(deadline clock.Time) {
+	earliest(&s.EarliestLeaseDeadline, deadline)
+}
+
+func (s *LifeCycleScan) SeeExpireDeadline(deadline clock.Time) {
+	earliest(&s.EarliestExpireDeadline, deadline)
+}
+
+func (s *LifeCycleScan) SeeEnqueueAt(at clock.Time) {
+	earliest(&s.EarliestEnqueueAt, at)
+}
+
+func earliest(current *clock.Time, candidate clock.Time) {
+	if current.IsZero() || candidate.Before(*current) {
+		*current = candidate
+	}
 }

@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/gob"
 	"fmt"
-	"iter"
 	"log/slog"
 	"path/filepath"
 	"strings"
@@ -703,137 +702,137 @@ func (b *BadgerPartition) UpdateQueueInfo(info types.QueueInfo) {
 	b.info.Queue = info
 }
 
-func (b *BadgerPartition) ScanForScheduled(_ context.Context, now clock.Time) iter.Seq2[types.Action, error] {
-	return func(yield func(types.Action, error) bool) {
-		db, err := b.getDB()
-		if err != nil {
-			yield(types.Action{}, err)
+func (b *BadgerPartition) ScanForScheduled(ctx context.Context, scan *types.LifeCycleScan, now clock.Time) error {
+	return b.readLifeCyclePage(ctx, scan, func(item *types.Item) {
+		if item.EnqueueAt.IsZero() {
 			return
 		}
-
-		err = db.View(func(txn *badger.Txn) error {
-			iter := txn.NewIterator(badger.DefaultIteratorOptions)
-			defer iter.Close()
-
-			for iter.Rewind(); iter.Valid(); iter.Next() {
-				key := iter.Item().Key()
-
-				if bytes.HasPrefix(key, []byte("source:")) {
-					continue
-				}
-
-				var v []byte
-				v, err := iter.Item().ValueCopy(v)
-				if err != nil {
-					return err
-				}
-
-				item := new(types.Item)
-				if err := gob.NewDecoder(bytes.NewReader(v)).Decode(item); err != nil {
-					return errors.Errorf("during Decode(): %w", err)
-				}
-
-				if item.EnqueueAt.IsZero() {
-					continue
-				}
-
-				if !item.EnqueueAt.After(now) {
-					if !yield(types.Action{
-						Action:       types.ActionQueueScheduledItem,
-						PartitionNum: b.info.PartitionNum,
-						Queue:        b.info.Queue.Name,
-						Item:         *item,
-					}, nil) {
-						return nil
-					}
-				}
-			}
-			return nil
-		})
-
-		if err != nil {
-			yield(types.Action{}, err)
+		if item.EnqueueAt.After(now) {
+			scan.SeeEnqueueAt(item.EnqueueAt)
+			return
 		}
-	}
+		scan.Add(types.Action{
+			Action:       types.ActionQueueScheduledItem,
+			PartitionNum: b.info.PartitionNum,
+			Queue:        b.info.Queue.Name,
+			Item:         *item,
+		})
+	})
 }
 
-func (b *BadgerPartition) ScanForActions(_ context.Context, now clock.Time) iter.Seq2[types.Action, error] {
-	return func(yield func(types.Action, error) bool) {
-		db, err := b.getDB()
-		if err != nil {
-			yield(types.Action{}, err)
+func (b *BadgerPartition) ScanForActions(ctx context.Context, scan *types.LifeCycleScan, now clock.Time) error {
+	return b.readLifeCyclePage(ctx, scan, func(item *types.Item) {
+		if !item.EnqueueAt.IsZero() {
 			return
 		}
-
-		err = db.View(func(txn *badger.Txn) error {
-			iter := txn.NewIterator(badger.DefaultIteratorOptions)
-			defer iter.Close()
-
-			for iter.Rewind(); iter.Valid(); iter.Next() {
-				key := iter.Item().Key()
-
-				if bytes.HasPrefix(key, []byte("source:")) {
-					continue
-				}
-
-				var v []byte
-				v, err := iter.Item().ValueCopy(v)
-				if err != nil {
-					return err
-				}
-
-				item := new(types.Item)
-				if err := gob.NewDecoder(bytes.NewReader(v)).Decode(item); err != nil {
-					return errors.Errorf("during Decode(): %w", err)
-				}
-
-				if !item.EnqueueAt.IsZero() {
-					continue
-				}
-
-				if item.IsLeased {
-					if !item.LeaseDeadline.After(now) {
-						if !yield(types.Action{
-							Action:       types.ActionLeaseExpired,
-							PartitionNum: b.info.PartitionNum,
-							Queue:        b.info.Queue.Name,
-							Item:         *item,
-						}, nil) {
-							return nil
-						}
-						continue
-					}
-					if b.info.Queue.MaxAttempts != 0 && item.Attempts >= b.info.Queue.MaxAttempts {
-						if !yield(types.Action{
-							Action:       types.ActionItemMaxAttempts,
-							PartitionNum: b.info.PartitionNum,
-							Queue:        b.info.Queue.Name,
-							Item:         *item,
-						}, nil) {
-							return nil
-						}
-						continue
-					}
-				}
-				if !item.ExpireDeadline.After(now) {
-					if !yield(types.Action{
-						Action:       types.ActionItemExpired,
-						PartitionNum: b.info.PartitionNum,
-						Queue:        b.info.Queue.Name,
-						Item:         *item,
-					}, nil) {
-						return nil
-					}
-					continue
-				}
+		if item.IsLeased {
+			if !item.LeaseDeadline.After(now) {
+				scan.Add(types.Action{
+					Action:       types.ActionLeaseExpired,
+					PartitionNum: b.info.PartitionNum,
+					Queue:        b.info.Queue.Name,
+					Item:         *item,
+				})
+				return
 			}
-			return nil
-		})
-
-		if err != nil {
-			yield(types.Action{}, err)
+			if b.info.Queue.MaxAttempts != 0 && item.Attempts >= b.info.Queue.MaxAttempts {
+				scan.Add(types.Action{
+					Action:       types.ActionItemMaxAttempts,
+					PartitionNum: b.info.PartitionNum,
+					Queue:        b.info.Queue.Name,
+					Item:         *item,
+				})
+				return
+			}
+			scan.SeeLeaseDeadline(item.LeaseDeadline)
 		}
+		if !item.ExpireDeadline.After(now) {
+			scan.Add(types.Action{
+				Action:       types.ActionItemExpired,
+				PartitionNum: b.info.PartitionNum,
+				Queue:        b.info.Queue.Name,
+				Item:         *item,
+			})
+			return
+		}
+		scan.SeeExpireDeadline(item.ExpireDeadline)
+	})
+}
+
+func (b *BadgerPartition) readLifeCyclePage(ctx context.Context, scan *types.LifeCycleScan, visit func(*types.Item)) error {
+	db, err := b.getDB()
+	if err != nil {
+		return err
 	}
+
+	return db.View(func(txn *badger.Txn) error {
+		tail := scan.Last
+		if !scan.MidPass() {
+			tail = lastItemID(txn)
+		}
+		if tail == nil {
+			scan.EndPass()
+			return nil
+		}
+
+		iter := txn.NewIterator(badger.DefaultIteratorOptions)
+		defer iter.Close()
+
+		var pivot []byte
+		var read int
+		for iter.Seek(scan.Pivot); iter.Valid() && ctx.Err() == nil; iter.Next() {
+			key := iter.Item().Key()
+			if bytes.Equal(key, scan.Pivot) {
+				continue
+			}
+			if bytes.Compare(key, tail) > 0 {
+				break
+			}
+			if read == LifeCyclePageSize {
+				scan.Pivot, scan.Last = pivot, tail
+				return nil
+			}
+			read++
+
+			v, err := iter.Item().ValueCopy(nil)
+			if err != nil {
+				return err
+			}
+			item := new(types.Item)
+			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(item); err != nil {
+				return errors.Errorf("during Decode(): %w", err)
+			}
+			visit(item)
+			pivot = iter.Item().KeyCopy(nil)
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		scan.EndPass()
+		return nil
+	})
+}
+
+func lastItemID(txn *badger.Txn) []byte {
+	iter := txn.NewIterator(badger.IteratorOptions{Reverse: true})
+	defer iter.Close()
+
+	iter.Seek(sourcePrefix)
+	if !iter.Valid() || bytes.HasPrefix(iter.Item().Key(), sourcePrefix) {
+		return nil
+	}
+	return iter.Item().KeyCopy(nil)
+}
+
+type badgerWrite struct {
+	key    []byte
+	value  []byte
+	delete bool
+}
+
+type actionWriteSet struct {
+	writes   []badgerWrite
+	unLeased int
 }
 
 func (b *BadgerPartition) TakeAction(_ context.Context, batch types.LifeCycleBatch,
@@ -848,175 +847,155 @@ func (b *BadgerPartition) TakeAction(_ context.Context, batch types.LifeCycleBat
 		return err
 	}
 
-	return db.Update(func(txn *badger.Txn) error {
-		for _, req := range batch.Requests {
-			for _, a := range req.Actions {
-				switch a.Action {
-				case types.ActionLeaseExpired:
-					item := new(types.Item)
-					kvItem, err := txn.Get(a.Item.ID)
-					if err != nil {
-						if errors.Is(err, badger.ErrKeyNotFound) {
-							b.conf.Log.Warn("unable to find item while processing action; ignoring action",
-								"id", a.Item.ID, "action", types.ActionToString(a.Action))
-							continue
-						}
-						return err
-					}
+	txn := db.NewTransaction(true)
+	defer func() { txn.Discard() }()
+	var pending []actionWriteSet
 
-					err = kvItem.Value(func(val []byte) error {
-						return gob.NewDecoder(bytes.NewReader(val)).Decode(item)
-					})
-					if err != nil {
-						return err
-					}
-
-					item.LeaseDeadline = clock.Time{}
-					item.IsLeased = false
-
-					b.uid = b.uid.Next()
-					item.ID = []byte(b.uid.String())
-
-					var buf bytes.Buffer
-					if err := gob.NewEncoder(&buf).Encode(item); err != nil {
-						return err
-					}
-
-					if err := txn.Set(item.ID, buf.Bytes()); err != nil {
-						return err
-					}
-					b.lowerLeasePivot(item.ID)
-
-					if err := txn.Delete(a.Item.ID); err != nil {
-						return err
-					}
-
-				case types.ActionDeleteItem:
-					if a.Item.SourceID != nil {
-						if err := txn.Delete([]byte("source:" + string(a.Item.SourceID))); err != nil {
-							return err
-						}
-					}
-					if err := txn.Delete(a.Item.ID); err != nil {
-						return err
-					}
-
-				case types.ActionQueueScheduledItem:
-					item := new(types.Item)
-					kvItem, err := txn.Get(a.Item.ID)
-					if err != nil {
-						if errors.Is(err, badger.ErrKeyNotFound) {
-							b.conf.Log.Warn("unable to find scheduled item while processing action; ignoring action",
-								"id", a.Item.ID, "action", types.ActionToString(a.Action))
-							continue
-						}
-						return err
-					}
-
-					err = kvItem.Value(func(val []byte) error {
-						return gob.NewDecoder(bytes.NewReader(val)).Decode(item)
-					})
-					if err != nil {
-						return err
-					}
-
-					if item.EnqueueAt.IsZero() {
-						b.conf.Log.Warn("assertion failed; expected to be a scheduled item; action ignored",
-							"id", string(a.Item.ID))
-						continue
-					}
-
-					item.EnqueueAt = clock.Time{}
-					b.uid = b.uid.Next()
-					newID := []byte(b.uid.String())
-					item.ID = newID
-
-					var buf bytes.Buffer
-					if err := gob.NewEncoder(&buf).Encode(item); err != nil {
-						return err
-					}
-
-					if err := txn.Set(newID, buf.Bytes()); err != nil {
-						return err
-					}
-					b.lowerLeasePivot(newID)
-
-					if err := txn.Delete(a.Item.ID); err != nil {
-						return err
-					}
-
-					state.UnLeased++
-
-				default:
-					assert.Unreachable(fmt.Sprintf("undefined action kind '0x%X'", int(a.Action)))
-				}
-			}
-		}
-		return nil
-	})
-}
-
-func (b *BadgerPartition) LifeCycleInfo(_ context.Context, info *types.LifeCycleInfo) error {
-	db, err := b.getDB()
-	if err != nil {
-		return err
-	}
-
-	return db.View(func(txn *badger.Txn) error {
-		nextLease := theFuture
-		nextExpire := theFuture
-		nextEnqueue := theFuture
-
-		iter := txn.NewIterator(badger.DefaultIteratorOptions)
-		defer iter.Close()
-
-		for iter.Rewind(); iter.Valid(); iter.Next() {
-			key := iter.Item().Key()
-
-			if bytes.HasPrefix(key, []byte("source:")) {
-				continue
-			}
-
-			var v []byte
-			v, err := iter.Item().ValueCopy(v)
+	for _, req := range batch.Requests {
+		for _, a := range req.Actions {
+			action, err := b.actionWrites(txn, a)
 			if err != nil {
 				return err
 			}
 
-			item := new(types.Item)
-			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(item); err != nil {
+			err = applyWrites(txn, action.writes)
+			if errors.Is(err, badger.ErrTxnTooBig) {
+				txn.Discard()
+				if err := commitInNewTransaction(db, pending, state); err != nil {
+					return err
+				}
+				pending = pending[:0]
+				txn = db.NewTransaction(true)
+				err = applyWrites(txn, action.writes)
+			}
+			if err != nil {
 				return err
 			}
+			pending = append(pending, action)
+		}
+	}
 
-			if !item.EnqueueAt.IsZero() {
-				if item.EnqueueAt.Before(nextEnqueue) {
-					nextEnqueue = item.EnqueueAt
-				}
-				continue
+	return commitActions(txn, pending, state)
+}
+
+func commitInNewTransaction(db *badger.DB, pending []actionWriteSet, state *types.PartitionState) error {
+	txn := db.NewTransaction(true)
+	defer txn.Discard()
+	for _, action := range pending {
+		if err := applyWrites(txn, action.writes); err != nil {
+			return err
+		}
+	}
+	return commitActions(txn, pending, state)
+}
+
+func commitActions(txn *badger.Txn, pending []actionWriteSet, state *types.PartitionState) error {
+	if err := txn.Commit(); err != nil {
+		return err
+	}
+	for _, action := range pending {
+		state.UnLeased += action.unLeased
+	}
+	return nil
+}
+
+func applyWrites(txn *badger.Txn, writes []badgerWrite) error {
+	for _, w := range writes {
+		if w.delete {
+			if err := txn.Delete(w.key); err != nil {
+				return err
 			}
+			continue
+		}
+		if err := txn.Set(w.key, w.value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
-			if item.IsLeased && !item.LeaseDeadline.IsZero() && item.LeaseDeadline.Before(nextLease) {
-				nextLease = item.LeaseDeadline
+func (b *BadgerPartition) actionWrites(txn *badger.Txn, a types.Action) (actionWriteSet, error) {
+	switch a.Action {
+	case types.ActionLeaseExpired:
+		item, err := getItem(txn, a.Item.ID)
+		if err != nil {
+			if errors.Is(err, badger.ErrKeyNotFound) {
+				b.conf.Log.Warn("unable to find item while processing action; ignoring action",
+					"id", a.Item.ID, "action", types.ActionToString(a.Action))
+				return actionWriteSet{}, nil
 			}
+			return actionWriteSet{}, err
+		}
 
-			if !item.ExpireDeadline.IsZero() && item.ExpireDeadline.Before(nextExpire) {
-				nextExpire = item.ExpireDeadline
+		item.LeaseDeadline = clock.Time{}
+		item.IsLeased = false
+		b.uid = b.uid.Next()
+		item.ID = []byte(b.uid.String())
+
+		var buf bytes.Buffer
+		if err := gob.NewEncoder(&buf).Encode(item); err != nil {
+			return actionWriteSet{}, err
+		}
+		b.lowerLeasePivot(item.ID)
+		return actionWriteSet{writes: []badgerWrite{
+			{key: item.ID, value: buf.Bytes()},
+			{key: a.Item.ID, delete: true},
+		}}, nil
+
+	case types.ActionDeleteItem:
+		var writes []badgerWrite
+		if a.Item.SourceID != nil {
+			writes = append(writes, badgerWrite{key: []byte("source:" + string(a.Item.SourceID)), delete: true})
+		}
+		return actionWriteSet{writes: append(writes, badgerWrite{key: a.Item.ID, delete: true})}, nil
+
+	case types.ActionQueueScheduledItem:
+		item, err := getItem(txn, a.Item.ID)
+		if err != nil {
+			if errors.Is(err, badger.ErrKeyNotFound) {
+				b.conf.Log.Warn("unable to find scheduled item while processing action; ignoring action",
+					"id", a.Item.ID, "action", types.ActionToString(a.Action))
+				return actionWriteSet{}, nil
 			}
+			return actionWriteSet{}, err
 		}
 
-		if nextLease != theFuture {
-			info.NextLeaseExpiry = nextLease
+		if item.EnqueueAt.IsZero() {
+			b.conf.Log.Warn("assertion failed; expected to be a scheduled item; action ignored",
+				"id", string(a.Item.ID))
+			return actionWriteSet{}, nil
 		}
 
-		if nextExpire != theFuture {
-			info.NextExpireDeadline = nextExpire
-		}
+		item.EnqueueAt = clock.Time{}
+		b.uid = b.uid.Next()
+		item.ID = []byte(b.uid.String())
 
-		if nextEnqueue != theFuture {
-			info.NextEnqueueAt = nextEnqueue
+		var buf bytes.Buffer
+		if err := gob.NewEncoder(&buf).Encode(item); err != nil {
+			return actionWriteSet{}, err
 		}
-		return nil
+		b.lowerLeasePivot(item.ID)
+		return actionWriteSet{unLeased: 1, writes: []badgerWrite{
+			{key: item.ID, value: buf.Bytes()},
+			{key: a.Item.ID, delete: true},
+		}}, nil
+
+	default:
+		assert.Unreachable(fmt.Sprintf("undefined action kind '0x%X'", int(a.Action)))
+	}
+	return actionWriteSet{}, nil
+}
+
+func getItem(txn *badger.Txn, id []byte) (*types.Item, error) {
+	kvItem, err := txn.Get(id)
+	if err != nil {
+		return nil, err
+	}
+	item := new(types.Item)
+	err = kvItem.Value(func(val []byte) error {
+		return gob.NewDecoder(bytes.NewReader(val)).Decode(item)
 	})
+	return item, err
 }
 
 func (b *BadgerPartition) Stats(_ context.Context, stats *types.PartitionStats, now clock.Time) error {

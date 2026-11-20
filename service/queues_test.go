@@ -367,23 +367,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					RequestedPartitions: 1,
 				}))
 
-				var wg sync.WaitGroup
-				wg.Go(func() {
-					for i := range updates {
-						assert.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
-							QueueName: queueName,
-							Reference: fmt.Sprintf("reference-%d", i),
-						}))
-					}
-				})
-				wg.Go(func() {
-					for range updates {
-						var info pb.QueueInfo
-						assert.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &info))
-						assert.Equal(t, queueName, info.QueueName)
-					}
-				})
-				wg.Wait()
+				updateWhileReadingInfo(t, ctx, c, queueName, updates)
 
 				var info pb.QueueInfo
 				require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &info))
@@ -1708,6 +1692,43 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		}()
 		c, ctx := d.MustClient(), d.Context()
 
+		t.Run("OmittedTimeoutsAreKept", func(t *testing.T) {
+			queueName := random.String("queue-", 10)
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				QueueName:           queueName,
+				LeaseTimeout:        "1m0s",
+				ExpireTimeout:       ExpireTimeout,
+				RequestedPartitions: 1,
+			})
+			require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+				QueueName:   queueName,
+				MaxAttempts: 5,
+			}))
+
+			ref := random.String("ref-", 10)
+			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+				QueueName:      queueName,
+				RequestTimeout: "1m",
+				Items:          []*pb.QueueProduceItem{{Reference: ref, Bytes: []byte("test payload")}},
+			}))
+			var lease pb.QueueLeaseResponse
+			require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+				ClientId:       random.String("client-", 10),
+				RequestTimeout: "5s",
+				QueueName:      queueName,
+				BatchSize:      1,
+			}, &lease))
+			require.Len(t, lease.Items, 1)
+
+			var resp pb.StorageItemsListResponse
+			require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &resp, nil))
+			item := findInStorageList(ref, &resp)
+			require.NotNil(t, item)
+			start := now.Now().UTC()
+			assert.WithinDuration(t, start.Add(24*clock.Hour), item.ExpireDeadline.AsTime(), clock.Microsecond)
+			assert.WithinDuration(t, start.Add(clock.Minute), item.LeaseDeadline.AsTime(), clock.Microsecond)
+		})
+
 		t.Run("MaxAttempts", func(t *testing.T) {
 			// Baseline test to verify lifecycle works (mirrors MaxAttemptsWithDLQ)
 			t.Run("BaselineWithDLQ", func(t *testing.T) {
@@ -2806,4 +2827,28 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			})
 		})
 	})
+}
+
+// updateWhileReadingInfo updates the queue's reference updates times while another goroutine reads
+// the queue's info as often. The goroutines start in a named function because Tiger's TS-C02 does
+// not see a Wait that follows Go inside a function literal.
+func updateWhileReadingInfo(t *testing.T, ctx context.Context, c *querator.Client, queueName string, updates int) {
+	t.Helper()
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		for i := range updates {
+			assert.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+				QueueName: queueName,
+				Reference: fmt.Sprintf("reference-%d", i),
+			}))
+		}
+	})
+	wg.Go(func() {
+		for range updates {
+			var info pb.QueueInfo
+			assert.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &info))
+			assert.Equal(t, queueName, info.QueueName)
+		}
+	})
+	wg.Wait()
 }

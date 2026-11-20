@@ -151,7 +151,10 @@ func (l *Logical) handleReload(state *QueueState, req *Request) {
 			partition.State.NumLeased = stats.NumLeased
 			partition.State.Failures = 0
 		}
+		partition.Lifecycle.RestartPasses(l.conf.Clock.Now().UTC())
 	}
+	state.LifecycleTimer.Reset(l.minNextLifecycleRun(state))
+	state.ScheduledTimer.Reset(l.minNextScheduledRun(state))
 
 	close(req.ReadyCh)
 }

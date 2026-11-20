@@ -16,9 +16,82 @@ const (
 type PartitionLifecycleState struct {
 	NextLifecycleRun  clock.Time
 	NextScheduledRun  clock.Time
+	ActionPass        LifecyclePass
+	ScheduledPass     LifecyclePass
 	Failures          int
 	UnfinishedRuns    int
 	ScheduledFailures int
+}
+
+func (s *PartitionLifecycleState) RunLifecycleBy(deadline clock.Time) bool {
+	if s.ActionPass.Scan.MidPass() {
+		s.ActionPass.StartNextPassBy(deadline)
+		return false
+	}
+	if deadline.Before(s.NextLifecycleRun) {
+		s.NextLifecycleRun = deadline
+		return true
+	}
+	return false
+}
+
+func (s *PartitionLifecycleState) RunScheduledBy(at clock.Time) bool {
+	if s.ScheduledPass.Scan.MidPass() {
+		s.ScheduledPass.StartNextPassBy(at)
+		return false
+	}
+	if at.Before(s.NextScheduledRun) {
+		s.NextScheduledRun = at
+		return true
+	}
+	return false
+}
+
+func (s *PartitionLifecycleState) RunDue(now clock.Time) bool {
+	return passDue(&s.ActionPass, s.NextLifecycleRun.Sub(now)) || passDue(&s.ScheduledPass, s.NextScheduledRun.Sub(now))
+}
+
+func passDue(pass *LifecyclePass, untilRun clock.Duration) bool {
+	if pass.Scan.MidPass() {
+		return untilRun <= 0
+	}
+	return untilRun < 0
+}
+
+func (s *PartitionLifecycleState) ItemMoved(id types.ItemID) {
+	if s.ActionPass.Scan.Unread(id) {
+		s.ActionPass.Moved = true
+	}
+}
+
+func (s *PartitionLifecycleState) RestartPasses(now clock.Time) {
+	s.ActionPass.End()
+	s.ScheduledPass.End()
+	s.NextLifecycleRun = now
+	s.NextScheduledRun = now
+}
+
+type LifecyclePass struct {
+	Scan       types.LifeCycleScan
+	NextPassAt clock.Time
+	Unfinished bool
+	Moved      bool
+}
+
+func (p *LifecyclePass) StartNextPassBy(deadline clock.Time) {
+	if deadline.IsZero() {
+		return
+	}
+	if p.NextPassAt.IsZero() || deadline.Before(p.NextPassAt) {
+		p.NextPassAt = deadline
+	}
+}
+
+func (p *LifecyclePass) End() {
+	p.Scan.EndPass()
+	p.NextPassAt = clock.Time{}
+	p.Unfinished = false
+	p.Moved = false
 }
 
 type Partition struct {

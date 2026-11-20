@@ -34,7 +34,7 @@ move runs again, and a completed item's source ID no longer stops it being store
 deleted as a lifecycle action rather than through complete, because complete refuses an item that is not
 leased and an item can expire without ever being leased. The code does not meet this yet when the source
 stops waiting at the write timeout: the source deletes nothing while the dead-letter queue still stores
-the move.
+the move (ENG-844).
 
 The source queue's wait on the dead-letter queue's request loop is bounded by the write timeout, and a
 dead-letter queue that cannot take the request at once answers that it is overloaded. A stalled or

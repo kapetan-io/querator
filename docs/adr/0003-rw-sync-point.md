@@ -43,10 +43,6 @@ throughput path. Every other request, such as a clear, stats or a queue info upd
 handled alone, outside any batch. A batch stops at the first such request, so that requests apply in
 the order they arrived.
 
-A produce can wait in the request inbox past its deadline while the loop is busy, so every pass that takes
-requests expires produces before it assigns them, including those it has just taken from the inbox. Skipping that would
-write items for a client that has already given up.
-
 If the single thread per Logical Queue becomes a bottleneck for throughput, querator will create more Logical Queues,
 depending on the available partitions and the number of consuming clients. In this way, we increase the total
 throughput of a queue as needed.

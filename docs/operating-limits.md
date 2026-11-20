@@ -28,10 +28,8 @@ authenticate, check storage first.
 
 Querator caches who a key belongs to, not what that user may do, so every request reads the user's role
 bindings and the roles they name from storage. Latency grows with the number of bindings a user holds.
-A user can hold at most 100 role bindings in one namespace, and creating a 101st is refused with
-`user_id is invalid; user '<id>' already holds 100 role bindings in namespace '<namespace>', the most
-one user can hold in one namespace`. The limit is per namespace, so the same user can still be given bindings in
-another one.
+A user can hold at most 100 role bindings in one namespace, and creating a 101st is refused. The same
+user can still be given bindings in another namespace.
 
 **Workaround**: Keep each user to a few role bindings per namespace. Bind users to broad roles in a
 namespace rather than to many narrow ones.
@@ -44,9 +42,8 @@ applies only when embedding. Open Door binds the anonymous user to the Admin rol
 namespace, so any request without an API key has full administrative access. A warning is logged when
 the binding is created. The binding is created again at every start, so deleting it closes the door only
 until the next restart, unless the anonymous user already holds 100 other bindings in `_system`. Then
-the start logs a warning and does not grant Admin, but requests without an API key still get every
-permission those other `_system` bindings grant, in every namespace. The standard roles are also
-written again at every start, replacing any change made to them.
+it is not created, and a warning is logged. The standard roles are also written again at every start,
+replacing any change made to them.
 
 With the `none` auth driver, the default, Querator checks no permissions, so any client that can reach
 the API port can do anything.

@@ -38,11 +38,7 @@ keeps the items. That holds only if nothing holds the queues manager's lock whil
 queue, because a move needs that lock to find `orders-dead`.
 
 **`orders` sends a move again only after `orders-dead` answers it.** Sending it again before the
-answer could store an item a second time once a consumer had completed the first copy. So a
-partition of `orders` holds at most one unanswered move and sends no other until the answer
-arrives. It then deletes what `orders-dead` stored before it looks for dead items again, since it
-would otherwise find the stored items and move them a second time. When `orders-dead` shuts down or
-is deleted, it answers every move it holds.
+answer could store an item a second time once a consumer had completed the first copy.
 
 **Every dead-letter queue follows these rules.**
 

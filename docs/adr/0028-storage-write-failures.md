@@ -30,9 +30,8 @@ that request alone. It is not a storage error and does not fail the others.
 
 **A produce fails only when the backend cannot say the batch was stored.** The queue counts as
 waiting only the items the backend says it stored from a failed produce. A backend that stores a
-batch in parts records how many items of each request it stored, always the first ones of the
-request, and counts an item it already held as stored. A backend must do this for a batch of only
-dead-letter hand-offs ([27. Dead-letter queues](0027-dead-letter-queues.md)).
+batch of only dead-letter hand-offs in parts says how many items of each request it stored
+([27. Dead-letter queues](0027-dead-letter-queues.md)).
 
 **A failed lease never hands out an item whose lease was not saved.** If a backend cannot tell whether
 a lease write applied, it takes back every item it marked leased for that request. Some of those may

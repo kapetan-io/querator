@@ -29,12 +29,12 @@ written in the same transaction, because an item stored without its entry would 
 next move.
 
 When a move fails after part of it was stored, the source must delete the stored part at once and keep
-the rest for the next run. The code does not meet this yet when the source stops waiting at the write
-timeout: the source deletes nothing while the dead-letter queue still stores the move. Waiting would not
-be safe: a consumer may complete a stored item before the move runs again, and a completed item's source
-ID no longer stops it being stored a second time. They are deleted as a lifecycle action rather than
-through complete, because complete refuses an item that is not leased and an item can expire without ever
-being leased.
+the rest for the next run. Waiting would not be safe: a consumer may complete a stored item before the
+move runs again, and a completed item's source ID no longer stops it being stored a second time. They are
+deleted as a lifecycle action rather than through complete, because complete refuses an item that is not
+leased and an item can expire without ever being leased. The code does not meet this yet when the source
+stops waiting at the write timeout: the source deletes nothing while the dead-letter queue still stores
+the move.
 
 The source queue's wait on the dead-letter queue's request loop is bounded by the write timeout, and a
 dead-letter queue that cannot take the request at once answers that it is overloaded. A stalled or

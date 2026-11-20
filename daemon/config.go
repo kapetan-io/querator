@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"fmt"
@@ -171,14 +172,60 @@ type Partition struct {
 }
 
 func ReadConfig(r io.Reader) (File, error) {
-	dec := yaml.NewDecoder(r)
+	content, err := io.ReadAll(r)
+	if err != nil {
+		return File{}, fmt.Errorf("while reading config file: %w", err)
+	}
+
+	dec := yaml.NewDecoder(bytes.NewReader(content))
 	dec.KnownFields(true)
 
 	var file File
 	if err := dec.Decode(&file); err != nil {
 		return File{}, fmt.Errorf("while reading config file: %w", err)
 	}
+
+	var doc yaml.Node
+	if err := yaml.Unmarshal(content, &doc); err != nil {
+		return File{}, fmt.Errorf("while reading config file: %w", err)
+	}
+	keepEmptyAuthKeys(&doc, &file)
 	return file, nil
+}
+
+func keepEmptyAuthKeys(doc *yaml.Node, file *File) {
+	if len(doc.Content) == 0 {
+		return
+	}
+	section := mappingValue(doc.Content[0], "auth")
+	if section == nil {
+		return
+	}
+	if file.Auth == nil {
+		file.Auth = &AuthConfig{}
+	}
+	storage := mappingValue(section, "storage")
+	if storage == nil {
+		return
+	}
+	if mappingValue(storage, "memory") != nil && file.Auth.Storage.Memory == nil {
+		file.Auth.Storage.Memory = &MemoryConfig{}
+	}
+	if mappingValue(storage, "badger") != nil && file.Auth.Storage.Badger == nil {
+		file.Auth.Storage.Badger = &BadgerConfig{}
+	}
+}
+
+func mappingValue(node *yaml.Node, key string) *yaml.Node {
+	if node.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i, child := range node.Content {
+		if i%2 == 0 && child.Value == key && i+1 < len(node.Content) {
+			return node.Content[i+1]
+		}
+	}
+	return nil
 }
 
 func ApplyConfigFile(ctx context.Context, conf *Config, file File, w io.Writer) error {

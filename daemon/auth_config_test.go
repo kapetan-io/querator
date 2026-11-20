@@ -262,8 +262,13 @@ func TestConfigFileAuthRejects(t *testing.T) {
 			err:  "field postgres not found in type daemon.AuthStorage",
 		},
 		{
-			name: "AuthBackendDriver",
+			name: "AuthBackendDriverInternal",
 			yaml: "auth-backend:\n  driver: internal\n",
+			err:  "field auth-backend not found in type daemon.File",
+		},
+		{
+			name: "AuthBackendDriverNone",
+			yaml: "auth-backend:\n  driver: none\n",
 			err:  "field auth-backend not found in type daemon.File",
 		},
 	} {
@@ -273,6 +278,52 @@ func TestConfigFileAuthRejects(t *testing.T) {
 			assert.Contains(t, err.Error(), test.err)
 		})
 	}
+}
+
+func TestConfigFileAuthWithoutStorageRefusesToStart(t *testing.T) {
+	const required = "invalid auth; 'storage' is required and must be one of (memory, badger); " +
+		"it holds namespaces, users, roles, role bindings and API keys"
+	for _, test := range []struct {
+		name string
+		yaml string
+		err  string
+	}{
+		{name: "AuthAlone", yaml: "auth:\n", err: required},
+		{name: "AuthNull", yaml: "auth: ~\n", err: required},
+		{name: "AuthEmptyMapping", yaml: "auth: {}\n", err: required},
+		{
+			name: "AuthWithCommentedStorage",
+			yaml: "auth:\n#  storage:\n#    badger:\n#      storage-dir: /data/auth\n",
+			err:  required,
+		},
+		{name: "StorageNull", yaml: "auth:\n  storage:\n", err: required},
+		{name: "StorageEmptyMapping", yaml: "auth:\n  storage: {}\n", err: required},
+		{
+			name: "BadgerNull",
+			yaml: "auth:\n  storage:\n    badger:\n",
+			err:  "invalid auth storage; badger: 'storage-dir' is required",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			file, err := daemon.ReadConfig(strings.NewReader(test.yaml))
+			require.NoError(t, err)
+
+			var conf daemon.Config
+			err = daemon.ApplyConfigFile(context.Background(), &conf, file, io.Discard)
+			assert.EqualError(t, err, test.err)
+		})
+	}
+}
+
+func TestConfigFileAuthWithNullMemoryStorageChecksKeys(t *testing.T) {
+	ctx := context.Background()
+	d := startFromConfig(t, "address: localhost:0\nauth:\n  storage:\n    memory:\n")
+	defer func() { require.NoError(t, d.Shutdown(ctx)) }()
+
+	err := listQueuesWithHeader(t, ctx, d, "Bearer qtr-not-a-real-key")
+	var duhErr duh.Error
+	require.ErrorAs(t, err, &duhErr)
+	assert.Equal(t, duh.CodeUnauthorized, duhErr.Code())
 }
 
 func startFromConfig(t *testing.T, config string) *daemon.Daemon {

@@ -231,8 +231,8 @@ func TestApplyConfigFileErrs(t *testing.T) {
 			expectedErr: "invalid queue 'test-queue'; partitions is invalid; cannot be greater than 1024",
 		},
 		{
-			name:        "AuthWithoutStorage",
-			file:        daemon.File{Auth: &daemon.AuthConfig{}},
+			name: "AuthWithoutStorage",
+			file: daemon.File{Auth: &daemon.AuthConfig{}},
 			expectedErr: "invalid auth; 'storage' is required and must be one of (memory, badger); " +
 				"it holds namespaces, users, roles, role bindings and API keys",
 		},

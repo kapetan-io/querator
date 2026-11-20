@@ -71,10 +71,12 @@ partition-storage:
 
 # Auth turns on API keys. Without this section every request is allowed and any
 # Authorization header is ignored, which suits deployments behind a trusted network.
-# With it, each request must send "Authorization: Bearer <key>".
+# With it, requests send their key as "Authorization: Bearer <key>". An "auth:" line
+# with nothing under it refuses to start.
 #
 # storage holds namespaces, users, roles, role bindings and API keys, and takes
-# memory or badger. With memory, every user and key is lost on restart.
+# memory or badger. With memory, all of them are lost on restart, while queues kept
+# in a badger queue-storage survive and are left without their namespace.
 # /v1/queues.create refuses a namespace that does not exist, so create it first
 # with /v1/namespaces.create.
 #

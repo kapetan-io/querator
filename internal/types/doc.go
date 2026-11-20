@@ -32,6 +32,11 @@ limitations under the License.
 // takes particular items back off their requests when a backend could not save their
 // leases, so a consumer receives only items storage shows as leased.
 //
+// CompleteRequest.Completed, RetryRequest.Retried and RetryRequest.UnLeased record how many
+// items storage applied, since a request stops at its first refused item after applying the
+// ones before it. A backend whose write rolls back calls MarkRolledBack, so the logical queue
+// does not count items storage discarded.
+//
 // # Partition state
 //
 // PartitionState is the logical queue's in-memory view of a partition.
@@ -40,8 +45,9 @@ limitations under the License.
 // deadline is still ahead but before the partition's next lifecycle run, the run is
 // moved up to it. In PartitionStats, Total comes from storage while UnLeased and
 // NumLeased come from that in-memory state, so the stats show both views and drift in the
-// in-memory accounting can be spotted. The two views differ between lifecycle runs, and
-// Total leaves out scheduled items, so a gap alone is not drift.
+// in-memory accounting can be spotted. The two views can differ while a write's outcome is
+// unknown and after lifecycle actions, clear or import that do not move the in-memory counts,
+// and Total leaves out scheduled items, so a gap alone is not drift.
 //
 // PartitionCompleter lets a LifeCycleRequest carry the partition's storage without this
 // package importing the store package, which imports this one.

@@ -128,6 +128,7 @@ func (m *MemoryPartition) completeItems(ctx context.Context, req *types.Complete
 			delete(m.bySourceID, string(m.mem[idx].SourceID))
 		}
 		m.mem = append(m.mem[:idx], m.mem[idx+1:]...)
+		req.Completed++
 	}
 }
 
@@ -184,6 +185,7 @@ func (m *MemoryPartition) retryItems(ctx context.Context, req *types.RetryReques
 				item.ID = []byte(m.uid.String())
 				m.mem = append(m.mem[:idx], m.mem[idx+1:]...)
 				m.mem = append(m.mem, item)
+				req.UnLeased++
 			} else {
 				m.mem[idx].IsLeased = false
 				m.mem[idx].LeaseDeadline = clock.Time{}
@@ -197,7 +199,9 @@ func (m *MemoryPartition) retryItems(ctx context.Context, req *types.RetryReques
 			item.ID = []byte(m.uid.String())
 			m.mem = append(m.mem[:idx], m.mem[idx+1:]...)
 			m.mem = append(m.mem, item)
+			req.UnLeased++
 		}
+		req.Retried++
 	}
 }
 
@@ -482,6 +486,8 @@ func (m *MemoryPartition) TakeAction(_ context.Context, batch types.LifeCycleBat
 
 				m.mem = append(m.mem[:idx], m.mem[idx+1:]...)
 				m.mem = append(m.mem, item)
+				state.NumLeased--
+				state.UnLeased++
 			case types.ActionDeleteItem:
 				idx, ok := m.findID(a.Item.ID)
 				if !ok {

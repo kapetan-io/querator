@@ -48,6 +48,7 @@ type CompleteRequest struct {
 	RequestDeadline clock.Time
 	ReadyCh         chan struct{}
 	Err             error
+	Completed       int
 }
 
 type RetryRequest struct {
@@ -58,6 +59,8 @@ type RetryRequest struct {
 	RequestDeadline clock.Time
 	ReadyCh         chan struct{}
 	Err             error
+	Retried         int
+	UnLeased        int
 }
 
 type RetryItem struct {

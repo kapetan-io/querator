@@ -76,10 +76,7 @@ func acquireClientLocked(uri string, maxPool uint64, log *slog.Logger) (*mongo.C
 	return client, nil
 }
 
-func releaseClient(uri string, log *slog.Logger) {
-	globalMongoMu.Lock()
-	defer globalMongoMu.Unlock()
-
+func releaseClientLocked(uri string, log *slog.Logger) {
 	manager, exists := globalMongoClients[uri]
 	if !exists {
 		return
@@ -142,8 +139,11 @@ func (c *MongoConfig) getOrCreateClient(_ context.Context) (*mongo.Client, error
 }
 
 func (c *MongoConfig) Close() {
+	globalMongoMu.Lock()
+	defer globalMongoMu.Unlock()
+
 	if c.connString != "" && c.clientAcquired {
-		releaseClient(c.connString, c.Log)
+		releaseClientLocked(c.connString, c.Log)
 		c.clientAcquired = false
 	}
 }

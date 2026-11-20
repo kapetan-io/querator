@@ -34,10 +34,7 @@ var (
 	globalPools  = make(map[string]*postgresPoolManager)
 )
 
-func acquirePool(connString string, maxConns int32, log *slog.Logger) (*pgxpool.Pool, error) {
-	globalPoolMu.Lock()
-	defer globalPoolMu.Unlock()
-
+func acquirePoolLocked(connString string, maxConns int32, log *slog.Logger) (*pgxpool.Pool, error) {
 	if manager, exists := globalPools[connString]; exists {
 		manager.refCount.Add(1)
 		return manager.pool, nil
@@ -84,10 +81,7 @@ func acquirePool(connString string, maxConns int32, log *slog.Logger) (*pgxpool.
 	return pool, nil
 }
 
-func releasePool(connString string) {
-	globalPoolMu.Lock()
-	defer globalPoolMu.Unlock()
-
+func releasePoolLocked(connString string) {
 	manager, exists := globalPools[connString]
 	if !exists {
 		return
@@ -114,21 +108,21 @@ func (c *PostgresConfig) getOrCreatePool(_ context.Context) (*pgxpool.Pool, erro
 		return nil, errors.New("connection string is required")
 	}
 
+	globalPoolMu.Lock()
+	defer globalPoolMu.Unlock()
+
 	if c.connString == "" {
 		c.connString = c.ConnectionString
 	}
 
 	if !c.poolAcquired {
-		pool, err := acquirePool(c.ConnectionString, c.MaxConns, c.Log)
+		pool, err := acquirePoolLocked(c.ConnectionString, c.MaxConns, c.Log)
 		if err != nil {
 			return nil, err
 		}
 		c.poolAcquired = true
 		return pool, nil
 	}
-
-	globalPoolMu.Lock()
-	defer globalPoolMu.Unlock()
 
 	manager, exists := globalPools[c.connString]
 	if !exists {
@@ -139,8 +133,11 @@ func (c *PostgresConfig) getOrCreatePool(_ context.Context) (*pgxpool.Pool, erro
 }
 
 func (c *PostgresConfig) Close() {
+	globalPoolMu.Lock()
+	defer globalPoolMu.Unlock()
+
 	if c.connString != "" && c.poolAcquired {
-		releasePool(c.connString)
+		releasePoolLocked(c.connString)
 		c.poolAcquired = false
 	}
 }
@@ -170,6 +167,10 @@ func (p *PostgresQueues) Config() PostgresConfig {
 	return p.conf
 }
 
+func isCreateTableRace(code string) bool {
+	return code == "23505" || code == "42P07" || code == "42710"
+}
+
 func (p *PostgresQueues) ensureTable(_ context.Context, pool *pgxpool.Pool) error {
 	bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -190,6 +191,10 @@ func (p *PostgresQueues) ensureTable(_ context.Context, pool *pgxpool.Pool) erro
 		)`
 
 	_, err := pool.Exec(bgCtx, query)
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && isCreateTableRace(pgErr.Code) {
+		_, err = pool.Exec(bgCtx, query)
+	}
 	if err != nil {
 		return errors.Errorf("create queues table: %w", err)
 	}

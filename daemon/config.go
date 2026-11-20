@@ -442,15 +442,6 @@ func setupQueueStorage(ctx context.Context, file File, conf *Config) error {
 	for _, queue := range file.Queues {
 		var stored types.QueueInfo
 		if err := conf.Service.StorageConfig.Queues.Get(ctx, queue.Name, &stored); err == nil {
-			if stored.Namespace != "" {
-				continue
-			}
-			stored.Namespace = auth.SystemNamespace
-			if err = conf.Service.StorageConfig.Queues.Update(ctx, stored); err != nil {
-				return fmt.Errorf("while moving queue '%s' into namespace '%s'; %w", queue.Name, auth.SystemNamespace, err)
-			}
-			conf.Service.Log.Info("moved queue stored without a namespace into the system namespace",
-				"queue", queue.Name, "namespace", auth.SystemNamespace)
 			continue
 		}
 		if len(queue.Partitions) == 0 && !store.CanPlacePartitions(conf.Service.StorageConfig.PartitionStorage) {
@@ -542,7 +533,6 @@ func (q Queue) ToQueueInfo() types.QueueInfo {
 
 	return types.QueueInfo{
 		Name:                q.Name,
-		Namespace:           auth.SystemNamespace,
 		DeadQueue:           q.DeadQueue,
 		LeaseTimeout:        q.LeaseTimeout,
 		ExpireTimeout:       q.ExpireTimeout,

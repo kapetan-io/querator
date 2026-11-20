@@ -241,6 +241,7 @@ func (p *PostgresQueues) Get(ctx context.Context, name string, queue *types.Queu
 		return errors.Errorf("query queue: %w", err)
 	}
 
+	queue.Namespace = systemIfEmpty(queue.Namespace)
 	queue.LeaseTimeout = clock.Duration(leaseNs)
 	queue.ExpireTimeout = clock.Duration(expireNs)
 
@@ -257,6 +258,7 @@ func (p *PostgresQueues) Add(ctx context.Context, info types.QueueInfo) error {
 	if err := p.validateAdd(info); err != nil {
 		return err
 	}
+	info.Namespace = systemIfEmpty(info.Namespace)
 
 	pool, err := p.conf.getOrCreatePool(ctx)
 	if err != nil {
@@ -337,8 +339,8 @@ func (p *PostgresQueues) Update(ctx context.Context, info types.QueueInfo) error
 
 	query := `UPDATE queues SET lease_timeout_ns = $1, expire_timeout_ns = $2, dead_queue = $3,
 	                           max_attempts = $4, reference = $5, requested_partitions = $6,
-	                           partition_info = $7, updated_at = $8, namespace = $9
-	          WHERE name = $10`
+	                           partition_info = $7, updated_at = $8
+	          WHERE name = $9`
 
 	_, err = pool.Exec(ctx, query,
 		found.LeaseTimeout.Nanoseconds(),
@@ -349,7 +351,6 @@ func (p *PostgresQueues) Update(ctx context.Context, info types.QueueInfo) error
 		found.RequestedPartitions,
 		partitionInfoJSON,
 		timeToMicroseconds(found.UpdatedAt),
-		found.Namespace,
 		found.Name,
 	)
 
@@ -412,6 +413,7 @@ func (p *PostgresQueues) List(ctx context.Context, queues *[]types.QueueInfo, op
 			return errors.Errorf("scan queue row: %w", err)
 		}
 
+		info.Namespace = systemIfEmpty(info.Namespace)
 		info.LeaseTimeout = clock.Duration(leaseNs)
 		info.ExpireTimeout = clock.Duration(expireNs)
 

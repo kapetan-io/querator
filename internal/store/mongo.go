@@ -293,7 +293,7 @@ func queueToDoc(info types.QueueInfo) (bson.M, error) {
 
 func (d *queueDoc) toInfo(info *types.QueueInfo) error {
 	info.Name = d.Name
-	info.Namespace = d.Namespace
+	info.Namespace = systemIfEmpty(d.Namespace)
 	info.LeaseTimeout = clock.Duration(d.LeaseTimeoutNs)
 	info.ExpireTimeout = clock.Duration(d.ExpireTimeoutNs)
 	info.DeadQueue = d.DeadQueue
@@ -336,6 +336,7 @@ func (q *MongoQueues) Add(ctx context.Context, info types.QueueInfo) error {
 	if err := q.validateAdd(info); err != nil {
 		return err
 	}
+	info.Namespace = systemIfEmpty(info.Namespace)
 
 	client, err := q.conf.getOrCreateClient(ctx)
 	if err != nil {
@@ -399,7 +400,6 @@ func (q *MongoQueues) Update(ctx context.Context, info types.QueueInfo) error {
 			"requested_partitions": found.RequestedPartitions,
 			"partition_info":       partitionInfoJSON,
 			"updated_at":           toMicros(found.UpdatedAt),
-			"namespace":            found.Namespace,
 		}})
 	if err != nil {
 		return errors.Errorf("update queue: %w", err)

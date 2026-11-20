@@ -161,9 +161,6 @@ func (i *QueueInfo) ToProto(in *pb.QueueInfo) *pb.QueueInfo {
 }
 
 func (i *QueueInfo) Update(r QueueInfo) bool {
-	if i.Namespace == "" && r.Namespace != "" {
-		i.Namespace = r.Namespace
-	}
 	if r.ExpireTimeout.Nanoseconds() != 0 {
 		i.ExpireTimeout = r.ExpireTimeout
 	}

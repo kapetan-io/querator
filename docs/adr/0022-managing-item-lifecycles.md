@@ -62,7 +62,9 @@ the source partition only after that produce is confirmed.
 If moving an item to the dead letter or writing an action fails, the life cycle runs again for that
 partition with back-off. The partition is not marked faulty and stays in the request distribution,
 since the fault may lie with the dead letter queue. A read that fails also backs off, and the
-partition leaves the request distribution until a read succeeds.
+partition leaves the request distribution until a read succeeds. After a failed write or move,
+the back-off is measured from the end of the run, because a move to the dead letter can block for
+the whole write timeout.
 
 ### Reading a partition
 Each partition has its own life cycle timing, so a degraded partition backs off without delaying

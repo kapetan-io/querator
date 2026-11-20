@@ -116,8 +116,8 @@ the tests are all nested under a single test function.
 - All tests MUST be in the `XXXX_test` package and NOT in the same package which is under test
 
 ### Documentation
-- `docs/CONTEXT.md`, `docs/queue-core.md` and `docs/storage/internals.md` hold no implementation detail: only purpose, domain terms, reasons, rules that must stay true and traps. If reading the code would tell you something, it does not belong there.
-- Tiger (the static checker, `GOTOOLCHAIN=go1.26.10 tiger check ./...`) allows no comments below the `package` line, so a reason that has no place in those pages goes in an ADR under `docs/adr/` or in the package comment (`doc.go`).
+- A change to the implementation needs no documentation edit. `docs/operating-limits.md` holds only limits an operator sees or must work around, and changes only when what an operator sees or must do changes. `docs/CONTEXT.md` is the glossary. If your change makes a sentence in any of these false, delete the sentence and say so in the pull request.
+- A rule or trap that must stay true goes in a test that fails when the code breaks it. A reason why something is built the way it is goes in an ADR under `docs/adr/`, written as the decision as it stands, and no longer in a package comment (`doc.go`). Tiger (the static checker, `GOTOOLCHAIN=go1.26.10 tiger check ./...`) allows no comments below the `package` line, so a reason cannot sit next to the code it explains.
 
 ### Naming Conventions
 - Follow `docs/NAMING.md` guidelines

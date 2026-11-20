@@ -19,17 +19,32 @@ amongst the available partitions will use the same optimistic partition distribu
 [0019-partition-item-distribution](0019-partition-item-distribution.md) where the number of scheduled
 items is combined with the number of enqueued items, and then used to calculate optimistic distribution.
 
+An item whose `enqueue_at` is in the past or only moments away is produced as an ordinary item and its
+`enqueue_at` is cleared. Clients often fill in every field of a produce request and set `enqueue_at` to
+"now", which clock drift between machines puts a few milliseconds in the future, and scheduling such an
+item costs a write, a scan and a move for nothing. An import (`/v1/storage/items.import`) restores
+items as they were, so an imported item keeps the `enqueue_at` it was given.
+
 #### Retried Items
 When an item is retried with a `retry_at` timestamp set to a future date, it will be placed into the
 scheduled queue of the same partition to which it was originally enqueued. As a result, retried items
 cannot move to different partitions and will remain associated with their original partition for their
-entire lifecycle.
+entire lifecycle. A `retry_at` in the past or only moments away is an immediate retry, by the same
+rule as `enqueue_at`.
 
 ### Implementation
 Querator uses the Logical Queue's lifecycle to find scheduled items that need to be enqueued at
 their designated times. The lifecycle keeps a scheduled timer, independent of the main lifecycle
 timer, to track when scheduled items are due for enqueueing. This avoids reading the partition for
 other lifecycle actions when only scheduled items are due.
+
+After each scheduled run the lifecycle asks storage for the earliest scheduled time and sets the
+scheduled timer from it. A produce or retry that schedules an earlier time brings the timer forward.
+The timer lives in memory and those writes are only the ones made since the queue loaded, so asking
+storage is what keeps a scheduled item written before a restart from being forgotten. Scheduled runs
+count their failures apart from the main lifecycle's, so neither raises or resets the other's back-off.
+Unlike a failed lifecycle read, a failed scheduled run leaves the partition in the request
+distribution.
 
 The lifecycle generates scheduled actions of type `ActionQueueScheduledItem`, each containing the ID
 of the scheduled item. `Logical` writes these actions to the storage implementation on its request

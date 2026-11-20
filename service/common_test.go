@@ -1025,10 +1025,6 @@ type lifecycleSpy struct {
 	failScans      atomic.Bool
 	failScheduled  atomic.Bool
 	failDeadLetter atomic.Bool
-	scans          atomic.Int32
-	holdProduce    atomic.Bool
-	produceHeld    chan struct{}
-	produceRelease chan struct{}
 }
 
 func (s *lifecycleSpy) Wrap(conf store.Config) store.Config {
@@ -1095,35 +1091,6 @@ func (s *lifecycleSpy) FailScheduledWritesAfterFirstItem() {
 // a later transaction fails.
 func (s *lifecycleSpy) FailNextDeadLetterWriteAfterFirstItem() {
 	s.failDeadLetter.Store(true)
-}
-
-// HoldNextProduce makes the next produce write wait until ReleaseProduce, which holds the
-// queue's request loop while other requests queue behind it.
-func (s *lifecycleSpy) HoldNextProduce() {
-	s.produceHeld = make(chan struct{})
-	s.produceRelease = make(chan struct{})
-	s.holdProduce.Store(true)
-}
-
-// WaitForProduceHeld returns once the held produce write has started.
-func (s *lifecycleSpy) WaitForProduceHeld(t *testing.T, ctx context.Context) {
-	t.Helper()
-	select {
-	case <-s.produceHeld:
-	case <-ctx.Done():
-		require.FailNow(t, "the daemon stopped before a produce write was held")
-	case <-clock.After(holdWait):
-		require.FailNowf(t, "no produce write was held", "no produce write started within %s", holdWait)
-	}
-}
-
-func (s *lifecycleSpy) ReleaseProduce() {
-	close(s.produceRelease)
-}
-
-// Scans is the number of lifecycle page reads that have finished on any partition.
-func (s *lifecycleSpy) Scans() int32 {
-	return s.scans.Load()
 }
 
 func (s *lifecycleSpy) Events() []string {
@@ -1213,20 +1180,11 @@ func (p spyPartition) ScanForActions(ctx context.Context, scan *types.LifeCycleS
 		return err
 	}
 	p.spy.afterPage(scan)
-	p.spy.scans.Add(1)
 	return nil
 }
 
 func (p spyPartition) Produce(ctx context.Context, batch types.ProduceBatch, now clock.Time) error {
 	p.spy.produce()
-	if p.spy.holdProduce.CompareAndSwap(true, false) {
-		close(p.spy.produceHeld)
-		select {
-		case <-p.spy.produceRelease:
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
 	if len(batch.Requests) == 0 || !batch.Requests[0].DeadLetterHandOff || !p.spy.failDeadLetter.CompareAndSwap(true, false) {
 		return p.Partition.Produce(ctx, batch, now)
 	}

@@ -29,8 +29,9 @@ const (
 )
 
 type BadgerConfig struct {
-	StorageDir string
-	Log        *slog.Logger
+	StorageDir   string
+	Log          *slog.Logger
+	MemTableSize int64
 }
 
 type BadgerPartitionStore struct {
@@ -1158,6 +1159,10 @@ func (b *BadgerPartition) getDB() (*badger.DB, error) {
 
 	opts := badger.DefaultOptions(dir)
 	opts.Logger = newBadgerLogger(b.conf.Log)
+	if b.conf.MemTableSize != 0 {
+		opts.MemTableSize = b.conf.MemTableSize
+		opts.ValueThreshold = min(opts.ValueThreshold, badgerTransactionLimit(opts.MemTableSize))
+	}
 	db, err := badger.Open(opts)
 	if err != nil {
 		b.mu.Unlock()
@@ -1166,6 +1171,10 @@ func (b *BadgerPartition) getDB() (*badger.DB, error) {
 	b.db = db
 	b.mu.Unlock()
 	return db, nil
+}
+
+func badgerTransactionLimit(memTableSize int64) int64 {
+	return 15 * memTableSize / 100
 }
 
 type BadgerQueues struct {

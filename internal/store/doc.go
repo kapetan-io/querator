@@ -11,6 +11,11 @@
 // goroutine, the logical queue that owns it, except Info and UpdateQueueInfo, which must be safe
 // for concurrent use. docs/storage/README.md covers configuring them.
 //
+// BadgerDB caps one transaction at 15% of a database's write buffer and refuses to open when
+// ValueThreshold is above that cap, so a set BadgerConfig.MemTableSize lowers ValueThreshold to
+// the cap when it must. badgerTransactionLimit copies the 15% from BadgerDB (db.go in v4.3.0) and
+// must follow it on upgrade.
+//
 // MongoDB's Lease keeps the items it placed in the same order as its bulk write models, because
 // a bulk write error names a failed update by its index in the models.
 package store

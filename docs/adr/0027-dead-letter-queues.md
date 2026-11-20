@@ -16,9 +16,9 @@ stall `orders`.
 
 ## Decision
 
-**An item leaves `orders` only after `orders-dead` has stored it.** `orders` produces the item to
-`orders-dead`, and deletes it only once that produce succeeds. If the produce fails, the item stays
-in `orders` and the move is tried again.
+**An item leaves `orders` only after `orders-dead` has stored it.** `orders` produces the items to
+`orders-dead` and deletes each one once `orders-dead` has stored it. The rest stay in `orders`, and
+the move is tried again.
 
 **A retried move does not store an item twice.** `orders-dead` keeps each item's ID from `orders` and
 skips an item it already holds. It stores an item and that ID together or not at all, because an
@@ -26,12 +26,13 @@ item stored without its ID would be stored again by the next try.
 
 That skip stops working once a consumer completes the copy in `orders-dead`. So when a move stores
 only some of its items, `orders` deletes those items at once instead of leaving them for the next
-try. The code does not meet this yet when `orders` stops waiting at the write timeout (ENG-844).
+try. The code does not meet this yet when `orders` stops waiting at the write timeout, or on a
+backend that cannot say how many items it stored (ENG-844).
 
-**Dead items are written to storage apart from client produces.** A client's produce is
-all-or-nothing, so every item in it is stored or none is. A large batch of dead items may be stored in
-pieces, because it can be too big for one write. Writing them apart means splitting the dead items
-never stores half of a client's produce ([28. Storage write failures](0028-storage-write-failures.md)).
+**Dead items are written to storage apart from client produces.** A failed storage call fails every
+request in it, and each client hears the outcome of its own produce ([28. Storage write
+failures](0028-storage-write-failures.md)). Writing dead items in their own call means a failed move
+never fails a client's produce, and a failed client produce never fails a move.
 
 **A stuck `orders-dead` never stalls `orders`.** `orders` waits for at most the write timeout, then
 keeps the item and tries again later. That holds only if nothing holds the queues manager's lock

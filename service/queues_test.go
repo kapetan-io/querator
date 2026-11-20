@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/duh-rpc/duh-go"
@@ -21,6 +22,16 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 )
+
+type countedQueues struct {
+	store.Queues
+	lists atomic.Int32
+}
+
+func (c *countedQueues) List(ctx context.Context, items *[]types.QueueInfo, opts types.ListOptions) error {
+	c.lists.Add(1)
+	return c.Queues.List(ctx, items, opts)
+}
 
 func TestQueuesStorage(t *testing.T) {
 	badger := badgerTestSetup{Dir: t.TempDir()}
@@ -1094,8 +1105,6 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		dead := "a-dead-queue"
 		source := "z-source-queue"
 
-		// sourceQueueOf reads 1,000 queues per page (pageSize in internal/queues_manager.go).
-		// The source sorts last, so filler must stay above that size or this stops testing paging.
 		const filler = 1500
 		infos := []types.QueueInfo{{Name: dead}}
 		for i := 0; i < filler; i++ {
@@ -1112,6 +1121,8 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			require.NoError(t, conf.Queues.Add(context.Background(), info))
 		}
 
+		counted := &countedQueues{Queues: conf.Queues}
+		conf.Queues = counted
 		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
 		defer func() {
 			d.Shutdown(t)
@@ -1119,12 +1130,17 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		}()
 		c, ctx := d.MustClient(), d.Context()
 
+		counted.lists.Store(0)
 		err := c.QueuesDelete(ctx, &pb.QueuesDeleteRequest{QueueName: dead})
 		require.Error(t, err)
 		var duhErr duh.Error
 		require.True(t, errors.As(err, &duhErr))
 		assert.Equal(t, duh.CodeBadRequest, duhErr.Code())
 		assert.Contains(t, duhErr.Message(), "it is the dead_queue of '"+source+"'")
+		assert.GreaterOrEqual(t, counted.lists.Load(), int32(2))
+
+		var info pb.QueueInfo
+		require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: dead}, &info))
 	})
 
 	t.Run("List", func(t *testing.T) {

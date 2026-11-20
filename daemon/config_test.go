@@ -231,28 +231,25 @@ func TestApplyConfigFileErrs(t *testing.T) {
 			expectedErr: "invalid queue 'test-queue'; partitions is invalid; cannot be greater than 1024",
 		},
 		{
-			name: "InternalAuthOnMongoQueueStorage",
-			file: daemon.File{
-				QueueStorage: daemon.QueueStorage{
-					Mongo: &daemon.MongoConfig{ConnectionString: "mongodb://localhost:27017", Database: "querator"},
-				},
-				AuthBackend: daemon.AuthConfig{Driver: "internal"},
-			},
-			expectedErr: "invalid auth-backend; the internal driver keeps namespaces, users, roles, role bindings " +
-				"and API keys in queue-storage, and the 'mongo' backend has no storage for them; " +
-				"use a memory or badger queue-storage",
+			name:        "AuthWithoutStorage",
+			file:        daemon.File{Auth: &daemon.AuthConfig{}},
+			expectedErr: "invalid auth; 'storage' is required and must be one of (memory, badger); " +
+				"it holds namespaces, users, roles, role bindings and API keys",
 		},
 		{
-			name: "InternalAuthOnPostgresQueueStorage",
-			file: daemon.File{
-				QueueStorage: daemon.QueueStorage{
-					Postgres: &daemon.PostgresConfig{ConnectionString: "postgres://user:pass@localhost:5432/querator"},
-				},
-				AuthBackend: daemon.AuthConfig{Driver: "internal"},
-			},
-			expectedErr: "invalid auth-backend; the internal driver keeps namespaces, users, roles, role bindings " +
-				"and API keys in queue-storage, and the 'postgres' backend has no storage for them; " +
-				"use a memory or badger queue-storage",
+			name: "AuthWithTwoStorages",
+			file: daemon.File{Auth: &daemon.AuthConfig{Storage: daemon.AuthStorage{
+				Memory: &daemon.MemoryConfig{},
+				Badger: &daemon.BadgerConfig{StorageDir: "/tmp"},
+			}}},
+			expectedErr: "invalid auth; 'storage' defines multiple backends; only one of (memory, badger) is allowed",
+		},
+		{
+			name: "AuthBadgerWithoutStorageDir",
+			file: daemon.File{Auth: &daemon.AuthConfig{Storage: daemon.AuthStorage{
+				Badger: &daemon.BadgerConfig{},
+			}}},
+			expectedErr: "invalid auth storage; badger: 'storage-dir' is required",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {

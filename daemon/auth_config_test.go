@@ -23,12 +23,13 @@ import (
 )
 
 func TestConfigFileInternalAuth(t *testing.T) {
-	t.Run("MemoryQueueStorageChecksKeys", func(t *testing.T) {
+	t.Run("MemoryStorageChecksKeys", func(t *testing.T) {
 		ctx := context.Background()
 		d := startFromConfig(t, `
 address: localhost:0
-auth-backend:
-  driver: internal
+auth:
+  storage:
+    memory: {}
 `)
 		defer func() { require.NoError(t, d.Shutdown(ctx)) }()
 
@@ -52,8 +53,9 @@ auth-backend:
 		ctx := context.Background()
 		d := startFromConfig(t, `
 address: localhost:0
-auth-backend:
-  driver: internal
+auth:
+  storage:
+    memory: {}
 `)
 		defer func() { require.NoError(t, d.Shutdown(ctx)) }()
 
@@ -71,8 +73,9 @@ auth-backend:
 		ctx := context.Background()
 		d := startFromConfig(t, `
 address: localhost:0
-auth-backend:
-  driver: internal
+auth:
+  storage:
+    memory: {}
 `)
 		defer func() { require.NoError(t, d.Shutdown(ctx)) }()
 
@@ -98,20 +101,14 @@ auth-backend:
 		}
 	})
 
-	t.Run("BadgerQueueStorageKeepsKeysAcrossRestart", func(t *testing.T) {
+	t.Run("BadgerStorageKeepsKeysAcrossRestart", func(t *testing.T) {
 		ctx := context.Background()
 		config := fmt.Sprintf(`
 address: localhost:0
-queue-storage:
-  badger:
-    storage-dir: %[1]s
-partition-storage:
-  - name: badger-00
-    affinity: 1
+auth:
+  storage:
     badger:
-      storage-dir: %[1]s
-auth-backend:
-  driver: internal
+      storage-dir: %s
 `, t.TempDir())
 
 		d := startFromConfig(t, config)
@@ -130,12 +127,13 @@ auth-backend:
 		assert.Contains(t, names, "admin")
 	})
 
-	t.Run("NamespacesInMemoryQueueStorage", func(t *testing.T) {
+	t.Run("NamespacesInMemoryStorage", func(t *testing.T) {
 		ctx := context.Background()
 		d := startFromConfig(t, `
 address: localhost:0
-auth-backend:
-  driver: internal
+auth:
+  storage:
+    memory: {}
 `)
 		defer func() { require.NoError(t, d.Shutdown(ctx)) }()
 
@@ -162,20 +160,14 @@ auth-backend:
 		assert.Contains(t, duhErr.Message(), "billing")
 	})
 
-	t.Run("NamespacesInBadgerQueueStorageSurviveRestart", func(t *testing.T) {
+	t.Run("NamespacesInBadgerStorageSurviveRestart", func(t *testing.T) {
 		ctx := context.Background()
 		config := fmt.Sprintf(`
 address: localhost:0
-queue-storage:
-  badger:
-    storage-dir: %[1]s
-partition-storage:
-  - name: badger-00
-    affinity: 1
+auth:
+  storage:
     badger:
-      storage-dir: %[1]s
-auth-backend:
-  driver: internal
+      storage-dir: %s
 `, t.TempDir())
 
 		d := startFromConfig(t, config)
@@ -205,7 +197,7 @@ func TestConfigFileExampleWithInternalAuth(t *testing.T) {
 		"address: 0.0.0.0:2319",
 		"storage-dir: /data/queues",
 		"storage-dir: /data/partitions",
-		"#auth-backend:\n#  driver: internal",
+		"#auth:\n#  storage:\n#    badger:\n#      storage-dir: /data/auth",
 	} {
 		require.Contains(t, config, line)
 	}
@@ -213,7 +205,8 @@ func TestConfigFileExampleWithInternalAuth(t *testing.T) {
 		"address: 0.0.0.0:2319", "address: localhost:0",
 		"storage-dir: /data/queues", "storage-dir: "+t.TempDir(),
 		"storage-dir: /data/partitions", "storage-dir: "+t.TempDir(),
-		"#auth-backend:\n#  driver: internal", "auth-backend:\n  driver: internal",
+		"#auth:\n#  storage:\n#    badger:\n#      storage-dir: /data/auth",
+		"auth:\n  storage:\n    badger:\n      storage-dir: "+t.TempDir(),
 	).Replace(config)
 
 	ctx := context.Background()
@@ -233,31 +226,51 @@ func TestConfigFileExampleWithInternalAuth(t *testing.T) {
 }
 
 func TestConfigFileNoAuthServesAnyAuthorizationHeader(t *testing.T) {
+	ctx := context.Background()
+	d := startFromConfig(t, "address: localhost:0\n")
+	defer func() { require.NoError(t, d.Shutdown(ctx)) }()
+
+	for _, header := range []struct {
+		name  string
+		value string
+	}{
+		{name: "Basic", value: "Basic c29tZS1jcmVkZW50aWFscw=="},
+		{name: "LowercaseBearerUnknownKey", value: "bearer qtr-not-a-real-key"},
+		{name: "BearerUnknownKey", value: "Bearer qtr-not-a-real-key"},
+		{name: "NoScheme", value: "no-scheme-at-all"},
+	} {
+		t.Run(header.name, func(t *testing.T) {
+			require.NoError(t, listQueuesWithHeader(t, ctx, d, header.value))
+		})
+	}
+}
+
+func TestConfigFileAuthRejects(t *testing.T) {
 	for _, test := range []struct {
 		name string
 		yaml string
+		err  string
 	}{
-		{name: "DriverUnset", yaml: "address: localhost:0\n"},
-		{name: "DriverNone", yaml: "address: localhost:0\nauth-backend:\n  driver: none\n"},
+		{
+			name: "MongoStorage",
+			yaml: "auth:\n  storage:\n    mongo:\n      connection-string: mongodb://localhost:27017\n",
+			err:  "field mongo not found in type daemon.AuthStorage",
+		},
+		{
+			name: "PostgresStorage",
+			yaml: "auth:\n  storage:\n    postgres:\n      connection-string: postgres://localhost:5432/querator\n",
+			err:  "field postgres not found in type daemon.AuthStorage",
+		},
+		{
+			name: "AuthBackendDriver",
+			yaml: "auth-backend:\n  driver: internal\n",
+			err:  "field auth-backend not found in type daemon.File",
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			ctx := context.Background()
-			d := startFromConfig(t, test.yaml)
-			defer func() { require.NoError(t, d.Shutdown(ctx)) }()
-
-			for _, header := range []struct {
-				name  string
-				value string
-			}{
-				{name: "Basic", value: "Basic c29tZS1jcmVkZW50aWFscw=="},
-				{name: "LowercaseBearerUnknownKey", value: "bearer qtr-not-a-real-key"},
-				{name: "BearerUnknownKey", value: "Bearer qtr-not-a-real-key"},
-				{name: "NoScheme", value: "no-scheme-at-all"},
-			} {
-				t.Run(header.name, func(t *testing.T) {
-					require.NoError(t, listQueuesWithHeader(t, ctx, d, header.value))
-				})
-			}
+			_, err := daemon.ReadConfig(strings.NewReader(test.yaml))
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), test.err)
 		})
 	}
 }

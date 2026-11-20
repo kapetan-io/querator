@@ -69,21 +69,21 @@ partition-storage:
 #     max-conns: 50
 #     scan-batch-size: 1000
 
-# Auth Backend defines the authentication and authorization backend.
-# Options:
-#   "none" (default) - No authentication; all requests are allowed (open access) and any
-#                      Authorization header is ignored. Suitable for internal deployments
-#                      behind a trusted network.
-#   "internal"       - Checks the API key in "Authorization: Bearer <key>" against users,
-#                      roles, role bindings and API keys kept in the queue-storage backend.
-#                      queue-storage must be memory or badger; with mongo or postgres the
-#                      server refuses to start. With memory, every user and key is lost on
-#                      restart. /v1/queues.create refuses a namespace that does not exist,
-#                      so create it first with /v1/namespaces.create.
-#                      See docs/operating-limits.md for Open Door: requests without a key
-#                      get admin access, and the door reopens at every start.
-#auth-backend:
-#  driver: internal
+# Auth turns on API keys. Without this section every request is allowed and any
+# Authorization header is ignored, which suits deployments behind a trusted network.
+# With it, each request must send "Authorization: Bearer <key>".
+#
+# storage holds namespaces, users, roles, role bindings and API keys, and takes
+# memory or badger. With memory, every user and key is lost on restart.
+# /v1/queues.create refuses a namespace that does not exist, so create it first
+# with /v1/namespaces.create.
+#
+# See docs/operating-limits.md for Open Door: requests without a key get admin
+# access, and the door reopens at every start.
+#auth:
+#  storage:
+#    badger:
+#      storage-dir: /data/auth
 
 # Queues is a convenience that allows users to define queues without needing
 # to call the /v1/queues.create after querator starts.

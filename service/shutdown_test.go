@@ -621,6 +621,84 @@ func shutdownWithAdminRequestWaiting(t *testing.T) {
 	}
 }
 
+// TestShutdownAnswersStatsRequestsWaitingInQueue sits outside TestShutdown because it wraps the
+// in-memory partition store so a storage list can hold the request loop while stats requests wait
+// in the queue. It calls the service directly, since the HTTP client can cancel a call on its own
+// side before the queue answers it.
+func TestShutdownAnswersStatsRequestsWaitingInQueue(t *testing.T) {
+	const numStats = 8
+	entered, release := make(chan struct{}), make(chan struct{})
+	var armed atomic.Bool
+
+	conf := setupMemoryStorage(store.Config{})
+	conf.PartitionStorage[0].PartitionStore = heldListStore{
+		PartitionStore: conf.PartitionStorage[0].PartitionStore,
+		hold: func(ctx context.Context) error {
+			if !armed.CompareAndSwap(true, false) {
+				return nil
+			}
+			close(entered)
+			select {
+			case <-release:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		},
+	}
+	d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+	c, ctx := d.MustClient(), d.Context()
+	var calls sync.WaitGroup
+	defer func() {
+		d.cancel()
+		calls.Wait()
+	}()
+
+	queueName := random.String("queue-", 10)
+	createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+		QueueName:           queueName,
+		LeaseTimeout:        "1m0s",
+		ExpireTimeout:       "24h0m0s",
+		RequestedPartitions: 1,
+	})
+	armed.Store(true)
+
+	var listErr, shutdownErr error
+	calls.Go(func() {
+		listErr = c.StorageItemsList(ctx, queueName, 0, &pb.StorageItemsListResponse{}, &querator.ListOptions{Limit: 10})
+	})
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		require.FailNow(t, "storage list never reached the partition")
+	}
+
+	statsCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	statsErrs := make([]error, numStats)
+	for i := range numStats {
+		calls.Go(func() {
+			statsErrs[i] = d.Service().QueueStats(statsCtx, &pb.QueueStatsRequest{QueueName: queueName},
+				&pb.QueueStatsResponse{})
+		})
+	}
+	clock.Sleep(100 * clock.Millisecond)
+	calls.Go(func() {
+		shutdownErr = d.d.Shutdown(ctx)
+	})
+	clock.Sleep(100 * clock.Millisecond)
+	close(release)
+	calls.Wait()
+
+	require.NoError(t, listErr)
+	require.NoError(t, shutdownErr)
+	for _, err := range statsErrs {
+		if err != nil {
+			assert.ErrorContains(t, err, "is shutting down")
+		}
+	}
+}
+
 type heldListStore struct {
 	store.PartitionStore
 	hold func(context.Context) error

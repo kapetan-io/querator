@@ -57,12 +57,11 @@ even after its caller gives up, and is applied when the pause is cancelled.
 
 ## Shutdown
 
-Shutdown must answer every hot request's caller, including requests the loop is holding because
+Shutdown must answer every caller, including requests the loop is holding because
 the queue is paused or every partition has failed. A caller left unanswered keeps shutdown waiting
 until its context ends. A caller can be counted as waiting before its request reaches the loop, so
-shutdown waits for its count of waiting hot callers to reach zero, not for the request channel to
-empty. Cold requests are not counted, so one still in the channel when the count is zero is never
-answered and waits until its own context ends (ENG-816).
+shutdown waits for its count of waiting callers to reach zero, not for the request channel to
+empty.
 
 `QueuesManager.Shutdown` must not hold its mutex while it waits for a Logical Queue to stop. Holding
 it would deadlock: a request loop in the middle of a lifecycle run can move dead items to a

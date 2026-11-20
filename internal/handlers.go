@@ -197,7 +197,7 @@ func (l *Logical) handleShutdown(state *QueueState, req *types.ShutdownRequest) 
 
 func (l *Logical) rejectInFlight(ctx context.Context) error {
 	for {
-		if l.inFlight.Load() == 0 {
+		if l.inFlight.Load()+l.inFlightCold.Load() == 0 {
 			return nil
 		}
 		select {

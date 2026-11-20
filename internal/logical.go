@@ -87,13 +87,14 @@ type LogicalConfig struct {
 type Logical struct {
 	requestCh requestInbox
 
-	shutdownCh shutdownRequests
-	wg         sync.WaitGroup
-	conf       LogicalConfig
-	log        *slog.Logger
-	inFlight   atomic.Int32
-	inShutdown atomic.Bool
-	instanceID string
+	shutdownCh   shutdownRequests
+	wg           sync.WaitGroup
+	conf         LogicalConfig
+	log          *slog.Logger
+	inFlight     atomic.Int32
+	inFlightCold atomic.Int32
+	inShutdown   atomic.Bool
+	instanceID   string
 }
 
 func SpawnLogicalQueue(conf LogicalConfig) (*Logical, error) {
@@ -118,11 +119,11 @@ func SpawnLogicalQueue(conf LogicalConfig) (*Logical, error) {
 }
 
 func (l *Logical) Produce(ctx context.Context, req *types.ProduceRequest) error {
+	l.inFlight.Add(1)
+	defer l.inFlight.Add(-1)
 	if l.inShutdown.Load() {
 		return ErrQueueShutdown
 	}
-	l.inFlight.Add(1)
-	defer l.inFlight.Add(-1)
 
 	if req.RequestTimeout == clock.Duration(0) {
 		return reply.NewInvalidOption("request timeout is required; '5m' is recommended, 15m is the maximum")
@@ -169,11 +170,11 @@ func (l *Logical) Produce(ctx context.Context, req *types.ProduceRequest) error 
 }
 
 func (l *Logical) Lease(ctx context.Context, req *types.LeaseRequest) error {
+	l.inFlight.Add(1)
+	defer l.inFlight.Add(-1)
 	if l.inShutdown.Load() {
 		return ErrQueueShutdown
 	}
-	l.inFlight.Add(1)
-	defer l.inFlight.Add(-1)
 
 	if strings.TrimSpace(req.ClientID) == "" {
 		return reply.NewInvalidOption("invalid client id; cannot be empty")
@@ -224,11 +225,11 @@ func (l *Logical) Lease(ctx context.Context, req *types.LeaseRequest) error {
 }
 
 func (l *Logical) Complete(ctx context.Context, req *types.CompleteRequest) error {
+	l.inFlight.Add(1)
+	defer l.inFlight.Add(-1)
 	if l.inShutdown.Load() {
 		return ErrQueueShutdown
 	}
-	l.inFlight.Add(1)
-	defer l.inFlight.Add(-1)
 
 	if len(req.Ids) == 0 {
 		return reply.NewInvalidOption("ids is invalid; list of ids cannot be empty")
@@ -270,11 +271,11 @@ func (l *Logical) Complete(ctx context.Context, req *types.CompleteRequest) erro
 }
 
 func (l *Logical) Retry(ctx context.Context, req *types.RetryRequest) error {
+	l.inFlight.Add(1)
+	defer l.inFlight.Add(-1)
 	if l.inShutdown.Load() {
 		return ErrQueueShutdown
 	}
-	l.inFlight.Add(1)
-	defer l.inFlight.Add(-1)
 
 	if len(req.Items) == 0 {
 		return reply.NewInvalidOption("items is invalid; list of items cannot be empty")
@@ -316,11 +317,11 @@ func (l *Logical) Retry(ctx context.Context, req *types.RetryRequest) error {
 }
 
 func (l *Logical) ProduceDeadLetter(ctx context.Context, req *types.ProduceRequest) error {
+	l.inFlight.Add(1)
+	defer l.inFlight.Add(-1)
 	if l.inShutdown.Load() {
 		return ErrQueueShutdown
 	}
-	l.inFlight.Add(1)
-	defer l.inFlight.Add(-1)
 
 	if len(req.Items) == 0 {
 		return nil
@@ -732,6 +733,8 @@ func (l *Logical) reqToState(req *Request, state *QueueState) {
 }
 
 func (l *Logical) queueRequest(ctx context.Context, r *Request) error {
+	l.inFlightCold.Add(1)
+	defer l.inFlightCold.Add(-1)
 	if l.inShutdown.Load() {
 		return ErrQueueShutdown
 	}

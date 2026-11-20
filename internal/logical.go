@@ -636,7 +636,7 @@ func (l *Logical) requestLoop() {
 }
 
 func (l *Logical) leaseToWaitingConsumers(state *QueueState) {
-	if len(state.Leases.Requests) == 0 {
+	if len(state.Leases.Requests) == 0 && len(state.Producers.Requests) == 0 {
 		return
 	}
 	l.expireProduceRequests(&state.Producers)

@@ -118,10 +118,17 @@ func (l *Logical) handleClear(_ *QueueState, req *Request) {
 
 	if cr.Queue || cr.Scheduled {
 		for _, p := range l.conf.StoragePartitions {
-			if err := p.Clear(req.Context, *cr); err != nil {
-				req.Err = err
-				return
+			err := p.Clear(req.Context, *cr)
+			if err == nil {
+				continue
 			}
+			if req.Err == nil {
+				req.Err = err
+				continue
+			}
+			l.log.Warn("partition clear failed",
+				"partition", p.Info().PartitionNum,
+				"error", err)
 		}
 	}
 	close(req.ReadyCh)

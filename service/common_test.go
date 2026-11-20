@@ -886,17 +886,19 @@ func waitForLifecycleRun(t *testing.T, ctx context.Context, c *querator.Client, 
 var (
 	errProduceWriteFailed = errors.New("injected produce write failure")
 	errLeaseWriteFailed   = errors.New("injected lease write failure")
+	errClearFailed        = errors.New("injected clear failure")
 )
 
-// partitionFault makes partition storage refuse produce or lease writes on demand. While
-// failingProduce or failingLease is set, every partition that Wrap's config hands out fails
-// that call without writing anything. While scanFailing holds a queue name, that queue's
-// partitions fail the lifecycle scan, so each lifecycle run marks them failed. Every other call
-// reaches the real backend.
+// partitionFault makes partition storage refuse calls on demand. Each switch is set from the
+// test, and every call it does not name reaches the real backend. While scanFailing holds a
+// queue name, that queue's partitions fail the lifecycle scan, so each lifecycle run marks
+// them failed.
 type partitionFault struct {
 	failingProduce atomic.Bool
 	failingLease   atomic.Bool
-	scanFailing    atomic.Pointer[string]
+	// failingClear holds the number of the one partition whose Clear fails, plus one. Zero fails none.
+	failingClear atomic.Int32
+	scanFailing  atomic.Pointer[string]
 }
 
 func (f *partitionFault) Wrap(conf store.Config) store.Config {
@@ -935,6 +937,13 @@ func (f faultyPartition) Lease(ctx context.Context, batch types.LeaseBatch, opts
 		return errLeaseWriteFailed
 	}
 	return f.Partition.Lease(ctx, batch, opts)
+}
+
+func (f faultyPartition) Clear(ctx context.Context, req types.ClearRequest) error {
+	if f.fault.failingClear.Load() == int32(f.Info().PartitionNum)+1 {
+		return errClearFailed
+	}
+	return f.Partition.Clear(ctx, req)
 }
 
 var errScanFailed = errors.New("injected lifecycle scan failure")

@@ -2186,6 +2186,60 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		storage := setup()
 		defer tearDown()
 
+		t.Run("QueueClear", func(t *testing.T) {
+			t.Run("StorageFails", func(t *testing.T) {
+				var fault partitionFault
+				d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: fault.Wrap(storage)})
+				defer d.Shutdown(t)
+				c, ctx := d.MustClient(), d.Context()
+
+				queueName := random.String("queue-", 10)
+				createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+					LeaseTimeout:        LeaseTimeout,
+					ExpireTimeout:       ExpireTimeout,
+					QueueName:           queueName,
+					RequestedPartitions: 2,
+				})
+				// Write to both partitions so a clear that stops at the failing one is visible.
+				var before [2]pb.StorageItemsListResponse
+				for partition := range 2 {
+					var imported pb.StorageItemsImportResponse
+					require.NoError(t, c.StorageItemsImport(ctx, &pb.StorageItemsImportRequest{
+						QueueName: queueName,
+						Partition: int32(partition),
+						Items: []*pb.StorageItem{
+							{ExpireDeadline: timestamppb.New(clock.Now().UTC().Add(clock.Hour)), Payload: []byte("item")},
+						},
+					}, &imported))
+					require.NoError(t, c.StorageItemsList(ctx, queueName, partition, &before[partition], nil))
+					require.NotEmpty(t, before[partition].Items)
+				}
+
+				// Partition 0 fails and partition 1 is healthy.
+				fault.failingClear.Store(1)
+				start := clock.Now().UTC()
+				err := c.QueueClear(ctx, &pb.QueueClearRequest{QueueName: queueName, Queue: true, Destructive: true})
+				require.Error(t, err)
+				assert.Less(t, clock.Now().UTC().Sub(start), 5*clock.Second)
+				var e duh.Error
+				require.True(t, errors.As(err, &e))
+				assert.Equal(t, duh.CodeInternalError, e.Code())
+
+				// The failing partition keeps its items and the healthy one is cleared.
+				var list pb.StorageItemsListResponse
+				require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, nil))
+				assert.Len(t, list.Items, len(before[0].Items))
+				require.NoError(t, c.StorageItemsList(ctx, queueName, 1, &list, nil))
+				assert.Empty(t, list.Items)
+
+				// A clear after storage recovers empties the partition that failed.
+				fault.failingClear.Store(0)
+				require.NoError(t, c.QueueClear(ctx, &pb.QueueClearRequest{QueueName: queueName, Queue: true, Destructive: true}))
+				require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, nil))
+				assert.Empty(t, list.Items)
+			})
+		})
+
 		t.Run("QueueProduce", func(t *testing.T) {
 			t.Run("WriteFails", func(t *testing.T) {
 				var fault partitionFault

@@ -1024,6 +1024,11 @@ type lifecycleSpy struct {
 	pages          int
 	failScans      atomic.Bool
 	failScheduled  atomic.Bool
+	failDeadLetter atomic.Bool
+	scans          atomic.Int32
+	holdProduce    atomic.Bool
+	produceHeld    chan struct{}
+	produceRelease chan struct{}
 }
 
 func (s *lifecycleSpy) Wrap(conf store.Config) store.Config {
@@ -1083,6 +1088,42 @@ func (s *lifecycleSpy) StopFailingScans() {
 // then fail, as a backend does when a write commits partway.
 func (s *lifecycleSpy) FailScheduledWritesAfterFirstItem() {
 	s.failScheduled.Store(true)
+}
+
+// FailNextDeadLetterWriteAfterFirstItem makes the next dead letter write store only its first
+// item, report it stored, and then fail, as a BadgerDB move split across transactions does when
+// a later transaction fails.
+func (s *lifecycleSpy) FailNextDeadLetterWriteAfterFirstItem() {
+	s.failDeadLetter.Store(true)
+}
+
+// HoldNextProduce makes the next produce write wait until ReleaseProduce, which holds the
+// queue's request loop while other requests queue behind it.
+func (s *lifecycleSpy) HoldNextProduce() {
+	s.produceHeld = make(chan struct{})
+	s.produceRelease = make(chan struct{})
+	s.holdProduce.Store(true)
+}
+
+// WaitForProduceHeld returns once the held produce write has started.
+func (s *lifecycleSpy) WaitForProduceHeld(t *testing.T, ctx context.Context) {
+	t.Helper()
+	select {
+	case <-s.produceHeld:
+	case <-ctx.Done():
+		require.FailNow(t, "the daemon stopped before a produce write was held")
+	case <-clock.After(holdWait):
+		require.FailNowf(t, "no produce write was held", "no produce write started within %s", holdWait)
+	}
+}
+
+func (s *lifecycleSpy) ReleaseProduce() {
+	close(s.produceRelease)
+}
+
+// Scans is the number of lifecycle page reads that have finished on any partition.
+func (s *lifecycleSpy) Scans() int32 {
+	return s.scans.Load()
 }
 
 func (s *lifecycleSpy) Events() []string {
@@ -1172,12 +1213,30 @@ func (p spyPartition) ScanForActions(ctx context.Context, scan *types.LifeCycleS
 		return err
 	}
 	p.spy.afterPage(scan)
+	p.spy.scans.Add(1)
 	return nil
 }
 
 func (p spyPartition) Produce(ctx context.Context, batch types.ProduceBatch, now clock.Time) error {
 	p.spy.produce()
-	return p.Partition.Produce(ctx, batch, now)
+	if p.spy.holdProduce.CompareAndSwap(true, false) {
+		close(p.spy.produceHeld)
+		select {
+		case <-p.spy.produceRelease:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if len(batch.Requests) == 0 || !batch.Requests[0].DeadLetterHandOff || !p.spy.failDeadLetter.CompareAndSwap(true, false) {
+		return p.Partition.Produce(ctx, batch, now)
+	}
+	first := *batch.Requests[0]
+	first.Items = first.Items[:1]
+	if err := p.Partition.Produce(ctx, types.ProduceBatch{Requests: []*types.ProduceRequest{&first}}, now); err != nil {
+		return err
+	}
+	batch.Requests[0].Stored = 1
+	return errors.New("dead letter write failed by test after its first item")
 }
 
 func (p spyPartition) TakeAction(ctx context.Context, batch types.LifeCycleBatch, state *types.PartitionState) error {

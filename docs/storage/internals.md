@@ -37,7 +37,11 @@ some of the items, so the retried request reports those as "does not exist".
 
 **An error from `Produce` fails the whole batch.** The logical queue answers every request in the
 batch with a retry error and counts none of their items, so a backend returns an error only when it
-cannot say the batch was stored.
+cannot say the batch was stored. The one exception is a batch of only dead-letter hand-offs, which
+a backend may store in parts: it records on each request how many of its leading items were stored
+before the failure, and the queue counts those. The source then deletes them at once, because a
+consumer may complete one before the move runs again, and a completed item's `SourceID` no longer
+stops it being stored a second time.
 
 **A problem with one request goes on that request.** An invalid, missing, scheduled or not-leased
 item ID is recorded on its request, and the method still returns nil. The returned error is only for
@@ -128,6 +132,13 @@ it, and the lifecycle scans, which do not, cannot be relied on to.
 one write deadline. When it ends, the lease commits what it already assigned and the next lease
 resumes where it stopped. A lone consumer on a quiet queue can therefore get "no items are in the
 queue" while free items wait further on, and each new lease gets further.
+
+**A Badger produce of only dead-letter hand-offs may span transactions, and no other produce may.**
+A move can be larger than one Badger transaction holds. A produce holding any client request stays
+one transaction and fails whole ([ADR 0019](../adr/0019-partition-item-distribution.md)). An item and
+its `source:` index entry must commit in the same transaction, since an item stored without its
+entry is stored again by the next move. So a transaction that refused a write is discarded, never
+committed, because it may hold the item without its entry.
 
 **A Badger lifecycle delete needs the item's `SourceID` in the action.** Badger frees the `SourceID`
 from the action's copy of the item, not the stored one, so a delete action without it leaves the

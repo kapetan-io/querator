@@ -787,6 +787,200 @@ func testLifecycle(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		waitForPageWritten(t, ctx, c, queueName)
 		assert.Len(t, leaseUpTo(t, ctx, c, queueName, count), count)
 	})
+
+	t.Run("LargeDeadItemsMoveToDeadLetter", func(t *testing.T) {
+		now := clock.NewProvider()
+		now.Freeze(clock.Now())
+		defer now.UnFreeze()
+
+		d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: setup(), Clock: now, WriteTimeout: pageWriteTimeout})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+		c, ctx := d.MustClient(), d.Context()
+
+		queueName := random.String("queue-", 10)
+		dlqName := random.String("dlq-", 10)
+		createOnePartitionQueue(t, ctx, c, dlqName)
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			QueueName:           queueName,
+			LeaseTimeout:        "1m0s",
+			ExpireTimeout:       "24h0m0s",
+			MaxAttempts:         1,
+			DeadQueue:           dlqName,
+			RequestedPartitions: 1,
+		})
+
+		// BadgerDB keeps a value under 1 MiB in the transaction that writes it, and one
+		// transaction holds about 10 MiB, so the 16 dead items do not fit in one write.
+		const count, perRequest, payload = 16, 4, 1_000_000
+		for done := 0; done < count; done += perRequest {
+			items := make([]*pb.QueueProduceItem, perRequest)
+			for i := range items {
+				items[i] = &pb.QueueProduceItem{
+					Reference: fmt.Sprintf("item-%05d", done+i),
+					Bytes:     []byte(strings.Repeat("x", payload)),
+				}
+			}
+			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+				QueueName:      queueName,
+				RequestTimeout: "5s",
+				Items:          items,
+			}))
+		}
+		require.Len(t, leaseUpTo(t, ctx, c, queueName, count), count)
+
+		now.Advance(clock.Minute + clock.Second)
+		require.Eventually(t, func() bool {
+			return partitionTotal(t, ctx, c, dlqName) == count
+		}, pageWriteTimeout, 50*clock.Millisecond)
+		assert.Equal(t, int32(0), partitionTotal(t, ctx, c, queueName))
+	})
+
+	t.Run("LargeDeadItemsMoveWhileClientsProduceToDeadLetter", func(t *testing.T) {
+		now := clock.NewProvider()
+		now.Freeze(clock.Now())
+		defer now.UnFreeze()
+
+		spy := &lifecycleSpy{}
+		d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: spy.Wrap(setup()), Clock: now, WriteTimeout: pageWriteTimeout})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+		c, ctx := d.MustClient(), d.Context()
+
+		queueName := random.String("queue-", 10)
+		dlqName := random.String("dlq-", 10)
+		createOnePartitionQueue(t, ctx, c, dlqName)
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			QueueName:           queueName,
+			LeaseTimeout:        "1m0s",
+			ExpireTimeout:       "24h0m0s",
+			MaxAttempts:         1,
+			DeadQueue:           dlqName,
+			RequestedPartitions: 1,
+		})
+
+		const count, perRequest, payload = 16, 4, 1_000_000
+		for done := 0; done < count; done += perRequest {
+			items := make([]*pb.QueueProduceItem, perRequest)
+			for i := range items {
+				items[i] = &pb.QueueProduceItem{
+					Reference: fmt.Sprintf("item-%05d", done+i),
+					Bytes:     []byte(strings.Repeat("x", payload)),
+				}
+			}
+			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+				QueueName:      queueName,
+				RequestTimeout: "5s",
+				Items:          items,
+			}))
+		}
+		require.Len(t, leaseUpTo(t, ctx, c, queueName, count), count)
+
+		// The dead letter queue's loop is held in a client's write while the move and a second
+		// client produce queue behind it, so the queue stores both in the same pass. Stored in one
+		// write, the move is too big for BadgerDB and fails the client's produce with it.
+		produceOne := func(reference string) error {
+			return c.QueueProduce(ctx, &pb.QueueProduceRequest{
+				QueueName:      dlqName,
+				RequestTimeout: "30s",
+				Items:          []*pb.QueueProduceItem{{Reference: reference, Bytes: []byte("x")}},
+			})
+		}
+		var heldErr, queuedErr error
+		spy.HoldNextProduce()
+		backgroundCall{
+			Call: func() { heldErr = produceOne("held") },
+			While: func() {
+				spy.WaitForProduceHeld(t, ctx)
+				scans := spy.Scans()
+				now.Advance(clock.Minute + clock.Second)
+				require.Eventually(t, func() bool {
+					return spy.Scans() > scans
+				}, pageWriteTimeout, 10*clock.Millisecond)
+				backgroundCall{
+					Call: func() { queuedErr = produceOne("queued") },
+					While: func() {
+						clock.Sleep(requestSettle)
+						spy.ReleaseProduce()
+					},
+				}.run()
+			},
+		}.run()
+
+		require.NoError(t, heldErr)
+		require.NoError(t, queuedErr)
+		require.Eventually(t, func() bool {
+			return partitionTotal(t, ctx, c, dlqName) == count+2
+		}, pageWriteTimeout, 50*clock.Millisecond)
+		assert.Equal(t, int32(0), partitionTotal(t, ctx, c, queueName))
+	})
+
+	t.Run("DeadLetterWriteFailingPartwayMovesEachItemOnce", func(t *testing.T) {
+		now := clock.NewProvider()
+		now.Freeze(clock.Now())
+		defer now.UnFreeze()
+
+		spy := &lifecycleSpy{}
+		d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: spy.Wrap(setup()), Clock: now, WriteTimeout: pageWriteTimeout})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+		c, ctx := d.MustClient(), d.Context()
+
+		queueName := random.String("queue-", 10)
+		dlqName := random.String("dlq-", 10)
+		createOnePartitionQueue(t, ctx, c, dlqName)
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			QueueName:           queueName,
+			LeaseTimeout:        "1m0s",
+			ExpireTimeout:       "24h0m0s",
+			MaxAttempts:         1,
+			DeadQueue:           dlqName,
+			RequestedPartitions: 1,
+		})
+		const count = 10
+		produceInOrder(t, ctx, c, queueName, count)
+		require.Len(t, leaseUpTo(t, ctx, c, queueName, count), count)
+
+		// The first move stores item-00000 in the dead letter queue, says so, and then fails. The
+		// source deletes only item-00000, so a consumer that completes it before the next pass does
+		// not see it moved again.
+		spy.FailNextDeadLetterWriteAfterFirstItem()
+		now.Advance(clock.Minute + clock.Second)
+		require.Eventually(t, func() bool {
+			return partitionTotal(t, ctx, c, queueName) == count-1
+		}, 5*clock.Second, 20*clock.Millisecond)
+		assert.Equal(t, int32(1), partitionTotal(t, ctx, c, dlqName))
+
+		moved := leaseOne(t, ctx, c, dlqName)
+		require.Equal(t, "item-00000", moved.Reference)
+		require.NoError(t, c.QueueComplete(ctx, &pb.QueueCompleteRequest{
+			QueueName:      dlqName,
+			RequestTimeout: "5s",
+			Ids:            []string{moved.Id},
+		}))
+
+		now.Advance(10 * clock.Second)
+		require.Eventually(t, func() bool {
+			return partitionTotal(t, ctx, c, queueName) == 0
+		}, 5*clock.Second, 20*clock.Millisecond)
+
+		var list pb.StorageItemsListResponse
+		require.NoError(t, c.StorageItemsList(ctx, dlqName, 0, &list, &querator.ListOptions{Limit: 2 * count}))
+		references := make([]string, 0, len(list.Items))
+		for _, item := range list.Items {
+			references = append(references, item.Reference)
+		}
+		assert.ElementsMatch(t, []string{
+			"item-00001", "item-00002", "item-00003", "item-00004",
+			"item-00005", "item-00006", "item-00007", "item-00008", "item-00009",
+		}, references)
+	})
 }
 
 // produceInOrder produces count items named item-00000, item-00001 and so on, in that order.

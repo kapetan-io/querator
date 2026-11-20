@@ -20,7 +20,8 @@ through that one instance's request loop.
 
 Moving an item to a dead-letter queue is no exception. A source queue does not write to the
 dead-letter queue's partitions. It hands the items to the dead-letter queue's own Logical Queue,
-which takes them through its request loop exactly like a client produce. The design is in [ENG-55
+which takes them through its request loop like a client produce but stores them in a write of their
+own (see [Dead-letter moves](#dead-letter-moves)). The design is in [ENG-55
 dlq-single-writer](features/ENG-55-dlq-single-writer/blueprint.md).
 
 Because there is one writer, the request loop is the one place where interaction with the data
@@ -175,6 +176,12 @@ Items reach a dead-letter queue when they expire or reach `MaxAttempts`.
   copies, because the delete from the source partition needs the original IDs. When deleting the
   source items fails after a confirmed move, the next run finds them again and the dead-letter queue
   drops the duplicate by that `SourceID`.
+* A move may be stored in parts, a client produce never is. A move can be larger than one write to
+  storage holds, while a client produce keeps the whole-or-nothing write of
+  [ADR 0019](adr/0019-partition-item-distribution.md). So the dead-letter queue never stores a move
+  in the same write as a client produce, and it stores both whatever the other's outcome. When a
+  move fails after part of it was stored, the source deletes the stored part and keeps the rest for
+  the next run.
 
 A dead-letter queue name is checked for format before the queue is looked up, because the lookup
 loads the queue from storage and can start a Logical Queue for it. These rules govern a dead-letter

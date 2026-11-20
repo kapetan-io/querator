@@ -90,14 +90,6 @@ _Avoid_: Orchestrator, registry
 The work a queue does on its own as time passes: it returns items whose lease expired to the queue, moves items that expired or reached their maximum attempts to the dead letter queue (or deletes them when the queue has none), and enqueues scheduled items when their time arrives. The logical queue that owns a partition runs that partition's lifecycle.
 _Avoid_: GC, janitor, sweeper
 
-**Page**:
-The most items the lifecycle reads from a partition before the logical queue serves waiting requests again. The lifecycle goes through a partition one page at a time, so a large partition never holds up produce, lease, complete or retry for longer than one page takes.
-_Avoid_: Batch, chunk
-
-**Pass**:
-One trip of the lifecycle through a partition, from its first item to the item that was last when the trip began, read one page at a time. Items added during a pass wait for the next one.
-_Avoid_: Sweep, cycle
-
 ### Time Semantics
 
 **Deadline** (`time.Time`):

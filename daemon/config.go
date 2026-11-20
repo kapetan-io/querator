@@ -1,13 +1,13 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"fmt"
 	"io"
 	"log/slog"
 	"math"
-	"strings"
 	"time"
 
 	"github.com/duh-rpc/duh-go"
@@ -80,13 +80,18 @@ type File struct {
 	Logging          Logging            `yaml:"logging"`
 	PartitionStorage []PartitionStorage `yaml:"partition-storage"`
 	QueueStorage     QueueStorage       `yaml:"queue-storage"`
-	AuthBackend      AuthConfig         `yaml:"auth-backend"`
+	Auth             *AuthConfig        `yaml:"auth"`
 	Queues           []Queue            `yaml:"queues"`
 	ConfigFile       string
 }
 
 type AuthConfig struct {
-	Driver string `yaml:"driver"`
+	Storage AuthStorage `yaml:"storage"`
+}
+
+type AuthStorage struct {
+	Memory *MemoryConfig `yaml:"memory"`
+	Badger *BadgerConfig `yaml:"badger"`
 }
 
 type Logging struct {
@@ -167,14 +172,60 @@ type Partition struct {
 }
 
 func ReadConfig(r io.Reader) (File, error) {
-	dec := yaml.NewDecoder(r)
+	content, err := io.ReadAll(r)
+	if err != nil {
+		return File{}, fmt.Errorf("while reading config file: %w", err)
+	}
+
+	dec := yaml.NewDecoder(bytes.NewReader(content))
 	dec.KnownFields(true)
 
 	var file File
 	if err := dec.Decode(&file); err != nil {
 		return File{}, fmt.Errorf("while reading config file: %w", err)
 	}
+
+	var doc yaml.Node
+	if err := yaml.Unmarshal(content, &doc); err != nil {
+		return File{}, fmt.Errorf("while reading config file: %w", err)
+	}
+	keepEmptyAuthKeys(&doc, &file)
 	return file, nil
+}
+
+func keepEmptyAuthKeys(doc *yaml.Node, file *File) {
+	if len(doc.Content) == 0 {
+		return
+	}
+	section := mappingValue(doc.Content[0], "auth")
+	if section == nil {
+		return
+	}
+	if file.Auth == nil {
+		file.Auth = &AuthConfig{}
+	}
+	storage := mappingValue(section, "storage")
+	if storage == nil {
+		return
+	}
+	if mappingValue(storage, "memory") != nil && file.Auth.Storage.Memory == nil {
+		file.Auth.Storage.Memory = &MemoryConfig{}
+	}
+	if mappingValue(storage, "badger") != nil && file.Auth.Storage.Badger == nil {
+		file.Auth.Storage.Badger = &BadgerConfig{}
+	}
+}
+
+func mappingValue(node *yaml.Node, key string) *yaml.Node {
+	if node.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i, child := range node.Content {
+		if i%2 == 0 && child.Value == key && i+1 < len(node.Content) {
+			return node.Content[i+1]
+		}
+	}
+	return nil
 }
 
 func ApplyConfigFile(ctx context.Context, conf *Config, file File, w io.Writer) error {
@@ -426,19 +477,49 @@ func setupQueueStorage(ctx context.Context, file File, conf *Config) error {
 }
 
 func setupAuthBackend(file File, conf *Config) error {
-	switch strings.ToLower(file.AuthBackend.Driver) {
-	case "", "none":
-	case "internal":
-		conf.AuthBackend = internal.NewAuthBackend(internal.AuthBackendConfig{
-			RoleBindings: conf.Service.StorageConfig.RoleBindings,
-			APIKeys:      conf.Service.StorageConfig.APIKeys,
-			Users:        conf.Service.StorageConfig.Users,
-			Roles:        conf.Service.StorageConfig.Roles,
-			Log:          conf.Service.Log,
-		})
+	if file.Auth == nil {
+		return nil
+	}
+	if err := setupAuthStorage(file.Auth.Storage, conf); err != nil {
+		return err
+	}
+	conf.AuthBackend = internal.NewAuthBackend(internal.AuthBackendConfig{
+		RoleBindings: conf.Service.StorageConfig.RoleBindings,
+		APIKeys:      conf.Service.StorageConfig.APIKeys,
+		Users:        conf.Service.StorageConfig.Users,
+		Roles:        conf.Service.StorageConfig.Roles,
+		Log:          conf.Service.Log,
+	})
+	return nil
+}
+
+func setupAuthStorage(storage AuthStorage, conf *Config) error {
+	stores := &conf.Service.StorageConfig
+	switch {
+	case storage.Memory != nil && storage.Badger != nil:
+		return errors.New("invalid auth; 'storage' defines multiple backends; only one of (memory, badger) is allowed")
+	case storage.Memory != nil:
+		stores.Namespaces = store.NewMemoryNamespaces(conf.Service.Log)
+		stores.Users = store.NewMemoryUsers(conf.Service.Log)
+		stores.APIKeys = store.NewMemoryAPIKeys(conf.Service.Log)
+		stores.Roles = store.NewMemoryRoles(conf.Service.Log)
+		stores.RoleBindings = store.NewMemoryRoleBindings(conf.Service.Log)
+	case storage.Badger != nil:
+		if err := storage.Badger.validate(); err != nil {
+			return fmt.Errorf("invalid auth storage; %w", err)
+		}
+		dir := store.BadgerConfig{
+			StorageDir: storage.Badger.StorageDir,
+			Log:        conf.Service.Log,
+		}
+		stores.Namespaces = store.NewBadgerNamespaces(dir)
+		stores.Users = store.NewBadgerUsers(dir)
+		stores.APIKeys = store.NewBadgerAPIKeys(dir)
+		stores.Roles = store.NewBadgerRoles(dir)
+		stores.RoleBindings = store.NewBadgerRoleBindings(dir)
 	default:
-		return fmt.Errorf("invalid auth-backend driver; '%s' is not one of (none, internal)",
-			file.AuthBackend.Driver)
+		return errors.New("invalid auth; 'storage' is required and must be one of (memory, badger); " +
+			"it holds namespaces, users, roles, role bindings and API keys")
 	}
 	return nil
 }

@@ -36,21 +36,20 @@ namespace rather than to many narrow ones.
 
 ## Authentication with role storage starts with the door open
 
-When Querator is embedded in a Go program with authentication on and storage for users, roles and role
-bindings, it starts in Open Door mode. The `querator server` command cannot set up that storage, so this
-applies only when embedding. Open Door binds the anonymous user to the Admin role in the `_system`
-namespace, so any request without an API key has full administrative access. A warning is logged when
-the binding is created. The binding is created again at every start, so deleting it closes the door only
-until the next restart, unless the anonymous user already holds 100 other bindings in `_system`. Then
-it is not created, and a warning is logged. The standard roles are also written again at every start,
-replacing any change made to them.
+When Querator starts with auth turned on and storage for users, roles and role bindings, it starts in
+Open Door mode. A config file with an `auth` section always starts this way. Open Door binds the anonymous
+user to the Admin role in the `_system` namespace, so any request without an API key has full
+administrative access. A warning is logged when the binding is created. The binding is created again at
+every start, so deleting it closes the door only until the next restart, unless the anonymous user
+already holds 100 other bindings in `_system`. Then it is not created, and a warning is logged. The
+standard roles are also written again at every start, replacing any change made to them.
 
-With the `none` auth driver, the default, Querator checks no permissions, so any client that can reach
+Without an `auth` section, the default, Querator checks no permissions, so any client that can reach
 the API port can do anything.
 
 **Workaround**: After every start, delete the anonymous user's Admin binding in `_system` with
 `/v1/rolebindings.delete`. Keep the API port unreachable from untrusted networks until you have, and
-always with the `none` driver. Create your own roles rather than editing the standard ones.
+always when auth is off. Create your own roles rather than editing the standard ones.
 
 ## Health and metrics are served without authentication on the API port
 

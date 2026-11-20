@@ -230,6 +230,27 @@ func TestApplyConfigFileErrs(t *testing.T) {
 			},
 			expectedErr: "invalid queue 'test-queue'; partitions is invalid; cannot be greater than 1024",
 		},
+		{
+			name: "AuthWithoutStorage",
+			file: daemon.File{Auth: &daemon.AuthConfig{}},
+			expectedErr: "invalid auth; 'storage' is required and must be one of (memory, badger); " +
+				"it holds namespaces, users, roles, role bindings and API keys",
+		},
+		{
+			name: "AuthWithTwoStorages",
+			file: daemon.File{Auth: &daemon.AuthConfig{Storage: daemon.AuthStorage{
+				Memory: &daemon.MemoryConfig{},
+				Badger: &daemon.BadgerConfig{StorageDir: "/tmp"},
+			}}},
+			expectedErr: "invalid auth; 'storage' defines multiple backends; only one of (memory, badger) is allowed",
+		},
+		{
+			name: "AuthBadgerWithoutStorageDir",
+			file: daemon.File{Auth: &daemon.AuthConfig{Storage: daemon.AuthStorage{
+				Badger: &daemon.BadgerConfig{},
+			}}},
+			expectedErr: "invalid auth storage; badger: 'storage-dir' is required",
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			conf := &daemon.Config{}

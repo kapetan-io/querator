@@ -122,6 +122,10 @@ func NewHTTPHandler(conf HTTPHandlerConfig) *HTTPHandler {
 }
 
 func (h *HTTPHandler) authenticate(ctx context.Context, r *http.Request) (context.Context, error) {
+	if _, ok := h.auth.(*auth.NoOpAuthBackend); ok {
+		return auth.ContextWithPrincipal(ctx, auth.AnonymousPrincipal()), nil
+	}
+
 	authHeader := r.Header.Get("Authorization")
 	if authHeader == "" {
 		principal, err := h.auth.Authenticate(ctx, "")
@@ -131,11 +135,10 @@ func (h *HTTPHandler) authenticate(ctx context.Context, r *http.Request) (contex
 		return auth.ContextWithPrincipal(ctx, principal), nil
 	}
 
-	const bearerPrefix = "Bearer "
-	if !strings.HasPrefix(authHeader, bearerPrefix) {
+	scheme, token, found := strings.Cut(authHeader, " ")
+	if !found || !strings.EqualFold(scheme, "Bearer") {
 		return ctx, reply.NewUnauthorized("invalid authorization header format")
 	}
-	token := strings.TrimPrefix(authHeader, bearerPrefix)
 
 	principal, err := h.auth.Authenticate(ctx, token)
 	if err != nil {

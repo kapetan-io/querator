@@ -171,6 +171,8 @@ type Partition struct {
 	StorageName string `yaml:"storage-name"`
 }
 
+const maxEmptyDocuments = 16
+
 func ReadConfig(r io.Reader) (File, error) {
 	content, err := io.ReadAll(r)
 	if err != nil {
@@ -184,20 +186,44 @@ func ReadConfig(r io.Reader) (File, error) {
 	if err := dec.Decode(&file); err != nil {
 		return File{}, fmt.Errorf("while reading config file: %w", err)
 	}
-	if err := dec.Decode(&yaml.Node{}); !errors.Is(err, io.EOF) {
-		return File{}, errors.New("while reading config file: a config file holds one YAML document, " +
-			"but found a second after '---'; remove the separator or move its sections above it")
+	if err := refuseExtraDocuments(dec); err != nil {
+		return File{}, fmt.Errorf("while reading config file: %w", err)
 	}
 
 	var doc yaml.Node
 	if err := yaml.Unmarshal(content, &doc); err != nil {
 		return File{}, fmt.Errorf("while reading config file: %w", err)
 	}
-	keepEmptyAuthKeys(&doc, &file)
+	keepEmptyBackendKeys(&doc, &file)
 	return file, nil
 }
 
-func keepEmptyAuthKeys(doc *yaml.Node, file *File) {
+func refuseExtraDocuments(dec *yaml.Decoder) error {
+	for extras := 0; extras < maxEmptyDocuments; extras++ {
+		var extra yaml.Node
+		err := dec.Decode(&extra)
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if !isEmptyDocument(&extra) {
+			return errors.New("a config file holds one YAML document, but found a second with content " +
+				"after '---'; remove the separator or move its sections above it")
+		}
+	}
+	return fmt.Errorf("more than %d empty YAML documents after '---'", maxEmptyDocuments)
+}
+
+func isEmptyDocument(doc *yaml.Node) bool {
+	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
+		return true
+	}
+	return doc.Content[0].Kind == yaml.ScalarNode && doc.Content[0].Tag == "!!null"
+}
+
+func keepEmptyBackendKeys(doc *yaml.Node, file *File) {
 	if len(doc.Content) == 0 {
 		return
 	}

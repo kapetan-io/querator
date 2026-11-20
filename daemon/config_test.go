@@ -639,6 +639,21 @@ func TestConfigFileRefusesWhatItWouldIgnore(t *testing.T) {
 			wantErr: "holds one YAML document",
 		},
 		{
+			name:    "SecondDocumentWithCommentThenContent",
+			config:  "address: localhost:0\n---\n# note\n---\nauth:\n",
+			wantErr: "holds one YAML document",
+		},
+		{
+			name:    "QueueStorageMongoWithoutSettings",
+			config:  "queue-storage:\n  mongo:\n",
+			wantErr: "connection-string",
+		},
+		{
+			name:    "QueueStoragePostgresWithoutSettings",
+			config:  "queue-storage:\n  postgres:\n",
+			wantErr: "connection-string",
+		},
+		{
 			name:    "QueueStorageBadgerWithoutSettings",
 			config:  "queue-storage:\n  badger:\n",
 			wantErr: "storage-dir",
@@ -655,6 +670,18 @@ func TestConfigFileRefusesWhatItWouldIgnore(t *testing.T) {
 				err = daemon.ApplyConfigFile(context.Background(), &daemon.Config{}, file, io.Discard)
 			}
 			require.ErrorContains(t, err, test.wantErr)
+		})
+	}
+
+	for _, test := range []struct{ name, config string }{
+		{"TrailingSeparator", "address: localhost:0\n---\n"},
+		{"TrailingSeparatorComment", "address: localhost:0\n--- # end\n"},
+		{"TrailingCommentDocument", "address: localhost:0\n---\n# nothing here\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			file, err := daemon.ReadConfig(strings.NewReader(test.config))
+			require.NoError(t, err)
+			assert.Equal(t, "localhost:0", file.Address)
 		})
 	}
 

@@ -8,6 +8,7 @@ const (
 	KindUsernameAlreadyTaken     reply.Kind = "user.username_taken"
 	KindRoleAlreadyExists        reply.Kind = "role.already_exists"
 	KindRoleBindingAlreadyExists reply.Kind = "role_binding.already_exists"
+	KindRoleBindingLimitReached  reply.Kind = "role_binding.limit_reached"
 )
 
 var (
@@ -16,6 +17,7 @@ var (
 	ErrUsernameAlreadyTaken     = reply.NewInvalidOptionKind(KindUsernameAlreadyTaken, "")
 	ErrRoleAlreadyExists        = reply.NewInvalidOptionKind(KindRoleAlreadyExists, "")
 	ErrRoleBindingAlreadyExists = reply.NewInvalidOptionKind(KindRoleBindingAlreadyExists, "")
+	ErrRoleBindingLimitReached  = reply.NewInvalidOptionKind(KindRoleBindingLimitReached, "")
 )
 
 func NewErrNamespaceNotExist(name string) *reply.ErrRequestFailed {
@@ -65,7 +67,7 @@ func NewErrRoleBindingAlreadyExists(binding RoleBinding) *reply.ErrInvalidOption
 }
 
 func NewErrRoleBindingLimitReached(binding RoleBinding) *reply.ErrInvalidOption {
-	return reply.NewInvalidOption("user_id is invalid; user '%s' already holds %d role bindings in namespace '%s', the most one user can hold in one namespace", binding.UserID, MaxRoleBindingsPerUserInNamespace, binding.Namespace)
+	return reply.NewInvalidOptionKind(KindRoleBindingLimitReached, "user_id is invalid; user '%s' already holds %d role bindings in namespace '%s', the most one user can hold in one namespace", binding.UserID, MaxRoleBindingsPerUserInNamespace, binding.Namespace)
 }
 
 func NewErrRoleHasBindings(name string) *reply.ErrInvalidOption {

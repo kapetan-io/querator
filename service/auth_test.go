@@ -1182,6 +1182,55 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 			err = adminClient.NamespacesList(ctx, &listRes, nil)
 			require.NoError(t, err)
 		})
+
+		t.Run("RestartWithAnonymousAtBindingLimit", func(t *testing.T) {
+			const limit = 100
+			d := newDaemonWithAuth(t, setup)
+			defer d.Shutdown(t)
+
+			ctx := d.Context()
+			adminClient := newClientWithAPIKey(t, d, d.AdminKey)
+			anonClient := newClientWithAPIKey(t, d, "")
+
+			for i := range limit {
+				require.NoError(t, adminClient.RolesCreate(ctx, &pb.RoleCreateRequest{
+					Permissions: []string{auth.QueueList},
+					Namespace:   auth.SystemNamespace,
+					Name:        fmt.Sprintf("anon-limit-role-%d", i),
+				}, &pb.RoleCreateResponse{}))
+			}
+
+			// The Open Door binding counts toward the limit, so fill all but one slot before removing it
+			for i := range limit - 1 {
+				require.NoError(t, adminClient.RoleBindingsCreate(ctx, &pb.RoleBindingCreateRequest{
+					Namespace: auth.SystemNamespace,
+					RoleName:  fmt.Sprintf("anon-limit-role-%d", i),
+					UserId:    auth.AnonymousUserID,
+				}, &pb.RoleBindingCreateResponse{}))
+			}
+			require.NoError(t, adminClient.RoleBindingsDelete(ctx, &pb.RoleBindingDeleteRequest{
+				Namespace: auth.SystemNamespace,
+				RoleName:  auth.RoleAdmin,
+				UserId:    auth.AnonymousUserID,
+			}))
+			require.NoError(t, adminClient.RoleBindingsCreate(ctx, &pb.RoleBindingCreateRequest{
+				Namespace: auth.SystemNamespace,
+				RoleName:  fmt.Sprintf("anon-limit-role-%d", limit-1),
+				UserId:    auth.AnonymousUserID,
+			}, &pb.RoleBindingCreateResponse{}))
+
+			// Simulate restart: call Bootstrap again on the same storage
+			require.NoError(t, d.Service().Bootstrap(ctx))
+
+			// The Open Door grant is skipped, so anonymous requests stay denied
+			err := anonClient.UsersCreate(ctx, &pb.UserCreateRequest{
+				Username: "anon-" + random.String("", 5),
+			}, &pb.UserCreateResponse{})
+			require.Error(t, err)
+			var duhErr duh.Error
+			require.ErrorAs(t, err, &duhErr)
+			assert.Equal(t, duh.CodeForbidden, duhErr.Code())
+		})
 	})
 
 	t.Run("OpenDoor", func(t *testing.T) {

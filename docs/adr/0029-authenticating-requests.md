@@ -33,8 +33,10 @@ Each decision below keeps one of them from doing that.
 namespace, the same number a permission check reads, so every binding the API accepts is one a check
 reads. The store counts the user's bindings in the namespace inside the same write that adds the new
 one, so two creates at once cannot both land the 101st. The Open Door binding goes through the same
-store write, so a start that finds the anonymous user holding 100 other bindings in `_system` and no
-Open Door binding fails with the limit error.
+store write. A start that finds the anonymous user holding 100 other bindings in `_system`, and no
+Open Door binding, logs a warning and starts without granting it. Failing the start instead would
+leave the operator no way to free a slot, since bindings are removed through the API of a running
+server, and skipping the grant leaves the server closed rather than open.
 
 **Requests that arrive together with the same key share one storage lookup.** Fifty requests with the
 same uncached key cause one lookup, which reads the key and its user once, and all fifty wait on it.
@@ -48,7 +50,7 @@ the buffer is full it is thrown away.
 
 | Decision | What it protects | What it costs |
 |---|---|---|
-| Read a bounded number of bindings | No request scans storage without limit | A binding past the bound is never read, so a permission granted only by it is denied. Only bindings written by a Querator that did not refuse creates past the bound can be past it |
+| Read a bounded number of bindings | No request scans storage without limit | A binding past the bound is never read, so a permission granted only by it is denied. A user can still pass the bound if a binding is unreadable when a create counts, or if the bindings were written by a Querator that did not refuse creates past it |
 | Refuse a binding past the bound | An admin cannot grant a permission a check will ignore | A user who needs more than 100 grants in one namespace must be bound to broader roles. Counting can read every binding the user holds in every namespace on each create |
 | One shared lookup per key | Storage is not hit fifty times at once | A caller waits up to the lookup's own 10-second limit, whatever its deadline, and one storage error answers every waiting caller with an invalid-key error |
 | Drop last-used writes when busy | A request never waits on bookkeeping | A key's last-used time can be behind |

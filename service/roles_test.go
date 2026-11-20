@@ -933,6 +933,17 @@ func testRoles(t *testing.T, setup NewStorageFunc) {
 				require.NoError(t, c.RoleBindingsList(ctx, ns, &list, &querator.ListOptions{Limit: limit * 2}))
 				assert.Len(t, list.Items, limit)
 
+				// The limit is per user, so another user can still be bound in the full namespace
+				var secondRes pb.UserCreateResponse
+				require.NoError(t, c.UsersCreate(ctx, &pb.UserCreateRequest{
+					Username: "rb-limit-second-" + random.String("", 5),
+				}, &secondRes))
+				require.NoError(t, c.RoleBindingsCreate(ctx, &pb.RoleBindingCreateRequest{
+					Namespace: ns,
+					RoleName:  fmt.Sprintf("rb-limit-role-%d", limit),
+					UserId:    secondRes.Id,
+				}, &pb.RoleBindingCreateResponse{}))
+
 				require.NoError(t, c.RolesCreate(ctx, &pb.RoleCreateRequest{
 					Permissions: []string{auth.QueueList},
 					Namespace:   other,

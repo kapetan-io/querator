@@ -9,8 +9,8 @@ Accepted
 ## Context
 
 Requests waiting on a queue are written to storage in batches ([3. RW Sync Point](0003-rw-sync-point.md)).
-Say three clients each send a produce while the queue is busy. The Logical Queue sends all three to
-the partition as one storage call. Leases, completes and retries are batched the same way, each kind
+Say three clients each send a produce while the queue is busy. The Logical Queue assigns each one to
+a partition, and the produces assigned to the same partition go to it as one storage call. Leases, completes and retries are batched the same way, each kind
 in its own call, and dead-letter hand-offs go in a produce call of their own.
 
 When that call fails, storage may have written all of the batch, part of it, or none of it. A backend

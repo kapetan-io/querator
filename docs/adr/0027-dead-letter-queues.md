@@ -11,9 +11,9 @@ Accepted
 A queue can name another queue as its dead-letter queue. When an item in `orders` expires or reaches
 `max_attempts`, it moves to `orders-dead` ([22. Managing item lifecycles](0022-managing-item-lifecycles.md)).
 
-Each queue has a request loop, the one goroutine that writes to its partitions. The move runs on the
+Each queue has a request loop, the goroutine that writes to its partitions. The move runs on the
 `orders` loop, and the `orders` loop waits while `orders-dead` stores the items. Any time two loops
-wait on each other, or on a lock either one needs, both stop for good.
+wait on each other, or on a lock either one needs, both stop, for good unless one of them gives up.
 
 ## Decision
 

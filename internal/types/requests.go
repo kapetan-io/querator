@@ -37,6 +37,7 @@ type ProduceRequest struct {
 	Err               error
 	Assigned          bool
 	DeadLetterHandOff bool
+	Stored            int
 }
 
 type CompleteRequest struct {

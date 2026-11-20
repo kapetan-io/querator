@@ -37,6 +37,35 @@ func (r *ProduceBatch) Add(req *ProduceRequest) {
 	r.Requests = append(r.Requests, req)
 }
 
+func (r *ProduceBatch) HandOffsOnly() bool {
+	for _, req := range r.Requests {
+		if !req.DeadLetterHandOff {
+			return false
+		}
+	}
+	return len(r.Requests) != 0
+}
+
+func (r *ProduceBatch) ClientProduces() ProduceBatch {
+	var clients ProduceBatch
+	for _, req := range r.Requests {
+		if !req.DeadLetterHandOff {
+			clients.Add(req)
+		}
+	}
+	return clients
+}
+
+func (r *ProduceBatch) HandOffs() ProduceBatch {
+	var handOffs ProduceBatch
+	for _, req := range r.Requests {
+		if req.DeadLetterHandOff {
+			handOffs.Add(req)
+		}
+	}
+	return handOffs
+}
+
 func (r *ProduceBatch) DropAbandonedHandOffs() {
 	n := 0
 	for _, req := range r.Requests {

@@ -392,13 +392,14 @@ func (q *MongoQueues) Update(ctx context.Context, info types.QueueInfo) error {
 	_, err = q.collection(client).UpdateOne(ctx,
 		bson.M{"_id": found.Name},
 		bson.M{"$set": bson.M{
-			"lease_timeout_ns":  found.LeaseTimeout.Nanoseconds(),
-			"expire_timeout_ns": found.ExpireTimeout.Nanoseconds(),
-			"dead_queue":        found.DeadQueue,
-			"max_attempts":      found.MaxAttempts,
-			"reference":         found.Reference,
-			"partition_info":    partitionInfoJSON,
-			"updated_at":        toMicros(found.UpdatedAt),
+			"lease_timeout_ns":     found.LeaseTimeout.Nanoseconds(),
+			"expire_timeout_ns":    found.ExpireTimeout.Nanoseconds(),
+			"dead_queue":           found.DeadQueue,
+			"max_attempts":         found.MaxAttempts,
+			"reference":            found.Reference,
+			"requested_partitions": found.RequestedPartitions,
+			"partition_info":       partitionInfoJSON,
+			"updated_at":           toMicros(found.UpdatedAt),
 		}})
 	if err != nil {
 		return errors.Errorf("update queue: %w", err)

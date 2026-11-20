@@ -843,8 +843,7 @@ func testLifecycle(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		now.Freeze(clock.Now())
 		defer now.UnFreeze()
 
-		spy := &lifecycleSpy{}
-		d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: spy.Wrap(setup()), Clock: now, WriteTimeout: pageWriteTimeout})
+		d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: setup(), Clock: now, WriteTimeout: pageWriteTimeout})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
@@ -880,39 +879,39 @@ func testLifecycle(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		}
 		require.Len(t, leaseUpTo(t, ctx, c, queueName, count), count)
 
-		// The dead letter queue's loop is held in a client's write while the move and a second
-		// client produce queue behind it, so the queue stores both in the same pass. Stored in one
-		// write, the move is too big for BadgerDB and fails the client's produce with it.
+		// A paused queue holds the produce requests it receives and stores them all in one pass when
+		// it resumes, so the move and both client produces share that pass once ProduceWaiting is 3.
+		// Stored in one write, the move would be too big for BadgerDB and would fail both client
+		// produces with it.
+		require.NoError(t, d.Service().PauseQueue(ctx, dlqName))
+		callCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
 		produceOne := func(reference string) error {
-			return c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			return c.QueueProduce(callCtx, &pb.QueueProduceRequest{
 				QueueName:      dlqName,
 				RequestTimeout: "30s",
 				Items:          []*pb.QueueProduceItem{{Reference: reference, Bytes: []byte("x")}},
 			})
 		}
-		var heldErr, queuedErr error
-		spy.HoldNextProduce()
-		backgroundCall{
-			Call: func() { heldErr = produceOne("held") },
-			While: func() {
-				spy.WaitForProduceHeld(t, ctx)
-				scans := spy.Scans()
-				now.Advance(clock.Minute + clock.Second)
-				require.Eventually(t, func() bool {
-					return spy.Scans() > scans
-				}, pageWriteTimeout, 10*clock.Millisecond)
-				backgroundCall{
-					Call: func() { queuedErr = produceOne("queued") },
-					While: func() {
-						clock.Sleep(requestSettle)
-						spy.ReleaseProduce()
-					},
-				}.run()
-			},
-		}.run()
+		var produceErrs [2]error
+		duringCalls(cancel, func() {
+			now.Advance(clock.Minute + clock.Second)
+			require.Eventually(t, func() bool {
+				var stats pb.QueueStatsResponse
+				if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: dlqName}, &stats); err != nil {
+					return false
+				}
+				return len(stats.LogicalQueues) == 1 && stats.LogicalQueues[0].ProduceWaiting == 3
+			}, pageWriteTimeout, 10*clock.Millisecond)
+			require.NoError(t, d.Service().ResumeQueue(ctx, dlqName))
+		}, func() {
+			produceErrs[0] = produceOne("client-1")
+		}, func() {
+			produceErrs[1] = produceOne("client-2")
+		})
 
-		require.NoError(t, heldErr)
-		require.NoError(t, queuedErr)
+		require.NoError(t, produceErrs[0])
+		require.NoError(t, produceErrs[1])
 		require.Eventually(t, func() bool {
 			return partitionTotal(t, ctx, c, dlqName) == count+2
 		}, pageWriteTimeout, 50*clock.Millisecond)

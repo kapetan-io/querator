@@ -12,6 +12,14 @@
 // for concurrent use. docs/storage/internals.md explains the contract and
 // why each backend is built the way it is. docs/storage/README.md covers configuring them.
 //
+// BadgerConfig.MemTableSize sets the write buffer of each partition's database; zero keeps
+// BadgerDB's default of 64 MiB, and the metadata databases always keep it. BadgerDB limits one
+// transaction to 15% of that buffer, and badgerTransactionLimit copies that formula from BadgerDB
+// (db.go in v4.3.0), so it must follow BadgerDB on upgrade. A value under ValueThreshold counts
+// toward that limit in full, and BadgerDB refuses to open when ValueThreshold is above the limit,
+// so a set MemTableSize lowers ValueThreshold to the limit when it must. Tests set a small buffer
+// so small items reach the transaction limit.
+//
 // MongoDB's Lease keeps the items it placed in the same order as its bulk write models, because
 // a bulk write error names a failed update by its index in the models.
 package store

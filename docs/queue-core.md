@@ -104,11 +104,6 @@ described under Pause.
 A dead-letter hand-off has no request timeout and its deadline is zero, so the deadline check must
 skip it or it would expire at once.
 
-Produce assignment assumes the list of partitions is sorted with failed partitions last, and checks
-only the first. A partition that fails while it is first stays first until an assigned lease or a
-queue load re-sorts the list, and until then produce requests wait unassigned although another
-partition is healthy (ENG-818).
-
 Complete and retry requests name the partition the lease came from, so they cannot be moved to
 another one. When that partition is missing or failing, the client gets a retry error.
 
@@ -180,19 +175,31 @@ Items reach a dead-letter queue when they expire or reach `MaxAttempts`.
   drops the duplicate by that `SourceID`.
 
 A dead-letter queue name is checked for format before the queue is looked up, because the lookup
-loads the queue from storage and can start a Logical Queue for it. These rules apply to the queue
-named as a dead-letter queue.
+loads the queue from storage and can start a Logical Queue for it. These rules govern a dead-letter
+queue.
 
 * A queue cannot be its own dead-letter queue, and the queue named as a dead-letter queue must not
   have a dead-letter queue of its own. These rules exist so the source queue's loop and the
   dead-letter queue's loop are always different goroutines and the dead-letter queue never
   dead-letters back, which keeps the source loop's wait on the dead-letter queue's loop from
-  deadlocking. Updates can bypass the rules (ENG-778). The wait is bounded by `WriteTimeout` either
-  way.
+  deadlocking. The wait is bounded by `WriteTimeout` either way.
 * A dead-letter queue must have a single partition (ENG-57). `SourceID` dedup is per partition. With
   more than one partition, a move that failed and was retried could land on a different partition
   than the first attempt and slip past that partition's `SourceID` index, duplicating the item. One
   partition makes the dedup a guarantee.
+
+The rules are checked for both queues in a pair. Checking only the queue being named lets a later
+update break them: A names B, then B is updated to name C, giving the chain A→B→C (ENG-778). So a
+create or update is also refused when another queue already names the queue being saved and the save
+would give it a dead-letter queue or more than one partition. A queue cannot be deleted while another
+queue names it, since the source queue's moves would then fail on every run.
+
+* Finding the queues that name a queue reads up to every stored queue under the `QueuesManager` lock, so
+  each create, update and delete that triggers it blocks queue loads, dead-letter moves included, for
+  as long as that read takes.
+* Chains that formed before ENG-778 stay in storage. An update replaces `dead_queue`, so an update
+  that re-sends a link of such a chain is refused. Each update to a queue in the chain must clear its
+  `dead_queue` or point it at a queue the rules allow, which breaks the chain.
 
 ## Queue creation and loading
 

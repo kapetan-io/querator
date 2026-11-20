@@ -97,6 +97,10 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Que
 		return nil, err
 	}
 
+	if err := qm.validateAsDeadQueue(ctx, info); err != nil {
+		return nil, err
+	}
+
 	placed, err := store.PlacePartitions(qm.conf.StorageConfig.PartitionStorage, info)
 	if err != nil {
 		return nil, err
@@ -199,6 +203,10 @@ func (qm *QueuesManager) Update(ctx context.Context, info types.QueueInfo) error
 	qm.mutex.Lock()
 
 	if err := qm.validateDeadQueue(ctx, info); err != nil {
+		return err
+	}
+
+	if err := qm.validateAsDeadQueue(ctx, info); err != nil {
 		return err
 	}
 
@@ -346,7 +354,8 @@ func (qm *QueuesManager) validateDeadQueue(ctx context.Context, info types.Queue
 
 	dlqInfo := dlq.Info()
 	if dlqInfo.DeadQueue != "" {
-		return reply.NewInvalidOption("dead_queue is invalid; '%s' already has its own dead_queue configured", info.DeadQueue)
+		return reply.NewInvalidOption("dead_queue is invalid; '%s' already has its own dead_queue configured, "+
+			"clear or change dead_queue on '%s' first", info.DeadQueue, info.DeadQueue)
 	}
 
 	if dlqInfo.RequestedPartitions > 1 {
@@ -357,12 +366,66 @@ func (qm *QueuesManager) validateDeadQueue(ctx context.Context, info types.Queue
 	return nil
 }
 
+func (qm *QueuesManager) validateAsDeadQueue(ctx context.Context, info types.QueueInfo) error {
+	if info.DeadQueue == "" && info.RequestedPartitions <= 1 {
+		return nil
+	}
+
+	source, err := qm.sourceQueueOf(ctx, info.Name)
+	if err != nil {
+		return err
+	}
+	if source == "" {
+		return nil
+	}
+
+	if info.DeadQueue != "" {
+		return reply.NewInvalidOption("dead_queue is invalid; '%s' is the dead_queue of '%s' and cannot have its own dead_queue, "+
+			"clear or change dead_queue on '%s' first", info.Name, source, source)
+	}
+
+	return reply.NewInvalidOption("partitions is invalid; '%s' is the dead_queue of '%s' and must have a single partition, "+
+		"clear or change dead_queue on '%s' first", info.Name, source, source)
+}
+
+func (qm *QueuesManager) sourceQueueOf(ctx context.Context, name string) (string, error) {
+	const pageSize = 1000
+	var pivot []byte
+	for ctx.Err() == nil {
+		var page []types.QueueInfo
+		if err := qm.conf.StorageConfig.Queues.List(ctx, &page, types.ListOptions{Pivot: pivot, Limit: pageSize}); err != nil {
+			return "", errors.Errorf("Queues.List(): %w", err)
+		}
+
+		for _, queue := range page {
+			if queue.DeadQueue == name && queue.Name != name {
+				return queue.Name, nil
+			}
+		}
+
+		if len(page) < pageSize {
+			return "", nil
+		}
+		pivot = []byte(page[len(page)-1].Name)
+	}
+	return "", ctx.Err()
+}
+
 func (qm *QueuesManager) Delete(ctx context.Context, name string) error {
 	if qm.inShutdown.Load() {
 		return ErrServiceShutdown
 	}
 	defer qm.mutex.Unlock()
 	qm.mutex.Lock()
+
+	source, err := qm.sourceQueueOf(ctx, name)
+	if err != nil {
+		return err
+	}
+	if source != "" {
+		return reply.NewInvalidOption("queue '%s' cannot be deleted; it is the dead_queue of '%s', "+
+			"clear or change dead_queue on '%s' first", name, source, source)
+	}
 
 	if err := qm.conf.StorageConfig.Queues.Delete(ctx, name); err != nil {
 		return errors.Errorf("Queues.Delete(): %w", err)

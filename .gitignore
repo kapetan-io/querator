@@ -13,4 +13,5 @@ testdata/
 benchmarks/benchmark_results/
 /querator
 cmd/querator/querator
-quickstart
+/quickstart
+cmd/quickstart/quickstart

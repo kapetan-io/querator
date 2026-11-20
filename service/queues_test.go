@@ -12,6 +12,7 @@ import (
 	"github.com/duh-rpc/duh-go/retry"
 	"github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/internal/store"
+	"github.com/kapetan-io/querator/internal/types"
 	pb "github.com/kapetan-io/querator/proto"
 	svc "github.com/kapetan-io/querator/service"
 	"github.com/kapetan-io/tackle/clock"
@@ -643,6 +644,246 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					assert.Contains(t, duhErr.Message(), "must have a single partition")
 				})
 
+				t.Run("CycleByUpdates", func(t *testing.T) {
+					queueA := random.String("queue-a-", 10)
+					queueB := random.String("queue-b-", 10)
+
+					for _, name := range []string{queueA, queueB} {
+						require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+							QueueName:           name,
+							ExpireTimeout:       "10m",
+							LeaseTimeout:        "1m",
+							RequestedPartitions: 1,
+						}))
+					}
+
+					require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+						QueueName: queueA,
+						DeadQueue: queueB,
+					}))
+
+					err := c.QueuesUpdate(ctx, &pb.QueueInfo{
+						QueueName: queueB,
+						DeadQueue: queueA,
+					})
+					require.Error(t, err)
+					var duhErr duh.Error
+					require.True(t, errors.As(err, &duhErr))
+					assert.Equal(t, duh.CodeBadRequest, duhErr.Code())
+					assert.Contains(t, duhErr.Message(), "'"+queueA+"' already has its own dead_queue configured")
+
+					var info pb.QueueInfo
+					require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueB}, &info))
+					assert.Equal(t, "", info.DeadQueue)
+				})
+
+				t.Run("CycleByCreateThenUpdate", func(t *testing.T) {
+					queueA := random.String("queue-a-", 10)
+					queueB := random.String("queue-b-", 10)
+
+					require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+						QueueName:           queueA,
+						ExpireTimeout:       "10m",
+						LeaseTimeout:        "1m",
+						RequestedPartitions: 1,
+					}))
+					require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+						QueueName:           queueB,
+						DeadQueue:           queueA,
+						ExpireTimeout:       "10m",
+						LeaseTimeout:        "1m",
+						RequestedPartitions: 1,
+					}))
+
+					err := c.QueuesUpdate(ctx, &pb.QueueInfo{
+						QueueName: queueA,
+						DeadQueue: queueB,
+					})
+					require.Error(t, err)
+					var duhErr duh.Error
+					require.True(t, errors.As(err, &duhErr))
+					assert.Equal(t, duh.CodeBadRequest, duhErr.Code())
+					assert.Contains(t, duhErr.Message(), "'"+queueB+"' already has its own dead_queue configured")
+
+					var info pb.QueueInfo
+					require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueA}, &info))
+					assert.Equal(t, "", info.DeadQueue)
+				})
+
+				t.Run("UpdateGivesDeadQueueItsOwnDeadQueue", func(t *testing.T) {
+					queueA := random.String("queue-a-", 10)
+					queueB := random.String("queue-b-", 10)
+					queueC := random.String("queue-c-", 10)
+
+					for _, name := range []string{queueB, queueC} {
+						require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+							QueueName:           name,
+							ExpireTimeout:       "10m",
+							LeaseTimeout:        "1m",
+							RequestedPartitions: 1,
+						}))
+					}
+					require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+						QueueName:           queueA,
+						DeadQueue:           queueB,
+						ExpireTimeout:       "10m",
+						LeaseTimeout:        "1m",
+						RequestedPartitions: 1,
+					}))
+
+					// B is A's dead queue, so giving B a dead queue of its own would form the chain A→B→C
+					err := c.QueuesUpdate(ctx, &pb.QueueInfo{
+						QueueName: queueB,
+						DeadQueue: queueC,
+					})
+					require.Error(t, err)
+					var duhErr duh.Error
+					require.True(t, errors.As(err, &duhErr))
+					assert.Equal(t, duh.CodeBadRequest, duhErr.Code())
+					assert.Contains(t, duhErr.Message(), "is the dead_queue of '"+queueA+"'")
+
+					var info pb.QueueInfo
+					require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueB}, &info))
+					assert.Equal(t, "", info.DeadQueue)
+				})
+
+				t.Run("UpdateGivesDeadQueueTwoPartitions", func(t *testing.T) {
+					dlqName := random.String("dlq-", 10)
+					queueName := random.String("queue-", 10)
+
+					require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+						QueueName:           dlqName,
+						ExpireTimeout:       "10m",
+						LeaseTimeout:        "1m",
+						RequestedPartitions: 1,
+					}))
+					require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+						QueueName:           queueName,
+						DeadQueue:           dlqName,
+						ExpireTimeout:       "10m",
+						LeaseTimeout:        "1m",
+						RequestedPartitions: 1,
+					}))
+
+					err := c.QueuesUpdate(ctx, &pb.QueueInfo{
+						QueueName:           dlqName,
+						RequestedPartitions: 2,
+					})
+					require.Error(t, err)
+					var duhErr duh.Error
+					require.True(t, errors.As(err, &duhErr))
+					assert.Equal(t, duh.CodeBadRequest, duhErr.Code())
+					assert.Contains(t, duhErr.Message(), "is the dead_queue of '"+queueName+"'")
+
+					// Update replaces dead_queue, so the source queue must stay updatable when it re-sends its dead_queue
+					require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+						QueueName: queueName,
+						DeadQueue: dlqName,
+						Reference: "still-updatable",
+					}))
+
+					var info pb.QueueInfo
+					require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: dlqName}, &info))
+					assert.Equal(t, int32(1), info.RequestedPartitions)
+				})
+
+				t.Run("DeleteNamedDLQ", func(t *testing.T) {
+					dlqName := random.String("dlq-", 10)
+					queueName := random.String("queue-", 10)
+
+					require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+						QueueName:           dlqName,
+						ExpireTimeout:       "10m",
+						LeaseTimeout:        "1m",
+						RequestedPartitions: 1,
+					}))
+					require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+						QueueName:           queueName,
+						DeadQueue:           dlqName,
+						ExpireTimeout:       "10m",
+						LeaseTimeout:        "1m",
+						RequestedPartitions: 1,
+					}))
+
+					err := c.QueuesDelete(ctx, &pb.QueuesDeleteRequest{QueueName: dlqName})
+					require.Error(t, err)
+					var duhErr duh.Error
+					require.True(t, errors.As(err, &duhErr))
+					assert.Equal(t, duh.CodeBadRequest, duhErr.Code())
+					assert.Contains(t, duhErr.Message(), "is the dead_queue of '"+queueName+"'")
+
+					var info pb.QueueInfo
+					require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: dlqName}, &info))
+					assert.Equal(t, dlqName, info.QueueName)
+
+					require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+						QueueName: queueName,
+						DeadQueue: "",
+					}))
+					require.NoError(t, c.QueuesDelete(ctx, &pb.QueuesDeleteRequest{QueueName: dlqName}))
+				})
+
+				t.Run("ChainByUpdates", func(t *testing.T) {
+					queueA := random.String("queue-a-", 10)
+					queueB := random.String("queue-b-", 10)
+					queueC := random.String("queue-c-", 10)
+
+					for _, name := range []string{queueA, queueB, queueC} {
+						require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+							QueueName:           name,
+							ExpireTimeout:       "10m",
+							LeaseTimeout:        "1m",
+							RequestedPartitions: 1,
+						}))
+					}
+
+					require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+						QueueName: queueB,
+						DeadQueue: queueC,
+					}))
+
+					// The tail link is formed first, so pointing A at B would complete the chain A→B→C
+					err := c.QueuesUpdate(ctx, &pb.QueueInfo{
+						QueueName: queueA,
+						DeadQueue: queueB,
+					})
+					require.Error(t, err)
+					var duhErr duh.Error
+					require.True(t, errors.As(err, &duhErr))
+					assert.Equal(t, duh.CodeBadRequest, duhErr.Code())
+					assert.Contains(t, duhErr.Message(), "already has its own dead_queue configured")
+
+					var info pb.QueueInfo
+					require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueA}, &info))
+					assert.Equal(t, "", info.DeadQueue)
+				})
+
+				t.Run("DeleteSourceOfDLQ", func(t *testing.T) {
+					dlqName := random.String("dlq-", 10)
+					queueName := random.String("queue-", 10)
+
+					require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+						QueueName:           dlqName,
+						ExpireTimeout:       "10m",
+						LeaseTimeout:        "1m",
+						RequestedPartitions: 1,
+					}))
+					require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+						QueueName:           queueName,
+						DeadQueue:           dlqName,
+						ExpireTimeout:       "10m",
+						LeaseTimeout:        "1m",
+						RequestedPartitions: 1,
+					}))
+
+					// Only the named queue is guarded; the queue doing the naming deletes freely, which then frees the dead queue
+					require.NoError(t, c.QueuesDelete(ctx, &pb.QueuesDeleteRequest{QueueName: queueName}))
+					require.NoError(t, c.QueuesDelete(ctx, &pb.QueuesDeleteRequest{QueueName: dlqName}))
+
+					var info pb.QueueInfo
+					assert.Error(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: dlqName}, &info))
+				})
+
 				t.Run("ValidDLQ", func(t *testing.T) {
 					dlqName := random.String("dlq-", 10)
 					queueName := random.String("queue-", 10)
@@ -708,6 +949,82 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			})
 		})
 
+	})
+
+	t.Run("StoredDeadLetterChain", func(t *testing.T) {
+		conf := setup()
+		queueA := random.String("queue-a-", 10)
+		queueB := random.String("queue-b-", 10)
+		queueC := random.String("queue-c-", 10)
+
+		// The API no longer lets a chain form, so the chain A→B→C is written to storage
+		// before the daemon starts, as a version without the chain checks would have left it
+		for _, link := range []struct{ name, dead string }{{queueC, ""}, {queueB, queueC}, {queueA, queueB}} {
+			info := types.QueueInfo{
+				Name:                link.name,
+				DeadQueue:           link.dead,
+				LeaseTimeout:        clock.Minute,
+				ExpireTimeout:       10 * clock.Minute,
+				RequestedPartitions: 1,
+			}
+			placed, err := store.PlacePartitions(conf.PartitionStorage, info)
+			require.NoError(t, err)
+			info.PartitionInfo = placed
+			require.NoError(t, conf.Queues.Add(context.Background(), info))
+		}
+
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+		c, ctx := d.MustClient(), d.Context()
+
+		err := c.QueuesUpdate(ctx, &pb.QueueInfo{
+			QueueName: queueB,
+			DeadQueue: queueC,
+			Reference: "middle",
+		})
+		require.Error(t, err)
+		var duhErr duh.Error
+		require.True(t, errors.As(err, &duhErr))
+		assert.Equal(t, duh.CodeBadRequest, duhErr.Code())
+		assert.Contains(t, duhErr.Message(), "'"+queueB+"' is the dead_queue of '"+queueA+"'")
+		assert.Contains(t, duhErr.Message(), "clear or change dead_queue on '"+queueA+"' first")
+
+		err = c.QueuesUpdate(ctx, &pb.QueueInfo{
+			QueueName: queueA,
+			DeadQueue: queueB,
+			Reference: "head",
+		})
+		require.Error(t, err)
+		require.True(t, errors.As(err, &duhErr))
+		assert.Equal(t, duh.CodeBadRequest, duhErr.Code())
+		assert.Contains(t, duhErr.Message(), "'"+queueB+"' already has its own dead_queue configured")
+		assert.Contains(t, duhErr.Message(), "clear or change dead_queue on '"+queueB+"' first")
+
+		// Clearing the middle queue's dead_queue breaks the chain, after which both queues update
+		require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+			QueueName: queueB,
+			DeadQueue: "",
+		}))
+		require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+			QueueName: queueB,
+			Reference: "middle",
+		}))
+		require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+			QueueName: queueA,
+			DeadQueue: queueB,
+			Reference: "head",
+		}))
+
+		var info pb.QueueInfo
+		require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueB}, &info))
+		assert.Equal(t, "", info.DeadQueue)
+		assert.Equal(t, "middle", info.Reference)
+		require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueA}, &info))
+		assert.Equal(t, queueB, info.DeadQueue)
+		assert.Equal(t, "head", info.Reference)
 	})
 
 	t.Run("List", func(t *testing.T) {

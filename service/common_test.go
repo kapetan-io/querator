@@ -899,6 +899,8 @@ type partitionFault struct {
 	// failingClear holds the number of the one partition whose Clear fails, plus one. Zero fails none.
 	failingClear atomic.Int32
 	scanFailing  atomic.Pointer[string]
+	// scanFailingOnly narrows scanFailing to the one partition whose number it holds, plus one. Zero fails every partition.
+	scanFailingOnly atomic.Int32
 }
 
 func (f *partitionFault) Wrap(conf store.Config) store.Config {
@@ -950,6 +952,9 @@ var errScanFailed = errors.New("injected lifecycle scan failure")
 
 func (f faultyPartition) ScanForActions(ctx context.Context, now clock.Time) iter.Seq2[types.Action, error] {
 	if queue := f.fault.scanFailing.Load(); queue != nil && *queue == f.Info().Queue.Name {
+		if only := f.fault.scanFailingOnly.Load(); only != 0 && int(only)-1 != f.Info().PartitionNum {
+			return f.Partition.ScanForActions(ctx, now)
+		}
 		return func(yield func(types.Action, error) bool) {
 			yield(types.Action{}, errScanFailed)
 		}

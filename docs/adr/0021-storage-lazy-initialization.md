@@ -33,6 +33,10 @@ or degraded partition out of consideration until it recovers. The logical queue 
 operations using any partitions that have not failed until the failed partition recover, or the partition
 is re-assigned.
 
+On PostgreSQL, the first request to use a partition creates its table. That creation runs on its own
+timer, not the request's. A request with a 100ms timeout would otherwise cancel the creation halfway
+through.
+
 ## Consequences
 
 If Querator starts in an environment where all underlying storage systems have failed, clients in the

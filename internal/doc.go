@@ -10,5 +10,5 @@
 // no dead-letter queue. AuthBackend and AuthCache authenticate API keys and check permissions
 // against role bindings.
 //
-// Why the package works the way it does is in docs/queue-core.md.
+// Why the package works the way it does is in the ADRs under docs/adr/.
 package internal

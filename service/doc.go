@@ -56,8 +56,7 @@ limitations under the License.
 // NamespaceOwner, PublicViewer), and creates the anonymous to Admin role
 // binding described in ADR 0025 if missing. A standard role that already exists
 // is overwritten with the permissions the code defines, so standard roles are
-// synced from the code at every start. A deleted anonymous to Admin binding is
-// created again on the next start. Bootstrap writes these straight to storage
+// synced from the code at every start. Bootstrap writes these straight to storage
 // because the API methods cannot create them: NamespacesCreate rejects reserved
 // namespace names, RolesCreate rejects standard role names, and UsersCreate
 // generates its own user ID, so it cannot create the anonymous user.

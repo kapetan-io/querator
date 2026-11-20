@@ -68,6 +68,9 @@ Querator will manage the distribution of partitions across Logical Queue instanc
 partitions to Logical Queues should happen automatically and should react to current operational
 conditions
 
+Querator runs one Logical Queue per queue. Running several, as this ADR describes, waits until a
+queue needs more than one can handle.
+
 See [Querator Logical Queue Diagram](../Querator%20Logical%20Queue%20Diagram.png)
 
 ### Notes

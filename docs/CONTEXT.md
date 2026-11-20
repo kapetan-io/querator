@@ -1,11 +1,9 @@
 # Querator Domain Context
 
-> **No implementation detail in this file.** This page holds only what the code cannot say: purpose,
-> domain terms, why a choice was made, the rules that must stay true, and traps a reader would not
-> see from one function. If reading the code would tell you this, it does not belong here. Step-by-step flows,
-> lists of functions, fields or methods, timings, constants and per-backend mechanics stay in the
-> code. A reason with no place on this page goes in an ADR under `docs/adr/` or in the package
-> comment (`doc.go`).
+> **This page is the glossary.** It holds what Querator is for and what its terms mean to a user, and
+> it changes only when a term's meaning changes, not when the code does. A rule or trap that must stay
+> true belongs in a test, and a reason why something is built the way it is belongs in an ADR under
+> `docs/adr/`.
 
 This page states what Querator is for and defines the domain language used throughout the codebase,
 API, and documentation. A term is defined by what it means to a user of Querator, not by how the

@@ -38,6 +38,10 @@ the L3 cache when the CPU is engaged by avoiding HEAP objects that the synchroni
 While we can't avoid IO to the data store in the main loop, we can have producers and consumers
 'queue' as much work as possible so when the main loop is active, we get as much done as quickly as possible.
 
+Only produce, lease, complete, retry and dead-letter hand-offs are batched, because they carry the
+queue's traffic. Every other request, such as a clear, stats or a queue info update, is rare and runs
+on its own. A batch ends at the first such request, so requests apply in the order they arrived.
+
 If the single thread per Logical Queue becomes a bottleneck for throughput, querator will create more Logical Queues,
 depending on the available partitions and the number of consuming clients. In this way, we increase the total
 throughput of a queue as needed.

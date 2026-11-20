@@ -160,6 +160,7 @@ The 10-character base62 hash ensures table names stay well under the limit while
 ## Next Steps
 
 - Review backend-specific documentation for detailed configuration options
-- Read [Storage Backend Internals](internals.md) before changing or adding a backend
+- Read [Operating Limits](../operating-limits.md) for limits that differ between backends
+- Before changing or adding a backend, read the [ADRs](../adr/) and run the functional tests in `service/` against it
 - See [example.yaml](../../example.yaml) for complete configuration examples
 - Check the [Quick Start](../../README.md#quick-start) guide for getting started with Docker

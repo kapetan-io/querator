@@ -912,6 +912,23 @@ type clearHold struct {
 	Release chan struct{}
 }
 
+// holdWait is how long a test waits for a hold to be reached before it fails.
+const holdWait = 5 * clock.Second
+
+// WaitReached returns once the clear has made its After-th check of its context. It fails the
+// test after holdWait, so a clear that never gets that far does not wait for the daemon's context.
+func (h *clearHold) WaitReached(t *testing.T, ctx context.Context) {
+	t.Helper()
+	select {
+	case <-h.Reached:
+	case <-ctx.Done():
+		require.FailNow(t, "the daemon stopped before the clear reached its hold")
+	case <-clock.After(holdWait):
+		require.FailNowf(t, "the clear never reached its hold",
+			"the clear did not make %d checks of its context within %s", h.After, holdWait)
+	}
+}
+
 type heldContext struct {
 	context.Context
 	hold   *clearHold
@@ -989,4 +1006,215 @@ func (f faultyPartition) ScanForActions(ctx context.Context, scan *types.LifeCyc
 		return errScanFailed
 	}
 	return f.Partition.ScanForActions(ctx, scan, now)
+}
+
+// lifecycleSpy wraps a partition store. It records each lifecycle page read and each produce,
+// complete and retry in the order the partition sees them, can hold the first page of a pass
+// until the test releases it, and can make the lifecycle's reads fail. With watchScheduled set
+// it records and holds the scheduled pass's pages instead of the lifecycle's.
+type lifecycleSpy struct {
+	mu             sync.Mutex
+	watchScheduled bool
+	armed          bool
+	reached        chan struct{}
+	release        chan struct{}
+	released       sync.Once
+	events         []string
+	actions        []int
+	pages          int
+	failScans      atomic.Bool
+	failScheduled  atomic.Bool
+}
+
+func (s *lifecycleSpy) Wrap(conf store.Config) store.Config {
+	for i := range conf.PartitionStorage {
+		conf.PartitionStorage[i].PartitionStore = spyStore{PartitionStore: conf.PartitionStorage[i].PartitionStore, spy: s}
+	}
+	return conf
+}
+
+// HoldFirstPage starts recording and makes the next page read wait until Release.
+func (s *lifecycleSpy) HoldFirstPage() {
+	defer s.mu.Unlock()
+	s.mu.Lock()
+	s.armed = true
+	s.reached = make(chan struct{})
+	s.release = make(chan struct{})
+}
+
+// WaitForFirstPage returns once the lifecycle is waiting to read the held page.
+func (s *lifecycleSpy) WaitForFirstPage(t *testing.T, ctx context.Context) {
+	t.Helper()
+	select {
+	case <-s.reached:
+	case <-ctx.Done():
+		require.FailNow(t, "the lifecycle never read its first page")
+	case <-clock.After(holdWait):
+		require.FailNowf(t, "the lifecycle never read its first page", "no page read within %s", holdWait)
+	}
+}
+
+// WhileFirstPageHeld runs call while the lifecycle waits to read the held page, gives the request
+// call makes time to reach the queue, then lets the pass go on. The goroutine starts in a named
+// function because Tiger's TS-C02 does not see a Wait that follows Go inside a function literal.
+func (s *lifecycleSpy) WhileFirstPageHeld(t *testing.T, ctx context.Context, call func()) {
+	t.Helper()
+	s.WaitForFirstPage(t, ctx)
+	var calls sync.WaitGroup
+	calls.Go(call)
+	clock.Sleep(requestSettle)
+	s.Release()
+	calls.Wait()
+}
+
+func (s *lifecycleSpy) Release() {
+	s.released.Do(func() { close(s.release) })
+}
+
+func (s *lifecycleSpy) FailScans() {
+	s.failScans.Store(true)
+}
+
+func (s *lifecycleSpy) StopFailingScans() {
+	s.failScans.Store(false)
+}
+
+// FailScheduledWritesAfterFirstItem makes each scheduled write enqueue only its first item and
+// then fail, as a backend does when a write commits partway.
+func (s *lifecycleSpy) FailScheduledWritesAfterFirstItem() {
+	s.failScheduled.Store(true)
+}
+
+func (s *lifecycleSpy) Events() []string {
+	defer s.mu.Unlock()
+	s.mu.Lock()
+	return append([]string(nil), s.events...)
+}
+
+func (s *lifecycleSpy) ActionCounts() []int {
+	defer s.mu.Unlock()
+	s.mu.Lock()
+	return append([]int(nil), s.actions...)
+}
+
+func (s *lifecycleSpy) Pages() int {
+	defer s.mu.Unlock()
+	s.mu.Lock()
+	return s.pages
+}
+
+func (s *lifecycleSpy) beforePage(ctx context.Context, scan *types.LifeCycleScan) {
+	s.mu.Lock()
+	if !s.armed {
+		s.mu.Unlock()
+		return
+	}
+	s.pages++
+	first := s.pages == 1
+	if scan.MidPass() {
+		s.events = append(s.events, "page:resume")
+	} else {
+		s.events = append(s.events, "page:start")
+	}
+	s.mu.Unlock()
+	if first {
+		close(s.reached)
+		select {
+		case <-s.release:
+		case <-ctx.Done():
+		}
+	}
+}
+
+func (s *lifecycleSpy) afterPage(scan *types.LifeCycleScan) {
+	defer s.mu.Unlock()
+	s.mu.Lock()
+	if s.armed {
+		s.actions = append(s.actions, len(scan.Actions))
+	}
+}
+
+func (s *lifecycleSpy) produce() {
+	s.record("produce")
+}
+
+func (s *lifecycleSpy) record(event string) {
+	defer s.mu.Unlock()
+	s.mu.Lock()
+	if s.armed {
+		s.events = append(s.events, event)
+	}
+}
+
+type spyStore struct {
+	store.PartitionStore
+	spy *lifecycleSpy
+}
+
+func (s spyStore) Get(info types.PartitionInfo) store.Partition {
+	return spyPartition{Partition: s.PartitionStore.Get(info), spy: s.spy}
+}
+
+type spyPartition struct {
+	store.Partition
+	spy *lifecycleSpy
+}
+
+func (p spyPartition) ScanForActions(ctx context.Context, scan *types.LifeCycleScan, now clock.Time) error {
+	if p.spy.failScans.Load() {
+		return errors.New("scan failed by test")
+	}
+	if p.spy.watchScheduled {
+		return p.Partition.ScanForActions(ctx, scan, now)
+	}
+	p.spy.beforePage(ctx, scan)
+	if err := p.Partition.ScanForActions(ctx, scan, now); err != nil {
+		return err
+	}
+	p.spy.afterPage(scan)
+	return nil
+}
+
+func (p spyPartition) Produce(ctx context.Context, batch types.ProduceBatch, now clock.Time) error {
+	p.spy.produce()
+	return p.Partition.Produce(ctx, batch, now)
+}
+
+func (p spyPartition) TakeAction(ctx context.Context, batch types.LifeCycleBatch, state *types.PartitionState) error {
+	if !p.spy.failScheduled.Load() || len(batch.Requests) == 0 || len(batch.Requests[0].Actions) == 0 ||
+		batch.Requests[0].Actions[0].Action != types.ActionQueueScheduledItem {
+		return p.Partition.TakeAction(ctx, batch, state)
+	}
+	first := *batch.Requests[0]
+	first.Actions = first.Actions[:1]
+	if err := p.Partition.TakeAction(ctx, types.LifeCycleBatch{Requests: []*types.LifeCycleRequest{&first}}, state); err != nil {
+		return err
+	}
+	return errors.New("scheduled write failed by test after its first item")
+}
+
+func (p spyPartition) ScanForScheduled(ctx context.Context, scan *types.LifeCycleScan, now clock.Time) error {
+	if !p.spy.watchScheduled {
+		return p.Partition.ScanForScheduled(ctx, scan, now)
+	}
+	p.spy.beforePage(ctx, scan)
+	if err := p.Partition.ScanForScheduled(ctx, scan, now); err != nil {
+		return err
+	}
+	p.spy.afterPage(scan)
+	return nil
+}
+
+func (p spyPartition) Complete(ctx context.Context, batch types.CompleteBatch) error {
+	if len(batch.Requests) != 0 {
+		p.spy.record("complete")
+	}
+	return p.Partition.Complete(ctx, batch)
+}
+
+func (p spyPartition) Retry(ctx context.Context, batch types.RetryBatch) error {
+	if len(batch.Requests) != 0 {
+		p.spy.record("retry")
+	}
+	return p.Partition.Retry(ctx, batch)
 }

@@ -54,9 +54,7 @@ The contexts that start-up and recovery pass are never cancelled, so their scans
 The one a reload passes carries the read timeout and the reload request's own context. A client that
 gives up on a reload while a partition is being scanned, within the read timeout that began for that
 partition, stops the scan. After the timeout passes, the context's error stays `DeadlineExceeded`, so a
-later cancel is never seen and the scan runs to the end. The reload gives each partition its own
-timeout, so a cancel that arrives after the first partition's timeout still fails every partition after
-it.
+later cancel is never seen and the scan runs to the end.
 
 A reload cancelled this way marks the partition it was scanning failed, and each partition after it in
 that reload fails too, because each gets the cancelled context. The lifecycle then recovers each failed

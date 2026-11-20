@@ -219,6 +219,10 @@ produce, lease, complete and retry, and can still be inspected and deleted.
 The Logical Queue holds no cached items, so clearing a queue clears storage only. If it ever caches
 items in memory, clearing a queue must flush that cache too.
 
+A clear runs to the end even after the client that asked for it has given up, and the queue
+shutting down stops it early. A clear stopped that way may have removed part of the queue, and
+running it again finishes the job.
+
 ## Authentication and authorization
 
 Permission checks follow the cascade in [ADR-0025](adr/0025-multi-tenancy-and-auth.md), with one

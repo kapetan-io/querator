@@ -23,6 +23,11 @@ import (
 
 var sourcePrefix = []byte("source:")
 
+const (
+	clearPageSize  = 1_000
+	clearPageBytes = 1 << 20
+)
+
 type BadgerConfig struct {
 	StorageDir string
 	Log        *slog.Logger
@@ -626,7 +631,7 @@ func (b *BadgerPartition) Delete(_ context.Context, ids []types.ItemID) error {
 	})
 }
 
-func (b *BadgerPartition) Clear(_ context.Context, req types.ClearRequest) error {
+func (b *BadgerPartition) Clear(ctx context.Context, req types.ClearRequest) error {
 	db, err := b.getDB()
 	if err != nil {
 		return err
@@ -639,55 +644,83 @@ func (b *BadgerPartition) Clear(_ context.Context, req types.ClearRequest) error
 		return nil
 	}
 
-	return db.Update(func(txn *badger.Txn) error {
-		iter := txn.NewIterator(badger.DefaultIteratorOptions)
-		defer iter.Close()
+	var pivot []byte
+	for ctx.Err() == nil {
+		if err := db.Update(func(txn *badger.Txn) error {
+			var err error
+			pivot, err = clearPage(ctx, txn, pivot, req)
+			return err
+		}); err != nil {
+			return err
+		}
+		if pivot == nil {
+			return nil
+		}
+	}
+	return ctx.Err()
+}
 
-		for iter.Rewind(); iter.Valid(); iter.Next() {
-			var k, v []byte
-			k = iter.Item().KeyCopy(k)
+func clearPage(ctx context.Context, txn *badger.Txn, pivot []byte, req types.ClearRequest) ([]byte, error) {
+	iter := txn.NewIterator(badger.DefaultIteratorOptions)
+	defer iter.Close()
 
-			if bytes.HasPrefix(k, []byte("source:")) {
-				continue
-			}
+	var touched, written int
+	for iter.Seek(pivot); iter.Valid() && ctx.Err() == nil; iter.Next() {
+		if touched >= clearPageSize {
+			return iter.Item().KeyCopy(nil), nil
+		}
 
-			v, err := iter.Item().ValueCopy(v)
-			if err != nil {
-				return err
-			}
+		k := iter.Item().KeyCopy(nil)
+		if bytes.HasPrefix(k, sourcePrefix) {
+			return nil, nil
+		}
+		touched++
 
-			item := new(types.Item)
-			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(item); err != nil {
-				return errors.Errorf("during Decode(): %w", err)
-			}
+		v, err := iter.Item().ValueCopy(nil)
+		if err != nil {
+			return nil, err
+		}
 
-			shouldDelete := false
+		item := new(types.Item)
+		if err := gob.NewDecoder(bytes.NewReader(v)).Decode(item); err != nil {
+			return nil, errors.Errorf("during Decode(): %w", err)
+		}
 
-			if req.Scheduled && !item.EnqueueAt.IsZero() {
-				shouldDelete = true
-			}
+		if !clearSelects(req, item) {
+			continue
+		}
 
-			if req.Queue && item.EnqueueAt.IsZero() {
-				if req.Destructive || !item.IsLeased {
-					shouldDelete = true
-				}
-			}
+		var sourceKey []byte
+		if item.SourceID != nil {
+			sourceKey = []byte("source:" + string(item.SourceID))
+		}
+		if written > 0 && written+len(k)+len(sourceKey) > clearPageBytes {
+			return k, nil
+		}
+		written += len(k) + len(sourceKey)
 
-			if shouldDelete {
-				if item.SourceID != nil {
-					sourceKey := []byte("source:" + string(item.SourceID))
-					if err := txn.Delete(sourceKey); err != nil {
-						return errors.Errorf("deleting SourceID index: %w", err)
-					}
-				}
-
-				if err := txn.Delete(k); err != nil {
-					return errors.Errorf("during Delete(): %w", err)
-				}
+		if sourceKey != nil {
+			touched++
+			if err := txn.Delete(sourceKey); err != nil {
+				return nil, errors.Errorf("deleting SourceID index: %w", err)
 			}
 		}
-		return nil
-	})
+
+		if err := txn.Delete(k); err != nil {
+			return nil, errors.Errorf("during Delete(): %w", err)
+		}
+	}
+	if iter.Valid() {
+		return iter.Item().KeyCopy(nil), nil
+	}
+	return nil, nil
+}
+
+func clearSelects(req types.ClearRequest, item *types.Item) bool {
+	if req.Scheduled && !item.EnqueueAt.IsZero() {
+		return true
+	}
+	return req.Queue && item.EnqueueAt.IsZero() && (req.Destructive || !item.IsLeased)
 }
 
 func (b *BadgerPartition) Info() types.PartitionInfo {

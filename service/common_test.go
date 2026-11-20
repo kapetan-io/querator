@@ -900,6 +900,35 @@ type partitionFault struct {
 	scanFailing  atomic.Pointer[string]
 	// scanFailingOnly narrows scanFailing to the one partition whose number it holds, plus one. Zero fails every partition.
 	scanFailingOnly atomic.Int32
+	holdClear       atomic.Pointer[clearHold]
+}
+
+// clearHold stops a Clear partway through. On the Clear's After-th check of its context it
+// closes Reached, then waits until Release closes or the Clear's own context ends, so the test
+// knows the clear is running and decides when it goes on.
+type clearHold struct {
+	After   int
+	Reached chan struct{}
+	Release chan struct{}
+}
+
+type heldContext struct {
+	context.Context
+	hold   *clearHold
+	checks int
+}
+
+func (h *heldContext) Err() error {
+	ctx := h.Context
+	h.checks++
+	if h.checks == h.hold.After {
+		close(h.hold.Reached)
+		select {
+		case <-h.hold.Release:
+		case <-ctx.Done():
+		}
+	}
+	return ctx.Err()
 }
 
 func (f *partitionFault) Wrap(conf store.Config) store.Config {
@@ -943,6 +972,9 @@ func (f faultyPartition) Lease(ctx context.Context, batch types.LeaseBatch, opts
 func (f faultyPartition) Clear(ctx context.Context, req types.ClearRequest) error {
 	if f.fault.failingClear.Load() == int32(f.Info().PartitionNum)+1 {
 		return errClearFailed
+	}
+	if hold := f.fault.holdClear.Load(); hold != nil {
+		return f.Partition.Clear(&heldContext{Context: ctx, hold: hold}, req)
 	}
 	return f.Partition.Clear(ctx, req)
 }

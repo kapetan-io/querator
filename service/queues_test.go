@@ -367,23 +367,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					RequestedPartitions: 1,
 				}))
 
-				var wg sync.WaitGroup
-				wg.Go(func() {
-					for i := range updates {
-						assert.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
-							QueueName: queueName,
-							Reference: fmt.Sprintf("reference-%d", i),
-						}))
-					}
-				})
-				wg.Go(func() {
-					for range updates {
-						var info pb.QueueInfo
-						assert.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &info))
-						assert.Equal(t, queueName, info.QueueName)
-					}
-				})
-				wg.Wait()
+				updateWhileReadingInfo(t, ctx, c, queueName, updates)
 
 				var info pb.QueueInfo
 				require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &info))
@@ -2843,4 +2827,28 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			})
 		})
 	})
+}
+
+// updateWhileReadingInfo updates the queue's reference updates times while another goroutine reads
+// the queue's info as often. The goroutines start in a named function because Tiger's TS-C02 does
+// not see a Wait that follows Go inside a function literal.
+func updateWhileReadingInfo(t *testing.T, ctx context.Context, c *querator.Client, queueName string, updates int) {
+	t.Helper()
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		for i := range updates {
+			assert.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+				QueueName: queueName,
+				Reference: fmt.Sprintf("reference-%d", i),
+			}))
+		}
+	})
+	wg.Go(func() {
+		for range updates {
+			var info pb.QueueInfo
+			assert.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &info))
+			assert.Equal(t, queueName, info.QueueName)
+		}
+	})
+	wg.Wait()
 }

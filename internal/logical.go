@@ -87,14 +87,16 @@ type LogicalConfig struct {
 type Logical struct {
 	requestCh requestInbox
 
-	shutdownCh   shutdownRequests
-	wg           sync.WaitGroup
-	conf         LogicalConfig
-	log          *slog.Logger
-	inFlight     atomic.Int32
-	inFlightCold atomic.Int32
-	inShutdown   atomic.Bool
-	instanceID   string
+	shutdownCh    shutdownRequests
+	untilShutdown context.Context
+	beginShutdown context.CancelFunc
+	wg            sync.WaitGroup
+	conf          LogicalConfig
+	log           *slog.Logger
+	inFlight      atomic.Int32
+	inFlightCold  atomic.Int32
+	inShutdown    atomic.Bool
+	instanceID    string
 }
 
 func SpawnLogicalQueue(conf LogicalConfig) (*Logical, error) {
@@ -111,6 +113,7 @@ func SpawnLogicalQueue(conf LogicalConfig) (*Logical, error) {
 		instanceID: random.Alpha("", 10),
 		conf:       conf,
 	}
+	l.untilShutdown, l.beginShutdown = context.WithCancel(context.Background())
 	l.log = conf.Log.With("code.namespace", "Logical", "queue", conf.Name, "instance-id", l.instanceID)
 
 	l.log.LogAttrs(context.Background(), LevelDebugAll, "logical queue started")
@@ -464,6 +467,7 @@ func (l *Logical) Shutdown(ctx context.Context) error {
 	if l.inShutdown.Swap(true) {
 		return nil
 	}
+	l.beginShutdown()
 
 	req := &types.ShutdownRequest{
 		ReadyCh: make(chan struct{}),

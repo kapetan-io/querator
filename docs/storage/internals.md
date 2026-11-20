@@ -109,6 +109,11 @@ Disagree on Scheduled Items" in [known-issues.md](../known-issues.md).
 
 ## Badger
 
+**Badger refuses a transaction of more than about 100,000 writes**, and refuses all of it, so a
+store call that writes a whole partition in one transaction fails once the partition grows large.
+This is why a clear deletes in many small transactions. An item with a `SourceID` costs two deletes
+in a clear, the item and its `SourceID` index key, and both count toward a transaction's size.
+
 Badger keeps the queue list and the other metadata lists in databases whose directory names start
 with `~`. Queue names cannot contain `~`, so no queue's partition directory can collide with them.
 

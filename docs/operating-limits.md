@@ -36,13 +36,13 @@ namespace rather than to many narrow ones.
 
 ## Authentication with role storage starts with the door open
 
-When Querator is embedded in a Go program with authentication on and storage for users, roles and role
-bindings, it starts in Open Door mode. The `querator server` command cannot set up that storage, so this
-applies only when embedding. Open Door binds the anonymous user to the Admin role in the `_system`
-namespace, so any request without an API key has full administrative access. A warning is logged when
-the binding is created. The binding is created again at every start, so deleting it closes the door only
-until the next restart. The standard roles are also written again at every start, replacing any change
-made to them.
+When Querator starts with an auth backend other than `none` and storage for users, roles and role
+bindings, it starts in Open Door mode. The `internal` driver keeps that storage in the `queue-storage`
+backend, so `querator server` with `driver: internal` starts this way. Open Door binds the anonymous
+user to the Admin role in the `_system` namespace, so any request without an API key has full
+administrative access. A warning is logged when the binding is created. The binding is created again at
+every start, so deleting it closes the door only until the next restart. The standard roles are also
+written again at every start, replacing any change made to them.
 
 With the `none` auth driver, the default, Querator checks no permissions, so any client that can reach
 the API port can do anything.

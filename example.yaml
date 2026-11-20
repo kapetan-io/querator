@@ -71,10 +71,16 @@ partition-storage:
 
 # Auth Backend defines the authentication and authorization backend.
 # Options:
-#   "none" (default) - No authentication; all requests are allowed (open access).
-#                      Suitable for internal deployments behind a trusted network.
-#   "internal"       - Uses the configured storage backends (users, api-keys, roles,
-#                      role-bindings) for authentication and RBAC authorization.
+#   "none" (default) - No authentication; all requests are allowed (open access) and any
+#                      Authorization header is ignored. Suitable for internal deployments
+#                      behind a trusted network.
+#   "internal"       - Checks the API key in "Authorization: Bearer <key>" against users,
+#                      roles, role bindings and API keys kept in the queue-storage backend.
+#                      queue-storage must be memory or badger; with mongo or postgres the
+#                      server refuses to start. With memory, every user and key is lost on
+#                      restart. A queue's namespace must exist before the queue is created.
+#                      See docs/operating-limits.md for Open Door: requests without a key
+#                      get admin access, and the door reopens at every start.
 #auth-backend:
 #  driver: internal
 

@@ -903,6 +903,18 @@ type partitionFault struct {
 	// scanFailingOnly narrows scanFailing to the one partition whose number it holds, plus one. Zero fails every partition.
 	scanFailingOnly atomic.Int32
 	holdClear       atomic.Pointer[clearHold]
+	// statsPastDeadline makes each Stats call that has a deadline wait until the deadline passes
+	// before it reaches the backend, the way a scan longer than the read timeout outlasts it.
+	statsPastDeadline atomic.Bool
+	// statsCancelled hands each Stats call a context that is already cancelled, the way a caller
+	// that gave up does.
+	statsCancelled atomic.Bool
+	// statsCancelAfter, when above zero, cancels each Stats call's context that long after the call
+	// starts, the way a caller that gives up partway through a scan does.
+	statsCancelAfter atomic.Int64
+	// statsHung makes each Stats call that has a deadline wait until the deadline passes and
+	// return its error without reaching the backend, the way a hung database does.
+	statsHung atomic.Bool
 }
 
 // clearHold stops a Clear partway through. On the Clear's After-th check of its context it
@@ -999,6 +1011,29 @@ func (f faultyPartition) Clear(ctx context.Context, req types.ClearRequest) erro
 }
 
 var errScanFailed = errors.New("injected lifecycle scan failure")
+
+func (f faultyPartition) Stats(ctx context.Context, stats *types.PartitionStats, now clock.Time) error {
+	if _, ok := ctx.Deadline(); ok && f.fault.statsHung.Load() {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	if _, ok := ctx.Deadline(); ok && f.fault.statsPastDeadline.Load() {
+		<-ctx.Done()
+	}
+	if after := clock.Duration(f.fault.statsCancelAfter.Load()); after > 0 {
+		cancellable, cancel := context.WithCancel(ctx)
+		defer cancel()
+		timer := clock.AfterFunc(after, cancel)
+		defer timer.Stop()
+		return f.Partition.Stats(cancellable, stats, now)
+	}
+	if f.fault.statsCancelled.Load() {
+		cancelled, cancel := context.WithCancel(ctx)
+		cancel()
+		return f.Partition.Stats(cancelled, stats, now)
+	}
+	return f.Partition.Stats(ctx, stats, now)
+}
 
 func (f faultyPartition) ScanForActions(ctx context.Context, scan *types.LifeCycleScan, now clock.Time) error {
 	if queue := f.fault.scanFailing.Load(); queue != nil && *queue == f.Info().Queue.Name {

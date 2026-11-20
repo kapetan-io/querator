@@ -112,6 +112,19 @@ in the queue" while unleased items wait further on.
 
 **Workaround**: Lease again. Repeated leases reach the waiting items.
 
+## Stats and reload on a large BadgerDB partition hold up the queue
+
+On BadgerDB, `/v1/queue.stats`, `/v1/queue.reload`, a queue's start-up and a failed partition's recovery
+scan every item in the partition, at about 75,000 items a second on a laptop. The queue answers none of
+its other requests until the scan finishes, so produces, leases and completes on a queue with a 500,000
+item partition wait about 7 seconds behind each stats call. The scan runs past the read timeout
+(`ReadTimeout` in the embedded server's `service.Config`, 3 seconds by default) rather than failing the
+partition. A server shutdown waits for a scan in progress, or gives up at its own deadline while the scan
+runs on. ENG-867 is the design that removes the full scan.
+
+**Workaround**: Poll `/v1/queue.stats` rarely on queues with large BadgerDB partitions, and reload them
+only when their counts look wrong.
+
 ## Storage backends count due scheduled items differently in stats
 
 A scheduled item is due once its enqueue time passes, and it stays scheduled until Querator moves it into

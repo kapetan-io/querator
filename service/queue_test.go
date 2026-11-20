@@ -3766,6 +3766,103 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				assert.Contains(t, e.Message(), "does not exist")
 				assert.Equal(t, duh.CodeBadRequest, e.Code())
 			})
+
+			t.Run("StatsPastReadTimeoutFailsPartition", func(t *testing.T) {
+				const (
+					numItems  = 5
+					numLeased = 2
+				)
+				now := clock.NewProvider()
+				now.Freeze(clock.Now())
+				defer now.UnFreeze()
+
+				fault := &partitionFault{}
+				d := newDaemon(t, 10*clock.Second, svc.Config{
+					StorageConfig: fault.Wrap(setup()),
+					ReadTimeout:   100 * clock.Millisecond,
+					Clock:         now,
+				})
+				defer func() {
+					d.Shutdown(t)
+					tearDown()
+				}()
+				c, ctx := d.MustClient(), d.Context()
+
+				queueName := random.String("queue-", 10)
+				createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+					LeaseTimeout:        "1m0s",
+					ExpireTimeout:       "24h0m0s",
+					QueueName:           queueName,
+					RequestedPartitions: 1,
+				})
+				require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+					Items:          produceRandomItems(numItems),
+					QueueName:      queueName,
+					RequestTimeout: "5s",
+				}))
+				var leased pb.QueueLeaseResponse
+				require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+					ClientId:       random.String("client-", 10),
+					QueueName:      queueName,
+					BatchSize:      numLeased,
+					RequestTimeout: "5s",
+				}, &leased))
+				require.Len(t, leased.Items, numLeased)
+
+				partition := func() *pb.QueuePartitionStats {
+					var stats pb.QueueStatsResponse
+					if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats); err != nil {
+						return nil
+					}
+					return stats.LogicalQueues[0].Partitions[0]
+				}
+
+				// A hung backend holds the stats call only until the read timeout, so the reload returns
+				// and marks the partition failed. Stats from /v1/queue.stats carry no deadline and still pass.
+				fault.statsHung.Store(true)
+				require.NoError(t, c.QueueReload(ctx, &pb.QueueReloadRequest{QueueName: queueName}))
+				t.Run("Reload", func(t *testing.T) {
+					p := partition()
+					require.NotNil(t, p)
+					assert.Equal(t, int32(1), p.Failures)
+				})
+
+				// Recovery retries the stats call with the read timeout, so a failed attempt returns and
+				// counts another failure.
+				t.Run("Recovery", func(t *testing.T) {
+					require.Eventually(t, func() bool {
+						now.Advance(clock.Second)
+						p := partition()
+						return p != nil && p.Failures >= 2
+					}, 5*clock.Second, 20*clock.Millisecond)
+
+					fault.statsHung.Store(false)
+					require.Eventually(t, func() bool {
+						now.Advance(clock.Second)
+						p := partition()
+						return p != nil && p.Failures == 0
+					}, 5*clock.Second, 20*clock.Millisecond)
+					p := partition()
+					require.NotNil(t, p)
+					assert.Equal(t, int32(numItems-numLeased), p.UnLeased)
+					assert.Equal(t, int32(numLeased), p.TotalLeased)
+				})
+
+				// A queue starting up calls its partition's stats with the read timeout too.
+				fault.statsHung.Store(true)
+				queueName = random.String("queue-", 10)
+				require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+					LeaseTimeout:        "1m0s",
+					ExpireTimeout:       "24h0m0s",
+					QueueName:           queueName,
+					RequestedPartitions: 1,
+				}))
+				t.Run("StartUp", func(t *testing.T) {
+					p := partition()
+					require.NotNil(t, p)
+					assert.Equal(t, int32(1), p.Failures)
+				})
+			})
 		})
 	})
 

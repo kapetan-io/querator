@@ -29,5 +29,5 @@ pending last-used writes full is dropped.
 A user's role bindings beyond the bound in one namespace are never examined, so a permission held only
 through them is denied.
 
-A key's last-used time is recorded only when the key is read from storage, so it can lag the key's most
-recent use by up to the cache time, and further when an update is dropped.
+A key's last-used time can lag its most recent use by up to the cache time, and further when an update is
+dropped.

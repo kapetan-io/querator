@@ -31,9 +31,7 @@ be in vain.
 
 Shutdown answers every caller, including produce requests a Logical Queue holds while every one of
 its partitions has failed. A caller left unanswered keeps shutdown waiting until the caller's context or shutdown's own
-ends. A
-caller is counted as waiting before its request reaches the Logical Queue, so shutdown waits for that
-count to reach zero rather than for the queue's waiting requests to empty.
+ends.
 
 ## Consequences
 

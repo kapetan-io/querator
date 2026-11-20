@@ -22,8 +22,9 @@ items is combined with the number of enqueued items, and then used to calculate 
 An item whose `enqueue_at` is in the past or only moments away is produced as an ordinary item and its
 `enqueue_at` is cleared. Clients often fill in every field of a produce request and set `enqueue_at` to
 "now", which clock drift between machines puts a few milliseconds in the future, and scheduling such an
-item costs a write, a scan and a move for nothing. An import (`/v1/storage/items.import`) restores
-items as they were, so an imported item keeps the `enqueue_at` it was given.
+item costs a write, a scan and a move for nothing. An import (`/v1/storage/items.import`) is meant to
+restore items as they were, so an imported item keeps the `enqueue_at` it was given. The code does not
+meet this yet: an import drops `enqueue_at` (ENG-798).
 
 #### Retried Items
 When an item is retried with a `retry_at` timestamp set to a future date, it will be placed into the
@@ -38,13 +39,10 @@ their designated times. The lifecycle keeps a scheduled timer, independent of th
 timer, to track when scheduled items are due for enqueueing. This avoids reading the partition for
 other lifecycle actions when only scheduled items are due.
 
-After each scheduled run the lifecycle asks storage for the earliest scheduled time and sets the
-scheduled timer from it. A produce or retry that schedules an earlier time brings the timer forward.
-The timer lives in memory and those writes are only the ones made since the queue loaded, so asking
-storage is what keeps a scheduled item written before a restart from being forgotten. Scheduled runs
-count their failures apart from the main lifecycle's, so neither raises or resets the other's back-off.
-Unlike a failed lifecycle read, a failed scheduled run leaves the partition in the request
-distribution.
+The time of the next scheduled run comes from what storage holds, not only from the writes made since
+the queue loaded, so a scheduled item written before a restart is never forgotten. A failure of a
+scheduled run does not raise or reset the main lifecycle's back-off, and it leaves the partition in the
+request distribution.
 
 The lifecycle generates scheduled actions of type `ActionQueueScheduledItem`, each containing the ID
 of the scheduled item. `Logical` writes these actions to the storage implementation on its request

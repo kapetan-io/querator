@@ -4,9 +4,9 @@
 > operator sees or must do changes. Why Querator is built the way it is lives in the ADRs under
 > [adr/](adr/), and the rules the code must keep live in its tests.
 
-## A deleted API key keeps working on other nodes for up to 5 minutes
+## A deleted API key keeps working on other nodes for a few minutes
 
-Each node caches the API keys it has seen for 5 minutes, and the cache time has no setting. Deleting a
+Each node caches the API keys it has seen for a few minutes, and the cache time has no setting. Deleting a
 key, or the user who owns it, removes it from the cache of the node that served the delete only. Every
 other node accepts the key until its cached copy runs out. A key's expiry time is still honored on every
 node.
@@ -26,22 +26,23 @@ authenticate, check storage first.
 
 ## Permission checks read storage on every request
 
-Querator caches who a key belongs to, not what that user may do. A request reads the user's role bindings
-in the target namespace, and in `_system` when those grant nothing, then reads the roles those bindings
-name until one grants the permission. Latency grows with the number of bindings a user holds. At most 100
-of the bindings a user holds in one namespace are read, so a user with more than 100 there can be denied
-a permission one of the unread bindings grants.
+Querator caches who a key belongs to, not what that user may do, so every request reads the user's role
+bindings and the roles they name from storage. Latency grows with the number of bindings a user holds.
+Only a bounded number of a user's bindings in one namespace are read, so a user with very many bindings
+there can be denied a permission one of the unread bindings grants.
 
-**Workaround**: Keep each user well under 100 role bindings per namespace. Bind users to broad roles in a
+**Workaround**: Keep each user to a few role bindings per namespace. Bind users to broad roles in a
 namespace rather than to many narrow ones.
 
 ## Authentication with role storage starts with the door open
 
-When Querator runs with authentication on and storage for users, roles and role bindings, it starts in
-Open Door mode. It binds the anonymous user to the Admin role in the `_system` namespace, so any request
-without an API key has full administrative access. A warning is logged when the binding is created. The
-binding is created again at every start, so deleting it closes the door only until the next restart. The
-standard roles are also written again at every start, replacing any change made to them.
+When Querator is embedded in a Go program with authentication on and storage for users, roles and role
+bindings, it starts in Open Door mode. The `querator server` command cannot set up that storage, so this
+applies only when embedding. Open Door binds the anonymous user to the Admin role in the `_system`
+namespace, so any request without an API key has full administrative access. A warning is logged when
+the binding is created. The binding is created again at every start, so deleting it closes the door only
+until the next restart. The standard roles are also written again at every start, replacing any change
+made to them.
 
 With the `none` auth driver, the default, Querator checks no permissions, so any client that can reach
 the API port can do anything.
@@ -60,65 +61,58 @@ Neither shows queue names, items or payloads. There is no separate port for them
 **Workaround**: Restrict the API port at the infrastructure level (firewall rules, a service mesh policy
 or a Kubernetes NetworkPolicy) so that only trusted clients, probes and scrapers can reach it.
 
-## Querator does not route requests around a failing or slow partition
+## A failed write does not take a partition out of use, and a slow partition is never avoided
 
-A queue with several partitions does not move a request off a partition whose storage is failing or slow.
+A partition leaves the request distribution only when Querator cannot read it. A failed write does not
+take it out, a slow partition is never avoided, and a complete or retry always goes to the partition
+that holds its items.
 
-* When a write to a partition fails, produce, complete and retry requests on it get a retry error (HTTP
-  454) at once. A lease request keeps waiting and is tried again, and gets no items if the partition is
-  still failing when its request timeout passes.
+* When a write to a partition fails, produce, complete and retry requests on it get a retry error at
+  once. A lease request keeps waiting and is tried again, and gets no items if the partition is still
+  failing when its request timeout passes.
 * A produce answered with a retry error may have been stored in full or in part. A produce whose client
   stopped waiting on its own timer may also have been stored. Produce has no idempotency key, so sending
   either again can store the same items twice.
 * Partitions of one queue are written one after another, so a slow partition delays every request on the
-  queue, by up to the storage write timeout (3 seconds, with no setting in the server config) each time,
-  and on BadgerDB by as long as the slow write takes. A reply can arrive after the request's
+  queue, by up to the storage write timeout each time, which has no setting in the server config. On
+  BadgerDB a slow write is not cut short at the write timeout. A reply can arrive after the request's
   `request_timeout`.
 * When every partition of a queue has failed, produce requests wait. A partition that recovers while no
   lease request is waiting does not pick up the waiting produce requests until another produce, lease,
   complete or retry request arrives, so on an idle queue they get a retry error at their request timeout
   and their items are not written.
-* After a failed write, the unleased and leased counts `/queue.stats` reports can be wrong until the
-  queue is reloaded.
+* The leased count `/queue.stats` reports only goes up, so once items are completed it overstates the
+  items leased (ENG-826). After a failed write the unleased count can be wrong too.
 
 **Workaround**: Clients resend on a retry error or after their request timeout, and consumers must
 tolerate duplicate items. Reload a queue with `/v1/queue.reload` to recount it from storage.
 
 ## A resent complete can stop at an item it already completed on MongoDB
 
-MongoDB completes the items of a request one at a time, without a transaction. When a complete fails
-partway, the items before the failure are already removed. Sending the request again fails with "does not
-exist" at the first of those items, and the items after it are not completed. An immediate retry that
-fails partway can likewise leave a second copy of an item when it is sent again.
+On MongoDB, a complete that fails partway may already have completed some of its items. Sending the
+request again fails with "does not exist" at the first of those items, and the items after it are not
+completed. An immediate retry that fails partway can likewise leave a second copy of an item when it is
+sent again.
 
 **Workaround**: When a resent complete fails with "does not exist", drop the item it names and send the
 complete again for the rest, repeating while it fails with "does not exist". Consumers must tolerate
 duplicate items.
 
-## A clear can be left half done
+## Produces sent together to BadgerDB can fail whole
 
-A `/v1/queue.clear` can remove only part of a queue. When its client stops waiting, the part of the queue
-being cleared at that moment is cleared to the end, but the rest of the queue may not be cleared at all,
-and the client gets no answer that says which. A node shutting down also stops a running clear early.
+BadgerDB refuses a write that holds too many items or too many bytes, and refuses all of it. Produce
+requests that reach one partition together are stored in one write, so together they can pass the
+limit. Each then fails with a retry error and stores none of its items. One produce on its own is below
+the limit at the server's default request size cap.
 
-**Workaround**: When a clear fails, times out or is cut short by a shutdown, send it again once the queue
-is served again. The second clear finishes the job.
-
-## A large produce on BadgerDB can fail whole
-
-BadgerDB refuses a write that holds too many items or too many bytes, and refuses all of it. A produce
-request too large for one BadgerDB write fails with a retry error and stores none of its items, and
-sending the same request again fails the same way.
-
-**Workaround**: Send large produces as several smaller requests.
+**Workaround**: Resend. Spreading large produces over time, or over more partitions, avoids it.
 
 ## A BadgerDB lease can find no items while items are waiting
 
-A BadgerDB lease stops reading when it reaches the write timeout and keeps what it leased so far. The
-next lease carries on from where it stopped. A consumer on a quiet queue with many leased items ahead of
-the unleased ones can get "no items are in the queue" while unleased items wait further on.
+On a BadgerDB partition with many leased items ahead of its unleased ones, a lease can get "no items are
+in the queue" while unleased items wait further on.
 
-**Workaround**: Lease again. Each lease reads further into the partition.
+**Workaround**: Lease again. Repeated leases reach the waiting items.
 
 ## Storage backends disagree on scheduled items that are due but not yet enqueued
 
@@ -131,12 +125,12 @@ scheduled items that are not yet due, which PostgreSQL and MongoDB keep unless `
 **Workaround**: Before comparing stats across backends, or clearing a queue that holds scheduled items,
 wait a few seconds past their enqueue time so they have moved into the queue.
 
-## Changing queues holds up every request on a node with many queues
+## Changing queues holds up requests on a node with many queues
 
 Deleting a queue, or creating or updating one that names a dead-letter queue or has more than one
 partition, reads the stored queues to find any queue that names it as its dead-letter queue. Every
-request to that node waits while it does, so on a node with many queues those changes pause all traffic
-for as long as the read takes.
+request that looks up a queue on that node waits while it does, so on a node with many queues those
+changes pause traffic for as long as the read takes.
 
 **Workaround**: Make queue changes outside peak traffic.
 

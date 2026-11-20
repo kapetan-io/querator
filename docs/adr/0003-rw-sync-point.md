@@ -40,10 +40,12 @@ While we can't avoid IO to the data store in the main loop, we can have producer
 
 Only produce, lease, complete, retry and dead-letter hand-offs are batched. They are the queue's
 throughput path. Every other request, such as a clear, stats or a queue info update, is rare and is
-handled alone, outside any batch. A batch stops at the first such request, so requests apply in the order they
-arrived: a clear is never applied ahead of a produce sent before it, nor behind one sent after it.
-A produce held because every partition has failed is the exception, and a clear sent after it runs
-first.
+handled alone, outside any batch. A batch stops at the first such request, so that requests apply in
+the order they arrived.
+
+A produce can wait in the request inbox past its deadline while the loop is busy, so the loop expires
+produces before it assigns them, including those it has just taken from the inbox. Skipping that would
+write items for a client that has already given up.
 
 If the single thread per Logical Queue becomes a bottleneck for throughput, querator will create more Logical Queues,
 depending on the available partitions and the number of consuming clients. In this way, we increase the total

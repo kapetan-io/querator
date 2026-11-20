@@ -64,7 +64,10 @@ partition with back-off. The partition is not marked faulty and stays in the req
 since the fault may lie with the dead letter queue. A read that fails also backs off, and the
 partition leaves the request distribution until a read succeeds. After a failed write or move,
 the back-off is measured from the end of the run, because a move to the dead letter can block for
-the whole write timeout.
+the whole write timeout. Every attempt count passed to the back-off is capped, because a large count
+overflows the back-off's conversion to a duration and can return its shortest wait, which would put a
+partition that keeps failing back to retrying at the fastest rate. A partition's failure count is capped
+where it is passed in, not where it is kept, because queue stats report the count.
 
 ### Reading a partition
 Each partition has its own life cycle timing, so a degraded partition backs off without delaying

@@ -78,7 +78,8 @@ partition-storage:
 #                      roles, role bindings and API keys kept in the queue-storage backend.
 #                      queue-storage must be memory or badger; with mongo or postgres the
 #                      server refuses to start. With memory, every user and key is lost on
-#                      restart. A queue's namespace must exist before the queue is created.
+#                      restart. /v1/queues.create refuses a namespace that does not exist,
+#                      so create it first with /v1/namespaces.create.
 #                      See docs/operating-limits.md for Open Door: requests without a key
 #                      get admin access, and the door reopens at every start.
 #auth-backend:

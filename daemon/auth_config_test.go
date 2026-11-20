@@ -130,6 +130,70 @@ auth-backend:
 		assert.Contains(t, names, "admin")
 	})
 
+	t.Run("NamespacesInMemoryQueueStorage", func(t *testing.T) {
+		ctx := context.Background()
+		d := startFromConfig(t, `
+address: localhost:0
+auth-backend:
+  driver: internal
+`)
+		defer func() { require.NoError(t, d.Shutdown(ctx)) }()
+
+		c := clientWithKey(t, d, createAdminKey(t, ctx, d))
+		require.NoError(t, c.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: "orders"}))
+		require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+			QueueName:           "orders-queue",
+			Namespace:           "orders",
+			LeaseTimeout:        "1m",
+			ExpireTimeout:       "10m",
+			RequestedPartitions: 1,
+		}))
+
+		err := c.QueuesCreate(ctx, &pb.QueueInfo{
+			QueueName:           "billing-queue",
+			Namespace:           "billing",
+			LeaseTimeout:        "1m",
+			ExpireTimeout:       "10m",
+			RequestedPartitions: 1,
+		})
+		var duhErr duh.Error
+		require.ErrorAs(t, err, &duhErr)
+		assert.Equal(t, duh.CodeRequestFailed, duhErr.Code())
+		assert.Contains(t, duhErr.Message(), "billing")
+	})
+
+	t.Run("NamespacesInBadgerQueueStorageSurviveRestart", func(t *testing.T) {
+		ctx := context.Background()
+		config := fmt.Sprintf(`
+address: localhost:0
+queue-storage:
+  badger:
+    storage-dir: %[1]s
+partition-storage:
+  - name: badger-00
+    affinity: 1
+    badger:
+      storage-dir: %[1]s
+auth-backend:
+  driver: internal
+`, t.TempDir())
+
+		d := startFromConfig(t, config)
+		adminKey := createAdminKey(t, ctx, d)
+		require.NoError(t, clientWithKey(t, d, adminKey).NamespacesCreate(ctx, &pb.NamespaceInfo{Name: "orders"}))
+		require.NoError(t, d.Shutdown(ctx))
+
+		d = startFromConfig(t, config)
+		defer func() { require.NoError(t, d.Shutdown(ctx)) }()
+
+		var namespaces pb.NamespacesListResponse
+		require.NoError(t, clientWithKey(t, d, adminKey).NamespacesList(ctx, &namespaces, nil))
+		var names []string
+		for _, namespace := range namespaces.Items {
+			names = append(names, namespace.Name)
+		}
+		assert.Contains(t, names, "orders")
+	})
 }
 
 func TestConfigFileExampleWithInternalAuth(t *testing.T) {

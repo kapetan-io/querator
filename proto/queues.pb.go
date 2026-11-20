@@ -258,7 +258,8 @@ func (x *QueuesInfoRequest) GetQueueName() string {
 }
 
 // QueuesUpdateRequest changes the settings of an existing queue. Its field numbers match QueueInfo,
-// which '/queues.update' took before, so a client still sending QueueInfo is decoded the same way. A setting the request leaves
+// so a QueueInfo sent here decodes. A QueueInfo cannot carry an empty `dead_queue` or `reference` or a
+// `max_attempts` of 0, so it cannot clear them. A setting the request leaves
 // out keeps its current value. `dead_queue`, `reference` and `max_attempts` can be cleared by
 // sending them explicitly: `"dead_queue": ""` removes the dead letter queue, `"reference": ""`
 // removes the reference and `"max_attempts": 0` allows unlimited attempts.

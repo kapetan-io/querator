@@ -109,7 +109,8 @@ func TestUpdateCommandClearsSettings(t *testing.T) {
 // Builds the binary because the clear flags are derived from which flags were typed, in the command's RunE
 func TestUpdateCommandClearsSettingsFromFlags(t *testing.T) {
 	binary := filepath.Join(t.TempDir(), "querator")
-	require.NoError(t, exec.Command("go", "build", "-o", binary, ".").Run())
+	out, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput()
+	require.NoError(t, err, string(out))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -138,9 +139,9 @@ func TestUpdateCommandClearsSettingsFromFlags(t *testing.T) {
 	}))
 	endpoint := fmt.Sprintf("http://%s", d.Listener.Addr().String())
 
-	_, err = exec.Command(binary, "update", queueName, "--endpoint", endpoint,
+	out, err = exec.Command(binary, "update", queueName, "--endpoint", endpoint,
 		"--lease-timeout", "2m").CombinedOutput()
-	require.NoError(t, err)
+	require.NoError(t, err, string(out))
 
 	var info pb.QueueInfo
 	require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &info))
@@ -149,9 +150,9 @@ func TestUpdateCommandClearsSettingsFromFlags(t *testing.T) {
 	assert.Equal(t, int32(7), info.MaxAttempts)
 	assert.Equal(t, "owner-1", info.Reference)
 
-	_, err = exec.Command(binary, "update", queueName, "--endpoint", endpoint,
+	out, err = exec.Command(binary, "update", queueName, "--endpoint", endpoint,
 		"--dead-queue", "", "--reference", "", "--max-attempts", "0").CombinedOutput()
-	require.NoError(t, err)
+	require.NoError(t, err, string(out))
 
 	require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &info))
 	assert.Equal(t, "", info.DeadQueue)

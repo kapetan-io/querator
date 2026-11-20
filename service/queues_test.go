@@ -2077,10 +2077,10 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				{
 					Name: "RequestedPartitions",
 					Update: func(name string) *pb.QueuesUpdateRequest {
-						return &pb.QueuesUpdateRequest{QueueName: name, RequestedPartitions: 1}
+						return &pb.QueuesUpdateRequest{QueueName: name, RequestedPartitions: 2}
 					},
 					Want: func(dlq string) *pb.QueueInfo {
-						return &pb.QueueInfo{LeaseTimeout: "1m0s", ExpireTimeout: "24h0m0s", DeadQueue: dlq, MaxAttempts: 7, Reference: "owner-1", RequestedPartitions: 1}
+						return &pb.QueueInfo{LeaseTimeout: "1m0s", ExpireTimeout: "24h0m0s", DeadQueue: dlq, MaxAttempts: 7, Reference: "owner-1", RequestedPartitions: 2}
 					},
 				},
 			} {
@@ -2129,7 +2129,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			}
 		})
 
-		t.Run("ClearedDeadQueueIsStillChecked", func(t *testing.T) {
+		t.Run("EmptyDeadQueueStillChecksPartitions", func(t *testing.T) {
 			dlqName := random.String("dlq-", 10)
 			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 				QueueName:           dlqName,

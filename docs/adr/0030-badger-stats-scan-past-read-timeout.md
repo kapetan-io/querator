@@ -52,15 +52,18 @@ so the queue's other requests wait for it. The operating limits page lists this.
 
 The contexts that start-up and recovery pass are never cancelled, so their scans always run to the end.
 The one a reload passes carries the read timeout and the reload request's own context. A client that
-gives up on a reload within the read timeout stops the scan. After the timeout passes, the context's
-error stays `DeadlineExceeded`, so a later cancel is never seen and the scan runs to the end.
+gives up on a reload while a partition is being scanned, within the read timeout that began for that
+partition, stops the scan. After the timeout passes, the context's error stays `DeadlineExceeded`, so a
+later cancel is never seen and the scan runs to the end. The reload gives each partition its own
+timeout, so a cancel that arrives after the first partition's timeout still fails every partition after
+it.
 
-A reload cancelled early marks its partition failed, and every partition after it in that reload fails
-at once, because each gets the same cancelled context. The lifecycle then recovers each failed partition
-with a context no client can cancel, and the partition serves again with counts from a full scan.
-PostgreSQL and MongoDB already mark a partition failed when a cancelled reload stops their count, so
-BadgerDB behaves the same. The cost is a second scan of the partition. `CancelledReloadRecovers` in
-`service/badger_stats_test.go` holds this.
+A reload cancelled this way marks the partition it was scanning failed, and each partition after it in
+that reload fails too, because each gets the cancelled context. The lifecycle then recovers each failed
+partition with a context no client can cancel, and the partition serves again. PostgreSQL and MongoDB
+already mark a partition failed when a cancelled reload stops their count, so BadgerDB behaves the same.
+The cost is a second scan of the partition. `CancelledReloadRecovers` in `service/badger_stats_test.go`
+holds the failure and the recovery.
 
 Shutdown cancels none of these contexts. A shutdown waits for a scan in progress, or gives up at
 its own deadline while the scan runs on.

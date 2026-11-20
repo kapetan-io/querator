@@ -237,8 +237,11 @@ func testBadgerStats(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			numPartitions = 2
 		)
 		fault := &partitionFault{}
+		now := clock.NewProvider()
+		now.Freeze(clock.Now())
+		defer now.UnFreeze()
 		var queueName = random.String("queue-", 10)
-		d := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: fault.Wrap(setup())})
+		d := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: fault.Wrap(setup()), Clock: now})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
@@ -257,11 +260,20 @@ func testBadgerStats(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			RequestTimeout: "1m",
 		}))
 
-		// Every partition of the reload sees a cancelled context, as when the client drops the request.
+		// Each Stats call of the reload gets an already cancelled context, the way a request the
+		// client dropped would. The frozen clock holds recovery back until the test advances it.
 		fault.statsCancelNext.Store(numPartitions)
 		require.NoError(t, c.QueueReload(ctx, &pb.QueueReloadRequest{QueueName: queueName}))
 
-		// Nobody asks for recovery. The lifecycle brings each partition back with counts from a fresh scan.
+		var stats pb.QueueStatsResponse
+		require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats))
+		require.Len(t, stats.LogicalQueues[0].Partitions, numPartitions)
+		for _, p := range stats.LogicalQueues[0].Partitions {
+			assert.NotEqual(t, int32(0), p.Failures)
+		}
+
+		// No operator request follows. The lifecycle recovers each partition once its time comes.
+		now.Advance(clock.Second)
 		require.Eventually(t, func() bool {
 			var stats pb.QueueStatsResponse
 			if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats); err != nil {
@@ -276,14 +288,6 @@ func testBadgerStats(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			}
 			return total == numItems
 		}, 10*clock.Second, 10*clock.Millisecond)
-
-		var stats pb.QueueStatsResponse
-		require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats))
-		var unleased int32
-		for _, p := range stats.LogicalQueues[0].Partitions {
-			unleased += p.UnLeased
-		}
-		assert.Equal(t, int32(numItems), unleased)
 
 		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
 			Items:          produceRandomItems(numPartitions),

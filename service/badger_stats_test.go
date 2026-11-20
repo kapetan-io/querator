@@ -231,6 +231,84 @@ func testBadgerStats(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		})
 	})
 
+	t.Run("CancelledReloadRecovers", func(t *testing.T) {
+		const (
+			numItems      = 20
+			numPartitions = 2
+		)
+		fault := &partitionFault{}
+		var queueName = random.String("queue-", 10)
+		d := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: fault.Wrap(setup())})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+		c, ctx := d.MustClient(), d.Context()
+
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			LeaseTimeout:        LeaseTimeout,
+			ExpireTimeout:       ExpireTimeout,
+			QueueName:           queueName,
+			RequestedPartitions: numPartitions,
+		})
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			Items:          produceRandomItems(numItems),
+			QueueName:      queueName,
+			RequestTimeout: "1m",
+		}))
+
+		// Every partition of the reload sees a cancelled context, as when the client drops the request.
+		fault.statsCancelNext.Store(numPartitions)
+		require.NoError(t, c.QueueReload(ctx, &pb.QueueReloadRequest{QueueName: queueName}))
+
+		// Nobody asks for recovery. The lifecycle brings each partition back with counts from a fresh scan.
+		require.Eventually(t, func() bool {
+			var stats pb.QueueStatsResponse
+			if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats); err != nil {
+				return false
+			}
+			var total int32
+			for _, p := range stats.LogicalQueues[0].Partitions {
+				if p.Failures != 0 {
+					return false
+				}
+				total += p.Total
+			}
+			return total == numItems
+		}, 10*clock.Second, 10*clock.Millisecond)
+
+		var stats pb.QueueStatsResponse
+		require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats))
+		var unleased int32
+		for _, p := range stats.LogicalQueues[0].Partitions {
+			unleased += p.UnLeased
+		}
+		assert.Equal(t, int32(numItems), unleased)
+
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			Items:          produceRandomItems(numPartitions),
+			QueueName:      queueName,
+			RequestTimeout: "1m",
+		}))
+		// A lease reads one partition, so lease until every item has come back.
+		var leased int
+		for range numPartitions {
+			var resp pb.QueueLeaseResponse
+			require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+				ClientId:       random.String("client-", 10),
+				QueueName:      queueName,
+				BatchSize:      numItems + numPartitions,
+				RequestTimeout: "1m",
+			}, &resp))
+			require.NotEmpty(t, resp.Items)
+			leased += len(resp.Items)
+			if leased == numItems+numPartitions {
+				break
+			}
+		}
+		assert.Equal(t, numItems+numPartitions, leased)
+	})
+
 	t.Run("CancelStopsScanPartway", func(t *testing.T) {
 		const (
 			numItems    = 5_000

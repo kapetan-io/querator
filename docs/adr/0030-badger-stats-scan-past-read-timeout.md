@@ -51,8 +51,18 @@ The stats scan on a large BadgerDB partition runs on the queue's request loop fo
 so the queue's other requests wait for it. The operating limits page lists this.
 
 The contexts that start-up and recovery pass are never cancelled, so their scans always run to the end.
-The one a reload passes ends with the reload request, so a client that gives up on a reload stops its
-scan. Shutdown cancels none of these contexts. A shutdown waits for a scan in progress, or gives up at
+The one a reload passes carries the read timeout and the reload request's own context. A client that
+gives up on a reload within the read timeout stops the scan. After the timeout passes, the context's
+error stays `DeadlineExceeded`, so a later cancel is never seen and the scan runs to the end.
+
+A reload cancelled early marks its partition failed, and every partition after it in that reload fails
+at once, because each gets the same cancelled context. The lifecycle then recovers each failed partition
+with a context no client can cancel, and the partition serves again with counts from a full scan.
+PostgreSQL and MongoDB already mark a partition failed when a cancelled reload stops their count, so
+BadgerDB behaves the same. The cost is a second scan of the partition. `CancelledReloadRecovers` in
+`service/badger_stats_test.go` holds this.
+
+Shutdown cancels none of these contexts. A shutdown waits for a scan in progress, or gives up at
 its own deadline while the scan runs on.
 
 Keeping a partition's counts as items come and go would make the full scan unnecessary and remove this

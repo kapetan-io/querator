@@ -46,10 +46,11 @@ limitations under the License.
 //
 // ReadConfig decodes a YAML config file into a File with strict field checking:
 // an unknown or misspelled key, including an option placed under the wrong
-// backend, is an error instead of being ignored. ApplyConfigFile applies a File
-// to a Config. Queue storage takes at most one backend section (memory, badger,
+// backend, is an error instead of being ignored, as is a second YAML document
+// after a "---" separator. ApplyConfigFile applies a File to a Config. Queue storage takes at most one backend section (memory, badger,
 // mongo or postgres) and uses memory when none is set; each partition storage
 // takes exactly one. The memory backend has no options and is selected with an
-// empty mapping (memory: {}). See docs/packages/daemon.md for how queues listed
-// in the file are applied.
+// empty mapping (memory: {}); a backend key with no value, such as a bare
+// "memory:" or "badger:", still names that backend.
+// See docs/packages/daemon.md for how queues listed in the file are applied.
 package daemon

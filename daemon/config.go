@@ -184,6 +184,10 @@ func ReadConfig(r io.Reader) (File, error) {
 	if err := dec.Decode(&file); err != nil {
 		return File{}, fmt.Errorf("while reading config file: %w", err)
 	}
+	if err := dec.Decode(&yaml.Node{}); !errors.Is(err, io.EOF) {
+		return File{}, errors.New("while reading config file: a config file holds one YAML document, " +
+			"but found a second after '---'; remove the separator or move its sections above it")
+	}
 
 	var doc yaml.Node
 	if err := yaml.Unmarshal(content, &doc); err != nil {
@@ -196,6 +200,9 @@ func ReadConfig(r io.Reader) (File, error) {
 func keepEmptyAuthKeys(doc *yaml.Node, file *File) {
 	if len(doc.Content) == 0 {
 		return
+	}
+	if queues := mappingValue(doc.Content[0], "queue-storage"); queues != nil {
+		keepEmptyQueueStorageKeys(queues, &file.QueueStorage)
 	}
 	section := mappingValue(doc.Content[0], "auth")
 	if section == nil {
@@ -213,6 +220,21 @@ func keepEmptyAuthKeys(doc *yaml.Node, file *File) {
 	}
 	if mappingValue(storage, "badger") != nil && file.Auth.Storage.Badger == nil {
 		file.Auth.Storage.Badger = &BadgerConfig{}
+	}
+}
+
+func keepEmptyQueueStorageKeys(node *yaml.Node, storage *QueueStorage) {
+	if mappingValue(node, "memory") != nil && storage.Memory == nil {
+		storage.Memory = &MemoryConfig{}
+	}
+	if mappingValue(node, "badger") != nil && storage.Badger == nil {
+		storage.Badger = &BadgerConfig{}
+	}
+	if mappingValue(node, "mongo") != nil && storage.Mongo == nil {
+		storage.Mongo = &MongoConfig{}
+	}
+	if mappingValue(node, "postgres") != nil && storage.Postgres == nil {
+		storage.Postgres = &PostgresConfig{}
 	}
 }
 

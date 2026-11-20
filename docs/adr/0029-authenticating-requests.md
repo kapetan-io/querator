@@ -36,7 +36,8 @@ one, so two creates at once cannot both land the 101st. The Open Door binding go
 store write. A start that finds the anonymous user holding 100 other bindings in `_system`, and no
 Open Door binding, logs a warning and starts without granting it. Failing the start instead would
 leave the operator no way to free a slot, since bindings are removed through the API of a running
-server, and skipping the grant leaves the server closed rather than open.
+server. Skipping the grant withholds Admin, but the anonymous user keeps the permissions its other
+`_system` bindings grant, and a permission check in any namespace falls back to `_system` bindings.
 
 **Requests that arrive together with the same key share one storage lookup.** Fifty requests with the
 same uncached key cause one lookup, which reads the key and its user once, and all fifty wait on it.

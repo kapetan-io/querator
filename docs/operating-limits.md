@@ -44,8 +44,9 @@ applies only when embedding. Open Door binds the anonymous user to the Admin rol
 namespace, so any request without an API key has full administrative access. A warning is logged when
 the binding is created. The binding is created again at every start, so deleting it closes the door only
 until the next restart, unless the anonymous user already holds 100 other bindings in `_system`. Then
-the start logs a warning and leaves the door closed. The standard roles are also written again at every start, replacing any change
-made to them.
+the start logs a warning and does not grant Admin, but requests without an API key still get every
+permission those other `_system` bindings grant, in every namespace. The standard roles are also
+written again at every start, replacing any change made to them.
 
 With the `none` auth driver, the default, Querator checks no permissions, so any client that can reach
 the API port can do anything.

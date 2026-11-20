@@ -2731,6 +2731,68 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				assert.Empty(t, list.Items)
 			})
 
+			t.Run("WaitingProduceStoredOnRecoveryWithoutLease", func(t *testing.T) {
+				now := clock.NewProvider()
+				now.Freeze(clock.Now())
+				defer now.UnFreeze()
+
+				var fault partitionFault
+				d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: fault.Wrap(storage), Clock: now})
+				defer d.Shutdown(t)
+				c, ctx := d.MustClient(), d.Context()
+
+				queueName := random.String("queue-", 10)
+				createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+					LeaseTimeout:        LeaseTimeout,
+					ExpireTimeout:       ExpireTimeout,
+					QueueName:           queueName,
+					RequestedPartitions: 1,
+				})
+
+				fault.scanFailing.Store(&queueName)
+				now.Advance(clock.Millisecond)
+				var stats pb.QueueStatsResponse
+				require.Eventually(t, func() bool {
+					if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats); err != nil {
+						return false
+					}
+					return stats.LogicalQueues[0].Partitions[0].Failures != 0
+				}, 5*clock.Second, 20*clock.Millisecond)
+
+				// No lease is waiting, so only the lifecycle run that recovers the partition can
+				// assign the waiting produce.
+				produceCtx, produceCancel := context.WithCancel(ctx)
+				defer produceCancel()
+				var produceErr error
+				duringCalls(produceCancel, func() {
+					require.Eventually(t, func() bool {
+						if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats); err != nil {
+							return false
+						}
+						return stats.LogicalQueues[0].ProduceWaiting == 1
+					}, 5*clock.Second, 20*clock.Millisecond)
+
+					fault.scanFailing.Store(nil)
+					require.Eventually(t, func() bool {
+						now.Advance(6 * clock.Second)
+						if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats); err != nil {
+							return false
+						}
+						return stats.LogicalQueues[0].ProduceWaiting == 0
+					}, 5*clock.Second, 20*clock.Millisecond)
+				}, func() {
+					produceErr = c.QueueProduce(produceCtx, &pb.QueueProduceRequest{
+						QueueName:      queueName,
+						RequestTimeout: "10m",
+						Items:          produceRandomItems(3),
+					})
+				})
+				require.NoError(t, produceErr)
+				var list pb.StorageItemsListResponse
+				require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, nil))
+				assert.Len(t, list.Items, 3)
+			})
+
 			var queueName = random.String("queue-", 10)
 			d := newDaemon(t, 5*clock.Second, svc.Config{StorageConfig: storage})
 			defer d.Shutdown(t)

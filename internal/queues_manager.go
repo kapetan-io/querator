@@ -354,7 +354,8 @@ func (qm *QueuesManager) validateDeadQueue(ctx context.Context, info types.Queue
 
 	dlqInfo := dlq.Info()
 	if dlqInfo.DeadQueue != "" {
-		return reply.NewInvalidOption("dead_queue is invalid; '%s' already has its own dead_queue configured", info.DeadQueue)
+		return reply.NewInvalidOption("dead_queue is invalid; '%s' already has its own dead_queue configured, "+
+			"clear or change dead_queue on '%s' first", info.DeadQueue, info.DeadQueue)
 	}
 
 	if dlqInfo.RequestedPartitions > 1 {
@@ -379,12 +380,12 @@ func (qm *QueuesManager) validateAsDeadQueue(ctx context.Context, info types.Que
 	}
 
 	if info.DeadQueue != "" {
-		return reply.NewInvalidOption("dead_queue is invalid; '%s' is the dead_queue of '%s' and cannot have its own dead_queue",
-			info.Name, source)
+		return reply.NewInvalidOption("dead_queue is invalid; '%s' is the dead_queue of '%s' and cannot have its own dead_queue, "+
+			"clear or change dead_queue on '%s' first", info.Name, source, source)
 	}
 
-	return reply.NewInvalidOption("partitions is invalid; '%s' is the dead_queue of '%s' and must have a single partition",
-		info.Name, source)
+	return reply.NewInvalidOption("partitions is invalid; '%s' is the dead_queue of '%s' and must have a single partition, "+
+		"clear or change dead_queue on '%s' first", info.Name, source, source)
 }
 
 func (qm *QueuesManager) sourceQueueOf(ctx context.Context, name string) (string, error) {
@@ -423,7 +424,7 @@ func (qm *QueuesManager) Delete(ctx context.Context, name string) error {
 	}
 	if source != "" {
 		return reply.NewInvalidOption("queue '%s' cannot be deleted; it is the dead_queue of '%s', "+
-			"clear dead_queue on '%s' first", name, source, source)
+			"clear or change dead_queue on '%s' first", name, source, source)
 	}
 
 	if err := qm.conf.StorageConfig.Queues.Delete(ctx, name); err != nil {

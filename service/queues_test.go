@@ -12,6 +12,7 @@ import (
 	"github.com/duh-rpc/duh-go/retry"
 	"github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/internal/store"
+	"github.com/kapetan-io/querator/internal/types"
 	pb "github.com/kapetan-io/querator/proto"
 	svc "github.com/kapetan-io/querator/service"
 	"github.com/kapetan-io/tackle/clock"
@@ -948,6 +949,82 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			})
 		})
 
+	})
+
+	t.Run("StoredDeadLetterChain", func(t *testing.T) {
+		conf := setup()
+		queueA := random.String("queue-a-", 10)
+		queueB := random.String("queue-b-", 10)
+		queueC := random.String("queue-c-", 10)
+
+		// The API no longer lets a chain form, so the chain A→B→C is written to storage
+		// before the daemon starts, as a version without the chain checks would have left it
+		for _, link := range []struct{ name, dead string }{{queueC, ""}, {queueB, queueC}, {queueA, queueB}} {
+			info := types.QueueInfo{
+				Name:                link.name,
+				DeadQueue:           link.dead,
+				LeaseTimeout:        clock.Minute,
+				ExpireTimeout:       10 * clock.Minute,
+				RequestedPartitions: 1,
+			}
+			placed, err := store.PlacePartitions(conf.PartitionStorage, info)
+			require.NoError(t, err)
+			info.PartitionInfo = placed
+			require.NoError(t, conf.Queues.Add(context.Background(), info))
+		}
+
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+		c, ctx := d.MustClient(), d.Context()
+
+		err := c.QueuesUpdate(ctx, &pb.QueueInfo{
+			QueueName: queueB,
+			DeadQueue: queueC,
+			Reference: "middle",
+		})
+		require.Error(t, err)
+		var duhErr duh.Error
+		require.True(t, errors.As(err, &duhErr))
+		assert.Equal(t, duh.CodeBadRequest, duhErr.Code())
+		assert.Contains(t, duhErr.Message(), "'"+queueB+"' is the dead_queue of '"+queueA+"'")
+		assert.Contains(t, duhErr.Message(), "clear or change dead_queue on '"+queueA+"' first")
+
+		err = c.QueuesUpdate(ctx, &pb.QueueInfo{
+			QueueName: queueA,
+			DeadQueue: queueB,
+			Reference: "head",
+		})
+		require.Error(t, err)
+		require.True(t, errors.As(err, &duhErr))
+		assert.Equal(t, duh.CodeBadRequest, duhErr.Code())
+		assert.Contains(t, duhErr.Message(), "'"+queueB+"' already has its own dead_queue configured")
+		assert.Contains(t, duhErr.Message(), "clear or change dead_queue on '"+queueB+"' first")
+
+		// Clearing the middle queue's dead_queue breaks the chain, after which both queues update
+		require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+			QueueName: queueB,
+			DeadQueue: "",
+		}))
+		require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+			QueueName: queueB,
+			Reference: "middle",
+		}))
+		require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+			QueueName: queueA,
+			DeadQueue: queueB,
+			Reference: "head",
+		}))
+
+		var info pb.QueueInfo
+		require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueB}, &info))
+		assert.Equal(t, "", info.DeadQueue)
+		assert.Equal(t, "middle", info.Reference)
+		require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueA}, &info))
+		assert.Equal(t, queueB, info.DeadQueue)
+		assert.Equal(t, "head", info.Reference)
 	})
 
 	t.Run("List", func(t *testing.T) {

@@ -3,6 +3,8 @@ package main_test
 import (
 	"context"
 	"fmt"
+	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -102,4 +104,58 @@ func TestUpdateCommandClearsSettings(t *testing.T) {
 	assert.Equal(t, int32(0), info.MaxAttempts)
 	assert.Equal(t, "", info.Reference)
 	assert.Equal(t, "1m0s", info.LeaseTimeout)
+}
+
+// Builds the binary because the clear flags are derived from which flags were typed, in the command's RunE
+func TestUpdateCommandClearsSettingsFromFlags(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "querator")
+	require.NoError(t, exec.Command("go", "build", "-o", binary, ".").Run())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	d, err := daemon.NewDaemon(ctx, daemon.Config{ListenAddress: "localhost:0"})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, d.Shutdown(context.Background())) }()
+
+	const queueName = "update-clear-flags"
+	const deadName = "update-clear-flags-dead"
+	c := d.MustClient()
+	require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+		QueueName:           deadName,
+		LeaseTimeout:        "1m",
+		ExpireTimeout:       "10m",
+		RequestedPartitions: 1,
+	}))
+	require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+		QueueName:           queueName,
+		LeaseTimeout:        "1m",
+		ExpireTimeout:       "10m",
+		DeadQueue:           deadName,
+		MaxAttempts:         7,
+		Reference:           "owner-1",
+		RequestedPartitions: 1,
+	}))
+	endpoint := fmt.Sprintf("http://%s", d.Listener.Addr().String())
+
+	_, err = exec.Command(binary, "update", queueName, "--endpoint", endpoint,
+		"--lease-timeout", "2m").CombinedOutput()
+	require.NoError(t, err)
+
+	var info pb.QueueInfo
+	require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &info))
+	assert.Equal(t, "2m0s", info.LeaseTimeout)
+	assert.Equal(t, deadName, info.DeadQueue)
+	assert.Equal(t, int32(7), info.MaxAttempts)
+	assert.Equal(t, "owner-1", info.Reference)
+
+	_, err = exec.Command(binary, "update", queueName, "--endpoint", endpoint,
+		"--dead-queue", "", "--reference", "", "--max-attempts", "0").CombinedOutput()
+	require.NoError(t, err)
+
+	require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &info))
+	assert.Equal(t, "", info.DeadQueue)
+	assert.Equal(t, int32(0), info.MaxAttempts)
+	assert.Equal(t, "", info.Reference)
+	assert.Equal(t, "2m0s", info.LeaseTimeout)
 }

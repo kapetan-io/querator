@@ -775,7 +775,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					assert.Equal(t, duh.CodeBadRequest, duhErr.Code())
 					assert.Contains(t, duhErr.Message(), "is the dead_queue of '"+queueName+"'")
 
-					// Update replaces dead_queue, so the source queue must stay updatable when it re-sends its dead_queue
+					// Re-sending the same dead_queue is allowed, so the source queue stays updatable
 					require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
 						QueueName: queueName,
 						DeadQueue: new(dlqName),
@@ -2015,6 +2015,153 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			assert.Equal(t, "", info.Reference)
 		})
 
+		t.Run("EachSentSettingChangesOnlyItself", func(t *testing.T) {
+			otherDLQ := random.String("dlq-", 10)
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				QueueName:           otherDLQ,
+				LeaseTimeout:        LeaseTimeout,
+				ExpireTimeout:       ExpireTimeout,
+				RequestedPartitions: 1,
+			})
+
+			for _, test := range []struct {
+				Name   string
+				Update func(name string) *pb.QueuesUpdateRequest
+				Want   func(dlq string) *pb.QueueInfo
+			}{
+				{
+					Name: "LeaseTimeout",
+					Update: func(name string) *pb.QueuesUpdateRequest {
+						return &pb.QueuesUpdateRequest{QueueName: name, LeaseTimeout: "2m0s"}
+					},
+					Want: func(dlq string) *pb.QueueInfo {
+						return &pb.QueueInfo{LeaseTimeout: "2m0s", ExpireTimeout: "24h0m0s", DeadQueue: dlq, MaxAttempts: 7, Reference: "owner-1", RequestedPartitions: 1}
+					},
+				},
+				{
+					Name: "ExpireTimeout",
+					Update: func(name string) *pb.QueuesUpdateRequest {
+						return &pb.QueuesUpdateRequest{QueueName: name, ExpireTimeout: "12h0m0s"}
+					},
+					Want: func(dlq string) *pb.QueueInfo {
+						return &pb.QueueInfo{LeaseTimeout: "1m0s", ExpireTimeout: "12h0m0s", DeadQueue: dlq, MaxAttempts: 7, Reference: "owner-1", RequestedPartitions: 1}
+					},
+				},
+				{
+					Name: "MaxAttempts",
+					Update: func(name string) *pb.QueuesUpdateRequest {
+						return &pb.QueuesUpdateRequest{QueueName: name, MaxAttempts: new(int32(3))}
+					},
+					Want: func(dlq string) *pb.QueueInfo {
+						return &pb.QueueInfo{LeaseTimeout: "1m0s", ExpireTimeout: "24h0m0s", DeadQueue: dlq, MaxAttempts: 3, Reference: "owner-1", RequestedPartitions: 1}
+					},
+				},
+				{
+					Name: "DeadQueue",
+					Update: func(name string) *pb.QueuesUpdateRequest {
+						return &pb.QueuesUpdateRequest{QueueName: name, DeadQueue: new(otherDLQ)}
+					},
+					Want: func(string) *pb.QueueInfo {
+						return &pb.QueueInfo{LeaseTimeout: "1m0s", ExpireTimeout: "24h0m0s", DeadQueue: otherDLQ, MaxAttempts: 7, Reference: "owner-1", RequestedPartitions: 1}
+					},
+				},
+				{
+					Name: "Reference",
+					Update: func(name string) *pb.QueuesUpdateRequest {
+						return &pb.QueuesUpdateRequest{QueueName: name, Reference: new("owner-2")}
+					},
+					Want: func(dlq string) *pb.QueueInfo {
+						return &pb.QueueInfo{LeaseTimeout: "1m0s", ExpireTimeout: "24h0m0s", DeadQueue: dlq, MaxAttempts: 7, Reference: "owner-2", RequestedPartitions: 1}
+					},
+				},
+				{
+					Name: "RequestedPartitions",
+					Update: func(name string) *pb.QueuesUpdateRequest {
+						return &pb.QueuesUpdateRequest{QueueName: name, RequestedPartitions: 1}
+					},
+					Want: func(dlq string) *pb.QueueInfo {
+						return &pb.QueueInfo{LeaseTimeout: "1m0s", ExpireTimeout: "24h0m0s", DeadQueue: dlq, MaxAttempts: 7, Reference: "owner-1", RequestedPartitions: 1}
+					},
+				},
+			} {
+				t.Run(test.Name, func(t *testing.T) {
+					dlqName := random.String("dlq-", 10)
+					createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+						QueueName:           dlqName,
+						LeaseTimeout:        LeaseTimeout,
+						ExpireTimeout:       ExpireTimeout,
+						RequestedPartitions: 1,
+					})
+					queueName := random.String("queue-", 10)
+					createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+						QueueName:           queueName,
+						LeaseTimeout:        "1m0s",
+						ExpireTimeout:       "24h0m0s",
+						DeadQueue:           dlqName,
+						MaxAttempts:         7,
+						Reference:           "owner-1",
+						RequestedPartitions: 1,
+					})
+
+					require.NoError(t, c.QueuesUpdate(ctx, test.Update(queueName)))
+					want := test.Want(dlqName)
+
+					var info pb.QueueInfo
+					require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &info))
+					assert.Equal(t, want.LeaseTimeout, info.LeaseTimeout)
+					assert.Equal(t, want.ExpireTimeout, info.ExpireTimeout)
+					assert.Equal(t, want.DeadQueue, info.DeadQueue)
+					assert.Equal(t, want.MaxAttempts, info.MaxAttempts)
+					assert.Equal(t, want.Reference, info.Reference)
+					assert.Equal(t, want.RequestedPartitions, info.RequestedPartitions)
+
+					var list pb.QueuesListResponse
+					require.NoError(t, c.QueuesList(ctx, &list, &querator.ListOptions{Pivot: queueName, Limit: 1}))
+					require.Len(t, list.Items, 1)
+					assert.Equal(t, queueName, list.Items[0].QueueName)
+					assert.Equal(t, want.LeaseTimeout, list.Items[0].LeaseTimeout)
+					assert.Equal(t, want.ExpireTimeout, list.Items[0].ExpireTimeout)
+					assert.Equal(t, want.DeadQueue, list.Items[0].DeadQueue)
+					assert.Equal(t, want.MaxAttempts, list.Items[0].MaxAttempts)
+					assert.Equal(t, want.Reference, list.Items[0].Reference)
+					assert.Equal(t, want.RequestedPartitions, list.Items[0].RequestedPartitions)
+				})
+			}
+		})
+
+		t.Run("ClearedDeadQueueIsStillChecked", func(t *testing.T) {
+			dlqName := random.String("dlq-", 10)
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				QueueName:           dlqName,
+				LeaseTimeout:        LeaseTimeout,
+				ExpireTimeout:       ExpireTimeout,
+				RequestedPartitions: 1,
+			})
+			queueName := random.String("queue-", 10)
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				QueueName:           queueName,
+				LeaseTimeout:        LeaseTimeout,
+				ExpireTimeout:       ExpireTimeout,
+				DeadQueue:           dlqName,
+				RequestedPartitions: 1,
+			})
+
+			err := c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
+				QueueName:           dlqName,
+				DeadQueue:           new(""),
+				RequestedPartitions: 2,
+			})
+			require.Error(t, err)
+			var duhErr duh.Error
+			require.True(t, errors.As(err, &duhErr))
+			assert.Equal(t, duh.CodeBadRequest, duhErr.Code())
+			assert.Contains(t, duhErr.Message(), "'"+dlqName+"' is the dead_queue of '"+queueName+"' and must have a single partition")
+
+			var info pb.QueueInfo
+			require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: dlqName}, &info))
+			assert.Equal(t, int32(1), info.RequestedPartitions)
+		})
+
 		t.Run("MaxAttempts", func(t *testing.T) {
 			// Baseline test to verify lifecycle works (mirrors MaxAttemptsWithDLQ)
 			t.Run("BaselineWithDLQ", func(t *testing.T) {
@@ -2160,7 +2307,6 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				assert.Equal(t, int32(1), leased.Attempts)
 
 				// Update queue to MaxAttempts=2 (decrease from 5)
-				// NOTE: Must include DeadQueue to preserve DLQ config since Update replaces fields
 				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
 					QueueName:   queueName,
 					MaxAttempts: new(int32(2)),
@@ -2318,7 +2464,6 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				assert.Equal(t, int32(2), leased.Attempts)
 
 				// Update queue to MaxAttempts=5 (increase from 2)
-				// NOTE: Must include DeadQueue to preserve DLQ config since Update replaces fields
 				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
 					QueueName:   queueName,
 					MaxAttempts: new(int32(5)),
@@ -2423,7 +2568,6 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				assert.Equal(t, int32(1), leased.Attempts)
 
 				// Update queue to MaxAttempts=0 (unlimited)
-				// NOTE: Must include DeadQueue to preserve DLQ config since Update replaces fields
 				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
 					QueueName:   queueName,
 					MaxAttempts: new(int32(0)),

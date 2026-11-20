@@ -257,7 +257,8 @@ func (x *QueuesInfoRequest) GetQueueName() string {
 	return ""
 }
 
-// QueuesUpdateRequest changes the settings of an existing queue. A setting the request leaves
+// QueuesUpdateRequest changes the settings of an existing queue. Its field numbers match QueueInfo,
+// which '/queues.update' took before, so a client still sending QueueInfo is decoded the same way. A setting the request leaves
 // out keeps its current value. `dead_queue`, `reference` and `max_attempts` can be cleared by
 // sending them explicitly: `"dead_queue": ""` removes the dead letter queue, `"reference": ""`
 // removes the reference and `"max_attempts": 0` allows unlimited attempts.
@@ -287,7 +288,8 @@ type QueuesUpdateRequest struct {
 	MaxAttempts *int32 `protobuf:"varint,8,opt,name=maxAttempts,json=max_attempts,proto3,oneof" json:"maxAttempts,omitempty"`
 	// The number of partitions the queue is requesting. Left out or '0', the current count is kept.
 	RequestedPartitions int32 `protobuf:"varint,9,opt,name=requestedPartitions,json=requested_partitions,proto3" json:"requestedPartitions,omitempty"`
-	// Accepted so a request can carry back what '/queues.info' returned. Ignored on update.
+	// The fields below are accepted so a JSON body copied from '/queues.info' is not refused as
+	// having unknown fields. All four are ignored on update.
 	CreatedAt  *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=createdAt,json=created_at,proto3" json:"createdAt,omitempty"`
 	UpdatedAt  *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=updatedAt,json=updated_at,proto3" json:"updatedAt,omitempty"`
 	Partitions []*PartitionInfo       `protobuf:"bytes,10,rep,name=partitions,proto3" json:"partitions,omitempty"`

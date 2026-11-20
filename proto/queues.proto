@@ -50,7 +50,8 @@ message QueuesInfoRequest {
   string queueName = 1 [json_name = "queue_name"];
 }
 
-// QueuesUpdateRequest changes the settings of an existing queue. A setting the request leaves
+// QueuesUpdateRequest changes the settings of an existing queue. Its field numbers match QueueInfo,
+// which '/queues.update' took before, so a client still sending QueueInfo is decoded the same way. A setting the request leaves
 // out keeps its current value. `dead_queue`, `reference` and `max_attempts` can be cleared by
 // sending them explicitly: `"dead_queue": ""` removes the dead letter queue, `"reference": ""`
 // removes the reference and `"max_attempts": 0` allows unlimited attempts.
@@ -83,7 +84,8 @@ message QueuesUpdateRequest {
   // The number of partitions the queue is requesting. Left out or '0', the current count is kept.
   int32 requestedPartitions = 9 [json_name = "requested_partitions"];
 
-  // Accepted so a request can carry back what '/queues.info' returned. Ignored on update.
+  // The fields below are accepted so a JSON body copied from '/queues.info' is not refused as
+  // having unknown fields. All four are ignored on update.
   google.protobuf.Timestamp createdAt = 2 [json_name = "created_at"];
   google.protobuf.Timestamp updatedAt = 3 [json_name = "updated_at"];
   repeated PartitionInfo partitions = 10;

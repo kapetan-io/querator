@@ -840,11 +840,13 @@ func (p *PostgresPartition) Complete(ctx context.Context, batch types.CompleteBa
 
 	for _, req := range batch.Requests {
 		if err := p.completeItems(ctx, tx, req); err != nil {
+			batch.MarkRolledBack()
 			return err
 		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
+		batch.MarkRolledBack()
 		return errors.Errorf("postgres partition %s/%d: commit transaction: %w",
 			p.info.Queue.Name, p.info.PartitionNum, err)
 	}
@@ -870,11 +872,13 @@ func (p *PostgresPartition) Retry(ctx context.Context, batch types.RetryBatch) e
 
 	for _, req := range batch.Requests {
 		if err := p.retryItems(ctx, tx, req); err != nil {
+			batch.MarkRolledBack()
 			return err
 		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
+		batch.MarkRolledBack()
 		return errors.Errorf("commit transaction: %w", err)
 	}
 
@@ -912,6 +916,7 @@ func (p *PostgresPartition) completeItems(ctx context.Context, tx pgx.Tx, req *t
 			return errors.Errorf("postgres partition %s/%d: failed to delete item: %w",
 				p.info.Queue.Name, p.info.PartitionNum, err)
 		}
+		req.Completed++
 	}
 	return nil
 }
@@ -1026,7 +1031,9 @@ func (p *PostgresPartition) retryItems(ctx context.Context, tx pgx.Tx, req *type
 			if err != nil {
 				return errors.Errorf("during Retry() insert at tail: %w", err)
 			}
+			req.UnLeased++
 		}
+		req.Retried++
 	}
 	return nil
 }
@@ -1559,6 +1566,7 @@ func (p *PostgresPartition) TakeAction(ctx context.Context, batch types.LifeCycl
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	var expired int
 	p.mu.Lock()
 	for i := range batch.Requests {
 		for _, action := range batch.Requests[i].Actions {
@@ -1624,6 +1632,7 @@ func (p *PostgresPartition) TakeAction(ctx context.Context, batch types.LifeCycl
 					p.mu.Unlock()
 					return errors.Errorf("insert requeued item: %w", err)
 				}
+				expired++
 
 			case types.ActionItemExpired, types.ActionItemMaxAttempts:
 				_, err = tx.Exec(ctx, `DELETE FROM `+p.tableName()+` WHERE id = $1`, action.Item.ID)
@@ -1656,7 +1665,7 @@ func (p *PostgresPartition) TakeAction(ctx context.Context, batch types.LifeCycl
 	if err := tx.Commit(ctx); err != nil {
 		return errors.Errorf("commit transaction: %w", err)
 	}
-
+	state.LeasesExpired(expired)
 	return nil
 }
 

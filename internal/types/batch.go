@@ -198,6 +198,20 @@ func (b *CompleteBatch) Reset() {
 	b.Requests = b.Requests[:0]
 }
 
+func (b *CompleteBatch) Completed() int {
+	var n int
+	for _, req := range b.Requests {
+		n += req.Completed
+	}
+	return n
+}
+
+func (b *CompleteBatch) MarkRolledBack() {
+	for _, req := range b.Requests {
+		req.Completed = 0
+	}
+}
+
 type RetryBatch struct {
 	Requests []*RetryRequest
 }
@@ -222,6 +236,29 @@ func (b *RetryBatch) Remove(req *RetryRequest) {
 
 func (b *RetryBatch) Reset() {
 	b.Requests = b.Requests[:0]
+}
+
+func (b *RetryBatch) Retried() int {
+	var n int
+	for _, req := range b.Requests {
+		n += req.Retried
+	}
+	return n
+}
+
+func (b *RetryBatch) UnLeased() int {
+	var n int
+	for _, req := range b.Requests {
+		n += req.UnLeased
+	}
+	return n
+}
+
+func (b *RetryBatch) MarkRolledBack() {
+	for _, req := range b.Requests {
+		req.Retried = 0
+		req.UnLeased = 0
+	}
 }
 
 type LifeCycleBatch struct {

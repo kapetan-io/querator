@@ -394,8 +394,10 @@ func (s *sharedMongoContainer) Start(ctx context.Context) (err error) {
 	}()
 
 	// A standalone mongod (no replica set) is used deliberately: it is the practical proof that the
-	// non-transactional MongoDB backend design holds.
-	container, err := mongodb.Run(ctx, "mongo:7")
+	// non-transactional MongoDB backend design holds. Test commands let a test make a write apply
+	// and still report an error, which no other fault a test can add does.
+	container, err := mongodb.Run(ctx, "mongo:7",
+		testcontainers.WithCmdArgs("--setParameter", "enableTestCommands=1"))
 	if err != nil {
 		return fmt.Errorf("failed to start mongo container: %w", err)
 	}

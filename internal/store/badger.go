@@ -273,12 +273,14 @@ func (b *BadgerPartition) Complete(_ context.Context, batch types.CompleteBatch)
 
 	for _, req := range batch.Requests {
 		if err = b.completeItems(txn, req); err != nil {
+			batch.MarkRolledBack()
 			return err
 		}
 	}
 
 	err = txn.Commit()
 	if err != nil {
+		batch.MarkRolledBack()
 		return errors.Errorf("during Commit(): %w", err)
 	}
 
@@ -326,6 +328,7 @@ func (b *BadgerPartition) completeItems(txn *badger.Txn, req *types.CompleteRequ
 		if err = txn.Delete(id); err != nil {
 			return errors.Errorf("during Delete(%s): %w", id, err)
 		}
+		req.Completed++
 	}
 	return nil
 }
@@ -348,12 +351,14 @@ func (b *BadgerPartition) Retry(_ context.Context, batch types.RetryBatch) error
 
 	for _, req := range batch.Requests {
 		if err = b.retryItems(txn, req); err != nil {
+			batch.MarkRolledBack()
 			return err
 		}
 	}
 
 	err = txn.Commit()
 	if err != nil {
+		batch.MarkRolledBack()
 		return errors.Errorf("during Commit(): %w", err)
 	}
 
@@ -421,6 +426,7 @@ func (b *BadgerPartition) retryItems(txn *badger.Txn, req *types.RetryRequest) e
 				if err := txn.Delete(retryItem.ID); err != nil {
 					return errors.Errorf("during Delete(%s): %w", retryItem.ID, err)
 				}
+				req.UnLeased++
 			} else {
 				item.IsLeased = false
 				item.LeaseDeadline = clock.Time{}
@@ -449,7 +455,9 @@ func (b *BadgerPartition) retryItems(txn *badger.Txn, req *types.RetryRequest) e
 			if err := txn.Delete(retryItem.ID); err != nil {
 				return errors.Errorf("during Delete(%s): %w", retryItem.ID, err)
 			}
+			req.UnLeased++
 		}
+		req.Retried++
 	}
 	return nil
 }
@@ -903,6 +911,7 @@ type badgerWrite struct {
 type actionWriteSet struct {
 	writes   []badgerWrite
 	unLeased int
+	expired  int
 }
 
 func (b *BadgerPartition) TakeAction(_ context.Context, batch types.LifeCycleBatch,
@@ -965,6 +974,7 @@ func commitActions(txn *badger.Txn, pending []actionWriteSet, state *types.Parti
 	}
 	for _, action := range pending {
 		state.UnLeased += action.unLeased
+		state.LeasesExpired(action.expired)
 	}
 	return nil
 }
@@ -1007,7 +1017,7 @@ func (b *BadgerPartition) actionWrites(txn *badger.Txn, a types.Action) (actionW
 			return actionWriteSet{}, err
 		}
 		b.lowerLeasePivot(item.ID)
-		return actionWriteSet{writes: []badgerWrite{
+		return actionWriteSet{expired: 1, writes: []badgerWrite{
 			{key: item.ID, value: buf.Bytes()},
 			{key: a.Item.ID, delete: true},
 		}}, nil

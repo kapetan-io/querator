@@ -137,10 +137,9 @@ func (p *Partition) SettleLeases() {
 			leased += len(req.Items)
 		}
 	}
-	if unsaved := p.estimatedLeases - leased; unsaved > 0 {
-		p.State.NumLeased -= unsaved
-		p.State.UnLeased += unsaved
-	}
+	unsaved := p.estimatedLeases - leased
+	p.State.NumLeased -= unsaved
+	p.State.UnLeased = max(0, p.State.UnLeased+unsaved)
 	p.estimatedLeases = 0
 }
 

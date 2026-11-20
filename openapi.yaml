@@ -450,7 +450,7 @@ paths:
             schema:
               $ref: '#/components/schemas/QueuesInfoRequest'
             example:
-              name: queue-name
+              queue_name: queue-name
       responses:
         '200':
           description: ''
@@ -858,11 +858,11 @@ components:
     QueuesInfoRequest:
       type: object
       properties:
-        name:
+        queue_name:
           type: string
           description: The name of the queue to retrieve info about
       required:
-        - name
+        - queue_name
     QueuesDeleteRequest:
       type: object
       properties:

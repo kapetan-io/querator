@@ -92,6 +92,24 @@ const requestSettle = 200 * clock.Millisecond
 // write that times out backs off on the frozen clock, which never moves to retry it.
 const pageWriteTimeout = 30 * clock.Second
 
+// waitForPageWritten waits, for as long as a page write may take, until the next lifecycle run of
+// the queue's only partition is in the future again, which happens only after a due run has
+// finished and rescheduled itself.
+func waitForPageWritten(t *testing.T, ctx context.Context, c *querator.Client, queueName string) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		var stats pb.QueueStatsResponse
+		if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats); err != nil {
+			return false
+		}
+		if len(stats.LogicalQueues) != 1 || len(stats.LogicalQueues[0].Partitions) != 1 {
+			return false
+		}
+		next, err := clock.ParseDuration(stats.LogicalQueues[0].Partitions[0].NextLifecycleRun)
+		return err == nil && next > 0
+	}, pageWriteTimeout, 20*clock.Millisecond)
+}
+
 func testLifecycle(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime storageLifetime) {
 	defer goleak.VerifyNone(t, goleakOptions...)
 
@@ -114,7 +132,7 @@ func testLifecycle(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 			require.Len(t, leaseUpTo(t, ctx, c, queueName, largePartition), largePartition)
 
 			now.Advance(clock.Minute + clock.Second)
-			waitForLifecycleRun(t, ctx, c, queueName)
+			waitForPageWritten(t, ctx, c, queueName)
 			assert.Len(t, leaseUpTo(t, ctx, c, queueName, largePartition), largePartition)
 		})
 
@@ -261,7 +279,7 @@ func testLifecycle(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		createOnePartitionQueue(t, ctx, c, queueName)
 		produceScheduled(t, ctx, c, queueName, 2, now.Now().UTC().Add(48*clock.Hour))
 		now.Advance(24*clock.Hour + clock.Second)
-		waitForLifecycleRun(t, ctx, c, queueName)
+		waitForPageWritten(t, ctx, c, queueName)
 
 		// The scheduled write enqueues item-00000 and then fails, so the item is no longer scheduled
 		// and its expire deadline has passed. Only a lifecycle pass removes it.
@@ -306,7 +324,7 @@ func testLifecycle(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 				Items:          produceRandomItems(pageSize),
 			})
 		})
-		waitForLifecycleRun(t, ctx, c, queueName)
+		waitForPageWritten(t, ctx, c, queueName)
 		require.NoError(t, produceErr)
 
 		events := spy.Events()
@@ -352,7 +370,7 @@ func testLifecycle(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 				BatchSize:      1,
 			}, &leased)
 		})
-		waitForLifecycleRun(t, ctx, c, queueName)
+		waitForPageWritten(t, ctx, c, queueName)
 		require.NoError(t, leaseErr)
 		require.Len(t, leased.Items, 1)
 		require.Equal(t, "item-00001", leased.Items[0].Reference)
@@ -361,7 +379,7 @@ func testLifecycle(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		require.LessOrEqual(t, nextLifecycleRun(t, ctx, c, queueName), clock.Minute)
 
 		now.Advance(clock.Minute + clock.Second)
-		waitForLifecycleRun(t, ctx, c, queueName)
+		waitForPageWritten(t, ctx, c, queueName)
 		assert.Contains(t, leaseUpTo(t, ctx, c, queueName, largePartition), "item-00001")
 	})
 
@@ -398,7 +416,7 @@ func testLifecycle(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		assert.Equal(t, 1, spy.Pages())
 
 		require.NoError(t, d.Service().ResumeQueue(ctx, queueName))
-		waitForLifecycleRun(t, ctx, c, queueName)
+		waitForPageWritten(t, ctx, c, queueName)
 		assert.Equal(t, []string{"page:start", "page:resume"}, spy.Events())
 		assert.Len(t, leaseUpTo(t, ctx, c, queueName, largePartition), largePartition)
 	})
@@ -478,7 +496,7 @@ func testLifecycle(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		spy.WhileFirstPageHeld(t, ctx, func() {
 			reloadErr = c.QueueReload(ctx, &pb.QueueReloadRequest{QueueName: queueName})
 		})
-		waitForLifecycleRun(t, ctx, c, queueName)
+		waitForPageWritten(t, ctx, c, queueName)
 		require.NoError(t, reloadErr)
 
 		// The reload ends the pass after its first page, and the next page starts at the first item.
@@ -516,7 +534,7 @@ func testLifecycle(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		now.Advance(clock.Minute + clock.Second)
 		var waits []clock.Duration
 		for range 7 {
-			waitForLifecycleRun(t, ctx, c, queueName)
+			waitForPageWritten(t, ctx, c, queueName)
 			waits = append(waits, nextLifecycleRun(t, ctx, c, queueName))
 			if len(waits) < 7 {
 				now.Advance(waits[len(waits)-1])
@@ -532,7 +550,7 @@ func testLifecycle(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		// stop failing before the clock reaches the next run, so that run is the one that works.
 		spy.StopFailingScans()
 		now.Advance(waits[len(waits)-1])
-		waitForLifecycleRun(t, ctx, c, queueName)
+		waitForPageWritten(t, ctx, c, queueName)
 		assert.Eventually(t, func() bool {
 			return isUnLeased(ctx, c, queueName, "leased")
 		}, 5*clock.Second, 20*clock.Millisecond)
@@ -579,7 +597,7 @@ func testLifecycle(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 				Ids:            []string{held.Id},
 			})
 		})
-		waitForLifecycleRun(t, ctx, c, queueName)
+		waitForPageWritten(t, ctx, c, queueName)
 		require.NoError(t, completeErr)
 
 		events := spy.Events()
@@ -645,7 +663,7 @@ func testLifecycle(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 				Items:     []*pb.QueueRetryItem{{Id: second.Id}},
 			})
 		})
-		waitForLifecycleRun(t, ctx, c, queueName)
+		waitForPageWritten(t, ctx, c, queueName)
 		require.NoError(t, retryErr)
 
 		events := spy.Events()
@@ -770,7 +788,7 @@ func testLifecycle(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		require.Len(t, leaseUpTo(t, ctx, c, queueName, count), count)
 
 		now.Advance(clock.Minute + clock.Second)
-		waitForLifecycleRun(t, ctx, c, queueName)
+		waitForPageWritten(t, ctx, c, queueName)
 		assert.Len(t, leaseUpTo(t, ctx, c, queueName, count), count)
 	})
 }

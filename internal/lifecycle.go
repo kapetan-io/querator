@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/dustin/go-humanize"
+	"github.com/kapetan-io/errors"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tiger/assert"
@@ -23,6 +24,8 @@ func (l *Logical) runLifecycle(state *QueueState) {
 			return
 		}
 	}
+
+	holdMoves := l.settleUnansweredMove(partition)
 
 	pass := &partition.Lifecycle.ActionPass
 	pivot, last := pass.Scan.Pivot, pass.Scan.Last
@@ -89,6 +92,10 @@ func (l *Logical) runLifecycle(state *QueueState) {
 		}
 	}
 
+	if holdMoves && len(dlqActions) > 0 {
+		pass.Unfinished = true
+	}
+
 	if len(dlqActions) > 0 && !pass.Unfinished {
 		ctx, cancel := context.WithTimeout(context.Background(), l.conf.WriteTimeout)
 		req := &types.LifeCycleRequest{
@@ -101,7 +108,14 @@ func (l *Logical) runLifecycle(state *QueueState) {
 		}
 		err := l.conf.Manager.LifeCycle(ctx, req)
 		cancel()
-		if err != nil {
+		if errors.Is(err, ErrMoveUnanswered) {
+			partition.Lifecycle.UnansweredMove = req
+			l.wg.Go(func() { l.awaitMoveAnswer(req.HandOff) })
+			pass.Unfinished = true
+		} else if err != nil {
+			if errors.Is(err, ErrMovedItemsKept) {
+				partition.Lifecycle.UnansweredMove = req
+			}
 			pass.Unfinished = true
 			l.log.Warn("manager lifecycle failed",
 				"partition", partition.Info.PartitionNum,
@@ -157,6 +171,60 @@ func (l *Logical) runLifecycle(state *QueueState) {
 	}
 	partition.Lifecycle.NextLifecycleRun = next
 	pass.End()
+}
+
+func (l *Logical) awaitMoveAnswer(req *types.ProduceRequest) {
+	select {
+	case <-req.ReadyCh:
+	case <-l.untilShutdown.Done():
+		return
+	}
+	select {
+	case l.moveAnswered <- struct{}{}:
+	default:
+	}
+}
+
+func (l *Logical) wakeForAnsweredMoves(state *QueueState) {
+	now := l.conf.Clock.Now().UTC()
+	for _, p := range state.Partitions {
+		if p.Lifecycle.UnansweredMove != nil && now.Before(p.Lifecycle.NextLifecycleRun) {
+			p.Lifecycle.NextLifecycleRun = now
+		}
+	}
+	if state.Paused {
+		return
+	}
+	l.runLifecycle(state)
+	l.assignWaitingRequests(state)
+	state.LifecycleTimer.Reset(l.minNextLifecycleRun(state))
+}
+
+func (l *Logical) settleUnansweredMove(partition *Partition) (holdMoves bool) {
+	req := partition.Lifecycle.UnansweredMove
+	if req == nil {
+		return false
+	}
+	select {
+	case <-req.HandOff.ReadyCh:
+	default:
+		return true
+	}
+	partition.Lifecycle.UnansweredMove = nil
+
+	ctx, cancel := context.WithTimeout(context.Background(), l.conf.WriteTimeout)
+	defer cancel()
+	if err := l.conf.Manager.SettleAnsweredMove(ctx, req); err != nil {
+		if errors.Is(err, ErrMovedItemsKept) {
+			partition.Lifecycle.UnansweredMove = req
+		}
+		l.log.Warn("manager lifecycle failed",
+			"partition", partition.Info.PartitionNum,
+			"num_actions", len(req.Actions),
+			"error", err)
+		return true
+	}
+	return false
 }
 
 func (l *Logical) backOffUnfinished(partition *Partition) clock.Duration {

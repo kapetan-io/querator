@@ -276,23 +276,43 @@ func (qm *QueuesManager) LifeCycle(ctx context.Context, req *types.LifeCycleRequ
 		item.Attempts = 0
 	}
 
-	stored, err := qm.ProduceToQueue(ctx, deadQueueName, deadItems)
-	if err != nil {
-		qm.log.Error("failed to produce to dead_queue",
+	req.HandOff = &types.ProduceRequest{Items: deadItems}
+	stored, err := qm.ProduceToQueue(ctx, deadQueueName, req.HandOff)
+	if errors.Is(err, ErrMoveUnanswered) {
+		qm.log.Warn("dead queue has not answered the move; the source keeps the items until it does",
 			"dead_queue", deadQueueName,
 			"source_queue", queueInfo.Name,
+			"items", len(deadItems))
+		return err
+	}
+	return qm.settleMove(ctx, req, stored, err)
+}
+
+func (qm *QueuesManager) SettleAnsweredMove(ctx context.Context, req *types.LifeCycleRequest) error {
+	err := req.HandOff.Err
+	if err != nil {
+		err = errors.Errorf("failed to produce to queue '%s': %w", req.PartitionInfo.Queue.DeadQueue, err)
+	}
+	return qm.settleMove(ctx, req, req.HandOff.Stored, err)
+}
+
+func (qm *QueuesManager) settleMove(ctx context.Context, req *types.LifeCycleRequest, stored int, err error) error {
+	if err != nil {
+		qm.log.Error("failed to produce to dead_queue",
+			"dead_queue", req.PartitionInfo.Queue.DeadQueue,
+			"source_queue", req.PartitionInfo.Queue.Name,
 			"stored", stored,
 			"error", err)
 		if stored != 0 {
 			if err := deleteDeadItems(ctx, req, stored); err != nil {
-				return errors.Errorf("failed to delete stored items from source partition after DLQ produce: %w", err)
+				return errors.Errorf("%w: %w", ErrMovedItemsKept, err)
 			}
 		}
 		return err
 	}
 
-	if err := deleteDeadItems(ctx, req, len(deadItems)); err != nil {
-		return errors.Errorf("failed to delete items from source partition after DLQ produce: %w", err)
+	if err := deleteDeadItems(ctx, req, len(req.HandOff.Items)); err != nil {
+		return errors.Errorf("%w: %w", ErrMovedItemsKept, err)
 	}
 
 	return nil
@@ -314,7 +334,7 @@ func deleteDeadItems(ctx context.Context, req *types.LifeCycleRequest, limit int
 	return req.PartitionStorage.TakeAction(ctx, batch, req.PartitionState)
 }
 
-func (qm *QueuesManager) ProduceToQueue(ctx context.Context, queueName string, items []*types.Item) (int, error) {
+func (qm *QueuesManager) ProduceToQueue(ctx context.Context, queueName string, req *types.ProduceRequest) (int, error) {
 	qm.mutex.Lock()
 	q, err := qm.get(ctx, queueName)
 	qm.mutex.Unlock()
@@ -326,7 +346,7 @@ func (qm *QueuesManager) ProduceToQueue(ctx context.Context, queueName string, i
 	if logical == nil {
 		return 0, errors.Errorf("queue '%s' has no available partitions", queueName)
 	}
-	stored, err := logical.ProduceDeadLetter(ctx, &types.ProduceRequest{Items: items})
+	stored, err := logical.ProduceDeadLetter(ctx, req)
 	if err != nil {
 		return stored, errors.Errorf("failed to produce to queue '%s': %w", queueName, err)
 	}

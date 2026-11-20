@@ -26,8 +26,11 @@ item stored without its ID would be stored again by the next try.
 
 That skip stops working once a consumer completes the copy in `orders-dead`. So when a move stores
 only some of its items, `orders` deletes those items at once instead of leaving them for the next
-try. The code does not meet this yet when `orders` stops waiting at the write timeout, or on a
-backend that cannot say how many items it stored (ENG-844).
+try. The code does not meet this yet when a write commits but its answer never reaches `orders`,
+such as a storage call that fails after it commits, or `orders` restarting before `orders-dead`
+answers or before it deletes what `orders-dead` stored. A move can also reach `orders-dead` after
+its shutdown has answered every move waiting for it. Nothing stores or answers that move, so its
+partition of `orders` moves no more dead items until `orders` restarts (ENG-854).
 
 **Dead items are written to storage apart from client produces.** A failed storage call fails every
 request in it, and each client hears the outcome of its own produce ([28. Storage write
@@ -35,9 +38,18 @@ failures](0028-storage-write-failures.md)). Writing dead items in their own call
 never fails a client's produce, and a failed client produce never fails a move.
 
 **A stuck `orders-dead` never stalls `orders`.** `orders` waits for at most the write timeout, then
-keeps the item and tries again later. That holds only if nothing holds the queues manager's lock
-while it waits on a queue, because a move needs that lock to find `orders-dead`. The code does not
-meet this yet when a queue is updated or deleted (ENG-782).
+keeps the items and goes on with its other lifecycle work. That holds only if nothing holds the queues manager's lock while it
+waits on a queue, because a move needs that lock to find `orders-dead`. The code does not meet this
+yet when a queue is updated or deleted (ENG-782).
+
+**`orders` sends a move again only after `orders-dead` answers it.** Sending it again before the
+answer could store an item a second time once a consumer had completed the first copy. So a
+partition of `orders` with an unanswered move sends no other move until the answer arrives, and
+then deletes what `orders-dead` stored. That delete runs before the partition's next scan, because
+the scan would otherwise find the stored items dead again and move them. If the delete fails, the
+partition keeps the move and tries the delete again, for the same reason. Each partition has at
+most one unanswered move. When `orders-dead` shuts down or is deleted, it answers every move it
+holds, including one still waiting to be read.
 
 **Every dead-letter queue follows these rules.**
 

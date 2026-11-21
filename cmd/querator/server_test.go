@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,42 +24,41 @@ func freeAddress(t *testing.T) string {
 	return address
 }
 
-func runServer(t *testing.T, params main.FlagParams) {
+func withServer(t *testing.T, params main.FlagParams, check func()) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- main.StartServer(ctx, io.Discard, params) }()
-	t.Cleanup(func() {
-		cancel()
-		require.NoError(t, <-done)
-	})
+	var wg sync.WaitGroup
+	var served error
+	wg.Go(func() { served = main.StartServer(ctx, io.Discard, params) })
+	check()
+	cancel()
+	wg.Wait()
+	require.NoError(t, served)
 }
 
 func requireListening(t *testing.T, address string) {
 	t.Helper()
 	require.Eventually(t, func() bool {
 		conn, err := net.Dial("tcp", address)
-		if err != nil {
-			return false
-		}
-		_ = conn.Close()
-		return true
+		return err == nil && conn.Close() == nil
 	}, 5*time.Second, 20*time.Millisecond)
 }
 
 func TestServerAddress(t *testing.T) {
 	t.Run("FlagSetsListenAddress", func(t *testing.T) {
 		address := freeAddress(t)
-		runServer(t, main.FlagParams{Address: address})
-		requireListening(t, address)
+		withServer(t, main.FlagParams{Address: address}, func() {
+			requireListening(t, address)
+		})
 	})
 
 	t.Run("ConfigFileSetsListenAddressWhenFlagUnset", func(t *testing.T) {
 		address := freeAddress(t)
 		path := filepath.Join(t.TempDir(), "config.yaml")
 		require.NoError(t, os.WriteFile(path, []byte("address: "+address+"\n"), 0o600))
-		runServer(t, main.FlagParams{ConfigFile: path})
-		requireListening(t, address)
+		withServer(t, main.FlagParams{ConfigFile: path}, func() {
+			requireListening(t, address)
+		})
 	})
 
 	t.Run("FlagWinsOverConfigFile", func(t *testing.T) {
@@ -66,9 +66,10 @@ func TestServerAddress(t *testing.T) {
 		flagAddress := freeAddress(t)
 		path := filepath.Join(t.TempDir(), "config.yaml")
 		require.NoError(t, os.WriteFile(path, []byte("address: "+fileAddress+"\n"), 0o600))
-		runServer(t, main.FlagParams{ConfigFile: path, Address: flagAddress})
-		requireListening(t, flagAddress)
-		_, err := net.DialTimeout("tcp", fileAddress, 200*time.Millisecond)
-		require.Error(t, err)
+		withServer(t, main.FlagParams{ConfigFile: path, Address: flagAddress}, func() {
+			requireListening(t, flagAddress)
+			_, err := net.DialTimeout("tcp", fileAddress, 200*time.Millisecond)
+			require.Error(t, err)
+		})
 	})
 }

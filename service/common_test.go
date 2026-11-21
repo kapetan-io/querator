@@ -909,6 +909,9 @@ type partitionFault struct {
 	// statsCancelled hands each Stats call a context that is already cancelled, the way a caller
 	// that gave up does.
 	statsCancelled atomic.Bool
+	// statsCancelNext holds how many of the next Stats calls get an already cancelled context. Each
+	// call takes one, so later calls, such as a recovery scan, reach the backend untouched.
+	statsCancelNext atomic.Int32
 	// statsCancelAfter, when above zero, cancels each Stats call's context that long after the call
 	// starts, the way a caller that gives up partway through a scan does.
 	statsCancelAfter atomic.Int64
@@ -1012,6 +1015,14 @@ func (f faultyPartition) Clear(ctx context.Context, req types.ClearRequest) erro
 
 var errScanFailed = errors.New("injected lifecycle scan failure")
 
+func (f *partitionFault) takeStatsCancelNext() bool {
+	if f.statsCancelNext.Add(-1) >= 0 {
+		return true
+	}
+	f.statsCancelNext.Add(1)
+	return false
+}
+
 func (f faultyPartition) Stats(ctx context.Context, stats *types.PartitionStats, now clock.Time) error {
 	if _, ok := ctx.Deadline(); ok && f.fault.statsHung.Load() {
 		<-ctx.Done()
@@ -1027,7 +1038,7 @@ func (f faultyPartition) Stats(ctx context.Context, stats *types.PartitionStats,
 		defer timer.Stop()
 		return f.Partition.Stats(cancellable, stats, now)
 	}
-	if f.fault.statsCancelled.Load() {
+	if f.fault.statsCancelled.Load() || f.fault.takeStatsCancelNext() {
 		cancelled, cancel := context.WithCancel(ctx)
 		cancel()
 		return f.Partition.Stats(cancelled, stats, now)
@@ -1062,6 +1073,10 @@ type lifecycleSpy struct {
 	failScans      atomic.Bool
 	failScheduled  atomic.Bool
 	failDeadLetter atomic.Bool
+	failDelete     atomic.Bool
+	holdProduce    atomic.Bool
+	produceHeld    chan struct{}
+	produceRelease chan struct{}
 }
 
 func (s *lifecycleSpy) Wrap(conf store.Config) store.Config {
@@ -1128,6 +1143,46 @@ func (s *lifecycleSpy) FailScheduledWritesAfterFirstItem() {
 // a later transaction fails.
 func (s *lifecycleSpy) FailNextDeadLetterWriteAfterFirstItem() {
 	s.failDeadLetter.Store(true)
+}
+
+// FailNextItemDelete makes the next lifecycle write that deletes items fail without deleting any.
+func (s *lifecycleSpy) FailNextItemDelete() {
+	s.failDelete.Store(true)
+}
+
+// HoldNextProducePastDeadline makes the next produce write wait until ReleaseProduce even after
+// its deadline passes, and then store its items, as a backend does when a write it already sent
+// commits late. With FailNextDeadLetterWriteAfterFirstItem also set, the late write stores only
+// its first item and then fails.
+func (s *lifecycleSpy) HoldNextProducePastDeadline() {
+	s.produceHeld = make(chan struct{})
+	s.produceRelease = make(chan struct{})
+	s.holdProduce.Store(true)
+}
+
+// WaitForProduceHeld returns once the held produce write has started.
+func (s *lifecycleSpy) WaitForProduceHeld(t *testing.T, ctx context.Context) {
+	t.Helper()
+	select {
+	case <-s.produceHeld:
+	case <-ctx.Done():
+		require.FailNow(t, "the daemon stopped before a produce write was held")
+	case <-clock.After(holdWait):
+		require.FailNowf(t, "no produce write was held", "no produce write started within %s", holdWait)
+	}
+}
+
+func (s *lifecycleSpy) awaitRelease(ctx context.Context) error {
+	select {
+	case <-s.produceRelease:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *lifecycleSpy) ReleaseProduce() {
+	close(s.produceRelease)
 }
 
 func (s *lifecycleSpy) Events() []string {
@@ -1222,6 +1277,15 @@ func (p spyPartition) ScanForActions(ctx context.Context, scan *types.LifeCycleS
 
 func (p spyPartition) Produce(ctx context.Context, batch types.ProduceBatch, now clock.Time) error {
 	p.spy.produce()
+	if p.spy.holdProduce.CompareAndSwap(true, false) {
+		close(p.spy.produceHeld)
+		late, cancel := context.WithTimeout(context.WithoutCancel(ctx), holdWait)
+		defer cancel()
+		if err := p.spy.awaitRelease(late); err != nil {
+			return err
+		}
+		ctx = late
+	}
 	if len(batch.Requests) == 0 || !batch.Requests[0].DeadLetterHandOff || !p.spy.failDeadLetter.CompareAndSwap(true, false) {
 		return p.Partition.Produce(ctx, batch, now)
 	}
@@ -1235,6 +1299,10 @@ func (p spyPartition) Produce(ctx context.Context, batch types.ProduceBatch, now
 }
 
 func (p spyPartition) TakeAction(ctx context.Context, batch types.LifeCycleBatch, state *types.PartitionState) error {
+	if len(batch.Requests) != 0 && len(batch.Requests[0].Actions) != 0 &&
+		batch.Requests[0].Actions[0].Action == types.ActionDeleteItem && p.spy.failDelete.CompareAndSwap(true, false) {
+		return errors.New("item delete failed by test")
+	}
 	if !p.spy.failScheduled.Load() || len(batch.Requests) == 0 || len(batch.Requests[0].Actions) == 0 ||
 		batch.Requests[0].Actions[0].Action != types.ActionQueueScheduledItem {
 		return p.Partition.TakeAction(ctx, batch, state)

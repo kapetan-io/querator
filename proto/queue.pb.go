@@ -881,6 +881,8 @@ func (x *QueueRetryResponse) GetMessage() string {
 	return ""
 }
 
+// QueueInfo is the request of '/queues.create' and the response of '/queues.info' and '/queues.list'.
+// '/queues.update' takes QueuesUpdateRequest, which keeps any setting the request leaves out.
 type QueueInfo struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache

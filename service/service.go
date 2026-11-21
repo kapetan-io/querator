@@ -377,13 +377,13 @@ func (s *Service) QueuesList(ctx context.Context, req *proto.QueuesListRequest,
 	return nil
 }
 
-func (s *Service) QueuesUpdate(ctx context.Context, req *proto.QueueInfo) error {
+func (s *Service) QueuesUpdate(ctx context.Context, req *proto.QueuesUpdateRequest) error {
 	if err := validateQueueName(req.QueueName); err != nil {
 		return err
 	}
 
-	var info types.QueueInfo
-	if err := s.validateQueueOptionsProto(req, &info); err != nil {
+	var update types.QueueUpdate
+	if err := s.validateQueueUpdateProto(req, &update); err != nil {
 		return err
 	}
 
@@ -396,7 +396,7 @@ func (s *Service) QueuesUpdate(ctx context.Context, req *proto.QueueInfo) error 
 		return err
 	}
 
-	if err := s.queues.Update(ctx, info); err != nil {
+	if err := s.queues.Update(ctx, update); err != nil {
 		return err
 	}
 	return nil

@@ -126,4 +126,5 @@ type LifeCycleRequest struct {
 	PartitionInfo    PartitionInfo
 	PartitionStorage PartitionActionTaker
 	PartitionState   *PartitionState
+	HandOff          *ProduceRequest
 }

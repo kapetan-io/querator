@@ -850,6 +850,442 @@ func testLifecycle(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 			"item-00005", "item-00006", "item-00007", "item-00008", "item-00009",
 		}, references)
 	})
+
+	t.Run("DeadLetterWriteOutlastingSourceWaitStoresItemOnce", func(t *testing.T) {
+		const writeTimeout = 500 * clock.Millisecond
+		now := clock.NewProvider()
+		now.Freeze(clock.Now())
+		defer now.UnFreeze()
+
+		spy := &lifecycleSpy{}
+		d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: spy.Wrap(setup()), Clock: now, WriteTimeout: writeTimeout})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+		c, ctx := d.MustClient(), d.Context()
+
+		queueName := random.String("queue-", 10)
+		dlqName := random.String("dlq-", 10)
+		createOnePartitionQueue(t, ctx, c, dlqName)
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			QueueName:           queueName,
+			LeaseTimeout:        "1m0s",
+			ExpireTimeout:       "24h0m0s",
+			MaxAttempts:         1,
+			DeadQueue:           dlqName,
+			RequestedPartitions: 1,
+		})
+		produceInOrder(t, ctx, c, queueName, 1)
+		require.Len(t, leaseUpTo(t, ctx, c, queueName, 1), 1)
+
+		// The dead letter queue's write of the move is held until the source has stopped waiting
+		// for it, and then stores the item. The source still holds the item at that point.
+		spy.HoldNextProducePastDeadline()
+		now.Advance(clock.Minute + clock.Second)
+		spy.WaitForProduceHeld(t, ctx)
+		clock.Sleep(writeTimeout + requestSettle)
+		spy.ReleaseProduce()
+		require.Eventually(t, func() bool {
+			return partitionTotal(t, ctx, c, dlqName) == 1
+		}, 5*clock.Second, 20*clock.Millisecond)
+
+		moved := leaseOne(t, ctx, c, dlqName)
+		require.Equal(t, "item-00000", moved.Reference)
+		require.NoError(t, c.QueueComplete(ctx, &pb.QueueCompleteRequest{
+			QueueName:      dlqName,
+			RequestTimeout: "5s",
+			Ids:            []string{moved.Id},
+		}))
+
+		now.Advance(10 * clock.Second)
+		require.Eventually(t, func() bool {
+			return partitionTotal(t, ctx, c, queueName) == 0
+		}, 5*clock.Second, 20*clock.Millisecond)
+		clock.Sleep(requestSettle)
+		assert.Equal(t, int32(0), partitionTotal(t, ctx, c, dlqName))
+	})
+
+	t.Run("AnsweredMoveSettlesBeforeSourceScansAgain", func(t *testing.T) {
+		const writeTimeout = 500 * clock.Millisecond
+		now := clock.NewProvider()
+		now.Freeze(clock.Now())
+		defer now.UnFreeze()
+
+		spy := &lifecycleSpy{}
+		d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: spy.Wrap(setup()), Clock: now, WriteTimeout: writeTimeout})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+		c, ctx := d.MustClient(), d.Context()
+
+		queueName := random.String("queue-", 10)
+		dlqName := random.String("dlq-", 10)
+		createOnePartitionQueue(t, ctx, c, dlqName)
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			QueueName:           queueName,
+			LeaseTimeout:        "1m0s",
+			ExpireTimeout:       "24h0m0s",
+			MaxAttempts:         1,
+			DeadQueue:           dlqName,
+			RequestedPartitions: 1,
+		})
+		produceInOrder(t, ctx, c, queueName, 1)
+		require.Len(t, leaseUpTo(t, ctx, c, queueName, 1), 1)
+
+		spy.HoldNextProducePastDeadline()
+		now.Advance(clock.Minute + clock.Second)
+		spy.WaitForProduceHeld(t, ctx)
+		clock.Sleep(writeTimeout + requestSettle)
+
+		// The source is paused, so the answer waits until its next pass, and the consumer has
+		// completed the stored copy by then. That pass must delete the item from the source before
+		// it scans, or the scan finds the item dead again and moves it a second time.
+		require.NoError(t, d.Service().PauseQueue(ctx, queueName))
+		spy.ReleaseProduce()
+		require.Eventually(t, func() bool {
+			return partitionTotal(t, ctx, c, dlqName) == 1
+		}, 5*clock.Second, 20*clock.Millisecond)
+		moved := leaseOne(t, ctx, c, dlqName)
+		require.NoError(t, c.QueueComplete(ctx, &pb.QueueCompleteRequest{
+			QueueName:      dlqName,
+			RequestTimeout: "5s",
+			Ids:            []string{moved.Id},
+		}))
+
+		// The answer set the source's next run to now while it was paused. A millisecond is far
+		// shorter than the lifecycle back-off, so only that answer makes the run due on resume.
+		require.NoError(t, d.Service().ResumeQueue(ctx, queueName))
+		now.Advance(clock.Millisecond)
+		require.Eventually(t, func() bool {
+			return partitionTotal(t, ctx, c, queueName) == 0
+		}, 5*clock.Second, 20*clock.Millisecond)
+		clock.Sleep(requestSettle)
+		assert.Equal(t, int32(0), partitionTotal(t, ctx, c, dlqName))
+	})
+
+	t.Run("FailedSourceDeleteAfterMoveSendsNoSecondCopy", func(t *testing.T) {
+		now := clock.NewProvider()
+		now.Freeze(clock.Now())
+		defer now.UnFreeze()
+
+		spy := &lifecycleSpy{}
+		d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: spy.Wrap(setup()), Clock: now})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+		c, ctx := d.MustClient(), d.Context()
+
+		queueName := random.String("queue-", 10)
+		dlqName := random.String("dlq-", 10)
+		createOnePartitionQueue(t, ctx, c, dlqName)
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			QueueName:           queueName,
+			LeaseTimeout:        "1m0s",
+			ExpireTimeout:       "24h0m0s",
+			MaxAttempts:         1,
+			DeadQueue:           dlqName,
+			RequestedPartitions: 1,
+		})
+		produceInOrder(t, ctx, c, queueName, 1)
+		require.Len(t, leaseUpTo(t, ctx, c, queueName, 1), 1)
+
+		// The dead letter queue stores the item, but the source fails to delete it, so the source
+		// still holds the item while a consumer completes the stored copy. A later pass must retry
+		// the delete, not move the item again.
+		spy.FailNextItemDelete()
+		now.Advance(clock.Minute + clock.Second)
+		require.Eventually(t, func() bool {
+			return partitionTotal(t, ctx, c, dlqName) == 1
+		}, 5*clock.Second, 20*clock.Millisecond)
+		moved := leaseOne(t, ctx, c, dlqName)
+		require.NoError(t, c.QueueComplete(ctx, &pb.QueueCompleteRequest{
+			QueueName:      dlqName,
+			RequestTimeout: "5s",
+			Ids:            []string{moved.Id},
+		}))
+
+		now.Advance(10 * clock.Second)
+		require.Eventually(t, func() bool {
+			return partitionTotal(t, ctx, c, queueName) == 0
+		}, 5*clock.Second, 20*clock.Millisecond)
+		clock.Sleep(requestSettle)
+		assert.Equal(t, int32(0), partitionTotal(t, ctx, c, dlqName))
+	})
+
+	t.Run("FailedSourceDeleteAfterLateAnswerSendsNoSecondCopy", func(t *testing.T) {
+		const writeTimeout = 200 * clock.Millisecond
+		now := clock.NewProvider()
+		now.Freeze(clock.Now())
+		defer now.UnFreeze()
+
+		spy := &lifecycleSpy{}
+		d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: spy.Wrap(setup()), Clock: now, WriteTimeout: writeTimeout})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+		c, ctx := d.MustClient(), d.Context()
+
+		queueName := random.String("queue-", 10)
+		dlqName := random.String("dlq-", 10)
+		createOnePartitionQueue(t, ctx, c, dlqName)
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			QueueName:           queueName,
+			LeaseTimeout:        "1m0s",
+			ExpireTimeout:       "24h0m0s",
+			MaxAttempts:         1,
+			DeadQueue:           dlqName,
+			RequestedPartitions: 1,
+		})
+		produceInOrder(t, ctx, c, queueName, 1)
+		require.Len(t, leaseUpTo(t, ctx, c, queueName, 1), 1)
+
+		// The dead letter queue answers after the source stopped waiting, and the source then fails
+		// to delete the stored item. A consumer completes the stored copy, so a later pass must retry
+		// the delete, not move the item again.
+		spy.HoldNextProducePastDeadline()
+		now.Advance(clock.Minute + clock.Second)
+		spy.WaitForProduceHeld(t, ctx)
+		clock.Sleep(writeTimeout + requestSettle)
+		spy.FailNextItemDelete()
+		spy.ReleaseProduce()
+		require.Eventually(t, func() bool {
+			return partitionTotal(t, ctx, c, dlqName) == 1
+		}, 5*clock.Second, 20*clock.Millisecond)
+		clock.Sleep(requestSettle)
+		moved := leaseOne(t, ctx, c, dlqName)
+		require.NoError(t, c.QueueComplete(ctx, &pb.QueueCompleteRequest{
+			QueueName:      dlqName,
+			RequestTimeout: "5s",
+			Ids:            []string{moved.Id},
+		}))
+
+		now.Advance(10 * clock.Second)
+		require.Eventually(t, func() bool {
+			return partitionTotal(t, ctx, c, queueName) == 0
+		}, 5*clock.Second, 20*clock.Millisecond)
+		clock.Sleep(requestSettle)
+		assert.Equal(t, int32(0), partitionTotal(t, ctx, c, dlqName))
+	})
+
+	t.Run("SourceShutsDownWithMoveUnanswered", func(t *testing.T) {
+		const writeTimeout = 200 * clock.Millisecond
+		now := clock.NewProvider()
+		now.Freeze(clock.Now())
+		defer now.UnFreeze()
+
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup(), Clock: now, WriteTimeout: writeTimeout})
+		defer tearDown()
+		c, ctx := d.MustClient(), d.Context()
+
+		// Queues shut down in name order, so the source shuts down while the paused dead letter
+		// queue still holds the move unanswered.
+		queueName := random.String("a-queue-", 10)
+		dlqName := random.String("z-dlq-", 10)
+		createOnePartitionQueue(t, ctx, c, dlqName)
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			QueueName:           queueName,
+			LeaseTimeout:        "1m0s",
+			ExpireTimeout:       "24h0m0s",
+			MaxAttempts:         1,
+			DeadQueue:           dlqName,
+			RequestedPartitions: 1,
+		})
+		produceInOrder(t, ctx, c, queueName, 1)
+		require.Len(t, leaseUpTo(t, ctx, c, queueName, 1), 1)
+		require.NoError(t, d.Service().PauseQueue(ctx, dlqName))
+
+		now.Advance(clock.Minute + clock.Second)
+		require.Eventually(t, func() bool {
+			var stats pb.QueueStatsResponse
+			if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: dlqName}, &stats); err != nil {
+				return false
+			}
+			return len(stats.LogicalQueues) == 1 && stats.LogicalQueues[0].ProduceWaiting == 1
+		}, 5*clock.Second, 20*clock.Millisecond)
+		clock.Sleep(writeTimeout + requestSettle)
+
+		d.Shutdown(t)
+	})
+
+	t.Run("DeadLetterWriteFailingAfterSourceWaitMovesEachItemOnce", func(t *testing.T) {
+		const writeTimeout = 500 * clock.Millisecond
+		now := clock.NewProvider()
+		now.Freeze(clock.Now())
+		defer now.UnFreeze()
+
+		spy := &lifecycleSpy{}
+		d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: spy.Wrap(setup()), Clock: now, WriteTimeout: writeTimeout})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+		c, ctx := d.MustClient(), d.Context()
+
+		queueName := random.String("queue-", 10)
+		dlqName := random.String("dlq-", 10)
+		createOnePartitionQueue(t, ctx, c, dlqName)
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			QueueName:           queueName,
+			LeaseTimeout:        "1m0s",
+			ExpireTimeout:       "24h0m0s",
+			MaxAttempts:         1,
+			DeadQueue:           dlqName,
+			RequestedPartitions: 1,
+		})
+		const count = 2
+		produceInOrder(t, ctx, c, queueName, count)
+		require.Len(t, leaseUpTo(t, ctx, c, queueName, count), count)
+
+		// The move's write is held until the source has stopped waiting for it, then stores only
+		// item-00000 and fails. The source deletes item-00000 alone when the answer arrives.
+		spy.HoldNextProducePastDeadline()
+		spy.FailNextDeadLetterWriteAfterFirstItem()
+		now.Advance(clock.Minute + clock.Second)
+		spy.WaitForProduceHeld(t, ctx)
+		clock.Sleep(writeTimeout + requestSettle)
+		spy.ReleaseProduce()
+		require.Eventually(t, func() bool {
+			return partitionTotal(t, ctx, c, queueName) == count-1
+		}, 5*clock.Second, 20*clock.Millisecond)
+		assert.Equal(t, int32(1), partitionTotal(t, ctx, c, dlqName))
+
+		moved := leaseOne(t, ctx, c, dlqName)
+		require.Equal(t, "item-00000", moved.Reference)
+		require.NoError(t, c.QueueComplete(ctx, &pb.QueueCompleteRequest{
+			QueueName:      dlqName,
+			RequestTimeout: "5s",
+			Ids:            []string{moved.Id},
+		}))
+
+		now.Advance(10 * clock.Second)
+		require.Eventually(t, func() bool {
+			return partitionTotal(t, ctx, c, queueName) == 0
+		}, 5*clock.Second, 20*clock.Millisecond)
+
+		var list pb.StorageItemsListResponse
+		require.NoError(t, c.StorageItemsList(ctx, dlqName, 0, &list, &querator.ListOptions{Limit: 2 * count}))
+		references := make([]string, 0, len(list.Items))
+		for _, item := range list.Items {
+			references = append(references, item.Reference)
+		}
+		assert.Equal(t, []string{"item-00001"}, references)
+	})
+
+	t.Run("SourceServesRequestsWhileDeadLetterMoveIsUnanswered", func(t *testing.T) {
+		const writeTimeout = 500 * clock.Millisecond
+		now := clock.NewProvider()
+		now.Freeze(clock.Now())
+		defer now.UnFreeze()
+
+		spy := &lifecycleSpy{}
+		d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: spy.Wrap(setup()), Clock: now, WriteTimeout: writeTimeout})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+		c, ctx := d.MustClient(), d.Context()
+
+		queueName := random.String("queue-", 10)
+		dlqName := random.String("dlq-", 10)
+		createOnePartitionQueue(t, ctx, c, dlqName)
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			QueueName:           queueName,
+			LeaseTimeout:        "1m0s",
+			ExpireTimeout:       "24h0m0s",
+			MaxAttempts:         1,
+			DeadQueue:           dlqName,
+			RequestedPartitions: 1,
+		})
+		produceInOrder(t, ctx, c, queueName, 1)
+		require.Len(t, leaseUpTo(t, ctx, c, queueName, 1), 1)
+
+		spy.HoldNextProducePastDeadline()
+		now.Advance(clock.Minute + clock.Second)
+		spy.WaitForProduceHeld(t, ctx)
+		clock.Sleep(writeTimeout + requestSettle)
+
+		// The dead letter queue has not answered the move, and the source still answers its own
+		// clients well before the held write could end. A lease is left out because a leased item
+		// at MaxAttempts is itself moved on the next pass.
+		served, cancel := context.WithTimeout(ctx, 2*clock.Second)
+		defer cancel()
+		require.NoError(t, c.QueueProduce(served, &pb.QueueProduceRequest{
+			QueueName:      queueName,
+			RequestTimeout: "5s",
+			Items:          []*pb.QueueProduceItem{{Reference: "live", Bytes: []byte("x")}},
+		}))
+		var list pb.StorageItemsListResponse
+		require.NoError(t, c.StorageItemsList(served, queueName, 0, &list, nil))
+		require.Len(t, list.Items, 2)
+
+		spy.ReleaseProduce()
+		require.Eventually(t, func() bool {
+			return partitionTotal(t, ctx, c, queueName) == 1
+		}, 5*clock.Second, 20*clock.Millisecond)
+		assert.Equal(t, int32(1), partitionTotal(t, ctx, c, dlqName))
+	})
+
+	// A restart on the same storage shows what the source kept, so only backends whose storage
+	// outlives the daemon run it.
+	if lifetime == outlivesDaemon {
+		t.Run("DeadLetterMoveUnansweredAtShutdownStaysInSource", func(t *testing.T) {
+			now := clock.NewProvider()
+			now.Freeze(clock.Now())
+			defer now.UnFreeze()
+
+			conf := setup()
+			defer tearDown()
+			queueName := random.String("queue-", 10)
+			dlqName := random.String("dlq-", 10)
+
+			first := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: conf, Clock: now, WriteTimeout: 200 * clock.Millisecond})
+			stopped := false
+			defer func() {
+				if !stopped {
+					first.Shutdown(t)
+				}
+			}()
+			c, ctx := first.MustClient(), first.Context()
+			createOnePartitionQueue(t, ctx, c, dlqName)
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				QueueName:           queueName,
+				LeaseTimeout:        "1m0s",
+				ExpireTimeout:       "24h0m0s",
+				MaxAttempts:         1,
+				DeadQueue:           dlqName,
+				RequestedPartitions: 1,
+			})
+			produceInOrder(t, ctx, c, queueName, 1)
+			require.Len(t, leaseUpTo(t, ctx, c, queueName, 1), 1)
+
+			// The move waits in the paused dead letter queue after the source stops waiting for it,
+			// and the daemon shuts down before the dead letter queue answers.
+			require.NoError(t, first.Service().PauseQueue(ctx, dlqName))
+			now.Advance(2 * clock.Minute)
+			waitForLifecycleRun(t, ctx, c, queueName)
+			first.Shutdown(t)
+			stopped = true
+
+			second := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: conf, Clock: now})
+			defer second.Shutdown(t)
+			c, ctx = second.MustClient(), second.Context()
+
+			assert.Equal(t, int32(0), partitionTotal(t, ctx, c, dlqName))
+			require.Eventually(t, func() bool {
+				now.Advance(clock.Second)
+				return partitionTotal(t, ctx, c, queueName) == 0
+			}, 10*clock.Second, 50*clock.Millisecond)
+
+			var list pb.StorageItemsListResponse
+			require.NoError(t, c.StorageItemsList(ctx, dlqName, 0, &list, nil))
+			require.Len(t, list.Items, 1)
+			assert.Equal(t, "item-00000", list.Items[0].Reference)
+		})
+	}
 }
 
 // produceInOrder produces count items named item-00000, item-00001 and so on, in that order.

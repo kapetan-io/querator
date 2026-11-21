@@ -15,9 +15,13 @@ var UpdateCommand = &cobra.Command{
 	Use:   "update [flags] <queue-name>",
 	Short: "Update an existing queue",
 	Long: `Update an existing queue configuration.
-Only the flags provided will be updated, others remain unchanged.`,
+Only the flags provided will be updated, others remain unchanged.
+Pass --dead-queue "" or --reference "" to remove them, and --max-attempts 0 for unlimited attempts.`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		flags.ClearDeadQueue = cmd.Flags().Changed("dead-queue") && flags.DeadQueueUpdate == ""
+		flags.ClearReference = cmd.Flags().Changed("reference") && flags.ReferenceUpdate == ""
+		flags.UnlimitedAttempts = cmd.Flags().Changed("max-attempts") && flags.MaxAttemptsUpdate == 0
 		return RunUpdate(flags, args[0])
 	},
 }
@@ -30,9 +34,9 @@ func init() {
 	UpdateCommand.Flags().Int32Var(&flags.MaxAttemptsUpdate, "max-attempts",
 		0, "Maximum retry attempts (0 for unlimited)")
 	UpdateCommand.Flags().StringVar(&flags.DeadQueueUpdate, "dead-queue",
-		"", "Dead letter queue name")
+		"", "Dead letter queue name (\"\" to remove)")
 	UpdateCommand.Flags().StringVar(&flags.ReferenceUpdate, "reference",
-		"", "Queue reference/owner")
+		"", "Queue reference/owner (\"\" to remove)")
 	UpdateCommand.Flags().Int32Var(&flags.PartitionsUpdate, "partitions",
 		0, "Number of requested partitions")
 }
@@ -47,29 +51,17 @@ func RunUpdate(flags FlagParams, queueName string) error {
 	defer cancel()
 
 	var currentQueue proto.QueueInfo
-	infoReq := &proto.QueuesInfoRequest{
-		QueueName: queueName,
-	}
-
-	if err := client.QueuesInfo(ctx, infoReq, &currentQueue); err != nil {
+	if err := client.QueuesInfo(ctx, &proto.QueuesInfoRequest{QueueName: queueName}, &currentQueue); err != nil {
 		return fmt.Errorf("failed to get current queue info: %w", err)
 	}
 
-	req := &proto.QueueInfo{
-		QueueName:           currentQueue.QueueName,
-		LeaseTimeout:        currentQueue.LeaseTimeout,
-		ExpireTimeout:       currentQueue.ExpireTimeout,
-		MaxAttempts:         currentQueue.MaxAttempts,
-		DeadQueue:           currentQueue.DeadQueue,
-		Reference:           currentQueue.Reference,
-		RequestedPartitions: currentQueue.RequestedPartitions,
-	}
+	req := &proto.QueuesUpdateRequest{QueueName: currentQueue.QueueName}
 
 	leaseTimeoutSet := flags.LeaseTimeoutUpdate != ""
 	expireTimeoutSet := flags.ExpireTimeoutUpdate != ""
-	maxAttemptsSet := flags.MaxAttemptsUpdate != 0
-	deadQueueSet := flags.DeadQueueUpdate != ""
-	referenceSet := flags.ReferenceUpdate != ""
+	maxAttemptsSet := flags.MaxAttemptsUpdate != 0 || flags.UnlimitedAttempts
+	deadQueueSet := flags.DeadQueueUpdate != "" || flags.ClearDeadQueue
+	referenceSet := flags.ReferenceUpdate != "" || flags.ClearReference
 	partitionsSet := flags.PartitionsUpdate != 0
 
 	if leaseTimeoutSet {
@@ -89,13 +81,13 @@ func RunUpdate(flags FlagParams, queueName string) error {
 		req.ExpireTimeout = flags.ExpireTimeoutUpdate
 	}
 	if maxAttemptsSet {
-		req.MaxAttempts = flags.MaxAttemptsUpdate
+		req.MaxAttempts = new(flags.MaxAttemptsUpdate)
 	}
 	if deadQueueSet {
-		req.DeadQueue = flags.DeadQueueUpdate
+		req.DeadQueue = new(flags.DeadQueueUpdate)
 	}
 	if referenceSet {
-		req.Reference = flags.ReferenceUpdate
+		req.Reference = new(flags.ReferenceUpdate)
 	}
 	if partitionsSet {
 		req.RequestedPartitions = flags.PartitionsUpdate

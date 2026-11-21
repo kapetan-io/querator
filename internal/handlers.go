@@ -194,6 +194,7 @@ func (l *Logical) handleShutdown(state *QueueState, req *types.ShutdownRequest) 
 		l.log.Warn("shutdown context ended before in-flight requests drained", "error", err)
 		req.Err = err
 	}
+	l.rejectQueued()
 
 	state.LifecycleTimer.Stop()
 	state.ScheduledTimer.Stop()
@@ -220,6 +221,17 @@ func (l *Logical) rejectInFlight(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
+		}
+	}
+}
+
+func (l *Logical) rejectQueued() {
+	for {
+		select {
+		case r := <-l.requestCh:
+			rejectWithShutdown(r)
+		default:
+			return
 		}
 	}
 }

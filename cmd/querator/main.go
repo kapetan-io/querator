@@ -49,6 +49,9 @@ type FlagParams struct {
 	DeadQueueUpdate     string
 	ReferenceUpdate     string
 	PartitionsUpdate    int32
+	ClearDeadQueue      bool
+	ClearReference      bool
+	UnlimitedAttempts   bool
 
 	Force bool
 }

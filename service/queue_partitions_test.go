@@ -113,9 +113,9 @@ func TestQueuePartitionLimit(t *testing.T) {
 			}, &lease))
 			assert.Len(t, lease.Items, 1)
 
-			require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+			require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
 				QueueName: name,
-				Reference: "updated",
+				Reference: new("updated"),
 			}))
 		}()
 

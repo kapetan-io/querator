@@ -160,3 +160,32 @@ func TestUpdateCommandClearsSettingsFromFlags(t *testing.T) {
 	assert.Equal(t, "", info.Reference)
 	assert.Equal(t, "2m0s", info.LeaseTimeout)
 }
+
+func TestUpdateCommandLeaseTimeoutKeepsExpireTimeout(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	d, err := daemon.NewDaemon(ctx, daemon.Config{ListenAddress: "localhost:0"})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, d.Shutdown(context.Background())) }()
+
+	const queueName = "update-lease-only"
+	c := d.MustClient()
+	require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+		QueueName:           queueName,
+		LeaseTimeout:        "1m",
+		ExpireTimeout:       "24h",
+		RequestedPartitions: 1,
+	}))
+
+	endpoint := fmt.Sprintf("http://%s", d.Listener.Addr().String())
+	_, err = captureOutput(t, func() error {
+		return main.RunUpdate(main.FlagParams{Endpoint: endpoint, LeaseTimeoutUpdate: "2m"}, queueName)
+	})
+	require.NoError(t, err)
+
+	var info pb.QueueInfo
+	require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &info))
+	assert.Equal(t, "2m0s", info.LeaseTimeout)
+	assert.Equal(t, "24h0m0s", info.ExpireTimeout)
+}

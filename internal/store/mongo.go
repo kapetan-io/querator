@@ -379,11 +379,6 @@ func (q *MongoQueues) Update(ctx context.Context, info types.QueueInfo) error {
 		return err
 	}
 
-	if found.LeaseTimeout > found.ExpireTimeout {
-		return reply.NewInvalidOption("lease timeout is too long; %s cannot be greater than the "+
-			"expire timeout %s", found.LeaseTimeout.String(), found.ExpireTimeout.String())
-	}
-
 	partitionInfoJSON, err := json.Marshal(found.PartitionInfo)
 	if err != nil {
 		return errors.Errorf("marshal partition_info: %w", err)

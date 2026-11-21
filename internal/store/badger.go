@@ -1346,11 +1346,6 @@ func (b *BadgerQueues) Update(_ context.Context, info types.QueueInfo) error {
 			return err
 		}
 
-		if found.LeaseTimeout > found.ExpireTimeout {
-			return reply.NewInvalidOption("lease timeout is too long; %s cannot be greater than the "+
-				"expire timeout %s", info.LeaseTimeout.String(), found.ExpireTimeout.String())
-		}
-
 		var buf bytes.Buffer
 		if err := gob.NewEncoder(&buf).Encode(found); err != nil {
 			return errors.Errorf("during gob.Encode(): %w", err)

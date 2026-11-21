@@ -106,7 +106,16 @@ func (s QueuesValidation) validateAdd(info types.QueueInfo) error {
 }
 
 func (s QueuesValidation) validateUpdate(info types.QueueInfo) error {
-	return s.validateQueueInfo(info)
+	if err := s.validateQueueInfo(info); err != nil {
+		return err
+	}
+
+	if info.LeaseTimeout > info.ExpireTimeout {
+		return reply.NewInvalidOption("lease timeout is too long; %s cannot be greater than the "+
+			"expire timeout %s", info.LeaseTimeout.String(), info.ExpireTimeout.String())
+	}
+
+	return nil
 }
 
 func (s QueuesValidation) validateList(opts types.ListOptions) error {

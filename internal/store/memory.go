@@ -636,18 +636,6 @@ func (s *MemoryQueues) Update(_ context.Context, info types.QueueInfo) error {
 		return ErrQueueNotExist
 	}
 
-	if info.ExpireTimeout.Nanoseconds() != 0 {
-		if info.LeaseTimeout > info.ExpireTimeout {
-			return reply.NewInvalidOption("lease timeout is too long; %s cannot be greater than the "+
-				"expire timeout %s", info.LeaseTimeout.String(), info.ExpireTimeout.String())
-		}
-	}
-
-	if info.LeaseTimeout > s.mem[idx].ExpireTimeout {
-		return reply.NewInvalidOption("lease timeout is too long; %s cannot be greater than the "+
-			"expire timeout %s", info.LeaseTimeout.String(), s.mem[idx].ExpireTimeout.String())
-	}
-
 	found := s.mem[idx]
 	found.Update(info)
 

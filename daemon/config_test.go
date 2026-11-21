@@ -522,8 +522,8 @@ queues:
 			assert.Equal(t, []byte("unleased"), lease.Items[0].Bytes)
 
 			// An update must not move a queue into another namespace.
-			require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
-				QueueName: "removed-from-config", Namespace: "other", LeaseTimeout: "2m", ExpireTimeout: "1h", RequestedPartitions: 1,
+			require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
+				QueueName: "removed-from-config", Namespace: "other", LeaseTimeout: "2m", ExpireTimeout: "1h",
 			}))
 			var other pb.QueuesListResponse
 			require.NoError(t, c.QueuesList(ctx, &other, &querator.ListOptions{Namespace: "other"}))

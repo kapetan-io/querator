@@ -519,7 +519,6 @@ func testNamespaces(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			}()
 			c, ctx := d.MustClient(), d.Context()
 
-			// The _system queue sorts first, so a list that counts it before the namespace filter hides the target's queue
 			target := "z-target-" + random.String("", 6)
 			require.NoError(t, c.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: target}))
 			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -795,7 +794,7 @@ func TestQueuesListLegacyNamespace(t *testing.T) {
 
 	for _, tc := range []struct {
 		Setup       NewStorageFunc
-		StoreLegacy func(ctx context.Context, name string)
+		StoreLegacy func(t *testing.T, ctx context.Context, name string, empty bool)
 		TearDown    func()
 		Name        string
 	}{
@@ -804,7 +803,7 @@ func TestQueuesListLegacyNamespace(t *testing.T) {
 			Setup: func() store.Config {
 				return withMemoryAuth(postgres.Setup(store.PostgresConfig{}))
 			},
-			StoreLegacy: func(ctx context.Context, name string) {
+			StoreLegacy: func(t *testing.T, ctx context.Context, name string, _ bool) {
 				conn, err := pgx.Connect(ctx, postgres.dsn)
 				require.NoError(t, err)
 				defer func() { _ = conn.Close(ctx) }()
@@ -818,15 +817,14 @@ func TestQueuesListLegacyNamespace(t *testing.T) {
 			Setup: func() store.Config {
 				return withMemoryAuth(mongo.Setup(store.MongoConfig{}))
 			},
-			StoreLegacy: func(ctx context.Context, name string) {
+			StoreLegacy: func(t *testing.T, ctx context.Context, name string, empty bool) {
 				container, err := getSharedMongoContainer()
 				require.NoError(t, err)
 				client, err := mongodriver.Connect(ctx, mongoopts.Client().ApplyURI(container.uri))
 				require.NoError(t, err)
 				defer func() { _ = client.Disconnect(ctx) }()
-				// Earlier versions saved the field missing or empty
 				update := bson.M{"$unset": bson.M{"namespace": ""}}
-				if name == "c-legacy-empty" {
+				if empty {
 					update = bson.M{"$set": bson.M{"namespace": ""}}
 				}
 				_, err = client.Database(mongo.dbName).Collection("queues").UpdateOne(ctx,
@@ -860,8 +858,8 @@ func TestQueuesListLegacyNamespace(t *testing.T) {
 			create("c-legacy-empty", "")
 			create("d-system", "")
 			create("e-other", other)
-			tc.StoreLegacy(ctx, "b-legacy")
-			tc.StoreLegacy(ctx, "c-legacy-empty")
+			tc.StoreLegacy(t, ctx, "b-legacy", false)
+			tc.StoreLegacy(t, ctx, "c-legacy-empty", true)
 
 			var system pb.QueuesListResponse
 			require.NoError(t, c.QueuesList(ctx, &system, &querator.ListOptions{Namespace: auth.SystemNamespace, Limit: 3}))

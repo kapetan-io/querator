@@ -16,7 +16,6 @@ limitations under the License.
 
 package transport
 
-// HealthStatus represents the overall health status
 type HealthStatus string
 
 const (
@@ -25,8 +24,6 @@ const (
 	HealthStatusFail HealthStatus = "fail"
 )
 
-// HealthResponse represents the RFC Health Check response format
-// (draft-inadarei-api-health-check-06)
 type HealthResponse struct {
 	Status      HealthStatus       `json:"status"`
 	Version     string             `json:"version,omitempty"`
@@ -39,7 +36,6 @@ type HealthResponse struct {
 	Description string             `json:"description,omitempty"`
 }
 
-// Check represents a component health check
 type Check struct {
 	ComponentID   string       `json:"componentId,omitempty"`
 	ComponentType string       `json:"componentType,omitempty"`

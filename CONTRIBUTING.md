@@ -77,6 +77,15 @@ $ make ci
 ```
 This will run the linter, go mod tidy check and the full test suite.
 
+### Run Tiger
+[Tiger](https://github.com/kapetan-io/tiger) is a static analyzer for Go. It is not part of `make ci` or any CI workflow.
+```bash
+$ go install github.com/kapetan-io/tiger/cmd/tiger@latest
+$ make tiger
+```
+Any `make` run turns on the pre-push hook in your clone, and the hook runs Tiger before each `git push`.
+It stops the push when Tiger isn't installed. `git push --no-verify` skips it.
+
 ### Commits & Messages
 We don't have a specific structure for commit messages, but please be as descriptive as possible and avoid
 lots of tiny commits. If this is your style, please squash before making a PR, or we may squash on merge for you.

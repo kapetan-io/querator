@@ -9,9 +9,6 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// -------------------------------------------------
-
-// ErrRequestFailed is used to tell the client that the request was valid, but it failed for some reason.
 type ErrRequestFailed struct {
 	msg string
 }
@@ -52,21 +49,18 @@ func (e *ErrRequestFailed) Message() string {
 
 var _ duh.Error = &ErrRequestFailed{}
 
-// -------------------------------------------------
+type Kind string
 
-// ErrInvalidOption is used to indicate an option provided was invalid for some reason
 type ErrInvalidOption struct {
 	msg  string
-	kind string
+	kind Kind
 }
 
 func NewInvalidOption(msg string, args ...any) *ErrInvalidOption {
 	return &ErrInvalidOption{msg: fmt.Sprintf(msg, args...)}
 }
 
-// NewInvalidOptionKind creates an ErrInvalidOption with a kind tag for precise errors.Is matching.
-// Use when a specific condition needs to be distinguished from other ErrInvalidOption errors.
-func NewInvalidOptionKind(kind, msg string, args ...any) *ErrInvalidOption {
+func NewInvalidOptionKind(kind Kind, msg string, args ...any) *ErrInvalidOption {
 	return &ErrInvalidOption{kind: kind, msg: fmt.Sprintf(msg, args...)}
 }
 
@@ -79,11 +73,9 @@ func (e *ErrInvalidOption) Is(target error) bool {
 	if !errors.As(target, &t) {
 		return false
 	}
-	// Empty kind on target matches any ErrInvalidOption (broad match, backward compatible)
 	if t.kind == "" {
 		return true
 	}
-	// Non-empty kind on target requires exact kind match
 	return e.kind == t.kind
 }
 
@@ -110,10 +102,6 @@ func (e *ErrInvalidOption) Message() string {
 
 var _ duh.Error = &ErrInvalidOption{}
 
-// -------------------------------------------------
-
-// ErrRetryRequest is used to tell the client that the request was valid, the server did not encounter a failure, but
-// the request did not succeed. The client should retry
 type ErrRetryRequest struct {
 	msg string
 }
@@ -154,9 +142,6 @@ func (e *ErrRetryRequest) Message() string {
 
 var _ duh.Error = &ErrRetryRequest{}
 
-// -------------------------------------------------
-
-// ErrConflict is used to indicate there was a conflict
 type ErrConflict struct {
 	msg string
 }
@@ -199,9 +184,6 @@ func (e *ErrConflict) Message() string {
 
 var _ duh.Error = &ErrConflict{}
 
-// -------------------------------------------------
-
-// ErrUnauthorized is used to indicate authentication is required but not provided or invalid
 type ErrUnauthorized struct {
 	msg string
 }
@@ -242,9 +224,6 @@ func (e *ErrUnauthorized) Message() string {
 
 var _ duh.Error = &ErrUnauthorized{}
 
-// -------------------------------------------------
-
-// ErrForbidden is used to indicate the request is authenticated but lacks permission
 type ErrForbidden struct {
 	msg string
 }

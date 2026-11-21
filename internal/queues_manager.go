@@ -3,7 +3,9 @@ package internal
 import (
 	"context"
 	"log/slog"
+	"maps"
 	"math"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -12,7 +14,6 @@ import (
 	"github.com/kapetan-io/errors"
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
-	"github.com/kapetan-io/querator/proto"
 	"github.com/kapetan-io/querator/transport/reply"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/set"
@@ -28,21 +29,6 @@ type QueuesManagerConfig struct {
 	Log           *slog.Logger
 }
 
-// Remote represents a remote instance of querator. Implementations proxy requests to the remote instance
-type Remote interface {
-	QueueLease(ctx context.Context, req *proto.QueueLeaseRequest, res *proto.QueueLeaseResponse) error
-	QueueProduce(ctx context.Context, req *proto.QueueProduceRequest) error
-	QueueComplete(ctx context.Context, req *proto.QueueCompleteRequest) error
-	QueueRetry(ctx context.Context, req *proto.QueueRetryRequest) error
-	StorageItemsList(ctx context.Context, req *proto.StorageItemsListRequest,
-		res *proto.StorageItemsListResponse) error
-	StorageItemsImport(ctx context.Context, req *proto.StorageItemsImportRequest,
-		res *proto.StorageItemsImportResponse) error
-	StorageItemsDelete(ctx context.Context, req *proto.StorageItemsDeleteRequest) error
-}
-
-
-// QueuesManager manages queues in use, and information about that queue.
 type QueuesManager struct {
 	queues     map[string]*Queue
 	conf       QueuesManagerConfig
@@ -63,6 +49,24 @@ func NewQueuesManager(conf QueuesManagerConfig) (*QueuesManager, error) {
 		return nil, errors.New("conf.Config.PartitionStorage cannot be empty")
 	}
 
+	var total float64
+	seen := make(map[string]struct{}, len(conf.StorageConfig.PartitionStorage))
+	for _, b := range conf.StorageConfig.PartitionStorage {
+		if _, ok := seen[b.Name]; ok {
+			return nil, errors.Errorf("duplicate partition storage name '%s'; every partition storage must have a unique name", b.Name)
+		}
+		seen[b.Name] = struct{}{}
+		if math.IsNaN(b.Affinity) || math.IsInf(b.Affinity, 0) {
+			return nil, errors.Errorf("partition storage '%s' affinity must be a finite number, got %v", b.Name, b.Affinity)
+		}
+		if b.Affinity > 0 {
+			total += b.Affinity
+		}
+	}
+	if math.IsInf(total, 0) {
+		return nil, errors.New("the sum of partition storage affinities is too large; lower the affinities")
+	}
+
 	qm := &QueuesManager{
 		log:    conf.Log.With("code.namespace", "QueuesManager"),
 		queues: make(map[string]*Queue),
@@ -71,8 +75,6 @@ func NewQueuesManager(conf QueuesManagerConfig) (*QueuesManager, error) {
 
 	return qm, nil
 }
-
-// TODO: Implement a healthcheck method call, which will ensure access to Config is working
 
 func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Queue, error) {
 	if qm.inShutdown.Load() {
@@ -86,32 +88,28 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Que
 		return q, reply.NewInvalidOption("invalid queue; '%s' already exists", info.Name)
 	}
 
-	// Validate DLQ configuration before creating queue
+	if !store.CanPlacePartitions(qm.conf.StorageConfig.PartitionStorage) {
+		return nil, reply.NewRequestFailed("no storage backend can take partitions; " +
+			"at least one partition storage needs an affinity above 0")
+	}
+
 	if err := qm.validateDeadQueue(ctx, info); err != nil {
 		return nil, err
 	}
 
-	// When creating a new Queue, info.PartitionInfo should have no details, but should
-	// include the number of partitions requested. This QueueManager will decide where to
-	// place the partitions depending on the storage backend configurations. As such
-	// any details included by the caller will be ignored.
+	if err := qm.validateAsDeadQueue(ctx, info); err != nil {
+		return nil, err
+	}
 
-	// TODO: Test partitions are spread across multiple backends
-	// Spread the partitions across the storage backends according to affinity
-	var partitionIdx = 0
-	for idx, count := range qm.assignPartitions(info.RequestedPartitions) {
-		for i := 0; i < count; i++ {
-			p := types.PartitionInfo{
-				StorageName:  qm.conf.StorageConfig.PartitionStorage[idx].Name,
-				PartitionNum: partitionIdx,
-				Queue:        info,
-			}
-			partitionIdx++
-			info.PartitionInfo = append(info.PartitionInfo, p)
-			qm.log.LogAttrs(ctx, LevelDebugAll, "Partition Assigned",
-				slog.String("queue", p.Queue.Name), slog.String("storage", p.StorageName),
-				slog.Bool("read-only", p.ReadOnly), slog.Int("partition", p.PartitionNum))
-		}
+	placed, err := store.PlacePartitions(qm.conf.StorageConfig.PartitionStorage, info)
+	if err != nil {
+		return nil, err
+	}
+	info.PartitionInfo = placed
+	for _, p := range info.PartitionInfo {
+		qm.log.LogAttrs(ctx, LevelDebugAll, "Partition Assigned",
+			slog.String("queue", p.Queue.Name), slog.String("storage", p.StorageName),
+			slog.Bool("read-only", p.ReadOnly), slog.Int("partition", p.PartitionNum))
 	}
 
 	info.CreatedAt = qm.conf.LogicalConfig.Clock.Now().UTC()
@@ -135,13 +133,11 @@ func (qm *QueuesManager) Get(ctx context.Context, name string) (*Queue, error) {
 }
 
 func (qm *QueuesManager) get(ctx context.Context, name string) (*Queue, error) {
-	// If queue is already running
 	q, ok := qm.queues[name]
 	if ok {
 		return q, nil
 	}
 
-	// Look for the queue in storage
 	var queue types.QueueInfo
 	if err := qm.conf.StorageConfig.Queues.Get(ctx, name, &queue); err != nil {
 		if errors.Is(err, store.ErrQueueNotExist) {
@@ -150,7 +146,6 @@ func (qm *QueuesManager) get(ctx context.Context, name string) (*Queue, error) {
 		return nil, err
 	}
 
-	// Get the partitions from the store
 	var partitions []store.Partition
 	for _, info := range queue.PartitionInfo {
 
@@ -165,7 +160,11 @@ func (qm *QueuesManager) get(ctx context.Context, name string) (*Queue, error) {
 		partitions = append(partitions, b.PartitionStore.Get(info))
 	}
 
-	// Single logical queue per queue. Multi-logical support deferred until demonstrated need.
+	if len(partitions) == 0 {
+		qm.queues[queue.Name] = NewQueue(queue)
+		return qm.queues[queue.Name], nil
+	}
+
 	l, err := SpawnLogicalQueue(LogicalConfig{
 		MaxProduceBatchSize:  qm.conf.LogicalConfig.MaxProduceBatchSize,
 		MaxLeaseBatchSize:    qm.conf.LogicalConfig.MaxLeaseBatchSize,
@@ -196,32 +195,48 @@ func (qm *QueuesManager) List(ctx context.Context, items *[]types.QueueInfo, opt
 	return qm.conf.StorageConfig.Queues.List(ctx, items, opts)
 }
 
-func (qm *QueuesManager) Update(ctx context.Context, info types.QueueInfo) error {
+func (qm *QueuesManager) Update(ctx context.Context, update types.QueueUpdate) error {
 	if qm.inShutdown.Load() {
 		return ErrServiceShutdown
 	}
 	defer qm.mutex.Unlock()
 	qm.mutex.Lock()
 
-	// Validate DLQ configuration before updating queue
+	var current types.QueueInfo
+	if err := qm.conf.StorageConfig.Queues.Get(ctx, update.Name, &current); err != nil {
+		if errors.Is(err, store.ErrQueueNotExist) {
+			return err
+		}
+		return errors.Errorf("Queues.Get(): %w", err)
+	}
+	info := update.ApplyTo(current)
+
 	if err := qm.validateDeadQueue(ctx, info); err != nil {
 		return err
 	}
 
-	// Update the queue info in the data store
+	if err := qm.validateAsDeadQueue(ctx, info); err != nil {
+		return err
+	}
+
 	info.UpdatedAt = qm.conf.LogicalConfig.Clock.Now().UTC()
 	if err := qm.conf.StorageConfig.Queues.Update(ctx, info); err != nil {
 		return errors.Errorf("Queues.Update(): %w", err)
 	}
 
-	// If the queue is currently in use
 	q, ok := qm.queues[info.Name]
 	if !ok {
 		return nil
 	}
 
+	var stored types.QueueInfo
+	if err := qm.conf.StorageConfig.Queues.Get(ctx, info.Name, &stored); err != nil {
+		return errors.Errorf("Queues.Get(): %w", err)
+	}
+	q.UpdateInfo(stored)
+
 	for _, l := range q.GetAll() {
-		if err := l.UpdateInfo(ctx, info); err != nil {
+		if err := l.UpdateInfo(ctx, stored); err != nil {
 			return errors.Errorf("LogicalQueue.UpdateInfo(): %w", err)
 		}
 	}
@@ -230,11 +245,9 @@ func (qm *QueuesManager) Update(ctx context.Context, info types.QueueInfo) error
 }
 
 func (qm *QueuesManager) LifeCycle(ctx context.Context, req *types.LifeCycleRequest) error {
-	// Get the queue info from the request's partition info
 	queueInfo := req.PartitionInfo.Queue
 	deadQueueName := queueInfo.DeadQueue
 
-	// Collect all dead items (ItemExpired and ItemMaxAttempts actions)
 	var deadItems []*types.Item
 	for _, action := range req.Actions {
 		if action.Action == types.ActionItemExpired || action.Action == types.ActionItemMaxAttempts {
@@ -242,17 +255,14 @@ func (qm *QueuesManager) LifeCycle(ctx context.Context, req *types.LifeCycleRequ
 		}
 	}
 
-	// If no dead items, nothing to do
 	if len(deadItems) == 0 {
 		return nil
 	}
 
-	// Validate that partition storage was provided
 	if req.PartitionStorage == nil {
 		return errors.Errorf("PartitionStorage is required for lifecycle operations")
 	}
 
-	// If no DLQ configured, delete items and log warnings
 	if deadQueueName == "" {
 		for _, item := range deadItems {
 			qm.log.Warn("item exceeded limits, deleting (no dead_queue configured)",
@@ -261,90 +271,103 @@ func (qm *QueuesManager) LifeCycle(ctx context.Context, req *types.LifeCycleRequ
 				"partition", req.PartitionNum)
 		}
 
-		// Delete items from source partition
-		var itemIDs [][]byte
-		for _, item := range deadItems {
-			itemIDs = append(itemIDs, item.ID)
-		}
-		batch := types.CompleteBatch{}
-		batch.Add(&types.CompleteRequest{Ids: itemIDs})
-		if err := req.PartitionStorage.Complete(ctx, batch); err != nil {
+		if err := deleteDeadItems(ctx, req, len(deadItems)); err != nil {
 			return errors.Errorf("failed to delete items from source partition: %w", err)
 		}
 		return nil
 	}
 
-	// DLQ is configured - prepare items for DLQ. Capture the original IDs now (used to delete
-	// from the source partition after a successful produce) since we clear item.ID below.
-	itemIDs := make([][]byte, 0, len(deadItems))
 	for _, item := range deadItems {
-		// Set SourceID to original ID for idempotency
 		item.SourceID = item.ID
-		itemIDs = append(itemIDs, item.ID)
-		// Clear ID so DLQ storage generates a new one
 		item.ID = nil
-		// Reset state for DLQ
 		item.IsLeased = false
 		item.LeaseDeadline = clock.Time{}
 		item.Attempts = 0
 	}
 
-	// Produce items to DLQ
-	if err := qm.ProduceToQueue(ctx, deadQueueName, deadItems); err != nil {
-		qm.log.Error("failed to produce to dead_queue",
+	req.HandOff = &types.ProduceRequest{Items: deadItems}
+	stored, err := qm.ProduceToQueue(ctx, deadQueueName, req.HandOff)
+	if errors.Is(err, ErrMoveUnanswered) {
+		qm.log.Warn("dead queue has not answered the move; the source keeps the items until it does",
 			"dead_queue", deadQueueName,
 			"source_queue", queueInfo.Name,
+			"items", len(deadItems))
+		return err
+	}
+	return qm.settleMove(ctx, req, stored, err)
+}
+
+func (qm *QueuesManager) SettleAnsweredMove(ctx context.Context, req *types.LifeCycleRequest) error {
+	err := req.HandOff.Err
+	if err != nil {
+		err = errors.Errorf("failed to produce to queue '%s': %w", req.PartitionInfo.Queue.DeadQueue, err)
+	}
+	return qm.settleMove(ctx, req, req.HandOff.Stored, err)
+}
+
+func (qm *QueuesManager) settleMove(ctx context.Context, req *types.LifeCycleRequest, stored int, err error) error {
+	if err != nil {
+		qm.log.Error("failed to produce to dead_queue",
+			"dead_queue", req.PartitionInfo.Queue.DeadQueue,
+			"source_queue", req.PartitionInfo.Queue.Name,
+			"stored", stored,
 			"error", err)
+		if stored != 0 {
+			if err := deleteDeadItems(ctx, req, stored); err != nil {
+				return errors.Errorf("%w: %w", ErrMovedItemsKept, err)
+			}
+		}
 		return err
 	}
 
-	// Delete items from source partition after successful DLQ produce
-	batch := types.CompleteBatch{}
-	batch.Add(&types.CompleteRequest{Ids: itemIDs})
-	if err := req.PartitionStorage.Complete(ctx, batch); err != nil {
-		// Log error but don't fail - items are already in DLQ
-		// Next lifecycle will attempt cleanup again (DLQ will dedupe via SourceID)
-		qm.log.Error("failed to delete items from source partition after DLQ produce",
-			"source_queue", queueInfo.Name,
-			"partition", req.PartitionNum,
-			"error", err)
+	if err := deleteDeadItems(ctx, req, len(req.HandOff.Items)); err != nil {
+		return errors.Errorf("%w: %w", ErrMovedItemsKept, err)
 	}
 
 	return nil
 }
 
-// ProduceToQueue produces items to the specified queue by name.
-// Used for DLQ item movement during lifecycle processing.
-func (qm *QueuesManager) ProduceToQueue(ctx context.Context, queueName string, items []*types.Item) error {
+func deleteDeadItems(ctx context.Context, req *types.LifeCycleRequest, limit int) error {
+	actions := make([]types.Action, 0, limit)
+	for _, a := range req.Actions {
+		if len(actions) == limit {
+			break
+		}
+		if a.Action == types.ActionItemExpired || a.Action == types.ActionItemMaxAttempts {
+			a.Action = types.ActionDeleteItem
+			actions = append(actions, a)
+		}
+	}
+	var batch types.LifeCycleBatch
+	batch.Add(&types.LifeCycleRequest{PartitionNum: req.PartitionNum, Actions: actions})
+	return req.PartitionStorage.TakeAction(ctx, batch, req.PartitionState)
+}
+
+func (qm *QueuesManager) ProduceToQueue(ctx context.Context, queueName string, req *types.ProduceRequest) (int, error) {
 	qm.mutex.Lock()
 	q, err := qm.get(ctx, queueName)
 	qm.mutex.Unlock()
 	if err != nil {
-		return errors.Errorf("failed to get queue '%s': %w", queueName, err)
+		return 0, errors.Errorf("failed to get queue '%s': %w", queueName, err)
 	}
 
-	_, logical := q.GetNext()
+	logical := q.GetNext()
 	if logical == nil {
-		return errors.Errorf("queue '%s' has no available partitions", queueName)
+		return 0, errors.Errorf("queue '%s' has no available partitions", queueName)
 	}
-	// Route through the dead-letter queue's own requestLoop (ADR-0003). The items are already
-	// built; ExpireDeadline is assigned by the loop, so we pass them through unmodified.
-	if err := logical.ProduceDeadLetter(ctx, &types.ProduceRequest{Items: items}); err != nil {
-		return errors.Errorf("failed to produce to queue '%s': %w", queueName, err)
+	stored, err := logical.ProduceDeadLetter(ctx, req)
+	if err != nil {
+		return stored, errors.Errorf("failed to produce to queue '%s': %w", queueName, err)
 	}
 
-	return nil
+	return stored, nil
 }
 
-// validateDeadQueue validates that a dead queue configuration is valid.
-// Returns nil if validation passes, error otherwise.
 func (qm *QueuesManager) validateDeadQueue(ctx context.Context, info types.QueueInfo) error {
-	// No DLQ configured is valid
 	if info.DeadQueue == "" {
 		return nil
 	}
 
-	// Validate DeadQueue format first (before checking existence)
 	const maxQueueNameLength = 500
 	if len(info.DeadQueue) > maxQueueNameLength {
 		return reply.NewInvalidOption("dead queue is invalid; cannot be greater than '%d' characters", maxQueueNameLength)
@@ -358,12 +381,10 @@ func (qm *QueuesManager) validateDeadQueue(ctx context.Context, info types.Queue
 		return reply.NewInvalidOption("dead queue is invalid; '%s' cannot contain '~' character", info.DeadQueue)
 	}
 
-	// Prevent self-reference
 	if info.DeadQueue == info.Name {
 		return reply.NewInvalidOption("dead_queue cannot reference itself")
 	}
 
-	// Fetch the DLQ to ensure it exists
 	dlq, err := qm.get(ctx, info.DeadQueue)
 	if err != nil {
 		var invalidOpt *reply.ErrInvalidOption
@@ -373,22 +394,63 @@ func (qm *QueuesManager) validateDeadQueue(ctx context.Context, info types.Queue
 		return err
 	}
 
-	// Enforce no DLQ chains: a DLQ cannot have its own DLQ
 	dlqInfo := dlq.Info()
 	if dlqInfo.DeadQueue != "" {
-		return reply.NewInvalidOption("dead_queue is invalid; '%s' already has its own dead_queue configured", info.DeadQueue)
+		return reply.NewInvalidOption("dead_queue is invalid; '%s' already has its own dead_queue configured, "+
+			"clear or change dead_queue on '%s' first", info.DeadQueue, info.DeadQueue)
 	}
 
-	// Enforce single-partition dead-letter queues (ENG-57). SourceID dedup is partition-scoped,
-	// so a multi-partition DLQ can duplicate an item when a failed-then-retried lifecycle move
-	// lands on a different partition than the first attempt and escapes the partition-local
-	// SourceID index. Constraining the DLQ to one partition makes that dedup a hard guarantee.
 	if dlqInfo.RequestedPartitions > 1 {
 		return reply.NewInvalidOption("dead_queue is invalid; '%s' must have a single partition, but has '%d'",
 			info.DeadQueue, dlqInfo.RequestedPartitions)
 	}
 
 	return nil
+}
+
+func (qm *QueuesManager) validateAsDeadQueue(ctx context.Context, info types.QueueInfo) error {
+	if info.DeadQueue == "" && info.RequestedPartitions <= 1 {
+		return nil
+	}
+
+	source, err := qm.sourceQueueOf(ctx, info.Name)
+	if err != nil {
+		return err
+	}
+	if source == "" {
+		return nil
+	}
+
+	if info.DeadQueue != "" {
+		return reply.NewInvalidOption("dead_queue is invalid; '%s' is the dead_queue of '%s' and cannot have its own dead_queue, "+
+			"clear or change dead_queue on '%s' first", info.Name, source, source)
+	}
+
+	return reply.NewInvalidOption("partitions is invalid; '%s' is the dead_queue of '%s' and must have a single partition, "+
+		"clear or change dead_queue on '%s' first", info.Name, source, source)
+}
+
+func (qm *QueuesManager) sourceQueueOf(ctx context.Context, name string) (string, error) {
+	const pageSize = 1000
+	var pivot []byte
+	for ctx.Err() == nil {
+		var page []types.QueueInfo
+		if err := qm.conf.StorageConfig.Queues.List(ctx, &page, types.ListOptions{Pivot: pivot, Limit: pageSize}); err != nil {
+			return "", errors.Errorf("Queues.List(): %w", err)
+		}
+
+		for _, queue := range page {
+			if queue.DeadQueue == name && queue.Name != name {
+				return queue.Name, nil
+			}
+		}
+
+		if len(page) < pageSize {
+			return "", nil
+		}
+		pivot = []byte(page[len(page)-1].Name)
+	}
+	return "", ctx.Err()
 }
 
 func (qm *QueuesManager) Delete(ctx context.Context, name string) error {
@@ -398,12 +460,19 @@ func (qm *QueuesManager) Delete(ctx context.Context, name string) error {
 	defer qm.mutex.Unlock()
 	qm.mutex.Lock()
 
-	// TODO: Delete should return reply.NewInvalidOption("queue does not exist; no such queue named '%s'", name)
+	source, err := qm.sourceQueueOf(ctx, name)
+	if err != nil {
+		return err
+	}
+	if source != "" {
+		return reply.NewInvalidOption("queue '%s' cannot be deleted; it is the dead_queue of '%s', "+
+			"clear or change dead_queue on '%s' first", name, source, source)
+	}
+
 	if err := qm.conf.StorageConfig.Queues.Delete(ctx, name); err != nil {
 		return errors.Errorf("Queues.Delete(): %w", err)
 	}
 
-	// If the queue is currently in use
 	q, ok := qm.queues[name]
 	if !ok {
 		return nil
@@ -424,21 +493,19 @@ func (qm *QueuesManager) Shutdown(ctx context.Context) error {
 		return nil
 	}
 
-	// Lock the mutex to safely copy the queue references, then release it
-	// before waiting for logical queues to shut down. This avoids a deadlock
-	// where requestLoop (in runLifecycle -> ProduceToQueue) waits to acquire
-	// the mutex while Shutdown holds it waiting for requestLoop to exit.
 	qm.inShutdown.Store(true)
 	qm.mutex.Lock()
 	queues := make([]*Queue, 0, len(qm.queues))
-	for _, q := range qm.queues {
-		queues = append(queues, q)
+	for _, name := range slices.Sorted(maps.Keys(qm.queues)) {
+		queues = append(queues, qm.queues[name])
 	}
 	qm.mutex.Unlock()
 
-	wait := make(chan error, 1)
-	go func() {
-		var errs []error
+	var closing sync.WaitGroup
+	var errs []error
+	done := make(chan struct{})
+	closing.Go(func() {
+		defer close(done)
 		for _, q := range queues {
 			qm.log.LogAttrs(ctx, LevelDebugAll, "shutdown logical",
 				slog.Int("num_queues", len(queues)),
@@ -483,32 +550,18 @@ func (qm *QueuesManager) Shutdown(ctx context.Context) error {
 				errs = append(errs, err)
 			}
 		}
-		if len(errs) > 0 {
-			wait <- errs[0]
-			return
-		}
-		close(wait)
-	}()
+	})
 
 	select {
 	case <-ctx.Done():
 		qm.log.Warn("ctx cancelled while waiting for shutdown")
 		return errors.Wrap(ctx.Err())
-	case err := <-wait:
+	case <-done:
+		closing.Wait()
 		qm.log.LogAttrs(ctx, LevelDebugAll, "Shutdown complete")
-		return errors.Wrap(err)
+		if len(errs) > 0 {
+			return errors.Wrap(errs[0])
+		}
+		return nil
 	}
-}
-
-// assignPartitions assigns partition counts to a backend based on affinity
-func (qm *QueuesManager) assignPartitions(totalPartitions int) []int {
-	var totalAffinity float64
-	for _, backend := range qm.conf.StorageConfig.PartitionStorage {
-		totalAffinity += backend.Affinity
-	}
-	assignments := make([]int, len(qm.conf.StorageConfig.PartitionStorage))
-	for i, b := range qm.conf.StorageConfig.PartitionStorage {
-		assignments[i] = int(math.Floor((b.Affinity / totalAffinity) * float64(totalPartitions)))
-	}
-	return assignments
 }

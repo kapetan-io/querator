@@ -8,6 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `make cover` - Generate test coverage report and open in browser
 - `make proto` - Generate protobuf files using buf
 - `make ci` - Run the full test suite and linter. Before running, stage the files you intend to commit (`git add`), then run `make ci`. Commit only after everything passes.
+- `make tiger` - Run the Tiger static analyzer over every package. Install it with `go install github.com/kapetan-io/tiger/cmd/tiger@latest`. Any `make` run turns on `.githooks/pre-push`, which runs Tiger before each push. `git push --no-verify` skips it.
 
 ### Functional Testing Strategy
 
@@ -113,6 +114,10 @@ the tests are all nested under a single test function.
 - Table-driven tests for validation scenarios
 - You MUST use `github.com/stretchr/testify/assert` and `github.com/stretchr/testify/require` instead of `if` for assertions
 - All tests MUST be in the `XXXX_test` package and NOT in the same package which is under test
+
+### Documentation
+- A change to the implementation needs no documentation edit. `docs/operating-limits.md` holds only limits an operator sees or must work around, and changes only when what an operator sees or must do changes. `docs/CONTEXT.md` is the glossary. If your change makes a sentence in any of these false, delete the sentence and say so in the pull request.
+- A rule or trap that must stay true goes in a test that fails when the code breaks it. A reason why something is built the way it is goes in an ADR under `docs/adr/`, written as the decision as it stands, and no longer in a package comment (`doc.go`). Tiger (the static checker, `GOTOOLCHAIN=go1.26.10 tiger check ./...`) allows no comments below the `package` line, so a reason cannot sit next to the code it explains.
 
 ### Naming Conventions
 - Follow `docs/NAMING.md` guidelines

@@ -14,19 +14,23 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Command quickstart validates the Querator quick start documentation
+// Quickstart validates the Querator quick start documentation
 // by starting docker-compose, checking health, and performing basic queue operations.
+//
+// The test queue is reused when it already exists, so the check can run
+// again against an instance a previous run left behind.
 //
 // Usage:
 //
-//	go run quickstart.go [flags]
+//	go run ./cmd/quickstart [flags]
 //
 // Flags:
 //
-//	--endpoint string   Querator endpoint (default "http://localhost:2319")
-//	--skip-docker       Skip docker compose up/down (use existing instance)
-//	--cleanup           Run docker compose down after tests
-//	--verbose           Print detailed output
+//	--endpoint string          Querator endpoint (default "http://localhost:2319")
+//	--skip-docker              Skip docker compose up/down (use existing instance)
+//	--cleanup                  Run docker compose down after tests
+//	--verbose                  Print detailed output
+//	--health-timeout duration  Timeout for health check (default 1m0s)
 package main
 
 import (
@@ -34,15 +38,19 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/kapetan-io/querator"
 	pb "github.com/kapetan-io/querator/proto"
 	"github.com/kapetan-io/querator/transport"
+	"github.com/kapetan-io/tackle/clock"
+	"github.com/kapetan-io/tackle/retry"
 )
 
 const (
@@ -66,13 +74,15 @@ func main() {
 	fmt.Println("Querator Quick Start Validation")
 	fmt.Println("================================")
 
-	if err := run(); err != nil {
+	if err := run(context.Background()); err != nil {
 		fmt.Printf("\n[✗] Error: %v\n", err)
 		if !*skipDocker {
 			showDockerLogs()
 			if *cleanup {
 				fmt.Println("\n[~] Attempting cleanup...")
-				_ = stopDocker()
+				if err := stopDocker(); err != nil {
+					fmt.Printf("[✗] Cleanup failed: %v\n", err)
+				}
 			}
 		}
 		os.Exit(1)
@@ -88,7 +98,7 @@ func main() {
 	fmt.Println("\nAll checks passed!")
 }
 
-func run() error {
+func run(ctx context.Context) error {
 	if err := checkPrerequisites(); err != nil {
 		return err
 	}
@@ -101,7 +111,7 @@ func run() error {
 		printCheck("Docker compose started")
 	}
 
-	if err := waitForHealth(*endpoint, *healthTimeout); err != nil {
+	if err := waitForHealth(ctx, *endpoint, *healthTimeout); err != nil {
 		return err
 	}
 	printCheck("Health check passed (status: pass)")
@@ -113,7 +123,7 @@ func run() error {
 		return fmt.Errorf("failed to create client: %w", err)
 	}
 
-	if err := runQueueWorkflow(client); err != nil {
+	if err := runQueueWorkflow(ctx, client); err != nil {
 		return err
 	}
 
@@ -171,70 +181,88 @@ func showDockerLogs() {
 	cmd := exec.Command("docker", "compose", "logs", "--tail=100")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	_ = cmd.Run()
+	if err := cmd.Run(); err != nil {
+		fmt.Printf("[~] docker compose logs failed: %v\n", err)
+	}
 
 	fmt.Println("\n[~] === Docker PS ===")
 	cmd = exec.Command("docker", "ps", "-a")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	_ = cmd.Run()
-}
-
-func waitForHealth(endpoint string, timeout time.Duration) error {
-	verboseLog("Waiting for health endpoint...")
-
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	healthURL := endpoint + "/health"
-	ticker := time.NewTicker(healthRetry)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("health check timed out after %v", timeout)
-		case <-ticker.C:
-			resp, err := http.Get(healthURL)
-			if err != nil {
-				verboseLog("Health check failed, retrying: %v", err)
-				continue
-			}
-
-			var health transport.HealthResponse
-			if err := json.NewDecoder(resp.Body).Decode(&health); err != nil {
-				_ = resp.Body.Close()
-				verboseLog("Failed to decode health response, retrying: %v", err)
-				continue
-			}
-			_ = resp.Body.Close()
-
-			if health.Status == transport.HealthStatusPass {
-				return nil
-			}
-
-			// Print health check details when status is fail
-			if health.Status == transport.HealthStatusFail {
-				verboseLog("Health status: %s", health.Status)
-				for name, checks := range health.Checks {
-					for _, check := range checks {
-						if check.Output != "" {
-							verboseLog("  %s: %s - %s", name, check.Status, check.Output)
-						} else {
-							verboseLog("  %s: %s", name, check.Status)
-						}
-					}
-				}
-			} else {
-				verboseLog("Health status not ready: %s", health.Status)
-			}
-		}
+	if err := cmd.Run(); err != nil {
+		fmt.Printf("[~] docker ps failed: %v\n", err)
 	}
 }
 
-func runQueueWorkflow(client *querator.Client) error {
-	ctx := context.Background()
+func waitForHealth(ctx context.Context, endpoint string, timeout time.Duration) error {
+	verboseLog("Waiting for health endpoint...")
 
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"/health", nil)
+	if err != nil {
+		return fmt.Errorf("building health request: %w", err)
+	}
+
+	deadline, _ := ctx.Deadline()
+	err = retry.On(ctx, retry.Policy{Interval: pollUntil(deadline)}, func(context.Context, int) error {
+		return checkHealth(req)
+	})
+	if err != nil {
+		return fmt.Errorf("health check timed out after %v", timeout)
+	}
+	return nil
+}
+
+type pollUntil time.Time
+
+func (p pollUntil) Next(int) time.Duration {
+	return min(healthRetry, time.Time(p).Sub(clock.Now()))
+}
+
+func checkHealth(req *http.Request) error {
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		verboseLog("Health check failed, retrying: %v", err)
+		return err
+	}
+
+	var health transport.HealthResponse
+	if err := json.NewDecoder(resp.Body).Decode(&health); err != nil {
+		closeBody(resp)
+		verboseLog("Failed to decode health response, retrying: %v", err)
+		return err
+	}
+	closeBody(resp)
+
+	if health.Status == transport.HealthStatusPass {
+		return nil
+	}
+	if health.Status != transport.HealthStatusFail {
+		verboseLog("Health status not ready: %s", health.Status)
+		return fmt.Errorf("health status is %q", health.Status)
+	}
+	verboseLog("Health status: %s", health.Status)
+	for _, name := range slices.Sorted(maps.Keys(health.Checks)) {
+		for _, check := range health.Checks[name] {
+			if check.Output != "" {
+				verboseLog("  %s: %s - %s", name, check.Status, check.Output)
+			} else {
+				verboseLog("  %s: %s", name, check.Status)
+			}
+		}
+	}
+	return fmt.Errorf("health status is %q", health.Status)
+}
+
+func closeBody(resp *http.Response) {
+	if err := resp.Body.Close(); err != nil {
+		verboseLog("Closing health response body: %v", err)
+	}
+}
+
+func runQueueWorkflow(ctx context.Context, client *querator.Client) error {
 	err := client.QueuesCreate(ctx, &pb.QueueInfo{
 		QueueName:           queueName,
 		ExpireTimeout:       "24h0m0s",
@@ -242,7 +270,6 @@ func runQueueWorkflow(client *querator.Client) error {
 		RequestedPartitions: 1,
 	})
 	if err != nil {
-		// Queue may already exist from previous run - that's OK
 		if strings.Contains(err.Error(), "already exists") {
 			printCheck(fmt.Sprintf("Queue %q already exists (reusing)", queueName))
 		} else {

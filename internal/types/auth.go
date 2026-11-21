@@ -6,7 +6,6 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// User represents a user in the system
 type User struct {
 	ExternalID string
 	Username   string
@@ -16,7 +15,6 @@ type User struct {
 	ID         string
 }
 
-// ToProto converts a User to its proto representation
 func (u *User) ToProto(p *proto.User) *proto.User {
 	p.ExternalId = u.ExternalID
 	p.Username = u.Username
@@ -31,7 +29,6 @@ func (u *User) ToProto(p *proto.User) *proto.User {
 	return p
 }
 
-// APIKey represents an API key for authentication
 type APIKey struct {
 	NamespaceScope *string
 	ExpiresAt      *clock.Time
@@ -44,7 +41,6 @@ type APIKey struct {
 	ID             string
 }
 
-// ToProto converts an APIKey to its proto representation (excludes KeyHash)
 func (k *APIKey) ToProto(p *proto.APIKeyMetadata) *proto.APIKeyMetadata {
 	p.UserId = k.UserID
 	p.Prefix = k.KeyPrefix
@@ -65,7 +61,6 @@ func (k *APIKey) ToProto(p *proto.APIKeyMetadata) *proto.APIKeyMetadata {
 	return p
 }
 
-// Role represents a role with a set of permissions within a namespace
 type Role struct {
 	Permissions []string
 	CreatedAt   clock.Time
@@ -74,7 +69,6 @@ type Role struct {
 	ID          string
 }
 
-// ToProto converts a Role to its proto representation
 func (r *Role) ToProto(p *proto.Role) *proto.Role {
 	p.Permissions = r.Permissions
 	p.Namespace = r.Namespace
@@ -86,7 +80,8 @@ func (r *Role) ToProto(p *proto.Role) *proto.Role {
 	return p
 }
 
-// RoleBinding represents the binding of a user to a role within a namespace
+const MaxRoleBindingsPerUserInNamespace = 100
+
 type RoleBinding struct {
 	CreatedAt clock.Time
 	Namespace string
@@ -95,7 +90,6 @@ type RoleBinding struct {
 	ID        string
 }
 
-// ToProto converts a RoleBinding to its proto representation
 func (b *RoleBinding) ToProto(p *proto.RoleBinding) *proto.RoleBinding {
 	p.Namespace = b.Namespace
 	p.UserId = b.UserID

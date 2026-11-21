@@ -13,7 +13,8 @@ var ErrEmptyQueueName = reply.NewInvalidOption("queue name is invalid; queue nam
 
 const maxReferenceLength = 2_000
 const maxQueueNameLength = 512
-const maxInt16 = 65536 // 1<<16
+const maxQueuePartitions = 1_024
+const maxInt16 = 65536
 
 type QueuesValidation struct{}
 
@@ -76,7 +77,6 @@ func (s QueuesValidation) validateQueueInfo(info types.QueueInfo) error {
 		return reply.NewInvalidOption("max attempts is invalid; cannot be negative number")
 	}
 
-	// TODO: Add this check to the errors test
 	if info.RequestedPartitions < 1 {
 		return reply.NewInvalidOption("partitions is invalid; cannot be less than 1")
 	}

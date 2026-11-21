@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"iter"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -20,12 +19,9 @@ import (
 	"github.com/kapetan-io/querator/transport/reply"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/set"
+	"github.com/kapetan-io/tiger/assert"
 	"github.com/segmentio/ksuid"
 )
-
-// ---------------------------------------------
-// Global Pool Manager
-// ---------------------------------------------
 
 type postgresPoolManager struct {
 	pool     *pgxpool.Pool
@@ -37,10 +33,7 @@ var (
 	globalPools  = make(map[string]*postgresPoolManager)
 )
 
-func acquirePool(connString string, maxConns int32, log *slog.Logger) (*pgxpool.Pool, error) {
-	globalPoolMu.Lock()
-	defer globalPoolMu.Unlock()
-
+func acquirePoolLocked(connString string, maxConns int32, log *slog.Logger) (*pgxpool.Pool, error) {
 	if manager, exists := globalPools[connString]; exists {
 		manager.refCount.Add(1)
 		return manager.pool, nil
@@ -87,10 +80,7 @@ func acquirePool(connString string, maxConns int32, log *slog.Logger) (*pgxpool.
 	return pool, nil
 }
 
-func releasePool(connString string) {
-	globalPoolMu.Lock()
-	defer globalPoolMu.Unlock()
-
+func releasePoolLocked(connString string) {
 	manager, exists := globalPools[connString]
 	if !exists {
 		return
@@ -101,10 +91,6 @@ func releasePool(connString string) {
 		delete(globalPools, connString)
 	}
 }
-
-// ---------------------------------------------
-// PostgreSQL Configuration
-// ---------------------------------------------
 
 type PostgresConfig struct {
 	ConnectionString string
@@ -121,23 +107,21 @@ func (c *PostgresConfig) getOrCreatePool(_ context.Context) (*pgxpool.Pool, erro
 		return nil, errors.New("connection string is required")
 	}
 
+	globalPoolMu.Lock()
+	defer globalPoolMu.Unlock()
+
 	if c.connString == "" {
 		c.connString = c.ConnectionString
 	}
 
-	// Only acquire the pool once per config instance
 	if !c.poolAcquired {
-		pool, err := acquirePool(c.ConnectionString, c.MaxConns, c.Log)
+		pool, err := acquirePoolLocked(c.ConnectionString, c.MaxConns, c.Log)
 		if err != nil {
 			return nil, err
 		}
 		c.poolAcquired = true
 		return pool, nil
 	}
-
-	// Return the existing pool without incrementing refCount
-	globalPoolMu.Lock()
-	defer globalPoolMu.Unlock()
 
 	manager, exists := globalPools[c.connString]
 	if !exists {
@@ -148,8 +132,11 @@ func (c *PostgresConfig) getOrCreatePool(_ context.Context) (*pgxpool.Pool, erro
 }
 
 func (c *PostgresConfig) Close() {
+	globalPoolMu.Lock()
+	defer globalPoolMu.Unlock()
+
 	if c.connString != "" && c.poolAcquired {
-		releasePool(c.connString)
+		releasePoolLocked(c.connString)
 		c.poolAcquired = false
 	}
 }
@@ -161,10 +148,6 @@ func (c *PostgresConfig) Ping(ctx context.Context) error {
 	}
 	return pool.Ping(ctx)
 }
-
-// ---------------------------------------------
-// PostgreSQL Queues Implementation
-// ---------------------------------------------
 
 type PostgresQueues struct {
 	QueuesValidation
@@ -183,8 +166,11 @@ func (p *PostgresQueues) Config() PostgresConfig {
 	return p.conf
 }
 
+func isCreateTableRace(code string) bool {
+	return code == "23505" || code == "42P07" || code == "42710"
+}
+
 func (p *PostgresQueues) ensureTable(_ context.Context, pool *pgxpool.Pool) error {
-	// Use a context with reasonable timeout for table creation
 	bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -204,6 +190,10 @@ func (p *PostgresQueues) ensureTable(_ context.Context, pool *pgxpool.Pool) erro
 		)`
 
 	_, err := pool.Exec(bgCtx, query)
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && isCreateTableRace(pgErr.Code) {
+		_, err = pool.Exec(bgCtx, query)
+	}
 	if err != nil {
 		return errors.Errorf("create queues table: %w", err)
 	}
@@ -251,6 +241,7 @@ func (p *PostgresQueues) Get(ctx context.Context, name string, queue *types.Queu
 		return errors.Errorf("query queue: %w", err)
 	}
 
+	queue.Namespace = systemIfEmpty(queue.Namespace)
 	queue.LeaseTimeout = clock.Duration(leaseNs)
 	queue.ExpireTimeout = clock.Duration(expireNs)
 
@@ -267,6 +258,7 @@ func (p *PostgresQueues) Add(ctx context.Context, info types.QueueInfo) error {
 	if err := p.validateAdd(info); err != nil {
 		return err
 	}
+	info.Namespace = systemIfEmpty(info.Namespace)
 
 	pool, err := p.conf.getOrCreatePool(ctx)
 	if err != nil {
@@ -346,8 +338,9 @@ func (p *PostgresQueues) Update(ctx context.Context, info types.QueueInfo) error
 	}
 
 	query := `UPDATE queues SET lease_timeout_ns = $1, expire_timeout_ns = $2, dead_queue = $3,
-	                           max_attempts = $4, reference = $5, partition_info = $6, updated_at = $7
-	          WHERE name = $8`
+	                           max_attempts = $4, reference = $5, requested_partitions = $6,
+	                           partition_info = $7, updated_at = $8
+	          WHERE name = $9`
 
 	_, err = pool.Exec(ctx, query,
 		found.LeaseTimeout.Nanoseconds(),
@@ -355,6 +348,7 @@ func (p *PostgresQueues) Update(ctx context.Context, info types.QueueInfo) error
 		found.DeadQueue,
 		found.MaxAttempts,
 		found.Reference,
+		found.RequestedPartitions,
 		partitionInfoJSON,
 		timeToMicroseconds(found.UpdatedAt),
 		found.Name,
@@ -396,7 +390,7 @@ func (p *PostgresQueues) List(ctx context.Context, queues *[]types.QueueInfo, op
 	}
 	defer rows.Close()
 
-	for rows.Next() {
+	for ctx.Err() == nil && rows.Next() {
 		var info types.QueueInfo
 		var leaseNs, expireNs int64
 		var partitionInfoJSON []byte
@@ -419,6 +413,7 @@ func (p *PostgresQueues) List(ctx context.Context, queues *[]types.QueueInfo, op
 			return errors.Errorf("scan queue row: %w", err)
 		}
 
+		info.Namespace = systemIfEmpty(info.Namespace)
 		info.LeaseTimeout = clock.Duration(leaseNs)
 		info.ExpireTimeout = clock.Duration(expireNs)
 
@@ -434,7 +429,10 @@ func (p *PostgresQueues) List(ctx context.Context, queues *[]types.QueueInfo, op
 		*queues = append(*queues, info)
 	}
 
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	return ctx.Err()
 }
 
 func (p *PostgresQueues) Delete(ctx context.Context, name string) error {
@@ -466,10 +464,6 @@ func (p *PostgresQueues) Close(ctx context.Context) error {
 	return nil
 }
 
-// ---------------------------------------------
-// PostgreSQL Partition Store Implementation
-// ---------------------------------------------
-
 type PostgresPartitionStore struct {
 	conf PostgresConfig
 }
@@ -494,10 +488,6 @@ func (p *PostgresPartitionStore) Get(info types.PartitionInfo) Partition {
 	}
 }
 
-// ---------------------------------------------
-// PostgreSQL Partition Implementation
-// ---------------------------------------------
-
 type PostgresPartition struct {
 	info      types.PartitionInfo
 	conf      PostgresConfig
@@ -519,25 +509,16 @@ func hashQueueName(name string) string {
 
 	const alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 
-	if num == 0 {
-		return "0000000000"
-	}
-
-	result := make([]byte, 0, 11)
-	for num > 0 {
-		result = append(result, alphabet[num%62])
+	var digits [11]byte
+	for i := len(digits) - 1; i >= 0; i-- {
+		digits[i] = alphabet[num%62]
 		num /= 62
 	}
 
-	for i, j := 0, len(result)-1; i < j; i, j = i+1, j-1 {
-		result[i], result[j] = result[j], result[i]
+	if digits[0] == '0' {
+		return string(digits[1:])
 	}
-
-	for len(result) < 10 {
-		result = append([]byte{'0'}, result...)
-	}
-
-	return string(result[:10])
+	return string(digits[:10])
 }
 
 func (p *PostgresPartition) tableName() string {
@@ -548,8 +529,6 @@ func (p *PostgresPartition) tableName() string {
 
 func (p *PostgresPartition) ensureTable(_ context.Context, pool *pgxpool.Pool) error {
 	p.tableOnce.Do(func() {
-		// Use a separate context with a reasonable timeout for table creation
-		// Don't use the passed context as it might have a short timeout
 		bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		p.tableErr = p.createTableAndIndexes(bgCtx, pool)
@@ -592,7 +571,6 @@ func (p *PostgresPartition) createTableAndIndexes(ctx context.Context, pool *pgx
 		return errors.Errorf("create table: %w", err)
 	}
 
-	// Add partial unique index for source_id
 	sourceIdxName := pgx.Identifier{fmt.Sprintf("idx_%s_%d_src", hash, p.info.PartitionNum)}.Sanitize()
 	_, err = pool.Exec(ctx, fmt.Sprintf(`
 		CREATE UNIQUE INDEX IF NOT EXISTS %s ON %s (source_id) WHERE source_id IS NOT NULL`, sourceIdxName, table))
@@ -639,12 +617,10 @@ func timeToNullable(t time.Time) interface{} {
 	if t.IsZero() {
 		return nil
 	}
-	// Truncate to microseconds to match PostgreSQL TIMESTAMPTZ precision
 	return t.Truncate(time.Microsecond)
 }
 
 func timeToMicroseconds(t time.Time) time.Time {
-	// Truncate to microseconds to match PostgreSQL TIMESTAMPTZ precision
 	return t.Truncate(time.Microsecond)
 }
 
@@ -659,7 +635,6 @@ func (p *PostgresPartition) Produce(ctx context.Context, batch types.ProduceBatc
 	}
 
 	pgxBatch := &pgx.Batch{}
-	requestIndexes := []int{}
 
 	p.mu.Lock()
 	for i := range batch.Requests {
@@ -672,7 +647,6 @@ func (p *PostgresPartition) Produce(ctx context.Context, batch types.ProduceBatc
 				item.EnqueueAt = time.Time{}
 			}
 
-			// Truncate timestamps to microseconds to match PostgreSQL precision
 			item.ExpireDeadline = timeToMicroseconds(item.ExpireDeadline)
 			item.CreatedAt = timeToMicroseconds(item.CreatedAt)
 			if !item.LeaseDeadline.IsZero() {
@@ -718,22 +692,13 @@ func (p *PostgresPartition) Produce(ctx context.Context, batch types.ProduceBatc
 				item.Kind,
 				item.Payload,
 			)
-
-			requestIndexes = append(requestIndexes, i)
 		}
 	}
 	p.mu.Unlock()
 
-	br := pool.SendBatch(ctx, pgxBatch)
-	defer func() { _ = br.Close() }()
-
-	for range requestIndexes {
-		_, err := br.Exec()
-		if err != nil {
-			return errors.Errorf("failed to insert item: %w", err)
-		}
+	if err := pool.SendBatch(ctx, pgxBatch).Close(); err != nil {
+		return errors.Errorf("insert items: %w", err)
 	}
-
 	return nil
 }
 
@@ -771,7 +736,7 @@ func (p *PostgresPartition) Lease(ctx context.Context, batch types.LeaseBatch, o
 	defer rows.Close()
 
 	var items []types.Item
-	for rows.Next() {
+	for ctx.Err() == nil && rows.Next() {
 		var item types.Item
 		var leaseDeadline, enqueueAt sql.NullTime
 		var sourceID sql.NullString
@@ -808,6 +773,12 @@ func (p *PostgresPartition) Lease(ctx context.Context, batch types.LeaseBatch, o
 		items = append(items, item)
 	}
 	rows.Close()
+	if err := rows.Err(); err != nil {
+		return errors.Errorf("read items for lease: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	if len(items) == 0 {
 		return tx.Commit(ctx)
@@ -815,6 +786,7 @@ func (p *PostgresPartition) Lease(ctx context.Context, batch types.LeaseBatch, o
 
 	batchIter := batch.Iterator()
 	pgxBatch := &pgx.Batch{}
+	var placed []*types.Item
 
 	for _, item := range items {
 		item.LeaseDeadline = opts.LeaseDeadline
@@ -827,6 +799,7 @@ func (p *PostgresPartition) Lease(ctx context.Context, batch types.LeaseBatch, o
 		if !batchIter.Next(itemPtr) {
 			break
 		}
+		placed = append(placed, itemPtr)
 
 		pgxBatch.Queue(`
 			UPDATE `+p.tableName()+`
@@ -839,17 +812,16 @@ func (p *PostgresPartition) Lease(ctx context.Context, batch types.LeaseBatch, o
 		)
 	}
 
-	br := tx.SendBatch(ctx, pgxBatch)
-	for i := 0; i < pgxBatch.Len(); i++ {
-		_, err := br.Exec()
-		if err != nil {
-			_ = br.Close()
-			return errors.Errorf("update leased item: %w", err)
-		}
+	if err := tx.SendBatch(ctx, pgxBatch).Close(); err != nil {
+		batch.Unassign(placed)
+		return errors.Errorf("update leased item: %w", err)
 	}
-	_ = br.Close()
 
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		batch.Unassign(placed)
+		return errors.Errorf("commit leased items: %w", err)
+	}
+	return nil
 }
 
 func (p *PostgresPartition) Complete(ctx context.Context, batch types.CompleteBatch) error {
@@ -869,42 +841,15 @@ func (p *PostgresPartition) Complete(ctx context.Context, batch types.CompleteBa
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-nextBatch:
-	for i := range batch.Requests {
-		for _, id := range batch.Requests[i].Ids {
-			if err := p.validateID(id); err != nil {
-				batch.Requests[i].Err = reply.NewInvalidOption("invalid storage id; '%s': %s", id, err)
-				continue nextBatch
-			}
-
-			var isLeased bool
-			err := tx.QueryRow(ctx,
-				`SELECT is_leased FROM `+p.tableName()+` WHERE id = $1 FOR UPDATE`,
-				string(id)).Scan(&isLeased)
-
-			if err == pgx.ErrNoRows {
-				batch.Requests[i].Err = reply.NewInvalidOption("invalid storage id; '%s' does not exist", id)
-				continue nextBatch
-			}
-			if err != nil {
-				return errors.Errorf("postgres partition %s/%d: failed to check item: %w",
-					p.info.Queue.Name, p.info.PartitionNum, err)
-			}
-
-			if !isLeased {
-				batch.Requests[i].Err = reply.NewConflict("item(s) cannot be completed; '%s' is not marked as leased", id)
-				continue nextBatch
-			}
-
-			_, err = tx.Exec(ctx, `DELETE FROM `+p.tableName()+` WHERE id = $1`, string(id))
-			if err != nil {
-				return errors.Errorf("postgres partition %s/%d: failed to delete item: %w",
-					p.info.Queue.Name, p.info.PartitionNum, err)
-			}
+	for _, req := range batch.Requests {
+		if err := p.completeItems(ctx, tx, req); err != nil {
+			batch.MarkRolledBack()
+			return err
 		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
+		batch.MarkRolledBack()
 		return errors.Errorf("postgres partition %s/%d: commit transaction: %w",
 			p.info.Queue.Name, p.info.PartitionNum, err)
 	}
@@ -928,127 +873,171 @@ func (p *PostgresPartition) Retry(ctx context.Context, batch types.RetryBatch) e
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-nextBatch:
-	for i := range batch.Requests {
-		for _, retryItem := range batch.Requests[i].Items {
-			if err := p.validateID(retryItem.ID); err != nil {
-				batch.Requests[i].Err = reply.NewInvalidOption("invalid storage id; '%s': %s", retryItem.ID, err)
-				continue nextBatch
-			}
-
-			item := new(types.Item)
-			var enqueueAt, leaseDeadline sql.NullTime
-			var sourceID sql.NullString
-			err := tx.QueryRow(ctx,
-				`SELECT id, source_id, is_leased, lease_deadline, enqueue_at, created_at,
-				        expire_deadline, attempts, max_attempts, reference, encoding, kind, payload
-				 FROM `+p.tableName()+` WHERE id = $1 FOR UPDATE`,
-				retryItem.ID).Scan(
-				&item.ID,
-				&sourceID,
-				&item.IsLeased,
-				&leaseDeadline,
-				&enqueueAt,
-				&item.CreatedAt,
-				&item.ExpireDeadline,
-				&item.Attempts,
-				&item.MaxAttempts,
-				&item.Reference,
-				&item.Encoding,
-				&item.Kind,
-				&item.Payload,
-			)
-
-			if err == pgx.ErrNoRows {
-				batch.Requests[i].Err = reply.NewInvalidOption("invalid storage id; '%s' does not exist", retryItem.ID)
-				continue nextBatch
-			}
-			if err != nil {
-				return errors.Errorf("failed to check lease status: %w", err)
-			}
-
-			if sourceID.Valid {
-				item.SourceID = []byte(sourceID.String)
-			}
-			if leaseDeadline.Valid {
-				item.LeaseDeadline = leaseDeadline.Time
-			}
-			if enqueueAt.Valid {
-				item.EnqueueAt = enqueueAt.Time
-			}
-
-			if !item.EnqueueAt.IsZero() {
-				if p.conf.Log != nil {
-					p.conf.Log.LogAttrs(ctx, slog.LevelWarn, "attempted to retry a scheduled item; reported does not exist",
-						slog.String("id", string(retryItem.ID)))
-				}
-				batch.Requests[i].Err = reply.NewInvalidOption("invalid storage id; '%s' does not exist", retryItem.ID)
-				continue nextBatch
-			}
-
-			if !item.IsLeased {
-				batch.Requests[i].Err = reply.NewConflict("item(s) cannot be retried; '%s' is not marked as leased", retryItem.ID)
-				continue nextBatch
-			}
-
-			var srcID interface{}
-			if item.SourceID != nil {
-				srcID = string(item.SourceID)
-			}
-
-			switch {
-			case retryItem.Dead:
-				_, err = tx.Exec(ctx, `DELETE FROM `+p.tableName()+` WHERE id = $1`, retryItem.ID)
-				if err != nil {
-					return errors.Errorf("during Retry() delete dead: %w", err)
-				}
-			case !retryItem.RetryAt.IsZero() && !retryItem.RetryAt.Before(clock.Now().UTC().Add(time.Millisecond*100)):
-				// Schedule for future retry — position is irrelevant while scheduled
-				_, err = tx.Exec(ctx, `
-					UPDATE `+p.tableName()+`
-					SET is_leased = false,
-						lease_deadline = NULL,
-						enqueue_at = $1
-					WHERE id = $2`,
-					timeToMicroseconds(retryItem.RetryAt), retryItem.ID)
-				if err != nil {
-					return errors.Errorf("during Retry() schedule: %w", err)
-				}
-			default:
-				// Immediate retry (no RetryAt, or RetryAt within 100ms): assign new KSUID and place at tail (ADR 0022)
-				p.uid = p.uid.Next()
-				newID := p.uid.String()
-				_, err = tx.Exec(ctx, `DELETE FROM `+p.tableName()+` WHERE id = $1`, retryItem.ID)
-				if err != nil {
-					return errors.Errorf("during Retry() delete for tail placement: %w", err)
-				}
-				_, err = tx.Exec(ctx, `
-					INSERT INTO `+p.tableName()+` (
-						id, source_id, is_leased, lease_deadline, enqueue_at,
-						created_at, expire_deadline, attempts, max_attempts,
-						reference, encoding, kind, payload
-					) VALUES ($1, $2, false, NULL, NULL, $3, $4, $5, $6, $7, $8, $9, $10)`,
-					newID,
-					srcID,
-					timeToMicroseconds(item.CreatedAt),
-					timeToMicroseconds(item.ExpireDeadline),
-					item.Attempts,
-					item.MaxAttempts,
-					item.Reference,
-					item.Encoding,
-					item.Kind,
-					item.Payload)
-				if err != nil {
-					return errors.Errorf("during Retry() insert at tail: %w", err)
-				}
-			}
+	for _, req := range batch.Requests {
+		if err := p.retryItems(ctx, tx, req); err != nil {
+			batch.MarkRolledBack()
+			return err
 		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
+		batch.MarkRolledBack()
 		return errors.Errorf("commit transaction: %w", err)
 	}
 
+	return nil
+}
+
+func (p *PostgresPartition) completeItems(ctx context.Context, tx pgx.Tx, req *types.CompleteRequest) error {
+	for _, id := range req.Ids {
+		if err := p.validateID(id); err != nil {
+			req.Err = reply.NewInvalidOption("invalid storage id; '%s': %s", id, err)
+			return nil
+		}
+
+		var isLeased bool
+		err := tx.QueryRow(ctx,
+			`SELECT is_leased FROM `+p.tableName()+` WHERE id = $1 FOR UPDATE`,
+			string(id)).Scan(&isLeased)
+
+		if err == pgx.ErrNoRows {
+			req.Err = reply.NewInvalidOption("invalid storage id; '%s' does not exist", id)
+			return nil
+		}
+		if err != nil {
+			return errors.Errorf("postgres partition %s/%d: failed to check item: %w",
+				p.info.Queue.Name, p.info.PartitionNum, err)
+		}
+
+		if !isLeased {
+			req.Err = reply.NewConflict("item(s) cannot be completed; '%s' is not marked as leased", id)
+			return nil
+		}
+
+		_, err = tx.Exec(ctx, `DELETE FROM `+p.tableName()+` WHERE id = $1`, string(id))
+		if err != nil {
+			return errors.Errorf("postgres partition %s/%d: failed to delete item: %w",
+				p.info.Queue.Name, p.info.PartitionNum, err)
+		}
+		req.Completed++
+	}
+	return nil
+}
+
+func (p *PostgresPartition) retryItems(ctx context.Context, tx pgx.Tx, req *types.RetryRequest) error {
+	for _, retryItem := range req.Items {
+		if err := p.validateID(retryItem.ID); err != nil {
+			req.Err = reply.NewInvalidOption("invalid storage id; '%s': %s", retryItem.ID, err)
+			return nil
+		}
+
+		item := new(types.Item)
+		var enqueueAt, leaseDeadline sql.NullTime
+		var sourceID sql.NullString
+		err := tx.QueryRow(ctx,
+			`SELECT id, source_id, is_leased, lease_deadline, enqueue_at, created_at,
+		        expire_deadline, attempts, max_attempts, reference, encoding, kind, payload
+		 FROM `+p.tableName()+` WHERE id = $1 FOR UPDATE`,
+			retryItem.ID).Scan(
+			&item.ID,
+			&sourceID,
+			&item.IsLeased,
+			&leaseDeadline,
+			&enqueueAt,
+			&item.CreatedAt,
+			&item.ExpireDeadline,
+			&item.Attempts,
+			&item.MaxAttempts,
+			&item.Reference,
+			&item.Encoding,
+			&item.Kind,
+			&item.Payload,
+		)
+
+		if err == pgx.ErrNoRows {
+			req.Err = reply.NewInvalidOption("invalid storage id; '%s' does not exist", retryItem.ID)
+			return nil
+		}
+		if err != nil {
+			return errors.Errorf("failed to check lease status: %w", err)
+		}
+
+		if sourceID.Valid {
+			item.SourceID = []byte(sourceID.String)
+		}
+		if leaseDeadline.Valid {
+			item.LeaseDeadline = leaseDeadline.Time
+		}
+		if enqueueAt.Valid {
+			item.EnqueueAt = enqueueAt.Time
+		}
+
+		if !item.EnqueueAt.IsZero() {
+			if p.conf.Log != nil {
+				p.conf.Log.LogAttrs(ctx, slog.LevelWarn, "attempted to retry a scheduled item; reported does not exist",
+					slog.String("id", string(retryItem.ID)))
+			}
+			req.Err = reply.NewInvalidOption("invalid storage id; '%s' does not exist", retryItem.ID)
+			return nil
+		}
+
+		if !item.IsLeased {
+			req.Err = reply.NewConflict("item(s) cannot be retried; '%s' is not marked as leased", retryItem.ID)
+			return nil
+		}
+
+		var srcID interface{}
+		if item.SourceID != nil {
+			srcID = string(item.SourceID)
+		}
+
+		switch {
+		case retryItem.Dead:
+			_, err = tx.Exec(ctx, `DELETE FROM `+p.tableName()+` WHERE id = $1`, retryItem.ID)
+			if err != nil {
+				return errors.Errorf("during Retry() delete dead: %w", err)
+			}
+		case !retryItem.RetryAt.IsZero() && !retryItem.RetryAt.Before(clock.Now().UTC().Add(time.Millisecond*100)):
+			_, err = tx.Exec(ctx, `
+			UPDATE `+p.tableName()+`
+			SET is_leased = false,
+				lease_deadline = NULL,
+				enqueue_at = $1
+			WHERE id = $2`,
+				timeToMicroseconds(retryItem.RetryAt), retryItem.ID)
+			if err != nil {
+				return errors.Errorf("during Retry() schedule: %w", err)
+			}
+		default:
+			p.uid = p.uid.Next()
+			newID := p.uid.String()
+			_, err = tx.Exec(ctx, `DELETE FROM `+p.tableName()+` WHERE id = $1`, retryItem.ID)
+			if err != nil {
+				return errors.Errorf("during Retry() delete for tail placement: %w", err)
+			}
+			_, err = tx.Exec(ctx, `
+			INSERT INTO `+p.tableName()+` (
+				id, source_id, is_leased, lease_deadline, enqueue_at,
+				created_at, expire_deadline, attempts, max_attempts,
+				reference, encoding, kind, payload
+			) VALUES ($1, $2, false, NULL, NULL, $3, $4, $5, $6, $7, $8, $9, $10)`,
+				newID,
+				srcID,
+				timeToMicroseconds(item.CreatedAt),
+				timeToMicroseconds(item.ExpireDeadline),
+				item.Attempts,
+				item.MaxAttempts,
+				item.Reference,
+				item.Encoding,
+				item.Kind,
+				item.Payload)
+			if err != nil {
+				return errors.Errorf("during Retry() insert at tail: %w", err)
+			}
+			req.UnLeased++
+		}
+		req.Retried++
+	}
 	return nil
 }
 
@@ -1084,7 +1073,7 @@ func (p *PostgresPartition) List(ctx context.Context, items *[]*types.Item, opts
 	}
 	defer rows.Close()
 
-	for rows.Next() {
+	for ctx.Err() == nil && rows.Next() {
 		item := new(types.Item)
 		var leaseDeadline, enqueueAt sql.NullTime
 		var sourceID sql.NullString
@@ -1121,7 +1110,10 @@ func (p *PostgresPartition) List(ctx context.Context, items *[]*types.Item, opts
 		*items = append(*items, item)
 	}
 
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	return ctx.Err()
 }
 
 func (p *PostgresPartition) ListScheduled(ctx context.Context, items *[]*types.Item, opts types.ListOptions) error {
@@ -1156,7 +1148,7 @@ func (p *PostgresPartition) ListScheduled(ctx context.Context, items *[]*types.I
 	}
 	defer rows.Close()
 
-	for rows.Next() {
+	for ctx.Err() == nil && rows.Next() {
 		item := new(types.Item)
 		var leaseDeadline, enqueueAt sql.NullTime
 		var sourceID sql.NullString
@@ -1193,7 +1185,10 @@ func (p *PostgresPartition) ListScheduled(ctx context.Context, items *[]*types.I
 		*items = append(*items, item)
 	}
 
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	return ctx.Err()
 }
 
 func (p *PostgresPartition) Add(ctx context.Context, items []*types.Item, now clock.Time) error {
@@ -1218,7 +1213,6 @@ func (p *PostgresPartition) Add(ctx context.Context, items []*types.Item, now cl
 		item.ID = []byte(p.uid.String())
 		item.CreatedAt = now
 
-		// Truncate timestamps to microseconds to match PostgreSQL precision
 		item.ExpireDeadline = timeToMicroseconds(item.ExpireDeadline)
 		item.CreatedAt = timeToMicroseconds(item.CreatedAt)
 		if !item.LeaseDeadline.IsZero() {
@@ -1267,16 +1261,9 @@ func (p *PostgresPartition) Add(ctx context.Context, items []*types.Item, now cl
 	}
 	p.mu.Unlock()
 
-	br := pool.SendBatch(ctx, pgxBatch)
-	defer func() { _ = br.Close() }()
-
-	for range items {
-		_, err := br.Exec()
-		if err != nil {
-			return errors.Errorf("failed to insert item: %w", err)
-		}
+	if err := pool.SendBatch(ctx, pgxBatch).Close(); err != nil {
+		return errors.Errorf("insert items: %w", err)
 	}
-
 	return nil
 }
 
@@ -1304,16 +1291,9 @@ func (p *PostgresPartition) Delete(ctx context.Context, ids []types.ItemID) erro
 		pgxBatch.Queue(`DELETE FROM `+p.tableName()+` WHERE id = $1`, string(id))
 	}
 
-	br := pool.SendBatch(ctx, pgxBatch)
-	defer func() { _ = br.Close() }()
-
-	for range ids {
-		_, err := br.Exec()
-		if err != nil {
-			return errors.Errorf("failed to delete item: %w", err)
-		}
+	if err := pool.SendBatch(ctx, pgxBatch).Close(); err != nil {
+		return errors.Errorf("delete items: %w", err)
 	}
-
 	return nil
 }
 
@@ -1335,9 +1315,9 @@ func (p *PostgresPartition) Clear(ctx context.Context, req types.ClearRequest) e
 
 	if req.Queue {
 		if req.Destructive {
-			conditions = append(conditions, `(enqueue_at IS NULL OR enqueue_at <= NOW())`)
+			conditions = append(conditions, `enqueue_at IS NULL`)
 		} else {
-			conditions = append(conditions, `(enqueue_at IS NULL OR enqueue_at <= NOW()) AND is_leased = false`)
+			conditions = append(conditions, `enqueue_at IS NULL AND is_leased = false`)
 		}
 	}
 
@@ -1393,235 +1373,184 @@ func (p *PostgresPartition) Stats(ctx context.Context, stats *types.PartitionSta
 	return nil
 }
 
-func (p *PostgresPartition) ScanForScheduled(ctx context.Context, now clock.Time) iter.Seq2[types.Action, error] {
-	return func(yield func(types.Action, error) bool) {
-		batchSize := p.conf.ScanBatchSize
-		if batchSize == 0 {
-			batchSize = 1000
+const (
+	actionPageColumns = `id, source_id, is_leased, attempts, lease_deadline, expire_deadline,
+		enqueue_at, created_at, max_attempts, reference, encoding, kind, payload`
+	scheduledPageColumns = `id, NULL::text, false, attempts, lease_deadline, expire_deadline,
+		enqueue_at, NULL::timestamptz, 0, '', '', '', NULL::bytea`
+)
+
+func (p *PostgresPartition) ScanForScheduled(ctx context.Context, scan *types.LifeCycleScan, now clock.Time) error {
+	query := pageQuery{columns: scheduledPageColumns, filter: `enqueue_at IS NOT NULL`}
+	return p.readLifeCyclePage(ctx, scan, query, func(item types.Item) {
+		if item.EnqueueAt.After(now) {
+			scan.SeeEnqueueAt(item.EnqueueAt)
+			return
 		}
-		var lastID string
-
-		for {
-			if ctx.Err() != nil {
-				yield(types.Action{}, ctx.Err())
-				return
-			}
-
-			pool, err := p.conf.getOrCreatePool(ctx)
-			if err != nil {
-				yield(types.Action{}, err)
-				return
-			}
-
-			if err := p.ensureTable(ctx, pool); err != nil {
-				yield(types.Action{}, err)
-				return
-			}
-
-			query := `
-				SELECT id, attempts, lease_deadline, expire_deadline
-				FROM ` + p.tableName() + `
-				WHERE enqueue_at IS NOT NULL
-				  AND enqueue_at <= $1
-				  AND id > $2
-				ORDER BY id
-				LIMIT $3`
-
-			rows, err := pool.Query(ctx, query, now, lastID, batchSize)
-			if err != nil {
-				yield(types.Action{}, err)
-				return
-			}
-
-			var items []types.Item
-			for rows.Next() {
-				var item types.Item
-				var leaseDeadline, expireDeadline sql.NullTime
-
-				err := rows.Scan(
-					&item.ID,
-					&item.Attempts,
-					&leaseDeadline,
-					&expireDeadline,
-				)
-				if err != nil {
-					rows.Close()
-					yield(types.Action{}, err)
-					return
-				}
-
-				if leaseDeadline.Valid {
-					item.LeaseDeadline = leaseDeadline.Time
-				}
-				if expireDeadline.Valid {
-					item.ExpireDeadline = expireDeadline.Time
-				}
-
-				items = append(items, item)
-				lastID = string(item.ID)
-			}
-			rows.Close()
-
-			if len(items) == 0 {
-				return
-			}
-
-			for _, item := range items {
-				if !yield(types.Action{
-					Action:       types.ActionQueueScheduledItem,
-					PartitionNum: p.info.PartitionNum,
-					Queue:        p.info.Queue.Name,
-					Item:         item,
-				}, nil) {
-					return
-				}
-			}
-
-			if len(items) < batchSize {
-				return
-			}
-		}
-	}
+		scan.Add(types.Action{
+			Action:       types.ActionQueueScheduledItem,
+			PartitionNum: p.info.PartitionNum,
+			Queue:        p.info.Queue.Name,
+			Item:         item,
+		})
+	})
 }
 
-func (p *PostgresPartition) ScanForActions(ctx context.Context, now clock.Time) iter.Seq2[types.Action, error] {
-	return func(yield func(types.Action, error) bool) {
-		batchSize := p.conf.ScanBatchSize
-		if batchSize == 0 {
-			batchSize = 1000
+func (p *PostgresPartition) ScanForActions(ctx context.Context, scan *types.LifeCycleScan, now clock.Time) error {
+	p.mu.RLock()
+	maxAttempts := p.info.Queue.MaxAttempts
+	p.mu.RUnlock()
+
+	query := pageQuery{
+		columns:   actionPageColumns,
+		filter:    `(enqueue_at IS NULL OR enqueue_at <= $4)`,
+		filterArg: now,
+	}
+	return p.readLifeCyclePage(ctx, scan, query, func(item types.Item) {
+		if item.IsLeased && !item.LeaseDeadline.After(now) {
+			scan.Add(types.Action{
+				Action:       types.ActionLeaseExpired,
+				PartitionNum: p.info.PartitionNum,
+				Queue:        p.info.Queue.Name,
+				Item:         item,
+			})
+			return
 		}
-		var lastID string
 
-		for {
-			if ctx.Err() != nil {
-				yield(types.Action{}, ctx.Err())
-				return
-			}
+		if item.IsLeased && maxAttempts != 0 && item.Attempts >= maxAttempts {
+			scan.Add(types.Action{
+				Action:       types.ActionItemMaxAttempts,
+				PartitionNum: p.info.PartitionNum,
+				Queue:        p.info.Queue.Name,
+				Item:         item,
+			})
+			return
+		}
+		if item.IsLeased {
+			scan.SeeLeaseDeadline(item.LeaseDeadline)
+		}
 
-			pool, err := p.conf.getOrCreatePool(ctx)
-			if err != nil {
-				yield(types.Action{}, err)
-				return
-			}
+		if !item.ExpireDeadline.After(now) {
+			scan.Add(types.Action{
+				Action:       types.ActionItemExpired,
+				PartitionNum: p.info.PartitionNum,
+				Queue:        p.info.Queue.Name,
+				Item:         item,
+			})
+			return
+		}
+		scan.SeeExpireDeadline(item.ExpireDeadline)
+	})
+}
 
-			if err := p.ensureTable(ctx, pool); err != nil {
-				yield(types.Action{}, err)
-				return
-			}
+type pageQuery struct {
+	columns   string
+	filter    string
+	filterArg any
+}
 
-			query := `
-				SELECT id, source_id, is_leased, attempts, lease_deadline, expire_deadline,
-				       enqueue_at, created_at, max_attempts, reference, encoding, kind, payload
-				FROM ` + p.tableName() + `
-				WHERE (enqueue_at IS NULL OR enqueue_at <= $1)
-				  AND id > $2
-				ORDER BY id
-				LIMIT $3`
+func (p *PostgresPartition) readLifeCyclePage(ctx context.Context, scan *types.LifeCycleScan, page pageQuery,
+	visit func(types.Item)) error {
 
-			rows, err := pool.Query(ctx, query, now, lastID, batchSize)
-			if err != nil {
-				yield(types.Action{}, err)
-				return
-			}
+	pool, err := p.conf.getOrCreatePool(ctx)
+	if err != nil {
+		return err
+	}
 
-			var items []types.Item
-			for rows.Next() {
-				var item types.Item
-				var leaseDeadline, expireDeadline, enqueueAt, createdAt sql.NullTime
-				var sourceID sql.NullString
+	if err := p.ensureTable(ctx, pool); err != nil {
+		return err
+	}
 
-				err := rows.Scan(
-					&item.ID,
-					&sourceID,
-					&item.IsLeased,
-					&item.Attempts,
-					&leaseDeadline,
-					&expireDeadline,
-					&enqueueAt,
-					&createdAt,
-					&item.MaxAttempts,
-					&item.Reference,
-					&item.Encoding,
-					&item.Kind,
-					&item.Payload,
-				)
-				if err != nil {
-					rows.Close()
-					yield(types.Action{}, err)
-					return
-				}
-
-				if sourceID.Valid {
-					item.SourceID = []byte(sourceID.String)
-				}
-				if leaseDeadline.Valid {
-					item.LeaseDeadline = leaseDeadline.Time
-				}
-				if expireDeadline.Valid {
-					item.ExpireDeadline = expireDeadline.Time
-				}
-				if enqueueAt.Valid {
-					item.EnqueueAt = enqueueAt.Time
-				}
-				if createdAt.Valid {
-					item.CreatedAt = createdAt.Time
-				}
-
-				items = append(items, item)
-				lastID = string(item.ID)
-			}
-			rows.Close()
-
-			if len(items) == 0 {
-				return
-			}
-
-			for _, item := range items {
-				if item.IsLeased && now.After(item.LeaseDeadline) {
-					if !yield(types.Action{
-						Action:       types.ActionLeaseExpired,
-						PartitionNum: p.info.PartitionNum,
-						Queue:        p.info.Queue.Name,
-						Item:         item,
-					}, nil) {
-						return
-					}
-					continue
-				}
-
-				p.mu.RLock()
-				maxAttempts := p.info.Queue.MaxAttempts
-				p.mu.RUnlock()
-
-				if item.IsLeased && maxAttempts != 0 && item.Attempts >= maxAttempts {
-					if !yield(types.Action{
-						Action:       types.ActionItemMaxAttempts,
-						PartitionNum: p.info.PartitionNum,
-						Queue:        p.info.Queue.Name,
-						Item:         item,
-					}, nil) {
-						return
-					}
-					continue
-				}
-
-				if now.After(item.ExpireDeadline) {
-					if !yield(types.Action{
-						Action:       types.ActionItemExpired,
-						PartitionNum: p.info.PartitionNum,
-						Queue:        p.info.Queue.Name,
-						Item:         item,
-					}, nil) {
-						return
-					}
-				}
-			}
-
-			if len(items) < batchSize {
-				return
-			}
+	tail := string(scan.Last)
+	if !scan.MidPass() {
+		err := pool.QueryRow(ctx, `SELECT id FROM `+p.tableName()+` ORDER BY id DESC LIMIT 1`).Scan(&tail)
+		if errors.Is(err, pgx.ErrNoRows) {
+			scan.EndPass()
+			return nil
+		}
+		if err != nil {
+			return errors.Errorf("query partition tail: %w", err)
 		}
 	}
+
+	limit := min(LifeCyclePageSize, p.conf.ScanBatchSize)
+
+	query := `
+		SELECT ` + page.columns + `
+		FROM ` + p.tableName() + `
+		WHERE id > $1 AND id <= $2 AND ` + page.filter + `
+		ORDER BY id
+		LIMIT $3`
+	args := []any{string(scan.Pivot), tail, limit}
+	if page.filterArg != nil {
+		args = append(args, page.filterArg)
+	}
+
+	rows, err := pool.Query(ctx, query, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	var pivot string
+	var read int
+	for ctx.Err() == nil && rows.Next() {
+		var item types.Item
+		var leaseDeadline, expireDeadline, enqueueAt, createdAt sql.NullTime
+		var sourceID sql.NullString
+
+		err := rows.Scan(
+			&item.ID,
+			&sourceID,
+			&item.IsLeased,
+			&item.Attempts,
+			&leaseDeadline,
+			&expireDeadline,
+			&enqueueAt,
+			&createdAt,
+			&item.MaxAttempts,
+			&item.Reference,
+			&item.Encoding,
+			&item.Kind,
+			&item.Payload,
+		)
+		if err != nil {
+			return err
+		}
+
+		if sourceID.Valid {
+			item.SourceID = []byte(sourceID.String)
+		}
+		if leaseDeadline.Valid {
+			item.LeaseDeadline = leaseDeadline.Time
+		}
+		if expireDeadline.Valid {
+			item.ExpireDeadline = expireDeadline.Time
+		}
+		if enqueueAt.Valid {
+			item.EnqueueAt = enqueueAt.Time
+		}
+		if createdAt.Valid {
+			item.CreatedAt = createdAt.Time
+		}
+
+		visit(item)
+		pivot = string(item.ID)
+		read++
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	if read < limit {
+		scan.EndPass()
+		return nil
+	}
+	scan.Pivot, scan.Last = types.ItemID(pivot), types.ItemID(tail)
+	return nil
 }
 
 func (p *PostgresPartition) TakeAction(ctx context.Context, batch types.LifeCycleBatch, state *types.PartitionState) error {
@@ -1640,12 +1569,12 @@ func (p *PostgresPartition) TakeAction(ctx context.Context, batch types.LifeCycl
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	var expired int
 	p.mu.Lock()
 	for i := range batch.Requests {
 		for _, action := range batch.Requests[i].Actions {
 			switch action.Action {
 			case types.ActionLeaseExpired:
-				// Check if the item still exists before processing
 				var exists bool
 				err := tx.QueryRow(ctx,
 					`SELECT EXISTS(SELECT 1 FROM `+p.tableName()+` WHERE id = $1)`,
@@ -1663,11 +1592,9 @@ func (p *PostgresPartition) TakeAction(ctx context.Context, batch types.LifeCycl
 					continue
 				}
 
-				// Generate new ID for the requeued item
 				p.uid = p.uid.Next()
 				newID := p.uid.String()
 
-				// Truncate timestamps to microseconds to match PostgreSQL precision
 				createdAt := timeToMicroseconds(action.Item.CreatedAt)
 				expireDeadline := timeToMicroseconds(action.Item.ExpireDeadline)
 				enqueueAt := action.Item.EnqueueAt
@@ -1680,14 +1607,12 @@ func (p *PostgresPartition) TakeAction(ctx context.Context, batch types.LifeCycl
 					sourceID = string(action.Item.SourceID)
 				}
 
-				// Delete the old row
 				_, err = tx.Exec(ctx, `DELETE FROM `+p.tableName()+` WHERE id = $1`, action.Item.ID)
 				if err != nil {
 					p.mu.Unlock()
 					return errors.Errorf("delete expired item: %w", err)
 				}
 
-				// Insert new row with new ID and reset lease fields
 				_, err = tx.Exec(ctx, `
 					INSERT INTO `+p.tableName()+` (
 						id, source_id, is_leased, lease_deadline, enqueue_at,
@@ -1710,6 +1635,7 @@ func (p *PostgresPartition) TakeAction(ctx context.Context, batch types.LifeCycl
 					p.mu.Unlock()
 					return errors.Errorf("insert requeued item: %w", err)
 				}
+				expired++
 
 			case types.ActionItemExpired, types.ActionItemMaxAttempts:
 				_, err = tx.Exec(ctx, `DELETE FROM `+p.tableName()+` WHERE id = $1`, action.Item.ID)
@@ -1733,10 +1659,7 @@ func (p *PostgresPartition) TakeAction(ctx context.Context, batch types.LifeCycl
 				}
 
 			default:
-				if p.conf.Log != nil {
-					p.conf.Log.Warn("assertion failed; undefined action", "action",
-						fmt.Sprintf("0x%X", int(action.Action)))
-				}
+				assert.Unreachable(fmt.Sprintf("undefined action kind '0x%X'", int(action.Action)))
 			}
 		}
 	}
@@ -1745,42 +1668,7 @@ func (p *PostgresPartition) TakeAction(ctx context.Context, batch types.LifeCycl
 	if err := tx.Commit(ctx); err != nil {
 		return errors.Errorf("commit transaction: %w", err)
 	}
-
-	return nil
-}
-
-func (p *PostgresPartition) LifeCycleInfo(ctx context.Context, info *types.LifeCycleInfo) error {
-	pool, err := p.conf.getOrCreatePool(ctx)
-	if err != nil {
-		return err
-	}
-
-	if err := p.ensureTable(ctx, pool); err != nil {
-		return err
-	}
-
-	// Query for both lease expiry and item expiry
-	query := `
-		SELECT
-			COALESCE(MIN(lease_deadline) FILTER (WHERE is_leased = true), '9999-12-31 23:59:59.999999+00'::timestamptz),
-			COALESCE(MIN(expire_deadline) FILTER (WHERE enqueue_at IS NULL OR enqueue_at <= NOW()), '9999-12-31 23:59:59.999999+00'::timestamptz)
-		FROM ` + p.tableName()
-
-	var nextLeaseExpiry, nextExpireDeadline time.Time
-	err = pool.QueryRow(ctx, query).Scan(&nextLeaseExpiry, &nextExpireDeadline)
-	if err != nil {
-		return errors.Errorf("query lifecycle info: %w", err)
-	}
-
-	sentinel := time.Date(9999, 12, 31, 23, 59, 59, 999999999, time.UTC)
-	if nextLeaseExpiry.Before(sentinel) {
-		info.NextLeaseExpiry = nextLeaseExpiry
-	}
-
-	if nextExpireDeadline.Before(sentinel) {
-		info.NextExpireDeadline = nextExpireDeadline
-	}
-
+	state.LeasesExpired(expired)
 	return nil
 }
 

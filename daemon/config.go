@@ -1,12 +1,13 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"fmt"
 	"io"
 	"log/slog"
-	"strings"
+	"math"
 	"time"
 
 	"github.com/duh-rpc/duh-go"
@@ -23,28 +24,15 @@ import (
 )
 
 type Config struct {
-	// Explicit composition instead of embedding
 	Service service.Config
 
-	// TLS is the TLS config used for public server and clients
-	TLS *duh.TLSConfig
-	// ListenAddress is the address:port that Querator will listen on for public HTTP requests
+	TLS           *duh.TLSConfig
 	ListenAddress string
 
-	// MaxProducePayloadSize is the maximum size in bytes Querator will read from a client
-	// during the `/queue.produce` request. The Maximum size includes the entire payload for a
-	// single `/queue.produce` request including the size of all fields in the marshalled protobuf.
-	// The default size is 5MB.
 	MaxProducePayloadSize int64
 
-	// InMemoryListener is true if daemon should ignore ListenAddress and use net.Pipe to listen for
-	// and handle new connections. When true, calls to Daemon.Client() and Daemon.MustClient() will return
-	// a new instance of the client bound to the client portion of a net.Pipe. This is useful for testing
-	// querator where access to the loop back is not allowed, or when using testing/synctest
 	InMemoryListener bool
 
-	// AuthBackend is the authentication and authorization backend.
-	// If nil, defaults to NoOpAuthBackend which allows all requests (open access).
 	AuthBackend auth.AuthBackend
 }
 
@@ -80,29 +68,30 @@ func (c *Config) SetDefaults() {
 		},
 	})
 
-	// Default to NoOp auth (open access for internal deployments)
 	set.Default(&c.AuthBackend, auth.AuthBackend(&auth.NoOpAuthBackend{}))
 
-	// Bridge: ensure service layer uses the same auth backend as the transport
 	if c.Service.Auth == nil {
 		c.Service.Auth = c.AuthBackend
 	}
 }
-
-// YAML config file types
 
 type File struct {
 	Address          string             `yaml:"address"`
 	Logging          Logging            `yaml:"logging"`
 	PartitionStorage []PartitionStorage `yaml:"partition-storage"`
 	QueueStorage     QueueStorage       `yaml:"queue-storage"`
-	AuthBackend      AuthConfig         `yaml:"auth-backend"`
+	Auth             *AuthConfig        `yaml:"auth"`
 	Queues           []Queue            `yaml:"queues"`
 	ConfigFile       string
 }
 
 type AuthConfig struct {
-	Driver string `yaml:"driver"`
+	Storage AuthStorage `yaml:"storage"`
+}
+
+type AuthStorage struct {
+	Memory *MemoryConfig `yaml:"memory"`
+	Badger *BadgerConfig `yaml:"badger"`
 }
 
 type Logging struct {
@@ -110,8 +99,6 @@ type Logging struct {
 	Handler string `yaml:"handler"`
 }
 
-// QueueStorage selects the backend that stores queue metadata. Exactly one backend section
-// (memory, badger, mongo, or postgres) may be set. When none is set, the in-memory backend is used.
 type QueueStorage struct {
 	Memory   *MemoryConfig   `yaml:"memory"`
 	Badger   *BadgerConfig   `yaml:"badger"`
@@ -119,22 +106,17 @@ type QueueStorage struct {
 	Postgres *PostgresConfig `yaml:"postgres"`
 }
 
-// PartitionStorage selects the backend for a named partition store. Exactly one backend section
-// (memory, badger, mongo, or postgres) must be set.
 type PartitionStorage struct {
 	Name     string          `yaml:"name"`
-	Affinity int             `yaml:"affinity"`
+	Affinity float64         `yaml:"affinity"`
 	Memory   *MemoryConfig   `yaml:"memory"`
 	Badger   *BadgerConfig   `yaml:"badger"`
 	Mongo    *MongoConfig    `yaml:"mongo"`
 	Postgres *PostgresConfig `yaml:"postgres"`
 }
 
-// MemoryConfig configures the in-memory backend. It accepts no options; select it with an empty
-// mapping (`memory: {}`).
 type MemoryConfig struct{}
 
-// BadgerConfig configures the BadgerDB backend.
 type BadgerConfig struct {
 	StorageDir string `yaml:"storage-dir"`
 }
@@ -146,7 +128,6 @@ func (c BadgerConfig) validate() error {
 	return nil
 }
 
-// MongoConfig configures the MongoDB backend.
 type MongoConfig struct {
 	ConnectionString string `yaml:"connection-string"`
 	Database         string `yaml:"database"`
@@ -160,7 +141,6 @@ func (c MongoConfig) validate() error {
 	return nil
 }
 
-// PostgresConfig configures the PostgreSQL backend.
 type PostgresConfig struct {
 	ConnectionString string `yaml:"connection-string"`
 	MaxConns         int32  `yaml:"max-conns"`
@@ -191,18 +171,61 @@ type Partition struct {
 	StorageName string `yaml:"storage-name"`
 }
 
-// ReadConfig decodes a Querator YAML config from r with strict field checking enabled. Unknown or
-// misspelled keys — including a config option placed under the wrong backend — are reported as an
-// error instead of being silently ignored.
 func ReadConfig(r io.Reader) (File, error) {
-	dec := yaml.NewDecoder(r)
+	content, err := io.ReadAll(r)
+	if err != nil {
+		return File{}, fmt.Errorf("while reading config file: %w", err)
+	}
+
+	dec := yaml.NewDecoder(bytes.NewReader(content))
 	dec.KnownFields(true)
 
 	var file File
 	if err := dec.Decode(&file); err != nil {
 		return File{}, fmt.Errorf("while reading config file: %w", err)
 	}
+
+	var doc yaml.Node
+	if err := yaml.Unmarshal(content, &doc); err != nil {
+		return File{}, fmt.Errorf("while reading config file: %w", err)
+	}
+	keepEmptyAuthKeys(&doc, &file)
 	return file, nil
+}
+
+func keepEmptyAuthKeys(doc *yaml.Node, file *File) {
+	if len(doc.Content) == 0 {
+		return
+	}
+	section := mappingValue(doc.Content[0], "auth")
+	if section == nil {
+		return
+	}
+	if file.Auth == nil {
+		file.Auth = &AuthConfig{}
+	}
+	storage := mappingValue(section, "storage")
+	if storage == nil {
+		return
+	}
+	if mappingValue(storage, "memory") != nil && file.Auth.Storage.Memory == nil {
+		file.Auth.Storage.Memory = &MemoryConfig{}
+	}
+	if mappingValue(storage, "badger") != nil && file.Auth.Storage.Badger == nil {
+		file.Auth.Storage.Badger = &BadgerConfig{}
+	}
+}
+
+func mappingValue(node *yaml.Node, key string) *yaml.Node {
+	if node.Kind != yaml.MappingNode {
+		return nil
+	}
+	for i, child := range node.Content {
+		if i%2 == 0 && child.Value == key && i+1 < len(node.Content) {
+			return node.Content[i+1]
+		}
+	}
+	return nil
 }
 
 func ApplyConfigFile(ctx context.Context, conf *Config, file File, w io.Writer) error {
@@ -275,36 +298,53 @@ func toLogLevel(level string) slog.Level {
 	}
 }
 
-// selected reports the name of the single backend that is set and how many are set, so callers can
-// enforce the "exactly one backend" rule with a clear error.
-func selected(memory, badger, mongo, postgres bool) (name string, count int) {
-	if memory {
-		name, count = "memory", count+1
-	}
-	if badger {
-		name, count = "badger", count+1
-	}
-	if mongo {
-		name, count = "mongo", count+1
-	}
-	if postgres {
-		name, count = "postgres", count+1
-	}
-	return name, count
+type backends struct {
+	Memory   bool
+	Badger   bool
+	Mongo    bool
+	Postgres bool
 }
 
-func backendErr(what string, count int) error {
-	if count == 0 {
-		return fmt.Errorf("%s must define exactly one backend (memory, badger, mongo, postgres)", what)
+func (b backends) selected(section string) (string, error) {
+	var names []string
+	if b.Memory {
+		names = append(names, "memory")
 	}
-	return fmt.Errorf("%s defines multiple backends; only one of (memory, badger, mongo, postgres) is allowed", what)
+	if b.Badger {
+		names = append(names, "badger")
+	}
+	if b.Mongo {
+		names = append(names, "mongo")
+	}
+	if b.Postgres {
+		names = append(names, "postgres")
+	}
+	if len(names) > 1 {
+		return "", fmt.Errorf("%s defines multiple backends; only one of (memory, badger, mongo, postgres) is allowed", section)
+	}
+	if len(names) == 0 {
+		return "", nil
+	}
+	return names[0], nil
 }
 
 func setupPartitionStorage(file File, d *Config) error {
 	for _, ps := range file.PartitionStorage {
-		name, count := selected(ps.Memory != nil, ps.Badger != nil, ps.Mongo != nil, ps.Postgres != nil)
-		if count != 1 {
-			return backendErr(fmt.Sprintf("partition storage '%s'", ps.Name), count)
+		section := fmt.Sprintf("partition storage '%s'", ps.Name)
+		name, err := backends{
+			Memory:   ps.Memory != nil,
+			Badger:   ps.Badger != nil,
+			Mongo:    ps.Mongo != nil,
+			Postgres: ps.Postgres != nil,
+		}.selected(section)
+		if err != nil {
+			return err
+		}
+		if name == "" {
+			return fmt.Errorf("%s must define exactly one backend (memory, badger, mongo, postgres)", section)
+		}
+		if math.IsNaN(ps.Affinity) || math.IsInf(ps.Affinity, 0) {
+			return fmt.Errorf("%s affinity must be a finite number, got %v", section, ps.Affinity)
 		}
 
 		var s store.PartitionStore
@@ -345,7 +385,7 @@ func setupPartitionStorage(file File, d *Config) error {
 
 		d.Service.StorageConfig.PartitionStorage = append(d.Service.StorageConfig.PartitionStorage, store.PartitionStorage{
 			Name:           ps.Name,
-			Affinity:       float64(ps.Affinity),
+			Affinity:       ps.Affinity,
 			PartitionStore: s,
 		})
 	}
@@ -354,9 +394,14 @@ func setupPartitionStorage(file File, d *Config) error {
 
 func setupQueueStorage(ctx context.Context, file File, conf *Config) error {
 	qs := file.QueueStorage
-	name, count := selected(qs.Memory != nil, qs.Badger != nil, qs.Mongo != nil, qs.Postgres != nil)
-	if count > 1 {
-		return backendErr("queue storage", count)
+	name, err := backends{
+		Memory:   qs.Memory != nil,
+		Badger:   qs.Badger != nil,
+		Mongo:    qs.Mongo != nil,
+		Postgres: qs.Postgres != nil,
+	}.selected("queue storage")
+	if err != nil {
+		return err
 	}
 
 	switch name {
@@ -395,6 +440,14 @@ func setupQueueStorage(ctx context.Context, file File, conf *Config) error {
 	}
 
 	for _, queue := range file.Queues {
+		var stored types.QueueInfo
+		if err := conf.Service.StorageConfig.Queues.Get(ctx, queue.Name, &stored); err == nil {
+			continue
+		}
+		if len(queue.Partitions) == 0 && !store.CanPlacePartitions(conf.Service.StorageConfig.PartitionStorage) {
+			return fmt.Errorf("invalid queue '%s'; no storage backend can take partitions, "+
+				"at least one partition storage needs an affinity above 0", queue.Name)
+		}
 		for _, p := range queue.Partitions {
 			found := store.Find(p.StorageName, conf.Service.StorageConfig.PartitionStorage)
 			if found.Name == "" {
@@ -404,7 +457,16 @@ func setupQueueStorage(ctx context.Context, file File, conf *Config) error {
 			p.StorageName = found.Name
 		}
 
-		if err := conf.Service.StorageConfig.Queues.Add(ctx, queue.ToQueueInfo()); err != nil {
+		info := queue.ToQueueInfo()
+		if len(queue.Partitions) == 0 {
+			placed, err := store.PlacePartitions(conf.Service.StorageConfig.PartitionStorage, info)
+			if err != nil {
+				return fmt.Errorf("invalid queue '%s'; %w", queue.Name, err)
+			}
+			info.PartitionInfo = placed
+		}
+
+		if err := conf.Service.StorageConfig.Queues.Add(ctx, info); err != nil {
 			if errors.Is(err, store.ErrQueueAlreadyExists) {
 				continue
 			}
@@ -415,20 +477,49 @@ func setupQueueStorage(ctx context.Context, file File, conf *Config) error {
 }
 
 func setupAuthBackend(file File, conf *Config) error {
-	switch strings.ToLower(file.AuthBackend.Driver) {
-	case "", "none":
-		// NoOp auth (open access) — applied in SetDefaults
-	case "internal":
-		conf.AuthBackend = internal.NewAuthBackend(internal.AuthBackendConfig{
-			RoleBindings: conf.Service.StorageConfig.RoleBindings,
-			APIKeys:      conf.Service.StorageConfig.APIKeys,
-			Users:        conf.Service.StorageConfig.Users,
-			Roles:        conf.Service.StorageConfig.Roles,
-			Log:          conf.Service.Log,
-		})
+	if file.Auth == nil {
+		return nil
+	}
+	if err := setupAuthStorage(file.Auth.Storage, conf); err != nil {
+		return err
+	}
+	conf.AuthBackend = internal.NewAuthBackend(internal.AuthBackendConfig{
+		RoleBindings: conf.Service.StorageConfig.RoleBindings,
+		APIKeys:      conf.Service.StorageConfig.APIKeys,
+		Users:        conf.Service.StorageConfig.Users,
+		Roles:        conf.Service.StorageConfig.Roles,
+		Log:          conf.Service.Log,
+	})
+	return nil
+}
+
+func setupAuthStorage(storage AuthStorage, conf *Config) error {
+	stores := &conf.Service.StorageConfig
+	switch {
+	case storage.Memory != nil && storage.Badger != nil:
+		return errors.New("invalid auth; 'storage' defines multiple backends; only one of (memory, badger) is allowed")
+	case storage.Memory != nil:
+		stores.Namespaces = store.NewMemoryNamespaces(conf.Service.Log)
+		stores.Users = store.NewMemoryUsers(conf.Service.Log)
+		stores.APIKeys = store.NewMemoryAPIKeys(conf.Service.Log)
+		stores.Roles = store.NewMemoryRoles(conf.Service.Log)
+		stores.RoleBindings = store.NewMemoryRoleBindings(conf.Service.Log)
+	case storage.Badger != nil:
+		if err := storage.Badger.validate(); err != nil {
+			return fmt.Errorf("invalid auth storage; %w", err)
+		}
+		dir := store.BadgerConfig{
+			StorageDir: storage.Badger.StorageDir,
+			Log:        conf.Service.Log,
+		}
+		stores.Namespaces = store.NewBadgerNamespaces(dir)
+		stores.Users = store.NewBadgerUsers(dir)
+		stores.APIKeys = store.NewBadgerAPIKeys(dir)
+		stores.Roles = store.NewBadgerRoles(dir)
+		stores.RoleBindings = store.NewBadgerRoleBindings(dir)
 	default:
-		return fmt.Errorf("invalid auth-backend driver; '%s' is not one of (none, internal)",
-			file.AuthBackend.Driver)
+		return errors.New("invalid auth; 'storage' is required and must be one of (memory, badger); " +
+			"it holds namespaces, users, roles, role bindings and API keys")
 	}
 	return nil
 }

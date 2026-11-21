@@ -2,6 +2,7 @@ package service_test
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -47,15 +48,18 @@ func (s linState) clone() linState {
 
 // --- Porcupine model ---
 
-var linearizabilityModel = porcupine.Model{
-	Init: func() interface{} {
-		return linState{
+// linearizabilityModel is deterministic, but porcupine.Model's Step returns (bool, interface{}), a
+// result shape Tiger rejects (TS-E06). It is written as a NondeterministicModel whose Step returns
+// its one next state, or none for an illegal step.
+var linearizabilityModel = (&porcupine.NondeterministicModel{
+	Init: func() []interface{} {
+		return []interface{}{linState{
 			queue:  []string{},
 			leased: make(map[string]bool),
-		}
+		}}
 	},
 
-	Step: func(state, input, output interface{}) (bool, interface{}) {
+	Step: func(state, input, output interface{}) []interface{} {
 		s := state.(linState)
 		inp := input.(linInput)
 		out := output.(linOutput)
@@ -64,18 +68,21 @@ var linearizabilityModel = porcupine.Model{
 		case opProduce:
 			next := s.clone()
 			next.queue = append(next.queue, inp.ids...)
-			return true, next
+			return []interface{}{next}
 
 		case opLease:
 			if !out.ok {
-				return len(s.queue) == 0, s
+				if len(s.queue) == 0 {
+					return []interface{}{s}
+				}
+				return nil
 			}
 			if len(out.ids) > len(s.queue) {
-				return false, s
+				return nil
 			}
 			for i, id := range out.ids {
 				if s.queue[i] != id {
-					return false, s
+					return nil
 				}
 			}
 			next := s.clone()
@@ -83,24 +90,24 @@ var linearizabilityModel = porcupine.Model{
 			for _, id := range out.ids {
 				next.leased[id] = true
 			}
-			return true, next
+			return []interface{}{next}
 
 		case opComplete:
 			for _, id := range inp.ids {
 				if !s.leased[id] {
-					return false, s
+					return nil
 				}
 			}
 			next := s.clone()
 			for _, id := range inp.ids {
 				delete(next.leased, id)
 			}
-			return true, next
+			return []interface{}{next}
 
 		case opRetry, opLeaseExpiry:
 			for _, id := range inp.ids {
 				if !s.leased[id] {
-					return false, s
+					return nil
 				}
 			}
 			next := s.clone()
@@ -109,9 +116,9 @@ var linearizabilityModel = porcupine.Model{
 			}
 			// Per ADR 0022: retried and lease-expired items go to the tail of the queue.
 			next.queue = append(next.queue, inp.ids...)
-			return true, next
+			return []interface{}{next}
 		}
-		return false, s
+		return nil
 	},
 
 	Equal: func(s1, s2 interface{}) bool {
@@ -154,12 +161,9 @@ var linearizabilityModel = porcupine.Model{
 
 	DescribeState: func(state interface{}) string {
 		s := state.(linState)
-		leased := make([]string, 0, len(s.leased))
-		for k := range s.leased {
-			leased = append(leased, k)
-		}
+		leased := slices.Sorted(maps.Keys(s.leased))
 		return fmt.Sprintf("queue=[%s] leased=[%s]",
 			strings.Join(s.queue, ","),
 			strings.Join(leased, ","))
 	},
-}
+}).ToModel()

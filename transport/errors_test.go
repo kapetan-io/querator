@@ -1,16 +1,17 @@
-package transport
+package transport_test
 
 import (
 	"errors"
 	"fmt"
 	"github.com/duh-rpc/duh-go"
+	"github.com/kapetan-io/querator/transport"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"testing"
 )
 
 func TestNewErrInvalid(t *testing.T) {
-	in := NewInvalidOption("invalid key")
+	in := transport.NewInvalidOption("invalid key")
 	assert.Equal(t, "invalid key", in.Error())
 	err := fmt.Errorf("wrap: %w", in)
 	assert.Equal(t, "wrap: invalid key", err.Error())
@@ -22,7 +23,7 @@ func TestNewErrInvalid(t *testing.T) {
 }
 
 func TestErrConflict(t *testing.T) {
-	e := NewConflict("item already exists")
+	e := transport.NewConflict("item already exists")
 	assert.Equal(t, duh.CodeConflict, e.Code())
 	assert.Equal(t, "item already exists", e.Error())
 	err := fmt.Errorf("wrap: %w", e)

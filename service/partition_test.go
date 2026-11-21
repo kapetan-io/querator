@@ -8,6 +8,7 @@ import (
 	"github.com/duh-rpc/duh-go/retry"
 	"github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/internal/store"
+	"github.com/kapetan-io/querator/internal/types"
 	pb "github.com/kapetan-io/querator/proto"
 	svc "github.com/kapetan-io/querator/service"
 	"github.com/kapetan-io/tackle/clock"
@@ -73,11 +74,12 @@ func TestPartitions(t *testing.T) {
 
 func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	defer goleak.VerifyNone(t, goleakOptions...)
-	d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+	d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
 	defer func() {
 		d.Shutdown(t)
 		tearDown()
 	}()
+	c, ctx := d.MustClient(), d.Context()
 
 	t.Run("TwoPartitions", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
@@ -392,9 +394,13 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			}))
 		}
 
-		// A single consumer reserving all items from all partitions
+		// A single consumer reserving all items from all partitions. Each lease returns at
+		// least one item, so 50 leases are always enough.
 		var count int
-		for count < 50 {
+		for range 50 {
+			if count >= 50 {
+				break
+			}
 			var resp pb.QueueLeaseResponse
 			require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
 				ClientId:       random.String("client-", 10),
@@ -404,6 +410,7 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			}, &resp))
 			count += len(resp.Items)
 		}
+		require.Equal(t, 50, count)
 		assertPartition(t, ctx, c, queueName, Partition{Partition: 0, Leased: 5, NotLeased: 0})
 		assertPartition(t, ctx, c, queueName, Partition{Partition: 1, Leased: 5, NotLeased: 0})
 		assertPartition(t, ctx, c, queueName, Partition{Partition: 2, Leased: 5, NotLeased: 0})
@@ -461,32 +468,34 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			},
 		}
 
-		leaseCh := make(chan []*pb.QueueLeaseResponse)
-		go func() {
-			leaseCh <- pauseAndLease(t, ctx, d.Service(), c, queueName, requests)
-		}()
+		var resp []*pb.QueueLeaseResponse
+		backgroundCall{
+			Call: func() {
+				resp = pauseAndLease(t, ctx, d.Service(), c, queueName, requests)
+			},
+			While: func() {
+				// Wait until the lease requests are all waiting
+				err := retry.On(ctx, RetryTenTimes, func(ctx context.Context, i int) error {
+					var resp pb.QueueStatsResponse
+					require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &resp))
+					if int(resp.LogicalQueues[0].LeaseWaiting) != len(requests) {
+						return fmt.Errorf("LeaseWaiting never reached expected %d", len(requests))
+					}
+					return nil
+				})
+				require.NoError(t, err)
 
-		// Wait until the lease requests are all waiting
-		err := retry.On(ctx, RetryTenTimes, func(ctx context.Context, i int) error {
-			var resp pb.QueueStatsResponse
-			require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &resp))
-			if int(resp.LogicalQueues[0].LeaseWaiting) != len(requests) {
-				return fmt.Errorf("LeaseWaiting never reached expected %d", len(requests))
-			}
-			return nil
-		})
-		require.NoError(t, err)
-
-		// Now produce 10 items
-		items := produceRandomItems(10)
-		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
-			Items:          items,
-			QueueName:      queueName,
-			RequestTimeout: "1m",
-		}))
+				// Now produce 10 items
+				items := produceRandomItems(10)
+				require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+					Items:          items,
+					QueueName:      queueName,
+					RequestTimeout: "1m",
+				}))
+			},
+		}.run()
 
 		// The 10 items produced are distributed amongst all the waiting lease requests.
-		resp := <-leaseCh
 		for _, r := range resp {
 			assert.Equal(t, 2, len(r.Items))
 		}
@@ -514,4 +523,201 @@ func assertPartition(t *testing.T, ctx context.Context, c *querator.Client, name
 	}
 	assert.Equal(t, expected.Leased, leased)
 	assert.Equal(t, expected.NotLeased, notLeased)
+}
+
+// TestPartitionPlacement and TestPartitionSpread sit outside TestPartitions because each needs
+// several partition storage backends in one daemon. Each TestPartitions setup configures one
+// backend and its teardown cleans up only the last one set up, so it can't build a second.
+// QueuesManager picks a partition's backend before writing to it, so in-memory backends are
+// enough here. TestQueuesStorage/<Backend>/CRUD/Create proves each backend type saves the name.
+func TestPartitionPlacement(t *testing.T) {
+	defer goleak.VerifyNone(t, goleakOptions...)
+	conf := setupMemoryStorage(store.Config{})
+	conf.PartitionStorage = []store.PartitionStorage{
+		{
+			PartitionStore: store.NewMemoryPartitionStore(conf, log),
+			Name:           "memory-0",
+			Affinity:       1,
+		},
+		{
+			PartitionStore: store.NewMemoryPartitionStore(conf, log),
+			Name:           "memory-1",
+			Affinity:       1,
+		},
+	}
+	d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+	defer d.Shutdown(t)
+	c, ctx := d.MustClient(), d.Context()
+
+	queueName := random.String("queue-", 10)
+	createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+		QueueName:           queueName,
+		LeaseTimeout:        "1m",
+		ExpireTimeout:       "10m",
+		RequestedPartitions: 4,
+	})
+
+	// Each produce request lands in a single partition (ADR-0019), so one request per
+	// partition puts 3 items in every partition.
+	for range 4 {
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			Items:          produceRandomItems(3),
+			QueueName:      queueName,
+			RequestTimeout: "1m",
+		}))
+	}
+
+	// No public API can tell two backends' contents apart, so this reads each backend the test
+	// configured through the PartitionStore interface Querator itself uses. It catches a
+	// partition opened on a different backend than the one /queues.info names for it.
+	var info pb.QueueInfo
+	require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &info))
+	require.Len(t, info.Partitions, 4)
+	for _, p := range info.Partitions {
+		var items []*types.Item
+		require.NoError(t, store.Find(p.StorageName, conf.PartitionStorage).PartitionStore.Get(types.PartitionInfo{
+			Queue:        types.QueueInfo{Name: queueName},
+			PartitionNum: int(p.Partition),
+			StorageName:  p.StorageName,
+		}).List(ctx, &items, types.ListOptions{Limit: 100}))
+		assert.Len(t, items, 3)
+	}
+	assert.Equal(t, map[string]int{"memory-0": 2, "memory-1": 2}, partitionsPerBackend(t, ctx, c, queueName))
+
+	// Completing removes items, so this runs after the per backend count above.
+	clientID := random.String("client-", 10)
+	var done int
+	for range 12 {
+		if done == 12 {
+			break
+		}
+		var lease pb.QueueLeaseResponse
+		require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+			QueueName:      queueName,
+			ClientId:       clientID,
+			RequestTimeout: "5s",
+			BatchSize:      12,
+		}, &lease))
+
+		var ids []string
+		for _, item := range lease.Items {
+			ids = append(ids, item.Id)
+		}
+		require.NoError(t, c.QueueComplete(ctx, &pb.QueueCompleteRequest{
+			QueueName:      queueName,
+			RequestTimeout: "5s",
+			Partition:      lease.Partition,
+			Ids:            ids,
+		}))
+		done += len(lease.Items)
+	}
+	assert.Equal(t, 12, done)
+
+	for partition := range 4 {
+		var list pb.StorageItemsListResponse
+		require.NoError(t, c.StorageItemsList(ctx, queueName, partition, &list, nil))
+		assert.Empty(t, list.Items)
+	}
+}
+
+func TestPartitionSpread(t *testing.T) {
+	defer goleak.VerifyNone(t, goleakOptions...)
+
+	for _, test := range []struct {
+		Name       string
+		Affinities []float64
+		Partitions int32
+		Expected   map[string]int
+	}{
+		{
+			Name:       "EqualAffinity",
+			Affinities: []float64{1, 1},
+			Partitions: 4,
+			Expected:   map[string]int{"memory-0": 2, "memory-1": 2},
+		},
+		{
+			Name:       "UnevenPartitionCount",
+			Affinities: []float64{1, 1},
+			Partitions: 3,
+			Expected:   map[string]int{"memory-0": 2, "memory-1": 1},
+		},
+		{
+			Name:       "LeftoversOneEach",
+			Affinities: []float64{1, 1, 1},
+			Partitions: 5,
+			Expected:   map[string]int{"memory-0": 2, "memory-1": 2, "memory-2": 1},
+		},
+		{
+			Name:       "FractionalAffinity",
+			Affinities: []float64{1, 0.5, 0.3, 0.1},
+			Partitions: 10,
+			Expected:   map[string]int{"memory-0": 6, "memory-1": 3, "memory-2": 1},
+		},
+		{
+			Name:       "ZeroAffinity",
+			Affinities: []float64{1, 0},
+			Partitions: 4,
+			Expected:   map[string]int{"memory-0": 4},
+		},
+		{
+			Name:       "WeightedAffinity",
+			Affinities: []float64{3, 1},
+			Partitions: 4,
+			Expected:   map[string]int{"memory-0": 3, "memory-1": 1},
+		},
+		{
+			Name:       "LeftoverToHighestAffinity",
+			Affinities: []float64{1, 2},
+			Partitions: 4,
+			Expected:   map[string]int{"memory-0": 1, "memory-1": 3},
+		},
+		{
+			Name:       "LeftoverSkipsZeroAffinity",
+			Affinities: []float64{0, 1, 1, 1},
+			Partitions: 4,
+			Expected:   map[string]int{"memory-1": 2, "memory-2": 1, "memory-3": 1},
+		},
+		{
+			Name:       "NegativeAffinity",
+			Affinities: []float64{2, -1},
+			Partitions: 4,
+			Expected:   map[string]int{"memory-0": 4},
+		},
+	} {
+		t.Run(test.Name, func(t *testing.T) {
+			conf := setupMemoryStorage(store.Config{})
+			conf.PartitionStorage = nil
+			for i, affinity := range test.Affinities {
+				conf.PartitionStorage = append(conf.PartitionStorage, store.PartitionStorage{
+					PartitionStore: store.NewMemoryPartitionStore(conf, log),
+					Name:           fmt.Sprintf("memory-%d", i),
+					Affinity:       affinity,
+				})
+			}
+			d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+			defer d.Shutdown(t)
+			c, ctx := d.MustClient(), d.Context()
+
+			queueName := random.String("queue-", 10)
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				QueueName:           queueName,
+				LeaseTimeout:        "1m",
+				ExpireTimeout:       "10m",
+				RequestedPartitions: test.Partitions,
+			})
+			assert.Equal(t, test.Expected, partitionsPerBackend(t, ctx, c, queueName))
+		})
+	}
+}
+
+// partitionsPerBackend counts the partitions of a queue held by each storage backend, as reported by /queues.info
+func partitionsPerBackend(t *testing.T, ctx context.Context, c *querator.Client, queueName string) map[string]int {
+	t.Helper()
+	var info pb.QueueInfo
+	require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &info))
+	counts := make(map[string]int)
+	for _, p := range info.Partitions {
+		counts[p.StorageName]++
+	}
+	return counts
 }

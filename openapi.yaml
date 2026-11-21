@@ -354,14 +354,17 @@ paths:
                         lease_timeout: 60m
                         expire_timeout: 24h
                         max_attempts: 20
-                        requested_partitions: 1025
+                        requested_partitions: 100
           headers: {}
       security: []
   /v1/queues.create:
     post:
       summary: Create a queue
       deprecated: false
-      description: Create a new queue with the provided characteristics
+      description: >-
+        Create a new queue with the provided characteristics.
+        `requested_partitions` may be at most 1024; larger requests are
+        rejected with an invalid-option error (HTTP 400).
       operationId: post-v1-queues.create
       tags:
         - Querator V1
@@ -401,7 +404,11 @@ paths:
     post:
       summary: Update a queue
       deprecated: false
-      description: Update the details of a queue.
+      description: >-
+        Update the details of a queue. A field the request leaves out, or sends
+        as `null`, keeps its current value. To remove the dead letter queue send `"dead_queue": ""`,
+        to remove the reference send `"reference": ""`, and to allow unlimited
+        attempts send `"max_attempts": 0`.
       operationId: post-v1-queues.update
       tags:
         - Querator V1
@@ -410,7 +417,8 @@ paths:
         required: true
         content:
           application/json:
-            schema: *ref_0
+            schema:
+              $ref: '#/components/schemas/QueuesUpdateRequest'
             example:
               queue_name: queue-name
               dead_queue: queue-name-dead
@@ -447,7 +455,7 @@ paths:
             schema:
               $ref: '#/components/schemas/QueuesInfoRequest'
             example:
-              name: queue-name
+              queue_name: queue-name
       responses:
         '200':
           description: ''
@@ -566,8 +574,8 @@ paths:
       summary: Clear a queue
       deprecated: false
       description: >-
-        Clears all data from a queue, optionally clears all retry and scheduled
-        items
+        Clears items from a queue. Items scheduled for retry are scheduled
+        items, and only the `scheduled` flag removes them.
       tags:
         - Querator V1
       parameters: []
@@ -579,7 +587,6 @@ paths:
               $ref: '#/components/schemas/QueueClearRequest'
             example:
               queue_name: queue-name
-              retry: false
               scheduled: false
               queue: true
               destructive: true
@@ -807,17 +814,14 @@ components:
         queue_name:
           type: string
           description: The name of the queue to clear
-        retry:
-          type: boolean
-          description: >-
-            Indicates the 'retry' queue will be cleared. If true, any items
-            scheduled to be retried at a future date will be removed.
         scheduled:
           type: boolean
           description: >-
             Indicates any 'scheduled' items in the queue will be cleared. If
-            true, any items scheduled to be enqueued at a future date will be
-            removed.
+            true, every item still waiting to be enqueued is removed, including
+            one whose enqueue time has passed but which has not yet moved into
+            the queue, and items scheduled for retry. Only this flag removes
+            scheduled items.
         queue:
           type: boolean
           description: >-
@@ -827,8 +831,9 @@ components:
         destructive:
           type: boolean
           description: >-
-            Indicates the Retry, Scheduled, Queue operations should be destructive
-            in that all data regardless of status will be removed.
+            Indicates the Queue operation should be destructive in that items
+            are removed regardless of lease status. Scheduled items are kept
+            unless Scheduled is also set.
 
             For example, if used with ClearRequest.Queue = true, then ALL items
             in the queue regardless of lease status will be removed. This
@@ -837,7 +842,6 @@ components:
             knowledge of those items.
       required:
         - queue_name
-        - retry
         - scheduled
         - queue
         - destructive
@@ -859,11 +863,81 @@ components:
     QueuesInfoRequest:
       type: object
       properties:
-        name:
+        queue_name:
           type: string
           description: The name of the queue to retrieve info about
       required:
-        - name
+        - queue_name
+    QueuesUpdateRequest:
+      type: object
+      properties:
+        queue_name:
+          type: string
+          description: The name of the queue to update
+          examples:
+            - queue-name
+        dead_queue:
+          type: string
+          description: >-
+            The name of the dead letter queue for this queue. Left out, the
+            current dead letter queue is kept. An empty string removes it.
+          examples:
+            - queue-name-dead
+        reference:
+          type: string
+          description: >-
+            A user supplied field which could contain metadata or specify who
+            owns this queue. Left out, the current reference is kept. An empty
+            string removes it.
+          examples:
+            - account-12345
+        lease_timeout:
+          type: string
+          description: >-
+            The default lease timeout for this queue. Left out, empty or '0s', the
+            current lease timeout is kept.
+          examples:
+            - 60m
+        expire_timeout:
+          type: string
+          description: >-
+            How long an item can wait in the queue regardless of attempts before
+            it is moved to the dead letter queue. Left out, empty or '0s', the current
+            expire timeout is kept.
+          examples:
+            - 24h
+        max_attempts:
+          type: integer
+          description: >-
+            The maximum number of times an item can be retried by a consumer
+            before it is placed in the dead letter queue or removed. Left out,
+            the current limit is kept. '0' allows unlimited attempts.
+        requested_partitions:
+          type: integer
+          description: >-
+            The number of partitions this queue has requested. Left out or '0',
+            the current count is kept. `/queues.update` does not add or remove
+            partitions.
+        created_at:
+          type: string
+          format: date-time
+          description: Accepted so a request can carry back what `/queues.info` returned. Ignored.
+        updated_at:
+          type: string
+          format: date-time
+          description: Accepted so a request can carry back what `/queues.info` returned. Ignored.
+        namespace:
+          type: string
+          description: >-
+            Accepted so a request can carry back what `/queues.info` returned.
+            Ignored, but a malformed namespace is refused.
+        partitions:
+          type: array
+          description: Accepted so a request can carry back what `/queues.info` returned. Ignored.
+          items:
+            $ref: '#/components/schemas/PartitionInfo'
+      required:
+        - queue_name
     QueuesDeleteRequest:
       type: object
       properties:
@@ -1312,9 +1386,19 @@ components:
         requested_partitions:
           type: integer
           description: >-
-            The number of partitions this queue has requested. This might be
-            different than the number of currently active partitions as the
-            system grows or contracts the number of partitions.
+            The number of partitions this queue has requested.
+            `/queues.create` rejects a value greater than 1024 with HTTP 400.
+            Queues stored with more partitions keep working, so responses can
+            report a larger value. `/queues.update` does not add or remove
+            partitions.
+        partitions:
+          type: array
+          description: >-
+            The partitions of this queue and the storage backend which holds
+            each one. Set by Querator; ignored by `/queues.create` and
+            `/queues.update`.
+          items:
+            $ref: '#/components/schemas/PartitionInfo'
       required:
         - queue_name
         - requested_partitions
@@ -1325,6 +1409,26 @@ components:
         - reference
         - lease_timeout
         - expire_timeout
+    PartitionInfo:
+      type: object
+      properties:
+        partition:
+          type: integer
+          description: The partition number
+        storage_name:
+          type: string
+          description: >-
+            The name of the storage backend which holds this partition, as
+            given by the `name` of an entry under `partition-storage` in the
+            Querator config. `/queues.create` places a queue's partitions on
+            the storage backends in proportion to each backend's affinity, and
+            never on a backend with an affinity of 0. A queue defined in the
+            config file keeps the `storage-name` given there.
+          examples:
+            - badger-0
+      required:
+        - partition
+        - storage_name
     StorageItem:
       type: object
       properties:

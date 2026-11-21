@@ -1,5 +1,11 @@
 package types
 
+import (
+	"fmt"
+
+	"github.com/kapetan-io/tiger/assert"
+)
+
 const (
 	ActionQueueScheduledItem ActionKind = iota
 	ActionLeaseExpired
@@ -21,8 +27,9 @@ func ActionToString(a ActionKind) string {
 	case ActionDeleteItem:
 		return "DeleteItem"
 	default:
-		return "UnknownAction"
+		assert.Unreachable(fmt.Sprintf("undefined action kind '0x%X'", int(a)))
 	}
+	return ""
 }
 
 type ActionKind int

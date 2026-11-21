@@ -19,23 +19,38 @@ amongst the available partitions will use the same optimistic partition distribu
 [0019-partition-item-distribution](0019-partition-item-distribution.md) where the number of scheduled
 items is combined with the number of enqueued items, and then used to calculate optimistic distribution.
 
+An item whose `enqueue_at` is in the past or only moments away is produced as an ordinary item, with
+its `enqueue_at` cleared. Many clients fill in every field and set `enqueue_at` to "now". Clock drift
+between machines puts that a few milliseconds in the future, and scheduling the item would cost a
+write, a scan and a move to deliver it a few milliseconds later.
+
+An import (`/v1/storage/items.import`) is meant to restore items exactly as they were, so an imported
+item keeps the `enqueue_at` it was given. The code does not meet this yet: an import drops
+`enqueue_at` (ENG-798).
+
 #### Retried Items
 When an item is retried with a `retry_at` timestamp set to a future date, it will be placed into the
 scheduled queue of the same partition to which it was originally enqueued. As a result, retried items
 cannot move to different partitions and will remain associated with their original partition for their
-entire lifecycle.
+entire lifecycle. A `retry_at` in the past or only moments away is an immediate retry, for the
+same reason.
 
 ### Implementation
-Querator will use `LifeCycle` to monitor and report scheduled items that need to be enqueued at their
-designated times. `LifeCycle` will implement a secondary timer—independent of the main lifecycle timer—to
-track when scheduled items are due for enqueueing. This approach avoids scanning the entire partition
-queue for lifecycle actions when only scheduled item actions are needed, streamlining the movement of
-scheduled items independently of other lifecycle actions.
+Querator uses the Logical Queue's lifecycle to find scheduled items that need to be enqueued at
+their designated times. The lifecycle keeps a scheduled timer, independent of the main lifecycle
+timer, to track when scheduled items are due for enqueueing. This avoids reading the partition for
+other lifecycle actions when only scheduled items are due.
 
-`LifeCycle` will generate scheduled actions of type `ActionQueueScheduledItem`, each containing the ID
-of the scheduled item. These actions will be passed to `Logical`, which will then forward
-them to the storage implementation, which is responsible for moving items from the scheduled queue
-to the partition queue.
+The next scheduled run is set from what storage holds, not only from the writes made since the queue
+loaded. An item scheduled before a restart is in storage but in no write this process saw, so it would
+otherwise wait until some later write happened to wake the timer. A failed scheduled run does not change the main lifecycle's back-off, and
+the partition keeps taking requests.
+
+The lifecycle generates scheduled actions of type `ActionQueueScheduledItem`, each containing the ID
+of the scheduled item. `Logical` writes these actions to the storage implementation on its request
+loop, one page at a time (see [22. Managing item lifecycles](0022-managing-item-lifecycles.md)). The
+storage implementation is responsible for moving items from the scheduled queue to the partition
+queue.
 
 #### Data Store Implementation
 The data store implementation should attempt to move items atomically whenever possible. If atomic

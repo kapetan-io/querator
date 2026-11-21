@@ -75,7 +75,10 @@ func BenchmarkProduce(b *testing.B) {
 					b.RunParallel(func(p *testing.PB) {
 						index := int(rand.Uint32() & uint32(mask))
 
-						for p.Next() {
+						// The cap gives the loop a bound Tiger can prove and never ends it early. Next returns
+						// true b.N times across all goroutines, then false, so no goroutine calls it more than
+						// b.N+1 times.
+						for count := 0; count <= b.N && p.Next(); count++ {
 							err := s.QueueProduce(context.Background(), &pb.QueueProduceRequest{
 								Items:          items[index&mask : index+1&mask],
 								QueueName:      "bench-queue",

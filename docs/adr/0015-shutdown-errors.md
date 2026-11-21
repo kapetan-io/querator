@@ -29,6 +29,10 @@ Querator or refresh its network topology in an attempt to re-establish contact. 
 (Retry Request) as the service might not be available at this address or port and continued attempts to retry could
 be in vain.
 
+Shutdown answers every waiting caller, including a produce that is waiting because every partition of
+its queue has failed. A caller nobody answers keeps shutdown waiting until that caller gives up or
+shutdown's own deadline passes.
+
 ## Consequences
 
 The complexity of the client increases to handle a transient situation which occurs when the service is in shutdown.

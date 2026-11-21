@@ -12,11 +12,6 @@ import (
 	"github.com/kapetan-io/tackle/set"
 )
 
-// maxRoleBindingsPerCheck bounds the number of role bindings fetched per permission check,
-// preventing unbounded storage scans for users with many bindings.
-const maxRoleBindingsPerCheck = 100
-
-// AuthBackendConfig configures the AuthBackend
 type AuthBackendConfig struct {
 	RoleBindings store.RoleBindings
 	APIKeys      store.APIKeys
@@ -25,7 +20,6 @@ type AuthBackendConfig struct {
 	Log          *slog.Logger
 }
 
-// AuthBackend implements auth.AuthBackend using storage backends
 type AuthBackend struct {
 	roleBindings store.RoleBindings
 	roles        store.Roles
@@ -35,7 +29,6 @@ type AuthBackend struct {
 
 var _ auth.AuthBackend = &AuthBackend{}
 
-// NewAuthBackend creates a new AuthBackend
 func NewAuthBackend(conf AuthBackendConfig) *AuthBackend {
 	set.Default(&conf.Log, slog.Default())
 
@@ -51,7 +44,6 @@ func NewAuthBackend(conf AuthBackendConfig) *AuthBackend {
 	}
 }
 
-// Authenticate validates a token and returns the principal
 func (a *AuthBackend) Authenticate(ctx context.Context, token string) (auth.Principal, error) {
 	if token == "" {
 		return auth.AnonymousPrincipal(), nil
@@ -59,22 +51,16 @@ func (a *AuthBackend) Authenticate(ctx context.Context, token string) (auth.Prin
 	return a.cache.Authenticate(ctx, token)
 }
 
-// HasPermission implements the cascading permission check:
-// 1. Check API key scope: if scoped and scope != target namespace, only allow if target IS _system
-// 2. Check target namespace for permission (User has role in target NS)
-// 3. If not found and target != _system, check _system namespace (User has role in _system)
-func (a *AuthBackend) HasPermission(ctx context.Context, principal auth.Principal, targetNS string, perm string) (bool, error) {
+func (a *AuthBackend) HasPermission(ctx context.Context, principal auth.Principal, access auth.Access) (bool, error) {
+	targetNS, perm := access.Namespace, access.Permission
 	if principal.NamespaceScope != nil && *principal.NamespaceScope != targetNS {
-		// The scope does not match the target namespace. A scoped key is still allowed to
-		// exercise permissions it holds via _system role bindings when accessing _system
-		// directly. For any other target namespace the scope guard denies access.
 		if targetNS != auth.SystemNamespace {
 			return false, nil
 		}
-		return a.checkPermissionInNamespace(ctx, principal.UserID, auth.SystemNamespace, perm)
+		return a.checkPermissionInNamespace(ctx, permissionCheckArgs{UserID: principal.UserID, Namespace: auth.SystemNamespace, Permission: perm})
 	}
 
-	hasPermission, err := a.checkPermissionInNamespace(ctx, principal.UserID, targetNS, perm)
+	hasPermission, err := a.checkPermissionInNamespace(ctx, permissionCheckArgs{UserID: principal.UserID, Namespace: targetNS, Permission: perm})
 	if err != nil {
 		return false, err
 	}
@@ -83,7 +69,7 @@ func (a *AuthBackend) HasPermission(ctx context.Context, principal auth.Principa
 	}
 
 	if targetNS != auth.SystemNamespace {
-		hasPermission, err = a.checkPermissionInNamespace(ctx, principal.UserID, auth.SystemNamespace, perm)
+		hasPermission, err = a.checkPermissionInNamespace(ctx, permissionCheckArgs{UserID: principal.UserID, Namespace: auth.SystemNamespace, Permission: perm})
 		if err != nil {
 			return false, err
 		}
@@ -95,10 +81,15 @@ func (a *AuthBackend) HasPermission(ctx context.Context, principal auth.Principa
 	return false, nil
 }
 
-// checkPermissionInNamespace checks if a user has a specific permission in a namespace
-func (a *AuthBackend) checkPermissionInNamespace(ctx context.Context, userID, namespace, perm string) (bool, error) {
+type permissionCheckArgs struct {
+	UserID     string
+	Namespace  string
+	Permission string
+}
+
+func (a *AuthBackend) checkPermissionInNamespace(ctx context.Context, check permissionCheckArgs) (bool, error) {
 	var bindings []types.RoleBinding
-	if err := a.roleBindings.ListByUser(ctx, userID, namespace, &bindings, maxRoleBindingsPerCheck); err != nil {
+	if err := a.roleBindings.ListByUser(ctx, store.UserInNamespace{Namespace: check.Namespace, UserID: check.UserID}, &bindings, types.MaxRoleBindingsPerUserInNamespace); err != nil {
 		return false, err
 	}
 
@@ -117,7 +108,7 @@ func (a *AuthBackend) checkPermissionInNamespace(ctx context.Context, userID, na
 		}
 
 		for _, p := range role.Permissions {
-			if p == perm {
+			if p == check.Permission {
 				return true, nil
 			}
 		}
@@ -126,17 +117,14 @@ func (a *AuthBackend) checkPermissionInNamespace(ctx context.Context, userID, na
 	return false, nil
 }
 
-// InvalidateUser removes all cached entries for a user
 func (a *AuthBackend) InvalidateUser(userID string) {
 	a.cache.InvalidateUser(userID)
 }
 
-// InvalidateKey removes a cached entry by key hash
 func (a *AuthBackend) InvalidateKey(keyHash string) {
 	a.cache.Invalidate(keyHash)
 }
 
-// Close releases resources
 func (a *AuthBackend) Close() {
 	a.cache.Close()
 }

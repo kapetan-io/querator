@@ -9,7 +9,6 @@ import (
 	"strings"
 )
 
-// TODO: Consider using this instead of []byte for the Item ID
 type ItemID []byte
 
 func ToItemID(id string) ItemID {
@@ -19,47 +18,22 @@ func ToItemID(id string) ItemID {
 	return ItemID(id)
 }
 
-// Item is the store and queue representation of an item in the queue.
 type Item struct {
-	// ID is unique to each item in the data store. The ID style is different depending on the data store
-	// implementation, and does not include the queue name.
-	ID ItemID
-	// SourceID is the original ID from the source queue (only set for DLQ items, nil otherwise)
-	SourceID ItemID
-	// IsLeased is true if the item has been leased by a client
-	// TODO: Change this to a time stamp, which if non zero is the timestamp when the item was leased
-	IsLeased bool
-	// LeaseDeadline is the time in the future when the lease is
-	// expired and can be leased by another consumer
-	LeaseDeadline clock.Time
-	// ExpireDeadline is the time in the future the item must be consumed,
-	// before it is considered dead and moved to the dead letter queue if configured.
+	ID             ItemID
+	SourceID       ItemID
+	IsLeased       bool
+	LeaseDeadline  clock.Time
 	ExpireDeadline clock.Time
-	// EnqueueAt if this is not empty, then clock.Time indicates when this item should be enqueued.
-	EnqueueAt clock.Time
-	// CreatedAt is the time stamp when this item was added to the database.
-	CreatedAt clock.Time
-	// Attempts is how many attempts this item has seen
-	Attempts int
-	// MaxAttempts is the maximum number of times this message can be retried by a consumer before it is
-	// placed in the dead letter queue.
-	// TODO(thrawn01): We probably do NOT want to store this in the item, as the operator might want to
-	// retroactively increase the max attempts during an outage. As such the queue info should be the source
-	// of truth to max attempts.
-	MaxAttempts int
-	// Reference is a user supplied field which could contain metadata or specify who owns this queue
-	// Examples: "jake@statefarm.com", "stapler@office-space.com", "account-0001"
-	Reference string
-	// Encoding is a user specified field which indicates the encoding the user used to encode the 'payload'
-	Encoding string
-	// Kind is the Kind or Type the payload contains. Consumers can use this field to determine handling
-	// of the payload prior to unmarshalling. Examples: 'webhook-v2', 'webhook-v1',
-	Kind string
-	// Payload is the payload of the queue item
-	Payload []byte
+	EnqueueAt      clock.Time
+	CreatedAt      clock.Time
+	Attempts       int
+	MaxAttempts    int
+	Reference      string
+	Encoding       string
+	Kind           string
+	Payload        []byte
 }
 
-// TODO: Remove if not needed
 func (i *Item) Compare(r *Item) bool {
 	if !bytes.Equal(i.ID, r.ID) {
 		return false
@@ -131,18 +105,12 @@ func (i *Item) FromProto(in *pb.StorageItem) *Item {
 	return i
 }
 
-// PartitionInfo is information about partition
 type PartitionInfo struct {
-	Queue QueueInfo
-	// QueueName string
-	// Which StorageConfig Instance this partition belong too
-	StorageName string
-	// If the partition is marked as read only
-	ReadOnly bool
-	// The partition number
+	Queue        QueueInfo
+	StorageName  string
+	ReadOnly     bool
 	PartitionNum int
 
-	// cached hashKey
 	hashKey PartitionHash
 }
 
@@ -157,34 +125,18 @@ func (p *PartitionInfo) HashKey() PartitionHash {
 	return p.hashKey
 }
 
-// QueueInfo is information about a queue
 type QueueInfo struct {
-	// The name of the queue
-	Name string
-	// Namespace is the namespace this queue belongs to. Used for multi-tenant isolation.
-	Namespace string
-	// LeaseTimeout is how long the lease is valid for.
-	LeaseTimeout clock.Duration
-	// DeadQueue is the name of the dead letter queue for this queue.
-	DeadQueue string
-	// ExpireTimeout is the time an item can wait in the queue regardless of attempts before
-	// it is moved to the dead letter queue. This value is used if no ExpireTimeout is provided
-	// by the queued item.
-	ExpireTimeout clock.Duration
-	// CreatedAt is the time this queue was created
-	CreatedAt clock.Time
-	// UpdatedAt is the time this queue was last updated.
-	UpdatedAt clock.Time
-	// MaxAttempts is the maximum number of times this item can be retried
-	MaxAttempts int
-	// Reference is the user supplied field which could contain metadata or specify who owns this queue
-	Reference string
-	// RequestedPartitions is the number of partitions this queue expects to have. This might be different
-	// from the number of StoragePartitions listed in PartitionInfo as the system grows or shrinks the number
-	// of actual partitions.
+	Name                string
+	Namespace           string
+	LeaseTimeout        clock.Duration
+	DeadQueue           string
+	ExpireTimeout       clock.Duration
+	CreatedAt           clock.Time
+	UpdatedAt           clock.Time
+	MaxAttempts         int
+	Reference           string
 	RequestedPartitions int
-	// PartitionInfo is a list current partition details
-	PartitionInfo []PartitionInfo
+	PartitionInfo       []PartitionInfo
 }
 
 func (i *QueueInfo) ToProto(in *pb.QueueInfo) *pb.QueueInfo {
@@ -198,6 +150,13 @@ func (i *QueueInfo) ToProto(in *pb.QueueInfo) *pb.QueueInfo {
 	in.Namespace = i.Namespace
 	in.Reference = i.Reference
 	in.QueueName = i.Name
+	in.Partitions = make([]*pb.PartitionInfo, 0, len(i.PartitionInfo))
+	for _, p := range i.PartitionInfo {
+		in.Partitions = append(in.Partitions, &pb.PartitionInfo{
+			Partition:   int32(p.PartitionNum),
+			StorageName: p.StorageName,
+		})
+	}
 	return in
 }
 
@@ -226,7 +185,85 @@ func (i *QueueInfo) Update(r QueueInfo) bool {
 	return true
 }
 
-type LifeCycleInfo struct {
-	NextLeaseExpiry  clock.Time
-	NextExpireDeadline clock.Time
+type QueueUpdate struct {
+	Name                string
+	LeaseTimeout        clock.Duration
+	ExpireTimeout       clock.Duration
+	RequestedPartitions int
+	DeadQueue           *string
+	Reference           *string
+	MaxAttempts         *int
+}
+
+func (u QueueUpdate) ApplyTo(info QueueInfo) QueueInfo {
+	if u.LeaseTimeout != 0 {
+		info.LeaseTimeout = u.LeaseTimeout
+	}
+	if u.ExpireTimeout != 0 {
+		info.ExpireTimeout = u.ExpireTimeout
+	}
+	if u.RequestedPartitions != 0 {
+		info.RequestedPartitions = u.RequestedPartitions
+	}
+	if u.DeadQueue != nil {
+		info.DeadQueue = *u.DeadQueue
+	}
+	if u.Reference != nil {
+		info.Reference = *u.Reference
+	}
+	if u.MaxAttempts != nil {
+		info.MaxAttempts = *u.MaxAttempts
+	}
+	return info
+}
+
+type LifeCycleScan struct {
+	Pivot                  ItemID
+	Last                   ItemID
+	Actions                []Action
+	EarliestLeaseDeadline  clock.Time
+	EarliestExpireDeadline clock.Time
+	EarliestEnqueueAt      clock.Time
+}
+
+func (s *LifeCycleScan) MidPass() bool {
+	return s.Pivot != nil
+}
+
+func (s *LifeCycleScan) Unread(id ItemID) bool {
+	return s.MidPass() && bytes.Compare(id, s.Pivot) > 0 && bytes.Compare(id, s.Last) <= 0
+}
+
+func (s *LifeCycleScan) ResetPage() {
+	s.Actions = s.Actions[:0]
+	s.EarliestLeaseDeadline = clock.Time{}
+	s.EarliestExpireDeadline = clock.Time{}
+	s.EarliestEnqueueAt = clock.Time{}
+}
+
+func (s *LifeCycleScan) EndPass() {
+	s.Pivot = nil
+	s.Last = nil
+}
+
+func (s *LifeCycleScan) Add(a Action) {
+	s.Actions = append(s.Actions, a)
+}
+
+func (s *LifeCycleScan) SeeLeaseDeadline(deadline clock.Time) {
+	earliest(&s.EarliestLeaseDeadline, deadline)
+}
+
+func (s *LifeCycleScan) SeeExpireDeadline(deadline clock.Time) {
+	earliest(&s.EarliestExpireDeadline, deadline)
+}
+
+func (s *LifeCycleScan) SeeEnqueueAt(at clock.Time) {
+	earliest(&s.EarliestEnqueueAt, at)
+}
+
+func earliest(current *clock.Time, candidate clock.Time) {
+	if current.IsZero() || candidate.Before(*current) {
+		*current = candidate
+	}
 }

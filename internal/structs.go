@@ -13,33 +13,99 @@ const (
 	LevelDebug    = slog.LevelDebug + 1
 )
 
-// PartitionLifecycleState tracks lifecycle timing per partition
 type PartitionLifecycleState struct {
-	NextLifecycleRun clock.Time
-	NextScheduledRun clock.Time
-	Failures         int
+	NextLifecycleRun  clock.Time
+	NextScheduledRun  clock.Time
+	ActionPass        LifecyclePass
+	ScheduledPass     LifecyclePass
+	Failures          int
+	UnfinishedRuns    int
+	ScheduledFailures int
+	UnansweredMove    *types.LifeCycleRequest
 }
 
-// Partition is the in memory representation of the state of a partition.
+func (s *PartitionLifecycleState) RunLifecycleBy(deadline clock.Time) bool {
+	if s.ActionPass.Scan.MidPass() {
+		s.ActionPass.StartNextPassBy(deadline)
+		return false
+	}
+	if deadline.Before(s.NextLifecycleRun) {
+		s.NextLifecycleRun = deadline
+		return true
+	}
+	return false
+}
+
+func (s *PartitionLifecycleState) RunScheduledBy(at clock.Time) bool {
+	if s.ScheduledPass.Scan.MidPass() {
+		s.ScheduledPass.StartNextPassBy(at)
+		return false
+	}
+	if at.Before(s.NextScheduledRun) {
+		s.NextScheduledRun = at
+		return true
+	}
+	return false
+}
+
+func (s *PartitionLifecycleState) RunDue(now clock.Time) bool {
+	return passDue(&s.ActionPass, s.NextLifecycleRun.Sub(now)) || passDue(&s.ScheduledPass, s.NextScheduledRun.Sub(now))
+}
+
+func passDue(pass *LifecyclePass, untilRun clock.Duration) bool {
+	if pass.Scan.MidPass() {
+		return untilRun <= 0
+	}
+	return untilRun < 0
+}
+
+func (s *PartitionLifecycleState) ItemMoved(id types.ItemID) {
+	if s.ActionPass.Scan.Unread(id) {
+		s.ActionPass.Moved = true
+	}
+}
+
+func (s *PartitionLifecycleState) RestartPasses(now clock.Time) {
+	s.ActionPass.End()
+	s.ScheduledPass.End()
+	s.NextLifecycleRun = now
+	s.NextScheduledRun = now
+}
+
+type LifecyclePass struct {
+	Scan       types.LifeCycleScan
+	NextPassAt clock.Time
+	Unfinished bool
+	Moved      bool
+}
+
+func (p *LifecyclePass) StartNextPassBy(deadline clock.Time) {
+	if deadline.IsZero() {
+		return
+	}
+	if p.NextPassAt.IsZero() || deadline.Before(p.NextPassAt) {
+		p.NextPassAt = deadline
+	}
+}
+
+func (p *LifecyclePass) End() {
+	p.Scan.EndPass()
+	p.NextPassAt = clock.Time{}
+	p.Unfinished = false
+	p.Moved = false
+}
+
 type Partition struct {
-	// ProduceRequests is the batch of produce requests that are assigned to this partition
-	ProduceRequests types.ProduceBatch
-	// LeaseRequests is the batch of lease requests that are assigned to this partition
-	LeaseRequests types.LeaseBatch
-	// CompleteRequests is the batch of complete requests that are assigned to this partition
-	CompleteRequests types.CompleteBatch
-	// RetryRequests is the batch of retry requests that are assigned to this partition
-	RetryRequests types.RetryBatch
-	// LifeCycleRequests is a batch of lifecycle requests that are assigned to this partition
+	ProduceRequests   types.ProduceBatch
+	LeaseRequests     types.LeaseBatch
+	CompleteRequests  types.CompleteBatch
+	RetryRequests     types.RetryBatch
 	LifeCycleRequests types.LifeCycleBatch
-	// Store is the storage for this partition
-	Store store.Partition
-	// State is the current state of the partition. It is updated by lifecycle and storage backends
-	State types.PartitionState
-	// Lifecycle tracks per-partition lifecycle timing state
-	Lifecycle PartitionLifecycleState
-	// Info is the info associated with this partition
-	Info types.PartitionInfo
+	Store             store.Partition
+	State             types.PartitionState
+	Lifecycle         PartitionLifecycleState
+	Info              types.PartitionInfo
+	estimatedLeases   int
 }
 
 func (p *Partition) Reset() {
@@ -57,40 +123,39 @@ func (p *Partition) Produce(req *types.ProduceRequest) {
 }
 
 func (p *Partition) Lease(req *types.LeaseRequest) {
-	// Use the Number of Requested items OR the count of items in the partition which ever is least.
 	lease := min(p.State.UnLeased, req.NumRequested)
-	// Increment the number of lease items in this distribution.
 	p.State.NumLeased += lease
-	// Decrement requested from the actual count
 	p.State.UnLeased -= lease
-	// Record which partition this request is assigned, so it can be retrieved by the client later.
+	p.estimatedLeases += lease
 	req.Partition = p.Info.PartitionNum
-	// Add the request to this partitions lease batch
 	p.LeaseRequests.Add(req)
 }
 
+func (p *Partition) SettleLeases() {
+	var leased int
+	for _, req := range p.LeaseRequests.Requests {
+		if req != nil {
+			leased += len(req.Items)
+		}
+	}
+	unsaved := p.estimatedLeases - leased
+	p.State.NumLeased -= unsaved
+	p.State.UnLeased = max(0, p.State.UnLeased+unsaved)
+	p.estimatedLeases = 0
+}
+
 type Request struct {
-	// The API method called
-	Method MethodKind
-	// Context is the context of the request
+	Method  MethodKind
 	Context context.Context
-	// The request struct for this method
 	Request any
-	// Used to wait for this request to complete
-	ReadyCh chan struct{}
-	// The error to be returned to the caller
-	Err error
+	ReadyCh readySignal
+	Err     error
 }
 
 type StorageRequest struct {
-	// Items is the items returned by the storage request
-	Items *[]*types.Item
-	// ID is the unique id of the item requested
-	IDs []types.ItemID
-	// Options used when listing
-	Options types.ListOptions
-	// Partition is the partition this request is for
+	Items     *[]*types.Item
+	IDs       []types.ItemID
+	Options   types.ListOptions
 	Partition int
-	// ListKind the kind of item to list
-	ListKind types.ListKind
+	ListKind  types.ListKind
 }

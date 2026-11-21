@@ -19,7 +19,9 @@ queue-storage:
   badger:
     storage-dir: /data/queues
 
-# Partition Storage defines where partitions are stored
+# Partition Storage defines where partitions are stored. Each backend's affinity is its share of a
+# queue's partitions, so 1.5 gets three times the partitions of 0.5. Fractions are accepted. A backend
+# with 0 or a negative affinity gets none of the partitions Querator places itself.
 partition-storage:
   - name: badger-01
     affinity: 1
@@ -38,7 +40,7 @@ partition-storage:
 #      connection-string: "postgres://user:pass@localhost:5432/querator"
 #      # Caps the pgx connection pool per client; omit for the driver default.
 #      max-conns: 50
-#      # Rows fetched per scan batch; omit to use the default (1000).
+#      # Rows the lifecycle reads per page, at most 1000; omit to use the default (1000).
 #      scan-batch-size: 1000
 
 # MongoDB partition storage. Non-transactional and standalone-compatible: a single mongod (no replica
@@ -67,14 +69,23 @@ partition-storage:
 #     max-conns: 50
 #     scan-batch-size: 1000
 
-# Auth Backend defines the authentication and authorization backend.
-# Options:
-#   "none" (default) - No authentication; all requests are allowed (open access).
-#                      Suitable for internal deployments behind a trusted network.
-#   "internal"       - Uses the configured storage backends (users, api-keys, roles,
-#                      role-bindings) for authentication and RBAC authorization.
-#auth-backend:
-#  driver: internal
+# Auth turns on API keys. Without this section every request is allowed and any
+# Authorization header is ignored, which suits deployments behind a trusted network.
+# With it, requests send their key as "Authorization: Bearer <key>". An "auth:" line
+# with nothing under it refuses to start.
+#
+# storage holds namespaces, users, roles, role bindings and API keys, and takes
+# memory or badger. With memory, all of them are lost on restart, while queues kept
+# in a badger queue-storage survive and are left without their namespace.
+# /v1/queues.create refuses a namespace that does not exist, so create it first
+# with /v1/namespaces.create.
+#
+# See docs/operating-limits.md for Open Door: requests without a key get admin
+# access, and the door reopens at every start.
+#auth:
+#  storage:
+#    badger:
+#      storage-dir: /data/auth
 
 # Queues is a convenience that allows users to define queues without needing
 # to call the /v1/queues.create after querator starts.

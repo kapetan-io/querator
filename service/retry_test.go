@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
+	"testing"
+
 	"github.com/duh-rpc/duh-go"
 	"github.com/duh-rpc/duh-go/retry"
 	"github.com/kapetan-io/querator"
@@ -17,7 +20,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
 	"google.golang.org/protobuf/types/known/timestamppb"
-	"testing"
 )
 
 func TestRetry(t *testing.T) {
@@ -79,11 +81,12 @@ func testRetry(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 	t.Run("QueueRetry", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
 		}()
+		c, ctx := d.MustClient(), d.Context()
 
 		// Create a queue
 		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
@@ -210,7 +213,7 @@ func testRetry(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer now.UnFreeze()
 
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 60*clock.Second, svc.Config{
+		d := newDaemon(t, 60*clock.Second, svc.Config{
 			StorageConfig: setup(),
 			Clock:         now,
 		})
@@ -218,6 +221,7 @@ func testRetry(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			d.Shutdown(t)
 			tearDown()
 		}()
+		c, ctx := d.MustClient(), d.Context()
 
 		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 			RequestedPartitions: 1,
@@ -320,7 +324,7 @@ func testRetry(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer now.UnFreeze()
 
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 60*clock.Second, svc.Config{
+		d := newDaemon(t, 60*clock.Second, svc.Config{
 			StorageConfig: setup(),
 			Clock:         now,
 		})
@@ -328,6 +332,7 @@ func testRetry(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			d.Shutdown(t)
 			tearDown()
 		}()
+		c, ctx := d.MustClient(), d.Context()
 
 		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 			RequestedPartitions: 1,
@@ -399,11 +404,12 @@ func testRetry(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 	t.Run("RetryMovesToTail", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
 		defer func() {
 			d.Shutdown(t)
 			tearDown()
 		}()
+		c, ctx := d.MustClient(), d.Context()
 
 		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 			LeaseTimeout:        LeaseTimeout,
@@ -478,7 +484,7 @@ func testRetry(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		defer now.UnFreeze()
 
 		var queueName = random.String("queue-", 10)
-		d, c, ctx := newDaemon(t, 60*clock.Second, svc.Config{
+		d := newDaemon(t, 60*clock.Second, svc.Config{
 			StorageConfig: setup(),
 			Clock:         now,
 		})
@@ -486,6 +492,7 @@ func testRetry(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			d.Shutdown(t)
 			tearDown()
 		}()
+		c, ctx := d.MustClient(), d.Context()
 
 		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 			LeaseTimeout:        "300ms",
@@ -563,14 +570,124 @@ func testRetry(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		assert.NotEqual(t, originalIDofA, retriedA.Id)
 	})
 
+	t.Run("RetryRequestsInOneBatch", func(t *testing.T) {
+		// Retry requests buffered while the queue is paused reach the partition as one batch.
+		// A request whose items fail must get its own error without stopping the requests after it.
+		var queueName = random.String("queue-", 10)
+		d := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: setup()})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+		c, ctx := d.MustClient(), d.Context()
+
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			LeaseTimeout:        LeaseTimeout,
+			ExpireTimeout:       ExpireTimeout,
+			QueueName:           queueName,
+			RequestedPartitions: 1,
+		})
+
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			QueueName:      queueName,
+			RequestTimeout: "1m",
+			Items: []*pb.QueueProduceItem{
+				{Reference: "gone", Encoding: "text", Kind: "test", Bytes: []byte("payload")},
+				{Reference: "retried", Encoding: "text", Kind: "test", Bytes: []byte("payload")},
+				{Reference: "dead", Encoding: "text", Kind: "test", Bytes: []byte("payload")},
+			},
+		}))
+
+		var lease pb.QueueLeaseResponse
+		require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+			ClientId:       random.String("client-", 10),
+			RequestTimeout: "5s",
+			QueueName:      queueName,
+			BatchSize:      3,
+		}, &lease))
+		require.Len(t, lease.Items, 3)
+		require.Equal(t, "gone", lease.Items[0].Reference)
+		require.Equal(t, "retried", lease.Items[1].Reference)
+		require.Equal(t, "dead", lease.Items[2].Reference)
+
+		// Dead-letter one item now, so its id no longer exists when the batch runs
+		gone := lease.Items[0].Id
+		require.NoError(t, c.QueueRetry(ctx, &pb.QueueRetryRequest{
+			QueueName: queueName,
+			Partition: lease.Partition,
+			Items:     []*pb.QueueRetryItem{{Id: gone, Dead: true}},
+		}))
+
+		// An item that was never leased
+		notLeased := writeRandomItems(t, ctx, c, queueName, 1)
+		require.Len(t, notLeased, 1)
+
+		require.NoError(t, d.Service().PauseQueue(ctx, queueName))
+
+		requests := []*pb.QueueRetryRequest{
+			{
+				QueueName: queueName,
+				Partition: lease.Partition,
+				Items:     []*pb.QueueRetryItem{{Id: lease.Items[1].Id}},
+			},
+			{
+				QueueName: queueName,
+				Partition: lease.Partition,
+				Items:     []*pb.QueueRetryItem{{Id: gone}},
+			},
+			{
+				QueueName: queueName,
+				Partition: lease.Partition,
+				Items:     []*pb.QueueRetryItem{{Id: notLeased[0].Id}},
+			},
+			{
+				QueueName: queueName,
+				Partition: lease.Partition,
+				Items:     []*pb.QueueRetryItem{{Id: lease.Items[2].Id, Dead: true}},
+			},
+		}
+
+		errs := retryWhilePaused(ctx, c, requests, func() {
+			// Wait until every retry request is buffered in the paused queue
+			assert.Eventually(t, func() bool {
+				var stats pb.QueueStatsResponse
+				if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats); err != nil {
+					return false
+				}
+				return len(stats.LogicalQueues) == 1 && int(stats.LogicalQueues[0].InFlight) == len(requests)
+			}, 10*clock.Second, 100*clock.Millisecond)
+			assert.NoError(t, d.Service().ResumeQueue(ctx, queueName))
+		})
+
+		assert.NoError(t, errs[0])
+		var e duh.Error
+		require.True(t, errors.As(errs[1], &e))
+		assert.Contains(t, e.Message(), "invalid storage id; '"+gone+"' does not exist")
+		assert.Equal(t, duh.CodeBadRequest, e.Code())
+		require.True(t, errors.As(errs[2], &e))
+		assert.Contains(t, e.Message(), "item(s) cannot be retried; '"+notLeased[0].Id+"' is not marked as leased")
+		assert.Equal(t, duh.CodeBadRequest, e.Code())
+		assert.NoError(t, errs[3])
+
+		// The never-leased item remains and the retried item is back in the queue un-leased;
+		// the dead-lettered item is gone.
+		var list pb.StorageItemsListResponse
+		require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &list, nil))
+		require.Len(t, list.Items, 2)
+		assert.Equal(t, notLeased[0].Id, list.Items[0].Id)
+		assert.Equal(t, "retried", list.Items[1].Reference)
+		assert.False(t, list.Items[1].IsLeased)
+	})
+
 	t.Run("Errors", func(t *testing.T) {
 		storage := setup()
 		defer tearDown()
 
 		t.Run("QueueRetry", func(t *testing.T) {
 			var queueName = random.String("queue-", 10)
-			d, c, ctx := newDaemon(t, 5*clock.Second, svc.Config{StorageConfig: storage})
+			d := newDaemon(t, 5*clock.Second, svc.Config{StorageConfig: storage})
 			defer d.Shutdown(t)
+			c, ctx := d.MustClient(), d.Context()
 
 			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 				LeaseTimeout:        LeaseTimeout,
@@ -650,8 +767,9 @@ func testRetry(t *testing.T, setup NewStorageFunc, tearDown func()) {
 
 		t.Run("RetryNotLeased", func(t *testing.T) {
 			var queueName = random.String("queue-", 10)
-			d, c, ctx := newDaemon(t, 5*clock.Second, svc.Config{StorageConfig: storage})
+			d := newDaemon(t, 5*clock.Second, svc.Config{StorageConfig: storage})
 			defer d.Shutdown(t)
+			c, ctx := d.MustClient(), d.Context()
 
 			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
 				LeaseTimeout:        LeaseTimeout,
@@ -680,4 +798,20 @@ func testRetry(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			assert.Equal(t, duh.CodeBadRequest, e.Code())
 		})
 	})
+}
+
+// retryWhilePaused sends every request at once and calls unpause while they wait in the
+// paused queue. The goroutines start in a named function because Tiger's TS-C02
+// does not see a Wait that follows wg.Go inside a function literal.
+func retryWhilePaused(ctx context.Context, c *querator.Client, requests []*pb.QueueRetryRequest, unpause func()) []error {
+	errs := make([]error, len(requests))
+	var wg sync.WaitGroup
+	for i := range requests {
+		wg.Go(func() {
+			errs[i] = c.QueueRetry(ctx, requests[i])
+		})
+	}
+	unpause()
+	wg.Wait()
+	return errs
 }

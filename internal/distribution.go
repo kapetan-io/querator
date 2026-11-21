@@ -7,12 +7,13 @@ import (
 	"time"
 
 	"github.com/kapetan-io/querator/internal/store"
+	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/transport/reply"
 )
 
-// assignToPartitions assigns requests to appropriate partitions
+const immediateRetryWindow = 100 * time.Millisecond
+
 func (l *Logical) assignToPartitions(state *QueueState) {
-	// ==== LifeCycles ====
 	for _, req := range state.LifeCycles.Requests {
 		p := state.GetPartition(req.PartitionNum)
 		if p == nil {
@@ -23,26 +24,14 @@ func (l *Logical) assignToPartitions(state *QueueState) {
 		p.LifeCycleRequests.Add(req)
 	}
 
-	// ==== Producers ====
 	l.assignProduceRequests(state)
 
-	// TODO: We should inspect the produce requests, and attempt to assign produced
-	//  items with waiting lease requests if our queue is caught up.
-	//  (Check for cancel or expire lease requests first)
-
-	// ==== Lease ====
 	l.assignLeaseRequests(state)
-	// ==== Complete ====
 	l.assignCompleteRequests(state)
-	// ==== Retry ====
 	l.assignRetryRequests(state)
 }
 
-// notifyScheduled iterates through the produced items. If any are scheduled
-// items, then update the partition lifecycle state for the provided partition.
-// Returns true if NextScheduledRun was updated.
 func (l *Logical) notifyScheduled(p *Partition) bool {
-	// Find the earliest scheduled item in the requests
 	var earliestScheduled time.Time
 	for _, r := range p.ProduceRequests.Requests {
 		for _, item := range r.Items {
@@ -58,16 +47,9 @@ func (l *Logical) notifyScheduled(p *Partition) bool {
 	}
 
 	now := l.conf.Clock.Now().UTC()
-	if earliestScheduled.After(now) && earliestScheduled.Before(p.Lifecycle.NextScheduledRun) {
-		p.Lifecycle.NextScheduledRun = earliestScheduled
-		return true
-	}
-	return false
+	return earliestScheduled.After(now) && p.Lifecycle.RunScheduledBy(earliestScheduled)
 }
 
-// notifyScheduledRetry iterates through the retry items. If any have scheduled
-// RetryAt times, update the partition lifecycle state for the provided partition.
-// Returns true if NextScheduledRun was updated.
 func (l *Logical) notifyScheduledRetry(p *Partition) bool {
 	var earliestScheduled time.Time
 	for _, r := range p.RetryRequests.Requests {
@@ -84,16 +66,9 @@ func (l *Logical) notifyScheduledRetry(p *Partition) bool {
 	}
 
 	now := l.conf.Clock.Now().UTC()
-	if earliestScheduled.After(now) && earliestScheduled.Before(p.Lifecycle.NextScheduledRun) {
-		p.Lifecycle.NextScheduledRun = earliestScheduled
-		return true
-	}
-	return false
+	return earliestScheduled.After(now) && p.Lifecycle.RunScheduledBy(earliestScheduled)
 }
 
-// notifyExpired iterates through the produced items and finds the earliest
-// ExpireDeadline. If it's sooner than the partition's NextLifecycleRun,
-// updates the lifecycle state. Returns true if NextLifecycleRun was updated.
 func (l *Logical) notifyExpired(p *Partition) bool {
 	var earliestExpire time.Time
 	for _, r := range p.ProduceRequests.Requests {
@@ -108,16 +83,12 @@ func (l *Logical) notifyExpired(p *Partition) bool {
 	}
 
 	now := l.conf.Clock.Now().UTC()
-	if earliestExpire.After(now) && earliestExpire.Before(p.Lifecycle.NextLifecycleRun) {
-		p.Lifecycle.NextLifecycleRun = earliestExpire
-		return true
-	}
-	return false
+	return earliestExpire.After(now) && p.Lifecycle.RunLifecycleBy(earliestExpire)
 }
 
 func (l *Logical) assignProduceRequests(state *QueueState) {
+	sortPartitionsByLoad(state.Partitions)
 	for _, req := range state.Producers.Requests {
-		// Assign a ExpireTimeout to each item
 		for _, item := range req.Items {
 			item.ExpireDeadline = l.conf.Clock.Now().UTC().Add(l.conf.ExpireTimeout)
 		}
@@ -126,38 +97,25 @@ func (l *Logical) assignProduceRequests(state *QueueState) {
 			slog.Int("partition", state.Partitions[0].Info.PartitionNum),
 			slog.Int("items", len(req.Items)))
 
-		partitionState := state.Partitions[0].State
-		if partitionState.Failures != 0 || partitionState.ShouldDrain == true {
-			// If the chosen sorted partition has failed, then all partitions have failed, as
-			// partition sorting ensures failed partitions are sorted last.
-			l.log.Warn("no healthy partitions or partitions marked for draining, produce request not assigned",
+		p := state.Partitions[0]
+		if p.State.Failures != 0 || p.Info.ReadOnly {
+			l.log.Warn("no healthy partitions or partitions are read-only, produce request not assigned",
 				"num_items", len(req.Items))
 			return
 		}
 
-		// Perform Opportunistic Partition Distribution
-		// See docs/adr/0019-partition-items-distribution.md for details
 		state.Partitions[0].Produce(req)
 		sortPartitionsByLoad(state.Partitions)
 	}
 }
 
 func (l *Logical) assignLeaseRequests(state *QueueState) {
-	// Assign lease requests to StoragePartitions
 	for _, req := range state.Leases.Requests {
 		if req == nil {
 			continue
 		}
 
-		// Perform a reverse search through state.Partitions finding the first partition where p.State.Failures == 0
-		var assigned *Partition
-		for i := len(state.Partitions) - 1; i >= 0; i-- {
-			if state.Partitions[i].State.Failures == 0 {
-				assigned = state.Partitions[i]
-				break
-			}
-		}
-
+		assigned := lastHealthyPartition(state.Partitions)
 		if assigned == nil {
 			l.log.Warn("no healthy partitions, lease request not assigned",
 				"client_id", req.ClientID,
@@ -170,83 +128,74 @@ func (l *Logical) assignLeaseRequests(state *QueueState) {
 			slog.Int("num_requested", req.NumRequested),
 			slog.String("client_id", req.ClientID))
 
-		// Assign the request to the chosen partition
 		assigned.Lease(req)
 
-		// Perform Opportunistic Partition Distribution
-		// See docs/adr/0019-partition-items-distribution.md for details
 		sortPartitionsByLoad(state.Partitions)
 	}
 }
 
 func (l *Logical) assignCompleteRequests(state *QueueState) {
-nextRequest:
 	for _, req := range state.Completes.Requests {
 		if req == nil {
 			continue
 		}
-		var found bool
-		for i, p := range state.Partitions {
-			// Assign the complete request to the partition if found
-			if req.Partition == p.Info.PartitionNum {
-				if p.State.Failures != 0 {
-					req.Err = reply.NewRetryRequest("partition not available;"+
-						" partition '%d' is failing, retry again", req.Partition)
-					continue nextRequest
-				}
-				state.Partitions[i].CompleteRequests.Add(req)
-				found = true
-				break
-			}
-		}
-		if !found {
+
+		p := state.GetPartition(req.Partition)
+		if p == nil {
 			req.Err = reply.NewRetryRequest("partition not found;"+
 				" partition '%d' may have moved, retry again", req.Partition)
+			continue
 		}
+		if p.State.Failures != 0 {
+			req.Err = reply.NewRetryRequest("partition not available;"+
+				" partition '%d' is failing, retry again", req.Partition)
+			continue
+		}
+		p.CompleteRequests.Add(req)
 	}
 }
 
 func (l *Logical) assignRetryRequests(state *QueueState) {
-nextRequest:
 	for _, req := range state.Retries.Requests {
 		if req == nil {
 			continue
 		}
-		var found bool
-		for i, p := range state.Partitions {
-			// Assign the retry request to the partition if found
-			if req.Partition == p.Info.PartitionNum {
-				if p.State.Failures != 0 {
-					req.Err = reply.NewRetryRequest("partition not available;"+
-						" partition '%d' is failing, retry again", req.Partition)
-					continue nextRequest
-				}
-				state.Partitions[i].RetryRequests.Add(req)
-				found = true
-			}
-		}
-		if !found {
+		p := state.GetPartition(req.Partition)
+		if p == nil {
 			req.Err = reply.NewRetryRequest("partition not found;"+
 				" partition '%d' may have moved, retry again", req.Partition)
+			continue
 		}
+		if p.State.Failures != 0 {
+			req.Err = reply.NewRetryRequest("partition not available;"+
+				" partition '%d' is failing, retry again", req.Partition)
+			continue
+		}
+		p.RetryRequests.Add(req)
 	}
 }
 
-// sortPartitionsByLoad sorts partitions by failures (ascending) then UnLeased (ascending)
-// This implements the Opportunistic Distribution algorithm - see docs/adr/0019-partition-items-distribution.md
+func lastHealthyPartition(partitions []*Partition) *Partition {
+	for _, p := range slices.Backward(partitions) {
+		if p.State.Failures == 0 {
+			return p
+		}
+	}
+	return nil
+}
+
 func sortPartitionsByLoad(partitions []*Partition) {
 	slices.SortFunc(partitions, func(a, b *Partition) int {
-		// Ensure failed Partitions are sorted last
 		if a.State.Failures < b.State.Failures {
 			return -1
 		}
 		if a.State.Failures > b.State.Failures {
 			return +1
 		}
-		if !a.State.ShouldDrain && b.State.ShouldDrain {
+		if !a.Info.ReadOnly && b.Info.ReadOnly {
 			return -1
 		}
-		if a.State.ShouldDrain && !b.State.ShouldDrain {
+		if a.Info.ReadOnly && !b.Info.ReadOnly {
 			return +1
 		}
 		if a.State.UnLeased < b.State.UnLeased {
@@ -259,7 +208,6 @@ func sortPartitionsByLoad(partitions []*Partition) {
 	})
 }
 
-// finalizeRequests closes ready channels for completed requests
 func (l *Logical) finalizeRequests(state *QueueState) {
 	for _, req := range state.Producers.Requests {
 		if !req.Assigned {
@@ -291,46 +239,55 @@ func (l *Logical) finalizeRequests(state *QueueState) {
 	}
 }
 
-// applyToPartitions is intended as the sync point where we optimise interaction with the
-// data store. Right now (2025-04-03) this does the simple dumb thing
+func (l *Logical) storeProduce(ctx context.Context, p *Partition, batch types.ProduceBatch) bool {
+	if len(batch.Requests) == 0 {
+		return false
+	}
+	if err := p.Store.Produce(ctx, batch, l.conf.Clock.Now().UTC()); err != nil {
+		l.log.Error("while calling store.Partition.Produce()",
+			"partition", p.Info.PartitionNum,
+			"queueName", l.conf.Name,
+			"error", err)
+
+		var unstored, stored int
+		for _, req := range batch.Requests {
+			unstored += len(req.Items) - req.Stored
+			stored += req.Stored
+			req.Err = ErrInternalRetry
+		}
+		p.State.UnLeased -= unstored
+		return stored != 0
+	}
+	return true
+}
+
 func (l *Logical) applyToPartitions(state *QueueState) {
-	// TODO: applyToPartitions needs to indicate if a partition failed, which one, and if
-	//  we should re-distribute	requests to other partitions.
-
-	// TODO: Future: Querator should handle Partition failure by redistributing the batches
-	//  to partitions which have not failed. (note: make sure we reduce the
-	//  Partitions[].State.UnLeased when re-assigning)
-
-	// TODO: Identify a degradation vs a failure and set Partition[].Failures as appropriate,
-	//  and adjust the item count in state.Partitions for failed partitions
-
-	// TODO: Interaction with each partition should probably be async so we can send multiple
-	//  writes simultaneously. If one of the partitions is slow, it won't hold up the other
-	//  partitions?
 
 	scheduledUpdated := false
 	lifecycleUpdated := false
 	for _, p := range state.Partitions {
 		ctx, cancel := context.WithTimeout(context.Background(), l.conf.WriteTimeout)
 
-		// ==== Produce ====
 		if len(p.ProduceRequests.Requests) != 0 {
-			if err := p.Store.Produce(ctx, p.ProduceRequests, l.conf.Clock.Now().UTC()); err != nil {
-				l.log.Error("while calling store.Partition.Produce()",
-					"partition", p.Info.PartitionNum, "error", err)
-				// TODO: Handle degradation
+			clients, handOffs := p.ProduceRequests, p.ProduceRequests.HandOffs()
+			if len(handOffs.Requests) != 0 {
+				clients = p.ProduceRequests.ClientProduces()
 			}
-			// Only if Produce was successful
-			p.State.MostRecentDeadline = l.conf.Clock.Now().UTC().Add(l.conf.ExpireTimeout)
-			if l.notifyScheduled(p) {
-				scheduledUpdated = true
+			stored := l.storeProduce(ctx, p, clients)
+			if l.storeProduce(ctx, p, handOffs) {
+				stored = true
 			}
-			if l.notifyExpired(p) {
-				lifecycleUpdated = true
+			if stored {
+				p.State.MostRecentDeadline = l.conf.Clock.Now().UTC().Add(l.conf.ExpireTimeout)
+				if l.notifyScheduled(p) {
+					scheduledUpdated = true
+				}
+				if l.notifyExpired(p) {
+					lifecycleUpdated = true
+				}
 			}
 		}
 
-		// ==== Lease ====
 		if len(p.LeaseRequests.Requests) != 0 {
 			leaseDeadline := l.conf.Clock.Now().UTC().Add(l.conf.LeaseTimeout)
 			if err := p.Store.Lease(ctx, p.LeaseRequests, store.LeaseOptions{
@@ -339,14 +296,11 @@ func (l *Logical) applyToPartitions(state *QueueState) {
 				l.log.Error("while calling store.Partition.Lease()",
 					"partition", p.Info.PartitionNum,
 					"error", err)
-				// TODO: Handle degradation
 			}
-			// Only if Lease was successful
+			p.SettleLeases()
 			p.State.MostRecentDeadline = leaseDeadline
 
-			// Update lifecycle timer if lease deadline is sooner than next scheduled run
-			if leaseDeadline.Before(p.Lifecycle.NextLifecycleRun) {
-				p.Lifecycle.NextLifecycleRun = leaseDeadline
+			if p.Lifecycle.RunLifecycleBy(leaseDeadline) {
 				lifecycleUpdated = true
 			}
 
@@ -361,42 +315,43 @@ func (l *Logical) applyToPartitions(state *QueueState) {
 			}
 		}
 
-		// ==== Complete ====
-		if err := p.Store.Complete(ctx, p.CompleteRequests); err != nil {
+		err := p.Store.Complete(ctx, p.CompleteRequests)
+		p.State.NumLeased = max(0, p.State.NumLeased-p.CompleteRequests.Completed())
+		if err != nil {
 			l.log.Error("while calling store.Partition.Complete()",
 				"partition", p.Info.PartitionNum,
 				"queueName", l.conf.Name,
 				"error", err)
 
-			// Completes are a bit different, in that we can't assign them to different
-			// partitions, a complete request is FOR a specific partition, if there was
-			// an error talking to that partition we need to tell the client.
 			for _, req := range p.CompleteRequests.Requests {
-				// TODO: We likely want to inform the client they should retry
-				//  instead of return an internal error
 				req.Err = ErrInternalRetry
 			}
-			// TODO: Handle degradation
 		}
 
-		// ==== Retry ====
-		if err := p.Store.Retry(ctx, p.RetryRequests); err != nil {
+		err = p.Store.Retry(ctx, p.RetryRequests)
+		p.State.NumLeased = max(0, p.State.NumLeased-p.RetryRequests.Retried())
+		p.State.UnLeased += p.RetryRequests.UnLeased()
+		immediate := l.conf.Clock.Now().UTC().Add(immediateRetryWindow)
+		for _, req := range p.RetryRequests.Requests {
+			for _, item := range req.Items {
+				if !item.Dead && item.RetryAt.Before(immediate) {
+					p.Lifecycle.ItemMoved(item.ID)
+				}
+			}
+		}
+		if err != nil {
 			l.log.Error("while calling store.Partition.Retry()",
 				"partition", p.Info.PartitionNum,
 				"queueName", l.conf.Name,
 				"error", err)
 
-			// Retries are similar to completes, they are FOR a specific partition
 			for _, req := range p.RetryRequests.Requests {
 				req.Err = ErrInternalRetry
 			}
-			// TODO: Handle degradation
 		} else if l.notifyScheduledRetry(p) {
-			// Notify scheduler if any items were scheduled for retry
 			scheduledUpdated = true
 		}
 
-		// ==== LifeCycle ====
 		if err := p.Store.TakeAction(ctx, p.LifeCycleRequests, &p.State); err != nil {
 			l.log.Error("while calling store.Partition.TakeAction()",
 				"partition", p.Info.PartitionNum,
@@ -407,12 +362,10 @@ func (l *Logical) applyToPartitions(state *QueueState) {
 		cancel()
 	}
 
-	// Reset scheduled timer if any partition's NextScheduledRun was updated
 	if scheduledUpdated {
 		state.ScheduledTimer.Reset(l.minNextScheduledRun(state))
 	}
 
-	// Reset lifecycle timer if any partition's NextLifecycleRun was updated
 	if lifecycleUpdated {
 		state.LifecycleTimer.Reset(l.minNextLifecycleRun(state))
 	}

@@ -10,12 +10,11 @@ import (
 )
 
 const (
-	// KeyLength is the total number of random bytes in the secret key
-	KeyLength = 32
-	// DefaultKeyTag is the fallback tag used when no tag is supplied at any cascade level
-	DefaultKeyTag = "live"
-	// MaxKeyTagLength is the maximum allowed length for an API key tag segment.
+	KeyLength       = 32
+	DefaultKeyTag   = "live"
 	MaxKeyTagLength = 16
+
+	entropyLength = 43
 
 	base62Alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 )
@@ -28,27 +27,20 @@ func init() {
 	}
 }
 
-// GeneratedKey contains the components of a newly generated API key
 type GeneratedKey struct {
-	KeyHash string // SHA256 hash of the full key (for storage)
-	Prefix  string // qtr-[tag]- plus first 8 entropy chars (for display)
-	Key     string // Full API key to return to user (shown once)
+	KeyHash string
+	Prefix  string
+	Key     string
 }
 
-func base62Encode(b []byte) string {
+func encodeEntropy(b []byte) string {
 	n := new(big.Int).SetBytes(b)
 	base := big.NewInt(62)
 	mod := new(big.Int)
-	digits := make([]byte, 0, 43)
-	for n.Sign() > 0 {
+	digits := make([]byte, entropyLength)
+	for i := len(digits) - 1; i >= 0; i-- {
 		n.DivMod(n, base, mod)
-		digits = append(digits, base62Alphabet[mod.Int64()])
-	}
-	for i, j := 0, len(digits)-1; i < j; i, j = i+1, j-1 {
-		digits[i], digits[j] = digits[j], digits[i]
-	}
-	for len(digits) < 43 {
-		digits = append([]byte{base62Alphabet[0]}, digits...)
+		digits[i] = base62Alphabet[mod.Int64()]
 	}
 	return string(digits)
 }
@@ -67,7 +59,7 @@ func GenerateAPIKey(tag string) (GeneratedKey, error) {
 		return GeneratedKey{}, fmt.Errorf("generating random bytes: %w", err)
 	}
 
-	entropy := base62Encode(randomBytes)
+	entropy := encodeEntropy(randomBytes)
 	fullKey := fmt.Sprintf("qtr-%s-%s", tag, entropy)
 	prefix := fmt.Sprintf("qtr-%s-%s", tag, entropy[:8])
 
@@ -78,13 +70,11 @@ func GenerateAPIKey(tag string) (GeneratedKey, error) {
 	}, nil
 }
 
-// HashAPIKey creates a SHA256 hash of an API key for storage
 func HashAPIKey(key string) string {
 	hash := sha256.Sum256([]byte(key))
 	return base64.RawURLEncoding.EncodeToString(hash[:])
 }
 
-// validateKeyTag checks that a tag is lowercase alphanumeric and at most MaxKeyTagLength characters
 func validateKeyTag(tag string) error {
 	if len(tag) == 0 {
 		return fmt.Errorf("invalid api key format; tag cannot be empty")
@@ -93,14 +83,13 @@ func validateKeyTag(tag string) error {
 		return fmt.Errorf("invalid api key format; tag must be at most %d characters", MaxKeyTagLength)
 	}
 	for _, c := range tag {
-		if (c < '0' || c > '9') && (c < 'a' || c > 'z') {
+		if !isLowerAlphanumeric(c) {
 			return fmt.Errorf("invalid api key format; tag must be lowercase alphanumeric only")
 		}
 	}
 	return nil
 }
 
-// ValidateAPIKeyFormat checks if an API key has the correct qtr-[tag]-[entropy] format
 func ValidateAPIKeyFormat(key string) error {
 	if key == "" {
 		return fmt.Errorf("api key cannot be empty")
@@ -120,8 +109,8 @@ func ValidateAPIKeyFormat(key string) error {
 	}
 
 	entropy := parts[2]
-	if len(entropy) < 43 {
-		return fmt.Errorf("invalid api key format; entropy must be at least 43 characters")
+	if len(entropy) < entropyLength {
+		return fmt.Errorf("invalid api key format; entropy must be at least %d characters", entropyLength)
 	}
 	for _, c := range entropy {
 		if c >= 128 || !base62Lookup[c] {
@@ -130,4 +119,11 @@ func ValidateAPIKeyFormat(key string) error {
 	}
 
 	return nil
+}
+
+func isLowerAlphanumeric(c rune) bool {
+	if c >= '0' && c <= '9' {
+		return true
+	}
+	return c >= 'a' && c <= 'z'
 }

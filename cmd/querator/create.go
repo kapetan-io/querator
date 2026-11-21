@@ -34,7 +34,7 @@ func init() {
 	createCommand.Flags().StringVar(&flags.ReferenceCreate, "reference",
 		"", "Queue reference/owner")
 	createCommand.Flags().Int32Var(&flags.Partitions, "partitions",
-		1, "Number of requested partitions (defaults to 1)")
+		1, "Number of requested partitions, at most 1024 (defaults to 1)")
 }
 
 func RunCreate(flags FlagParams, queueName string) error {
@@ -50,14 +50,11 @@ func RunCreate(flags FlagParams, queueName string) error {
 		QueueName: queueName,
 	}
 
-	// Set lease timeout (always has a default)
 	req.LeaseTimeout = flags.LeaseTimeoutCreate
 
-	// Set expire timeout with smart calculation
 	if flags.ExpireTimeout != "" {
 		req.ExpireTimeout = flags.ExpireTimeout
 	} else {
-		// Calculate expire timeout as 60x lease timeout
 		leaseTimeout, err := time.ParseDuration(flags.LeaseTimeoutCreate)
 		if err != nil {
 			return fmt.Errorf("invalid lease-timeout format: %w", err)
@@ -66,10 +63,8 @@ func RunCreate(flags FlagParams, queueName string) error {
 		req.ExpireTimeout = expireTimeout.String()
 	}
 
-	// Set partitions (always has a default)
 	req.RequestedPartitions = flags.Partitions
 
-	// Set optional fields if provided
 	if flags.MaxAttempts > 0 {
 		req.MaxAttempts = flags.MaxAttempts
 	}

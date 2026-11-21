@@ -11,6 +11,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -23,12 +24,14 @@ import (
 	"github.com/kapetan-io/querator/daemon"
 	"github.com/kapetan-io/querator/internal"
 	"github.com/kapetan-io/querator/internal/store"
+	"github.com/kapetan-io/querator/internal/types"
 	pb "github.com/kapetan-io/querator/proto"
 	svc "github.com/kapetan-io/querator/service"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/color"
 	"github.com/kapetan-io/tackle/random"
 	"github.com/kapetan-io/tackle/set"
+	tigerassert "github.com/kapetan-io/tiger/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/mongodb"
@@ -88,7 +91,7 @@ func (s *sharedPostgresContainer) Start(ctx context.Context) (err error) {
 			if strings.Contains(msg, "rootless Docker not found") {
 				err = fmt.Errorf("Docker is not available: %s", msg)
 			} else {
-				panic(r)
+				err = fmt.Errorf("container start panicked: %s\n%s", msg, debug.Stack())
 			}
 		}
 	}()
@@ -135,23 +138,31 @@ func (s *sharedPostgresContainer) Stop(ctx context.Context) error {
 	return nil
 }
 
-func (s *sharedPostgresContainer) CreateDatabase(ctx context.Context) (dsn string, dbName string, err error) {
-	dbName = fmt.Sprintf("querator_test_%d", s.dbCounter.Add(1))
+// testDatabase is a database created in the shared postgres container for one test.
+type testDatabase struct {
+	DSN  string
+	Name string
+}
+
+func (s *sharedPostgresContainer) CreateDatabase(ctx context.Context) (testDatabase, error) {
+	dbName := fmt.Sprintf("querator_test_%d", s.dbCounter.Add(1))
 	adminDSN := fmt.Sprintf("postgres://postgres:postgres@%s:%s/postgres?sslmode=disable", s.host, s.port)
 
 	conn, err := pgx.Connect(ctx, adminDSN)
 	if err != nil {
-		return "", "", fmt.Errorf("connect to postgres db: %w", err)
+		return testDatabase{}, fmt.Errorf("connect to postgres db: %w", err)
 	}
 	defer func() { _ = conn.Close(ctx) }()
 
 	_, err = conn.Exec(ctx, fmt.Sprintf("CREATE DATABASE %s", pgx.Identifier{dbName}.Sanitize()))
 	if err != nil {
-		return "", "", fmt.Errorf("create database %s: %w", dbName, err)
+		return testDatabase{}, fmt.Errorf("create database %s: %w", dbName, err)
 	}
 
-	dsn = fmt.Sprintf("postgres://postgres:postgres@%s:%s/%s?sslmode=disable", s.host, s.port, dbName)
-	return dsn, dbName, nil
+	return testDatabase{
+		DSN:  fmt.Sprintf("postgres://postgres:postgres@%s:%s/%s?sslmode=disable", s.host, s.port, dbName),
+		Name: dbName,
+	}, nil
 }
 
 func (s *sharedPostgresContainer) DropDatabase(ctx context.Context, dbName string) error {
@@ -239,7 +250,7 @@ func (td *testDaemon) Service() *svc.Service {
 	return td.d.Service()
 }
 
-func newDaemon(t *testing.T, duration clock.Duration, conf svc.Config) (*testDaemon, *querator.Client, context.Context) {
+func newDaemon(t *testing.T, duration clock.Duration, conf svc.Config) *testDaemon {
 	t.Helper()
 
 	set.Default(&conf.Log, log)
@@ -252,7 +263,7 @@ func newDaemon(t *testing.T, duration clock.Duration, conf svc.Config) (*testDae
 		ListenAddress: "localhost:0",
 	})
 	require.NoError(t, err)
-	return td, td.d.MustClient(), td.ctx
+	return td
 }
 
 // ---------------------------------------------------------------------
@@ -260,20 +271,17 @@ func newDaemon(t *testing.T, duration clock.Duration, conf svc.Config) (*testDae
 // ---------------------------------------------------------------------
 
 type badgerTestSetup struct {
-	Dir string
+	Dir  string
+	data string
 }
 
 func (b *badgerTestSetup) Setup(bc store.BadgerConfig) store.Config {
 	if !dirExists(b.Dir) {
-		if err := os.Mkdir(b.Dir, 0777); err != nil {
-			panic(err)
-		}
+		tigerassert.NoError(os.Mkdir(b.Dir, 0777), "failed to create badger test directory")
 	}
-	b.Dir = filepath.Join(b.Dir, random.String("test-data-", 10))
-	if err := os.Mkdir(b.Dir, 0777); err != nil {
-		panic(err)
-	}
-	bc.StorageDir = b.Dir
+	b.data = filepath.Join(b.Dir, random.String("test-data-", 10))
+	tigerassert.NoError(os.Mkdir(b.data, 0777), "failed to create badger test data directory")
+	bc.StorageDir = b.data
 	bc.Log = log
 
 	var conf store.Config
@@ -294,9 +302,7 @@ func (b *badgerTestSetup) Setup(bc store.BadgerConfig) store.Config {
 }
 
 func (b *badgerTestSetup) Teardown() {
-	if err := os.RemoveAll(b.Dir); err != nil {
-		panic(err)
-	}
+	tigerassert.NoError(os.RemoveAll(b.data), "failed to remove badger test data directory")
 }
 
 // ---------------------------------------------------------------------
@@ -310,19 +316,15 @@ type postgresTestSetup struct {
 
 func (p *postgresTestSetup) Setup(conf store.PostgresConfig) store.Config {
 	container, err := getSharedPostgresContainer()
-	if err != nil {
-		panic(fmt.Sprintf("failed to get shared postgres container: %v", err))
-	}
+	tigerassert.NoError(err, "failed to get shared postgres container")
 
-	dsn, dbName, err := container.CreateDatabase(context.Background())
-	if err != nil {
-		panic(fmt.Sprintf("failed to create test database: %v", err))
-	}
+	database, err := container.CreateDatabase(context.Background())
+	tigerassert.NoError(err, "failed to create test database")
 
-	p.dsn = dsn
-	p.dbName = dbName
+	p.dsn = database.DSN
+	p.dbName = database.Name
 
-	conf.ConnectionString = dsn
+	conf.ConnectionString = database.DSN
 	conf.Log = log
 	conf.MaxConns = 10
 
@@ -386,14 +388,16 @@ func (s *sharedMongoContainer) Start(ctx context.Context) (err error) {
 			if strings.Contains(msg, "rootless Docker not found") {
 				err = fmt.Errorf("Docker is not available: %s", msg)
 			} else {
-				panic(r)
+				err = fmt.Errorf("container start panicked: %s\n%s", msg, debug.Stack())
 			}
 		}
 	}()
 
 	// A standalone mongod (no replica set) is used deliberately: it is the practical proof that the
-	// non-transactional MongoDB backend design holds.
-	container, err := mongodb.Run(ctx, "mongo:7")
+	// non-transactional MongoDB backend design holds. Test commands let a test make a write apply
+	// and still report an error, which no other fault a test can add does.
+	container, err := mongodb.Run(ctx, "mongo:7",
+		testcontainers.WithCmdArgs("--setParameter", "enableTestCommands=1"))
 	if err != nil {
 		return fmt.Errorf("failed to start mongo container: %w", err)
 	}
@@ -447,9 +451,7 @@ type mongoTestSetup struct {
 
 func (m *mongoTestSetup) Setup(conf store.MongoConfig) store.Config {
 	container, err := getSharedMongoContainer()
-	if err != nil {
-		panic(fmt.Sprintf("failed to get shared mongo container: %v", err))
-	}
+	tigerassert.NoError(err, "failed to get shared mongo container")
 
 	m.dbName = container.DatabaseName()
 
@@ -503,17 +505,31 @@ func produceRandomItems(count int) []*pb.QueueProduceItem {
 	return items
 }
 
-func compareStorageItem(t *testing.T, l *pb.StorageItem, r *pb.StorageItem) {
-	t.Helper()
-	require.Equal(t, l.Id, r.Id)
-	require.Equal(t, l.IsLeased, r.IsLeased)
-	require.Equal(t, l.ExpireDeadline.AsTime(), r.ExpireDeadline.AsTime())
-	require.Equal(t, l.LeaseDeadline.AsTime(), r.LeaseDeadline.AsTime())
-	require.Equal(t, l.Attempts, r.Attempts)
-	require.Equal(t, l.Reference, r.Reference)
-	require.Equal(t, l.Encoding, r.Encoding)
-	require.Equal(t, l.Kind, r.Kind)
-	require.Equal(t, l.Payload, r.Payload)
+// storageItemFields holds the StorageItem fields tests compare, so require.Equal can compare two items.
+type storageItemFields struct {
+	Id             string
+	IsLeased       bool
+	ExpireDeadline time.Time
+	LeaseDeadline  time.Time
+	Attempts       int32
+	Reference      string
+	Encoding       string
+	Kind           string
+	Payload        string
+}
+
+func storageItemFieldsOf(item *pb.StorageItem) storageItemFields {
+	return storageItemFields{
+		Id:             item.Id,
+		IsLeased:       item.IsLeased,
+		ExpireDeadline: item.ExpireDeadline.AsTime(),
+		LeaseDeadline:  item.LeaseDeadline.AsTime(),
+		Attempts:       item.Attempts,
+		Reference:      item.Reference,
+		Encoding:       item.Encoding,
+		Kind:           item.Kind,
+		Payload:        string(item.Payload),
+	}
 }
 
 //nolint:unparam // conf param kept for consistency with other setup functions
@@ -612,18 +628,22 @@ func pauseAndLease(t *testing.T, ctx context.Context, s *svc.Service, c *querato
 	t.Helper()
 
 	// Pause processing of the queue for testing
-	require.NoError(t, s.PauseQueue(ctx, name, true))
+	require.NoError(t, s.PauseQueue(ctx, name))
 
 	responses := make([]*pb.QueueLeaseResponse, len(requests))
 	for i := range responses {
 		responses[i] = &pb.QueueLeaseResponse{}
 	}
 
+	// Cancelling leaseCtx ends any lease request still waiting once the wait below times out.
+	leaseCtx, cancelLeases := context.WithCancel(ctx)
+	defer cancelLeases()
+
 	var wg sync.WaitGroup
 
 	for i := range requests {
 		wg.Go(func() {
-			if err := c.QueueLease(ctx, requests[i], responses[i]); err != nil {
+			if err := c.QueueLease(leaseCtx, requests[i], responses[i]); err != nil {
 				var d duh.Error
 				if errors.As(err, &d) {
 					if d.Code() == duh.CodeRetryRequest {
@@ -654,22 +674,41 @@ func pauseAndLease(t *testing.T, ctx context.Context, s *svc.Service, c *querato
 	}
 
 	// Unpause processing of the queue to allow the leases to be filled.
-	require.NoError(t, s.PauseQueue(ctx, name, false))
+	require.NoError(t, s.ResumeQueue(ctx, name))
 
 	// Wait for each request to complete
-	done := make(chan struct{})
-
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-	case <-clock.After(5 * clock.Second):
+	timer := clock.AfterFunc(5*clock.Second, cancelLeases)
+	wg.Wait()
+	if !timer.Stop() {
 		t.Fatalf("timed out waiting for distribution of requests")
 	}
 	return responses
+}
+
+// backgroundCall runs Call in its own goroutine while While runs on the calling goroutine, so
+// While can drive the system and use require. When While returns normally, run waits for Call;
+// when While fails the test, run does not. The Go and Wait sit in a named method because Tiger
+// does not credit a Wait inside a t.Run literal (ENG-762).
+type backgroundCall struct {
+	Call  func()
+	While func()
+}
+
+func (b backgroundCall) run() {
+	var wg sync.WaitGroup
+	wg.Go(b.Call)
+	b.While()
+	wg.Wait()
+}
+
+// concurrently calls work once for each index in [0, count), each call in its own goroutine,
+// and returns once every call has returned.
+func concurrently(count int, work func(i int)) {
+	var wg sync.WaitGroup
+	for i := range count {
+		wg.Go(func() { work(i) })
+	}
+	wg.Wait()
 }
 
 func untilLeaseClientWaiting(t *testing.T, c *querator.Client, queueName string, numWaiting int) error {
@@ -688,14 +727,25 @@ func untilLeaseClientWaiting(t *testing.T, c *querator.Client, queueName string,
 	})
 }
 
-func compareQueueInfo(t *testing.T, expected *pb.QueueInfo, actual *pb.QueueInfo) {
-	t.Helper()
-	require.Equal(t, expected.QueueName, actual.QueueName)
-	require.Equal(t, expected.ExpireTimeout, actual.ExpireTimeout)
-	require.Equal(t, expected.LeaseTimeout, actual.LeaseTimeout)
-	require.Equal(t, expected.MaxAttempts, actual.MaxAttempts)
-	require.Equal(t, expected.DeadQueue, actual.DeadQueue)
-	require.Equal(t, expected.Reference, actual.Reference)
+// queueInfoFields holds the QueueInfo fields tests compare, so require.Equal can compare two queues.
+type queueInfoFields struct {
+	QueueName     string
+	ExpireTimeout string
+	LeaseTimeout  string
+	MaxAttempts   int32
+	DeadQueue     string
+	Reference     string
+}
+
+func queueInfoFieldsOf(info *pb.QueueInfo) queueInfoFields {
+	return queueInfoFields{
+		QueueName:     info.QueueName,
+		ExpireTimeout: info.ExpireTimeout,
+		LeaseTimeout:  info.LeaseTimeout,
+		MaxAttempts:   info.MaxAttempts,
+		DeadQueue:     info.DeadQueue,
+		Reference:     info.Reference,
+	}
 }
 
 type Pair struct {
@@ -761,4 +811,532 @@ func createQueueAndWait(t *testing.T, ctx context.Context, c *querator.Client, i
 		return nil
 	})
 	require.NoError(t, err)
+}
+
+func leaseOne(t *testing.T, ctx context.Context, c *querator.Client, queueName string) *pb.QueueLeaseItem {
+	t.Helper()
+	var lease pb.QueueLeaseResponse
+	require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+		ClientId:       random.String("client-", 10),
+		RequestTimeout: "3s",
+		QueueName:      queueName,
+		BatchSize:      1,
+	}, &lease))
+	require.Len(t, lease.Items, 1)
+	return lease.Items[0]
+}
+
+// itemReference is the Reference a test gave an item when producing it. A distinct type keeps
+// it from being swapped with the queue name beside it.
+type itemReference string
+
+func isLeased(t *testing.T, ctx context.Context, c *querator.Client, queueName string, ref itemReference) bool {
+	t.Helper()
+	var resp pb.StorageItemsListResponse
+	require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &resp, nil))
+	item := findInStorageList(string(ref), &resp)
+	require.NotNil(t, item)
+	return item.IsLeased
+}
+
+// isUnLeased reports whether the item is in the queue and not leased. It takes no t and returns
+// false on any error so it can be polled from require.Eventually.
+func isUnLeased(ctx context.Context, c *querator.Client, queueName string, ref itemReference) bool {
+	var resp pb.StorageItemsListResponse
+	if err := c.StorageItemsList(ctx, queueName, 0, &resp, nil); err != nil {
+		return false
+	}
+	item := findInStorageList(string(ref), &resp)
+	return item != nil && !item.IsLeased
+}
+
+// nextLifecycleRun returns how long until the lifecycle next runs on the queue's only partition.
+func nextLifecycleRun(t *testing.T, ctx context.Context, c *querator.Client, queueName string) clock.Duration {
+	t.Helper()
+	var stats pb.QueueStatsResponse
+	require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats))
+	require.Len(t, stats.LogicalQueues, 1)
+	require.Len(t, stats.LogicalQueues[0].Partitions, 1)
+	next, err := clock.ParseDuration(stats.LogicalQueues[0].Partitions[0].NextLifecycleRun)
+	require.NoError(t, err)
+	return next
+}
+
+// waitForLifecycleRun waits until the next lifecycle run of the queue's only partition is in
+// the future again, which happens only after a due run has finished and rescheduled itself.
+// Call it right after advancing a frozen clock past the next run; otherwise it returns at once.
+func waitForLifecycleRun(t *testing.T, ctx context.Context, c *querator.Client, queueName string) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		var stats pb.QueueStatsResponse
+		if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats); err != nil {
+			return false
+		}
+		if len(stats.LogicalQueues) != 1 || len(stats.LogicalQueues[0].Partitions) != 1 {
+			return false
+		}
+		next, err := clock.ParseDuration(stats.LogicalQueues[0].Partitions[0].NextLifecycleRun)
+		return err == nil && next > 0
+	}, 5*clock.Second, 20*clock.Millisecond)
+}
+
+// ---------------------------------------------------------------------
+// Partition storage fault injection
+// ---------------------------------------------------------------------
+
+var (
+	errProduceWriteFailed = errors.New("injected produce write failure")
+	errLeaseWriteFailed   = errors.New("injected lease write failure")
+	errClearFailed        = errors.New("injected clear failure")
+)
+
+// partitionFault makes partition storage refuse calls on demand. Each switch is set from the
+// test, and every call it does not name reaches the real backend. While scanFailing holds a
+// queue name, that queue's partitions fail the lifecycle scan, so each lifecycle run marks
+// them failed.
+type partitionFault struct {
+	failingProduce atomic.Bool
+	failingLease   atomic.Bool
+	// failingClear holds the number of the one partition whose Clear fails, plus one. Zero fails none.
+	failingClear atomic.Int32
+	scanFailing  atomic.Pointer[string]
+	// scanFailingOnly narrows scanFailing to the one partition whose number it holds, plus one. Zero fails every partition.
+	scanFailingOnly atomic.Int32
+	holdClear       atomic.Pointer[clearHold]
+	// statsPastDeadline makes each Stats call that has a deadline wait until the deadline passes
+	// before it reaches the backend, the way a scan longer than the read timeout outlasts it.
+	statsPastDeadline atomic.Bool
+	// statsCancelled hands each Stats call a context that is already cancelled, the way a caller
+	// that gave up does.
+	statsCancelled atomic.Bool
+	// statsCancelNext holds how many of the next Stats calls get an already cancelled context. Each
+	// call takes one, so later calls, such as a recovery scan, reach the backend untouched.
+	statsCancelNext atomic.Int32
+	// statsCancelAfter, when above zero, cancels each Stats call's context that long after the call
+	// starts, the way a caller that gives up partway through a scan does.
+	statsCancelAfter atomic.Int64
+	// statsHung makes each Stats call that has a deadline wait until the deadline passes and
+	// return its error without reaching the backend, the way a hung database does.
+	statsHung atomic.Bool
+}
+
+// clearHold stops a Clear partway through. On the Clear's After-th check of its context it
+// closes Reached, then waits until Release closes or the Clear's own context ends, so the test
+// knows the clear is running and decides when it goes on.
+type clearHold struct {
+	After   int
+	Reached chan struct{}
+	Release chan struct{}
+}
+
+// holdWait is how long a test waits for a hold to be reached before it fails.
+const holdWait = 5 * clock.Second
+
+// WaitReached returns once the clear has made its After-th check of its context. It fails the
+// test after holdWait, so a clear that never gets that far does not wait for the daemon's context.
+func (h *clearHold) WaitReached(t *testing.T, ctx context.Context) {
+	t.Helper()
+	select {
+	case <-h.Reached:
+	case <-ctx.Done():
+		require.FailNow(t, "the daemon stopped before the clear reached its hold")
+	case <-clock.After(holdWait):
+		require.FailNowf(t, "the clear never reached its hold",
+			"the clear did not make %d checks of its context within %s", h.After, holdWait)
+	}
+}
+
+type heldContext struct {
+	context.Context
+	hold   *clearHold
+	checks int
+}
+
+func (h *heldContext) Err() error {
+	ctx := h.Context
+	h.checks++
+	if h.checks == h.hold.After {
+		close(h.hold.Reached)
+		select {
+		case <-h.hold.Release:
+		case <-ctx.Done():
+		}
+	}
+	return ctx.Err()
+}
+
+func (f *partitionFault) Wrap(conf store.Config) store.Config {
+	wrapped := make([]store.PartitionStorage, len(conf.PartitionStorage))
+	for i, ps := range conf.PartitionStorage {
+		ps.PartitionStore = faultyPartitionStore{PartitionStore: ps.PartitionStore, fault: f}
+		wrapped[i] = ps
+	}
+	conf.PartitionStorage = wrapped
+	return conf
+}
+
+type faultyPartitionStore struct {
+	store.PartitionStore
+	fault *partitionFault
+}
+
+func (f faultyPartitionStore) Get(info types.PartitionInfo) store.Partition {
+	return faultyPartition{Partition: f.PartitionStore.Get(info), fault: f.fault}
+}
+
+type faultyPartition struct {
+	store.Partition
+	fault *partitionFault
+}
+
+func (f faultyPartition) Produce(ctx context.Context, batch types.ProduceBatch, now clock.Time) error {
+	if f.fault.failingProduce.Load() {
+		return errProduceWriteFailed
+	}
+	return f.Partition.Produce(ctx, batch, now)
+}
+
+func (f faultyPartition) Lease(ctx context.Context, batch types.LeaseBatch, opts store.LeaseOptions) error {
+	if f.fault.failingLease.Load() {
+		return errLeaseWriteFailed
+	}
+	return f.Partition.Lease(ctx, batch, opts)
+}
+
+func (f faultyPartition) Clear(ctx context.Context, req types.ClearRequest) error {
+	if f.fault.failingClear.Load() == int32(f.Info().PartitionNum)+1 {
+		return errClearFailed
+	}
+	if hold := f.fault.holdClear.Load(); hold != nil {
+		return f.Partition.Clear(&heldContext{Context: ctx, hold: hold}, req)
+	}
+	return f.Partition.Clear(ctx, req)
+}
+
+var errScanFailed = errors.New("injected lifecycle scan failure")
+
+func (f *partitionFault) takeStatsCancelNext() bool {
+	if f.statsCancelNext.Add(-1) >= 0 {
+		return true
+	}
+	f.statsCancelNext.Add(1)
+	return false
+}
+
+func (f faultyPartition) Stats(ctx context.Context, stats *types.PartitionStats, now clock.Time) error {
+	if _, ok := ctx.Deadline(); ok && f.fault.statsHung.Load() {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	if _, ok := ctx.Deadline(); ok && f.fault.statsPastDeadline.Load() {
+		<-ctx.Done()
+	}
+	if after := clock.Duration(f.fault.statsCancelAfter.Load()); after > 0 {
+		cancellable, cancel := context.WithCancel(ctx)
+		defer cancel()
+		timer := clock.AfterFunc(after, cancel)
+		defer timer.Stop()
+		return f.Partition.Stats(cancellable, stats, now)
+	}
+	if f.fault.statsCancelled.Load() || f.fault.takeStatsCancelNext() {
+		cancelled, cancel := context.WithCancel(ctx)
+		cancel()
+		return f.Partition.Stats(cancelled, stats, now)
+	}
+	return f.Partition.Stats(ctx, stats, now)
+}
+
+func (f faultyPartition) ScanForActions(ctx context.Context, scan *types.LifeCycleScan, now clock.Time) error {
+	if queue := f.fault.scanFailing.Load(); queue != nil && *queue == f.Info().Queue.Name {
+		if only := f.fault.scanFailingOnly.Load(); only != 0 && int(only)-1 != f.Info().PartitionNum {
+			return f.Partition.ScanForActions(ctx, scan, now)
+		}
+		return errScanFailed
+	}
+	return f.Partition.ScanForActions(ctx, scan, now)
+}
+
+// lifecycleSpy wraps a partition store. It records each lifecycle page read and each produce,
+// complete and retry in the order the partition sees them, can hold the first page of a pass
+// until the test releases it, and can make the lifecycle's reads fail. With watchScheduled set
+// it records and holds the scheduled pass's pages instead of the lifecycle's.
+type lifecycleSpy struct {
+	mu             sync.Mutex
+	watchScheduled bool
+	armed          bool
+	reached        chan struct{}
+	release        chan struct{}
+	released       sync.Once
+	events         []string
+	actions        []int
+	pages          int
+	failScans      atomic.Bool
+	failScheduled  atomic.Bool
+	failDeadLetter atomic.Bool
+	failDelete     atomic.Bool
+	holdProduce    atomic.Bool
+	produceHeld    chan struct{}
+	produceRelease chan struct{}
+}
+
+func (s *lifecycleSpy) Wrap(conf store.Config) store.Config {
+	for i := range conf.PartitionStorage {
+		conf.PartitionStorage[i].PartitionStore = spyStore{PartitionStore: conf.PartitionStorage[i].PartitionStore, spy: s}
+	}
+	return conf
+}
+
+// HoldFirstPage starts recording and makes the next page read wait until Release.
+func (s *lifecycleSpy) HoldFirstPage() {
+	defer s.mu.Unlock()
+	s.mu.Lock()
+	s.armed = true
+	s.reached = make(chan struct{})
+	s.release = make(chan struct{})
+}
+
+// WaitForFirstPage returns once the lifecycle is waiting to read the held page.
+func (s *lifecycleSpy) WaitForFirstPage(t *testing.T, ctx context.Context) {
+	t.Helper()
+	select {
+	case <-s.reached:
+	case <-ctx.Done():
+		require.FailNow(t, "the daemon stopped before the lifecycle read its first page")
+	case <-clock.After(holdWait):
+		require.FailNowf(t, "the lifecycle never read its first page", "no page read within %s", holdWait)
+	}
+}
+
+// WhileFirstPageHeld runs call while the lifecycle waits to read the held page, gives the request
+// call makes time to reach the queue, then lets the pass go on. The goroutine starts in a named
+// function because Tiger's TS-C02 does not see a Wait that follows Go inside a function literal.
+func (s *lifecycleSpy) WhileFirstPageHeld(t *testing.T, ctx context.Context, call func()) {
+	t.Helper()
+	s.WaitForFirstPage(t, ctx)
+	var calls sync.WaitGroup
+	calls.Go(call)
+	clock.Sleep(requestSettle)
+	s.Release()
+	calls.Wait()
+}
+
+func (s *lifecycleSpy) Release() {
+	s.released.Do(func() { close(s.release) })
+}
+
+func (s *lifecycleSpy) FailScans() {
+	s.failScans.Store(true)
+}
+
+func (s *lifecycleSpy) StopFailingScans() {
+	s.failScans.Store(false)
+}
+
+// FailScheduledWritesAfterFirstItem makes each scheduled write enqueue only its first item and
+// then fail, as a backend does when a write commits partway.
+func (s *lifecycleSpy) FailScheduledWritesAfterFirstItem() {
+	s.failScheduled.Store(true)
+}
+
+// FailNextDeadLetterWriteAfterFirstItem makes the next dead letter write store only its first
+// item, report it stored, and then fail, as a BadgerDB move split across transactions does when
+// a later transaction fails.
+func (s *lifecycleSpy) FailNextDeadLetterWriteAfterFirstItem() {
+	s.failDeadLetter.Store(true)
+}
+
+// FailNextItemDelete makes the next lifecycle write that deletes items fail without deleting any.
+func (s *lifecycleSpy) FailNextItemDelete() {
+	s.failDelete.Store(true)
+}
+
+// HoldNextProducePastDeadline makes the next produce write wait until ReleaseProduce even after
+// its deadline passes, and then store its items, as a backend does when a write it already sent
+// commits late. With FailNextDeadLetterWriteAfterFirstItem also set, the late write stores only
+// its first item and then fails.
+func (s *lifecycleSpy) HoldNextProducePastDeadline() {
+	s.produceHeld = make(chan struct{})
+	s.produceRelease = make(chan struct{})
+	s.holdProduce.Store(true)
+}
+
+// WaitForProduceHeld returns once the held produce write has started.
+func (s *lifecycleSpy) WaitForProduceHeld(t *testing.T, ctx context.Context) {
+	t.Helper()
+	select {
+	case <-s.produceHeld:
+	case <-ctx.Done():
+		require.FailNow(t, "the daemon stopped before a produce write was held")
+	case <-clock.After(holdWait):
+		require.FailNowf(t, "no produce write was held", "no produce write started within %s", holdWait)
+	}
+}
+
+func (s *lifecycleSpy) awaitRelease(ctx context.Context) error {
+	select {
+	case <-s.produceRelease:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *lifecycleSpy) ReleaseProduce() {
+	close(s.produceRelease)
+}
+
+func (s *lifecycleSpy) Events() []string {
+	defer s.mu.Unlock()
+	s.mu.Lock()
+	return append([]string(nil), s.events...)
+}
+
+func (s *lifecycleSpy) ActionCounts() []int {
+	defer s.mu.Unlock()
+	s.mu.Lock()
+	return append([]int(nil), s.actions...)
+}
+
+func (s *lifecycleSpy) Pages() int {
+	defer s.mu.Unlock()
+	s.mu.Lock()
+	return s.pages
+}
+
+func (s *lifecycleSpy) beforePage(ctx context.Context, scan *types.LifeCycleScan) {
+	s.mu.Lock()
+	if !s.armed {
+		s.mu.Unlock()
+		return
+	}
+	s.pages++
+	first := s.pages == 1
+	if scan.MidPass() {
+		s.events = append(s.events, "page:resume")
+	} else {
+		s.events = append(s.events, "page:start")
+	}
+	s.mu.Unlock()
+	if first {
+		close(s.reached)
+		select {
+		case <-s.release:
+		case <-ctx.Done():
+		}
+	}
+}
+
+func (s *lifecycleSpy) afterPage(scan *types.LifeCycleScan) {
+	defer s.mu.Unlock()
+	s.mu.Lock()
+	if s.armed {
+		s.actions = append(s.actions, len(scan.Actions))
+	}
+}
+
+func (s *lifecycleSpy) produce() {
+	s.record("produce")
+}
+
+func (s *lifecycleSpy) record(event string) {
+	defer s.mu.Unlock()
+	s.mu.Lock()
+	if s.armed {
+		s.events = append(s.events, event)
+	}
+}
+
+type spyStore struct {
+	store.PartitionStore
+	spy *lifecycleSpy
+}
+
+func (s spyStore) Get(info types.PartitionInfo) store.Partition {
+	return spyPartition{Partition: s.PartitionStore.Get(info), spy: s.spy}
+}
+
+type spyPartition struct {
+	store.Partition
+	spy *lifecycleSpy
+}
+
+func (p spyPartition) ScanForActions(ctx context.Context, scan *types.LifeCycleScan, now clock.Time) error {
+	if p.spy.failScans.Load() {
+		return errors.New("scan failed by test")
+	}
+	if p.spy.watchScheduled {
+		return p.Partition.ScanForActions(ctx, scan, now)
+	}
+	p.spy.beforePage(ctx, scan)
+	if err := p.Partition.ScanForActions(ctx, scan, now); err != nil {
+		return err
+	}
+	p.spy.afterPage(scan)
+	return nil
+}
+
+func (p spyPartition) Produce(ctx context.Context, batch types.ProduceBatch, now clock.Time) error {
+	p.spy.produce()
+	if p.spy.holdProduce.CompareAndSwap(true, false) {
+		close(p.spy.produceHeld)
+		late, cancel := context.WithTimeout(context.WithoutCancel(ctx), holdWait)
+		defer cancel()
+		if err := p.spy.awaitRelease(late); err != nil {
+			return err
+		}
+		ctx = late
+	}
+	if len(batch.Requests) == 0 || !batch.Requests[0].DeadLetterHandOff || !p.spy.failDeadLetter.CompareAndSwap(true, false) {
+		return p.Partition.Produce(ctx, batch, now)
+	}
+	first := *batch.Requests[0]
+	first.Items = first.Items[:1]
+	if err := p.Partition.Produce(ctx, types.ProduceBatch{Requests: []*types.ProduceRequest{&first}}, now); err != nil {
+		return err
+	}
+	batch.Requests[0].Stored = 1
+	return errors.New("dead letter write failed by test after its first item")
+}
+
+func (p spyPartition) TakeAction(ctx context.Context, batch types.LifeCycleBatch, state *types.PartitionState) error {
+	if len(batch.Requests) != 0 && len(batch.Requests[0].Actions) != 0 &&
+		batch.Requests[0].Actions[0].Action == types.ActionDeleteItem && p.spy.failDelete.CompareAndSwap(true, false) {
+		return errors.New("item delete failed by test")
+	}
+	if !p.spy.failScheduled.Load() || len(batch.Requests) == 0 || len(batch.Requests[0].Actions) == 0 ||
+		batch.Requests[0].Actions[0].Action != types.ActionQueueScheduledItem {
+		return p.Partition.TakeAction(ctx, batch, state)
+	}
+	first := *batch.Requests[0]
+	first.Actions = first.Actions[:1]
+	if err := p.Partition.TakeAction(ctx, types.LifeCycleBatch{Requests: []*types.LifeCycleRequest{&first}}, state); err != nil {
+		return err
+	}
+	return errors.New("scheduled write failed by test after its first item")
+}
+
+func (p spyPartition) ScanForScheduled(ctx context.Context, scan *types.LifeCycleScan, now clock.Time) error {
+	if !p.spy.watchScheduled {
+		return p.Partition.ScanForScheduled(ctx, scan, now)
+	}
+	p.spy.beforePage(ctx, scan)
+	if err := p.Partition.ScanForScheduled(ctx, scan, now); err != nil {
+		return err
+	}
+	p.spy.afterPage(scan)
+	return nil
+}
+
+func (p spyPartition) Complete(ctx context.Context, batch types.CompleteBatch) error {
+	if len(batch.Requests) != 0 {
+		p.spy.record("complete")
+	}
+	return p.Partition.Complete(ctx, batch)
+}
+
+func (p spyPartition) Retry(ctx context.Context, batch types.RetryBatch) error {
+	if len(batch.Requests) != 0 {
+		p.spy.record("retry")
+	}
+	return p.Partition.Retry(ctx, batch)
 }

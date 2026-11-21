@@ -12,28 +12,32 @@ import (
 )
 
 const (
-	maxTimeoutLength   = 15
-	maxQueueNameLength = 512
-	defaultAllocation  = 512  // 1<<9
-	maxAllocation      = 2048 // 1<<11
-	// defaultRequestTimeout is used as a fallback for requests that lack an explicit timeout field.
+	maxTimeoutLength      = 15
+	maxQueueNameLength    = 512
+	defaultAllocation     = 512
+	maxAllocation         = 2048
 	defaultRequestTimeout = 5 * clock.Minute
 )
 
-func validateTag(field, value string) error {
-	if len(value) > auth.MaxKeyTagLength {
-		return reply.NewInvalidOption("%s is invalid; cannot be greater than %d characters", field, auth.MaxKeyTagLength)
+type keyTag struct {
+	Field string
+	Value string
+}
+
+func validateTag(tag keyTag) error {
+	if len(tag.Value) > auth.MaxKeyTagLength {
+		return reply.NewInvalidOption("%s is invalid; cannot be greater than %d characters", tag.Field, auth.MaxKeyTagLength)
 	}
-	for _, c := range value {
-		if (c < '0' || c > '9') && (c < 'a' || c > 'z') {
-			return reply.NewInvalidOption("%s is invalid; must be lowercase alphanumeric only", field)
+	for _, c := range tag.Value {
+		digit := c >= '0' && c <= '9'
+		lower := c >= 'a' && c <= 'z'
+		if !digit && !lower {
+			return reply.NewInvalidOption("%s is invalid; must be lowercase alphanumeric only", tag.Field)
 		}
 	}
 	return nil
 }
 
-// validateNamespaceName validates the namespace name format.
-// This validation happens at the service layer to protect downstream systems.
 func validateNamespaceName(name string) error {
 	const maxNamespaceNameLength = 256
 
@@ -60,8 +64,6 @@ func validateNamespaceName(name string) error {
 	return nil
 }
 
-// validateQueueName validates the queue name format.
-// This validation happens at the service layer to protect downstream systems.
 func validateQueueName(name string) error {
 	if len(name) > maxQueueNameLength {
 		return reply.NewInvalidOption("queue name is invalid; cannot be greater than '%d' characters", maxQueueNameLength)
@@ -102,7 +104,6 @@ func (s *Service) validateQueueProduceProto(in *proto.QueueProduceRequest, out *
 	}
 
 	for _, item := range in.Items {
-		// TODO: From Memory Pool
 		qi := new(types.Item)
 		qi.Encoding = item.Encoding
 		qi.Kind = item.Kind
@@ -137,11 +138,6 @@ func (s *Service) validateQueueLeaseProto(in *proto.QueueLeaseRequest, out *type
 func (s *Service) validateQueueCompleteProto(in *proto.QueueCompleteRequest, out *types.CompleteRequest) error {
 	var err error
 
-	// TODO: Move this into Queue.Complete()
-	// if strings.TrimSpace(in.QueueName) == "" {
-	// 	return reply.NewInvalidOption("'queue_name' cannot be empty")
-	// }
-
 	if in.RequestTimeout != "" {
 		out.RequestTimeout, err = clock.ParseDuration(in.RequestTimeout)
 		if err != nil {
@@ -159,8 +155,6 @@ func (s *Service) validateQueueCompleteProto(in *proto.QueueCompleteRequest, out
 }
 
 func (s *Service) validateQueueRetryProto(in *proto.QueueRetryRequest, out *types.RetryRequest) error {
-	// Note: RequestTimeout field is not defined in proto, using default timeout
-	// TODO: Add RequestTimeout field to QueueRetryRequest proto definition
 	out.RequestTimeout = defaultRequestTimeout
 
 	for _, item := range in.Items {
@@ -168,11 +162,11 @@ func (s *Service) validateQueueRetryProto(in *proto.QueueRetryRequest, out *type
 			ID:   []byte(item.Id),
 			Dead: item.Dead,
 		}
-		
+
 		if item.RetryAt != nil {
 			retryItem.RetryAt = clock.Time(item.RetryAt.AsTime())
 		}
-		
+
 		out.Items = append(out.Items, retryItem)
 	}
 
@@ -182,28 +176,15 @@ func (s *Service) validateQueueRetryProto(in *proto.QueueRetryRequest, out *type
 }
 
 func (s *Service) validateQueueOptionsProto(in *proto.QueueInfo, out *types.QueueInfo) error {
-	var err error
-
 	if len(in.LeaseTimeout) > maxTimeoutLength {
 		return reply.NewInvalidOption("lease timeout is invalid; cannot be greater than '%d' characters", maxTimeoutLength)
 	}
-
-	if len(in.ExpireTimeout) > maxTimeoutLength {
-		return reply.NewInvalidOption("expire timeout is invalid; cannot be greater than '%d' characters", maxTimeoutLength)
+	var err error
+	if out.ExpireTimeout, err = parseExpireTimeout(in.ExpireTimeout); err != nil {
+		return err
 	}
-
-	if in.ExpireTimeout != "" {
-		out.ExpireTimeout, err = clock.ParseDuration(in.ExpireTimeout)
-		if err != nil {
-			return reply.NewInvalidOption("expire timeout is invalid; %s - expected format: 60m, 2h or 24h", err.Error())
-		}
-	}
-
-	if in.LeaseTimeout != "" {
-		out.LeaseTimeout, err = clock.ParseDuration(in.LeaseTimeout)
-		if err != nil {
-			return reply.NewInvalidOption("lease timeout is invalid; %s - expected format: 8m, 15m or 1h", err.Error())
-		}
+	if out.LeaseTimeout, err = parseLeaseTimeout(in.LeaseTimeout); err != nil {
+		return err
 	}
 
 	out.RequestedPartitions = int(in.RequestedPartitions)
@@ -220,12 +201,68 @@ func (s *Service) validateQueueOptionsProto(in *proto.QueueInfo, out *types.Queu
 	return nil
 }
 
+func (s *Service) validateQueueUpdateProto(in *proto.QueuesUpdateRequest, out *types.QueueUpdate) error {
+	if len(in.LeaseTimeout) > maxTimeoutLength {
+		return reply.NewInvalidOption("lease timeout is invalid; cannot be greater than '%d' characters", maxTimeoutLength)
+	}
+	var err error
+	if out.ExpireTimeout, err = parseExpireTimeout(in.ExpireTimeout); err != nil {
+		return err
+	}
+	if out.LeaseTimeout, err = parseLeaseTimeout(in.LeaseTimeout); err != nil {
+		return err
+	}
+
+	if in.Namespace != "" {
+		if err := validateNamespaceName(in.Namespace); err != nil {
+			return err
+		}
+	}
+
+	out.RequestedPartitions = int(in.RequestedPartitions)
+	if in.MaxAttempts != nil {
+		out.MaxAttempts = new(int(*in.MaxAttempts))
+	}
+	out.DeadQueue = in.DeadQueue
+	out.Reference = in.Reference
+	out.Name = in.QueueName
+	return nil
+}
+
+func parseLeaseTimeout(lease string) (clock.Duration, error) {
+	if len(lease) > maxTimeoutLength {
+		return 0, reply.NewInvalidOption("lease timeout is invalid; cannot be greater than '%d' characters", maxTimeoutLength)
+	}
+	if lease == "" {
+		return 0, nil
+	}
+	timeout, err := clock.ParseDuration(lease)
+	if err != nil {
+		return 0, reply.NewInvalidOption("lease timeout is invalid; %s - expected format: 8m, 15m or 1h", err.Error())
+	}
+	return timeout, nil
+}
+
+func parseExpireTimeout(expire string) (clock.Duration, error) {
+	if len(expire) > maxTimeoutLength {
+		return 0, reply.NewInvalidOption("expire timeout is invalid; cannot be greater than '%d' characters", maxTimeoutLength)
+	}
+	if expire == "" {
+		return 0, nil
+	}
+	timeout, err := clock.ParseDuration(expire)
+	if err != nil {
+		return 0, reply.NewInvalidOption("expire timeout is invalid; %s - expected format: 60m, 2h or 24h", err.Error())
+	}
+	return timeout, nil
+}
+
 func (s *Service) validateNamespaceProto(in *proto.NamespaceInfo, out *types.Namespace) error {
 	if err := validateNamespaceName(in.Name); err != nil {
 		return err
 	}
 
-	if err := validateTag("api_key_tag", in.ApiKeyTag); err != nil {
+	if err := validateTag(keyTag{Field: "api_key_tag", Value: in.ApiKeyTag}); err != nil {
 		return err
 	}
 
@@ -286,7 +323,7 @@ func (s *Service) validateAPIKeyCreateProto(in *proto.APIKeyCreateRequest, out *
 	}
 
 	if in.KeyTag != "" {
-		if err := validateTag("key_tag", in.KeyTag); err != nil {
+		if err := validateTag(keyTag{Field: "key_tag", Value: in.KeyTag}); err != nil {
 			return err
 		}
 	}

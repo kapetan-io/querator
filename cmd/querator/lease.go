@@ -4,9 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/kapetan-io/tackle/random"
 	"os"
 	"time"
+
+	"github.com/kapetan-io/tackle/random"
 
 	"github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/proto"
@@ -59,7 +60,6 @@ func RunLease(flags FlagParams, queueName string) error {
 		return fmt.Errorf("failed to lease items: %w", err)
 	}
 
-	// Convert to JSON for output
 	output := struct {
 		QueueName string                  `json:"queue_name"`
 		Partition int32                   `json:"partition"`

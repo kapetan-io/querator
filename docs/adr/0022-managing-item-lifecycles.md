@@ -13,19 +13,20 @@ manner.
 
 ## Decision
 
-Item life cycles are managed by a separate Go routine for each partition. This routine operates similarly
-to a two-phase garbage collector. In the first phase, it identifies items that require action. In the
-second phase, it makes calls to either the Logical Queue or the QueuesManager to remove, move, or update
-the status of these items. 
+Item life cycles are managed by the Logical Queue, on its request loop (see
+[3. RW Sync Point](0003-rw-sync-point.md)). There is no separate life cycle Go routine. The life
+cycle works like a two-phase garbage collector. In the first phase it reads a partition to identify
+items that require action. In the second phase it writes those actions to the partition, or hands
+items bound for a dead letter to the QueuesManager.
 
-Running the life cycle in a separate Go routine, distinct from the main sync
-loop, prevents potential congestion in the main sync routine during the read phase. Since the life cycle
-is a client of both the Logical Queue and the QueuesManager, either of these systems can optimize the
-actions taken by the life cycle as necessary. For example, in the case of a logical queue, items that
-need to be moved or updated can be batched along with lease or produce items by the logical queue.
+The life cycle must not hold the request loop for longer than one bounded storage call. Each life
+cycle run reads one page of one partition and acts on what that page found. The Logical Queue
+remembers a pivot, the last item the page read, and the next run continues after it. Between pages
+the request loop handles any produce, lease, complete or retry requests that are waiting. A full
+pass over a partition is therefore many short runs, not one long one.
 
-This batching can improve data storage access efficiency, provided it is supported by the underlying
-storage.
+Because the life cycle runs on the request loop, the Logical Queue remains the only reader and
+writer of its partitions, and a partition store does not have to be safe for concurrent use.
 
 ### The Life Cycle
 When a logical queue starts, it will initiate the life cycles of all the partitions it is responsible
@@ -36,12 +37,14 @@ distribution until the life cycle can be restarted. This is to avoid unexpected 
 partition, such as handling leased items that have exceeded their deadline in a timely manner.
 If the life cycle is unable to start, the partition should not allow new items to be produced on it.
 
-NOTE: The life cycle go routine will only READ from the partition directly. Any writes
-preformed will be delegated to the logical queue or queues manager.
+NOTE: All life cycle writes to a partition are made by the Logical Queue that owns it. Items moved
+to a dead letter are produced through the dead-letter queue's own request loop, and removed from
+the source partition only after that produce is confirmed.
 
 #### Life Cycle Responsibilities 
-- Find all the lease items in the partition which have exceeded their `lease_deadline` and 
-  increment `attempts` then reset the item to un-leased state and clear the deadline.
+- Find all the leased items in the partition whose `lease_deadline` is at or before now, reset the
+  item to un-leased state and clear the deadline. (`attempts` is incremented when the item is
+  leased, not when the lease expires.)
 - If any items have exceeded their `max_attempts`
     - If the queue has a dead letter, then send the item to the dead letter if possible
         - If sent to dead letter, then remove them from the partition
@@ -56,23 +59,47 @@ preformed will be delegated to the logical queue or queues manager.
     - If the queue has no dead letter, log the expired item and delete it.
 -  Find any items scheduled for enqueue and distribute them to the current Logical queue
 
-### Life Cycle per partition
-Each partition is assigned a dedicated Go routine to manage its item life cycle. This routine periodically
-reads from the data store to identify items that require life cycle handling. As the number of partitions
-increases, so does the number of Go routines accessing the data store, potentially generating more IOPS
-than necessary. 
+If moving an item to the dead letter or writing an action fails, the life cycle runs again for that
+partition with back-off. The partition is not marked faulty and stays in the request distribution,
+since the fault may lie with the dead letter queue. A read that fails also backs off, and the
+partition leaves the request distribution until a read succeeds. After a failed write or move, the
+back-off starts counting when the run ends, not when it began, because a move to the dead letter can
+take the whole write timeout. Without that, a run that took as long as its back-off would retry at once.
 
-Optimizing efficient access to the data store is the responsibility of individual data store
-implementations. For instance, a data store implementation might cache life cycle item information in 
-secondary in-memory indexes to avoid IOPs when scanning the data store.
+The number of attempts given to the back-off is capped. After enough failures an uncapped count
+overflows when it is turned into a wait time, and the back-off falls back to its shortest wait, so a
+partition that keeps failing would retry at the fastest rate. The cap applies to the number handed to
+the back-off, not to the partition's failure count itself, because queue stats report the real count.
 
-We considered logically grouping partitions so that a single life cycle routine could scan multiple partitions,
-provided they reside on the same physical data store or data store cluster. However, this approach can
-significantly increase the complexity of the solution. Factors such as degraded partitions, availability zones,
-and clustered data store systems can affect how partitions are handled within a specific data store
-implementation, impacting the life cycle process. Due to this additional complexity, we made the decision
-to move forward with the simpler, per-partition life cycle solution. We may revisit this in the
-future if warranted.
+### Reading a partition
+Each partition has its own life cycle timing, so a degraded partition backs off without delaying
+the life cycle of healthy partitions on the same Logical Queue. The Logical Queue runs one page for
+one partition at a time.
+
+A pass ends when it reads the item that was last in the partition when the pass began. Items added
+behind that point during the pass wait for the next pass, so a busy producer cannot keep a pass
+running forever. The next pass starts at the earliest deadline seen during the pass, including the
+deadline of any lease granted while the pass was running and of any item the pass moved to the
+tail. When an immediate retry moves an item the pass has not read yet to the tail, the next pass
+starts as soon as this one ends: the pass will not read that item, and a retry carries no expire
+deadline to schedule the next pass from. A retry request that fails partway counts all its items,
+because the items before the failure were moved. The cost is that a large partition under a steady
+stream of immediate retries is read end to end without pause, one page at a time with requests
+served between pages, rather than only when a deadline is due.
+A failed move to the dead letter overrides both: the rest of the pass leaves dead items for the
+next pass, and the next pass waits for the back-off, so a dead letter queue that hangs is called
+once per pass, not once per page.
+
+Optimizing access to the data store is the responsibility of individual data store
+implementations. A data store that can find due items without reading the others, for instance
+with an index on `lease_deadline` and `expire_deadline`, may return only those. A data store
+that cannot must still examine no more than one page per call.
+
+We considered running the life cycle read in a separate Go routine per partition so that it never
+waits on the request loop. It required every data store to be safe for a reader concurrent with the
+request loop's writes, and it needed a hand-off between the life cycle and the Logical Queue for
+every write and every change in partition health. Once a read is one page, it is no larger than a
+lease, and the separate Go routine buys nothing.
 
 ### Avoid Head of line blocking
 When an item exceeds its `leased_deadline`, the naive solution might be to simply reset the
@@ -102,16 +129,18 @@ the tail of the queue. If the retried item were left at its original position, i
 precedence over newer items waiting behind it — the same HOL blocking problem described above.
 
 ## Consequences
-Because the life cycle runs its first phase in a separate Go routine, all querator storage systems
-must support concurrent read/write workloads. This ensures that both the life cycle and the sync
-Go routines can access the storage system simultaneously. Most storage systems do support this.
+A life cycle run holds the request loop for one page read and the writes that page found, plus a
+dead-letter hand-off when the page found items bound for a dead letter. Requests for that Logical
+Queue wait for that long, as they do for any other storage call.
 
-Since the life cycle runs in a separate Go routine, it is possible that the routine might be
-scheduled to run or is blocked from a previous run, leading to a delay in updating expired
-leases. This means a leased item may not be immediately available for delivery to a
-different consumer at the exact moment one might expect. However, I believe that the efficiency
-gained by this design outweighs any deficiencies incurred by the delayed handling of expired
-leases.
+On a data store that must examine every item, the time to notice an expired lease grows with the
+size of the partition, because the pass has to come round to the item. An expired lease may be
+given back up to one pass later than its deadline. This means a leased item may not be available
+for delivery to a different consumer at the exact moment one might expect. I believe this is an
+acceptable cost for keeping a single reader and writer per partition.
+
+The pivot is held in memory. After a restart or a reload the pass begins again at the first item.
+This is safe because every action is found again.
 
 #### Order Of Operation Integrity
 The decision to force items which exceed the `leased_deadline` to be re-queued at the tail of the queue
@@ -137,4 +166,4 @@ is preserved while not blocking other items in the queue waiting to be processed
 I consider the Order of Operation problem distinct from the FIFO (First In, First Out) problem. At first glance,
 it might seem that a FIFO solution addresses this issue, but due to the impossibility of achieving Exactly
 One Delivery (EOD), any FIFO system will eventually violate the Order of Operation. Therefore, Querator is
-not currently designed to solve the Order of Operation problem.
+not designed to solve the Order of Operation problem.

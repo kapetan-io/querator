@@ -1,0 +1,10 @@
+#!/bin/sh
+# Turns on .githooks in this clone unless another hooks path is already in effect.
+top=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+[ "$top" = "$(pwd -P)" ] || exit 0
+current=$(git config --get core.hooksPath)
+case "$current" in
+.githooks | ./.githooks | "$top/.githooks") exit 0 ;;
+"") git config core.hooksPath .githooks 2>/dev/null; exit 0 ;;
+esac
+echo "Tiger pre-push hook is off: core.hooksPath is '$current'. Run 'make hooks' to switch to .githooks." >&2

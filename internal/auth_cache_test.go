@@ -87,7 +87,8 @@ func TestAuthCacheCloseRace(t *testing.T) {
 			done.Go(func() {
 				ready.Done()
 				ready.Wait() // wait for all goroutines to be ready before proceeding
-				_, _ = cache.Authenticate(context.Background(), generated.Key)
+				_, err := cache.Authenticate(context.Background(), generated.Key)
+				assert.NoError(t, err)
 			})
 		}
 
@@ -167,7 +168,8 @@ func TestAuthCacheMissUpdateLastUsedFanOut(t *testing.T) {
 		done.Go(func() {
 			ready.Done()
 			ready.Wait()
-			_, _ = cache.Authenticate(context.Background(), generated.Key)
+			_, err := cache.Authenticate(context.Background(), generated.Key)
+			assert.NoError(t, err)
 		})
 	}
 	done.Wait()

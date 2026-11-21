@@ -11,5 +11,8 @@ coverage.html
 docs/notes
 testdata/
 benchmarks/benchmark_results/
-querator
-quickstart
+/querator
+cmd/querator/querator
+/quickstart
+cmd/quickstart/quickstart
+.VSCodeCounter/

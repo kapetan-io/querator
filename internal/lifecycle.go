@@ -3,214 +3,336 @@ package internal
 import (
 	"context"
 
+	"fmt"
+
 	"github.com/dustin/go-humanize"
+	"github.com/kapetan-io/errors"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/tackle/clock"
+	"github.com/kapetan-io/tiger/assert"
 )
 
-// runLifecycle processes lifecycle actions for all partitions that are due
 func (l *Logical) runLifecycle(state *QueueState) {
 	now := l.conf.Clock.Now().UTC()
+	partition := duePartition(state.Partitions, now, func(p *Partition) clock.Time {
+		return p.Lifecycle.NextLifecycleRun
+	})
+	if partition == nil {
+		return
+	}
 
-	for _, partition := range state.Partitions {
-		if partition.Lifecycle.NextLifecycleRun.After(now) {
-			continue
+	if partition.State.Failures != 0 {
+		if !l.recoverPartition(partition, now) {
+			return
 		}
+	}
 
-		if partition.State.Failures != 0 {
-			if !l.recoverPartition(partition, now) {
-				continue
-			}
-		}
+	holdMoves := l.settleUnansweredMove(partition)
 
-		ctx, cancel := context.WithTimeout(context.Background(), l.conf.ReadTimeout)
-		actions, err := l.scanPartitionLifecycle(ctx, partition)
-		cancel()
-		if err != nil {
-			partition.Lifecycle.Failures++
-			retryIn := lifecycleBackOff.Next(partition.Lifecycle.Failures)
-			partition.Lifecycle.NextLifecycleRun = now.Add(retryIn)
-			partition.State.Failures = partition.Lifecycle.Failures
+	pass := &partition.Lifecycle.ActionPass
+	pivot, last := pass.Scan.Pivot, pass.Scan.Last
+	ctx, cancel := context.WithTimeout(context.Background(), l.conf.ReadTimeout)
+	pass.Scan.ResetPage()
+	err := partition.Store.ScanForActions(ctx, &pass.Scan, now)
+	cancel()
+	if err != nil {
+		partition.Lifecycle.Failures++
+		retryIn := lifecycleBackOff.Next(min(partition.Lifecycle.Failures, lifecycleBackOffAttemptLimit))
+		partition.Lifecycle.NextLifecycleRun = now.Add(retryIn)
+		partition.State.Failures = partition.Lifecycle.Failures
+		l.log.Warn("lifecycle scan failed; retrying...",
+			"partition", partition.Info.PartitionNum,
+			"retry", retryIn,
+			"error", err)
+		return
+	}
+	partition.Lifecycle.Failures = 0
 
-			l.log.Warn("lifecycle scan failed; retrying...",
-				"partition", partition.Info.PartitionNum,
-				"retry", retryIn,
-				"error", err)
-			continue
-		}
-		partition.Lifecycle.Failures = 0
-
-		// Batch DLQ actions for manager processing
-		var dlqActions []types.Action
-
-		for _, a := range actions {
-			switch a.Action {
-			case types.ActionLeaseExpired:
-				// Check if max attempts exceeded - route to DLQ or delete
-				if partition.Info.Queue.MaxAttempts != 0 && a.Item.Attempts >= partition.Info.Queue.MaxAttempts {
-					if partition.Info.Queue.DeadQueue != "" {
-						// Route to DLQ via manager
-						a.Action = types.ActionItemMaxAttempts
-						dlqActions = append(dlqActions, a)
-					} else {
-						// No DLQ - delete the item
-						a.Action = types.ActionDeleteItem
-						partition.LifeCycleRequests.Add(&types.LifeCycleRequest{
-							PartitionNum: partition.Info.PartitionNum,
-							Actions:      []types.Action{a},
-						})
-					}
+	var dlqActions []types.Action
+	for _, a := range pass.Scan.Actions {
+		switch a.Action {
+		case types.ActionLeaseExpired:
+			if partition.Info.Queue.MaxAttempts != 0 && a.Item.Attempts >= partition.Info.Queue.MaxAttempts {
+				if partition.Info.Queue.DeadQueue != "" {
+					a.Action = types.ActionItemMaxAttempts
+					dlqActions = append(dlqActions, a)
 				} else {
-					// Normal lease expiry - re-queue item
-					partition.LifeCycleRequests.Add(&types.LifeCycleRequest{
-						PartitionNum: partition.Info.PartitionNum,
-						Actions:      []types.Action{a},
-					})
-				}
-			case types.ActionItemExpired, types.ActionItemMaxAttempts:
-				if partition.Info.Queue.DeadQueue == "" {
 					a.Action = types.ActionDeleteItem
 					partition.LifeCycleRequests.Add(&types.LifeCycleRequest{
 						PartitionNum: partition.Info.PartitionNum,
 						Actions:      []types.Action{a},
 					})
-				} else {
-					// Batch DLQ actions for single manager call
-					dlqActions = append(dlqActions, a)
 				}
-			case types.ActionDeleteItem:
-				partition.LifeCycleRequests.Add(&types.LifeCycleRequest{
-					PartitionNum: partition.Info.PartitionNum,
-					Actions:      []types.Action{a},
-				})
-			case types.ActionQueueScheduledItem:
+			} else {
 				partition.LifeCycleRequests.Add(&types.LifeCycleRequest{
 					PartitionNum: partition.Info.PartitionNum,
 					Actions:      []types.Action{a},
 				})
 			}
-		}
-
-		// Process batched DLQ actions if any
-		if len(dlqActions) > 0 {
-			ctx, cancel := context.WithTimeout(context.Background(), l.conf.WriteTimeout)
-			req := &types.LifeCycleRequest{
-				RequestTimeout:   l.conf.WriteTimeout,
-				PartitionInfo:    partition.Info,
-				PartitionNum:     partition.Info.PartitionNum,
-				Actions:          dlqActions,
-				PartitionStorage: partition.Store,
+		case types.ActionItemExpired, types.ActionItemMaxAttempts:
+			if partition.Info.Queue.DeadQueue == "" {
+				a.Action = types.ActionDeleteItem
+				partition.LifeCycleRequests.Add(&types.LifeCycleRequest{
+					PartitionNum: partition.Info.PartitionNum,
+					Actions:      []types.Action{a},
+				})
+			} else {
+				dlqActions = append(dlqActions, a)
 			}
-			err := l.conf.Manager.LifeCycle(ctx, req)
-			cancel()
-			if err != nil {
-				l.log.Warn("manager lifecycle failed",
-					"partition", partition.Info.PartitionNum,
-					"num_actions", len(dlqActions),
-					"error", err)
-			}
-		}
 
-		// Execute the lifecycle actions against storage
-		if len(partition.LifeCycleRequests.Requests) > 0 {
-			ctx, cancel := context.WithTimeout(context.Background(), l.conf.WriteTimeout)
-			if err := partition.Store.TakeAction(ctx, partition.LifeCycleRequests, &partition.State); err != nil {
-				l.log.Error("while calling store.Partition.TakeAction()",
-					"partition", partition.Info.PartitionNum,
-					"queueName", l.conf.Name,
-					"error", err)
-			}
-			cancel()
-			partition.LifeCycleRequests.Reset()
-		}
-
-		ctx, cancel = context.WithTimeout(context.Background(), l.conf.ReadTimeout)
-		var info types.LifeCycleInfo
-		err = partition.Store.LifeCycleInfo(ctx, &info)
-		cancel()
-		if err != nil {
-			partition.Lifecycle.Failures++
-			retryIn := lifecycleBackOff.Next(partition.Lifecycle.Failures)
-			partition.Lifecycle.NextLifecycleRun = now.Add(retryIn)
-			partition.State.Failures = partition.Lifecycle.Failures
-
-			l.log.Warn("lifecycle info failed; retrying...",
-				"partition", partition.Info.PartitionNum,
-				"retry", retryIn,
-				"error", err)
-			continue
-		}
-
-		// Find the earliest future deadline (lease expiry or item expiry)
-		nextRun := clock.Time{}
-
-		if info.NextLeaseExpiry.After(now) {
-			nextRun = info.NextLeaseExpiry
-		}
-
-		if info.NextExpireDeadline.After(now) {
-			if nextRun.IsZero() || info.NextExpireDeadline.Before(nextRun) {
-				nextRun = info.NextExpireDeadline
-			}
-		}
-
-		if nextRun.IsZero() {
-			partition.Lifecycle.NextLifecycleRun = now.Add(humanize.LongTime)
-		} else {
-			partition.Lifecycle.NextLifecycleRun = nextRun
-		}
-	}
-}
-
-// runScheduled processes scheduled items for all partitions that are due
-func (l *Logical) runScheduled(state *QueueState) {
-	now := l.conf.Clock.Now().UTC()
-
-	for _, partition := range state.Partitions {
-		if partition.Lifecycle.NextScheduledRun.After(now) {
-			continue
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), l.conf.ReadTimeout)
-		actions, err := l.scanPartitionScheduled(ctx, partition)
-		cancel()
-		if err != nil {
-			partition.Lifecycle.Failures++
-			retryIn := lifecycleBackOff.Next(partition.Lifecycle.Failures)
-			partition.Lifecycle.NextScheduledRun = now.Add(retryIn)
-			l.log.Warn("scheduled scan failed; retrying...",
-				"partition", partition.Info.PartitionNum,
-				"retry", retryIn,
-				"error", err)
-			continue
-		}
-		partition.Lifecycle.Failures = 0
-
-		for _, a := range actions {
+		case types.ActionDeleteItem:
 			partition.LifeCycleRequests.Add(&types.LifeCycleRequest{
 				PartitionNum: partition.Info.PartitionNum,
 				Actions:      []types.Action{a},
 			})
+		case types.ActionQueueScheduledItem:
+			partition.LifeCycleRequests.Add(&types.LifeCycleRequest{
+				PartitionNum: partition.Info.PartitionNum,
+				Actions:      []types.Action{a},
+			})
+		default:
+			assert.Unreachable(fmt.Sprintf("undefined action kind '0x%X'", int(a.Action)))
 		}
+	}
 
-		// Execute the scheduled actions against storage
-		if len(partition.LifeCycleRequests.Requests) > 0 {
-			ctx, cancel := context.WithTimeout(context.Background(), l.conf.WriteTimeout)
-			if err := partition.Store.TakeAction(ctx, partition.LifeCycleRequests, &partition.State); err != nil {
-				l.log.Error("while calling store.Partition.TakeAction()",
-					"partition", partition.Info.PartitionNum,
-					"queueName", l.conf.Name,
-					"error", err)
+	if holdMoves && len(dlqActions) > 0 {
+		pass.Unfinished = true
+	}
+
+	if len(dlqActions) > 0 && !pass.Unfinished {
+		ctx, cancel := context.WithTimeout(context.Background(), l.conf.WriteTimeout)
+		req := &types.LifeCycleRequest{
+			RequestTimeout:   l.conf.WriteTimeout,
+			PartitionInfo:    partition.Info,
+			PartitionNum:     partition.Info.PartitionNum,
+			Actions:          dlqActions,
+			PartitionStorage: partition.Store,
+			PartitionState:   &partition.State,
+		}
+		err := l.conf.Manager.LifeCycle(ctx, req)
+		cancel()
+		if errors.Is(err, ErrMoveUnanswered) {
+			partition.Lifecycle.UnansweredMove = req
+			l.wg.Go(func() { l.awaitMoveAnswer(req.HandOff) })
+			pass.Unfinished = true
+		} else if err != nil {
+			if errors.Is(err, ErrMovedItemsKept) {
+				partition.Lifecycle.UnansweredMove = req
 			}
-			cancel()
-			partition.LifeCycleRequests.Reset()
+			pass.Unfinished = true
+			l.log.Warn("manager lifecycle failed",
+				"partition", partition.Info.PartitionNum,
+				"num_actions", len(dlqActions),
+				"error", err)
 		}
+	}
 
-		partition.Lifecycle.NextScheduledRun = now.Add(humanize.LongTime)
+	if len(partition.LifeCycleRequests.Requests) > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), l.conf.WriteTimeout)
+		err := partition.Store.TakeAction(ctx, partition.LifeCycleRequests, &partition.State)
+		cancel()
+		for _, req := range partition.LifeCycleRequests.Requests {
+			for _, a := range req.Actions {
+				if a.Action == types.ActionLeaseExpired {
+					pass.StartNextPassBy(a.Item.ExpireDeadline)
+				}
+			}
+		}
+		if err != nil {
+			partition.LifeCycleRequests.Reset()
+			pass.Scan.Pivot, pass.Scan.Last = pivot, last
+			retryIn := l.backOffUnfinished(partition)
+			partition.Lifecycle.NextLifecycleRun = l.conf.Clock.Now().UTC().Add(retryIn)
+			l.log.Error("while calling store.Partition.TakeAction(); retrying...",
+				"partition", partition.Info.PartitionNum,
+				"queueName", l.conf.Name,
+				"retry", retryIn,
+				"error", err)
+			return
+		}
+		partition.LifeCycleRequests.Reset()
+	}
+
+	pass.StartNextPassBy(pass.Scan.EarliestLeaseDeadline)
+	pass.StartNextPassBy(pass.Scan.EarliestExpireDeadline)
+	if pass.Scan.MidPass() {
+		partition.Lifecycle.NextLifecycleRun = now
+		return
+	}
+
+	next := pass.NextPassAt
+	if pass.Moved {
+		next = now
+	}
+	if pass.Unfinished {
+		next = l.conf.Clock.Now().UTC().Add(l.backOffUnfinished(partition))
+	} else {
+		partition.Lifecycle.UnfinishedRuns = 0
+	}
+	if next.IsZero() {
+		next = now.Add(humanize.LongTime)
+	}
+	partition.Lifecycle.NextLifecycleRun = next
+	pass.End()
+}
+
+func (l *Logical) awaitMoveAnswer(req *types.ProduceRequest) {
+	select {
+	case <-req.ReadyCh:
+	case <-l.untilShutdown.Done():
+		return
+	}
+	select {
+	case l.moveAnswered <- struct{}{}:
+	default:
 	}
 }
 
-// minNextLifecycleRun finds the minimum NextLifecycleRun across all partitions
+func (l *Logical) wakeForAnsweredMoves(state *QueueState) {
+	now := l.conf.Clock.Now().UTC()
+	for _, p := range state.Partitions {
+		if p.Lifecycle.UnansweredMove != nil && now.Before(p.Lifecycle.NextLifecycleRun) {
+			p.Lifecycle.NextLifecycleRun = now
+		}
+	}
+	if state.Paused {
+		return
+	}
+	l.runLifecycle(state)
+	l.assignWaitingRequests(state)
+	state.LifecycleTimer.Reset(l.minNextLifecycleRun(state))
+}
+
+func (l *Logical) settleUnansweredMove(partition *Partition) (holdMoves bool) {
+	req := partition.Lifecycle.UnansweredMove
+	if req == nil {
+		return false
+	}
+	select {
+	case <-req.HandOff.ReadyCh:
+	default:
+		return true
+	}
+	partition.Lifecycle.UnansweredMove = nil
+
+	ctx, cancel := context.WithTimeout(context.Background(), l.conf.WriteTimeout)
+	defer cancel()
+	if err := l.conf.Manager.SettleAnsweredMove(ctx, req); err != nil {
+		if errors.Is(err, ErrMovedItemsKept) {
+			partition.Lifecycle.UnansweredMove = req
+		}
+		l.log.Warn("manager lifecycle failed",
+			"partition", partition.Info.PartitionNum,
+			"num_actions", len(req.Actions),
+			"error", err)
+		return true
+	}
+	return false
+}
+
+func (l *Logical) backOffUnfinished(partition *Partition) clock.Duration {
+	if lifecycleBackOff.Next(partition.Lifecycle.UnfinishedRuns) < lifecycleBackOff.Max {
+		partition.Lifecycle.UnfinishedRuns++
+	}
+	retryIn := lifecycleBackOff.Next(partition.Lifecycle.UnfinishedRuns)
+	l.log.Warn("lifecycle left due work undone; retrying...",
+		"partition", partition.Info.PartitionNum,
+		"retry", retryIn)
+	return retryIn
+}
+
+func (l *Logical) runScheduled(state *QueueState) {
+	now := l.conf.Clock.Now().UTC()
+	partition := duePartition(state.Partitions, now, func(p *Partition) clock.Time {
+		return p.Lifecycle.NextScheduledRun
+	})
+	if partition == nil {
+		return
+	}
+
+	if err := l.enqueueScheduled(partition, now); err != nil {
+		if lifecycleBackOff.Next(partition.Lifecycle.ScheduledFailures) < lifecycleBackOff.Max {
+			partition.Lifecycle.ScheduledFailures++
+		}
+		retryIn := lifecycleBackOff.Next(partition.Lifecycle.ScheduledFailures)
+		partition.Lifecycle.NextScheduledRun = now.Add(retryIn)
+		l.log.Warn("scheduled run failed; retrying...",
+			"partition", partition.Info.PartitionNum,
+			"retry", retryIn,
+			"error", err)
+		return
+	}
+	partition.Lifecycle.ScheduledFailures = 0
+
+	pass := &partition.Lifecycle.ScheduledPass
+	pass.StartNextPassBy(pass.Scan.EarliestEnqueueAt)
+	if pass.Scan.MidPass() {
+		partition.Lifecycle.NextScheduledRun = now
+		return
+	}
+
+	partition.Lifecycle.NextScheduledRun = pass.NextPassAt
+	if pass.NextPassAt.IsZero() {
+		partition.Lifecycle.NextScheduledRun = now.Add(humanize.LongTime)
+	}
+	pass.End()
+}
+
+func (l *Logical) enqueueScheduled(partition *Partition, now clock.Time) error {
+	pass := &partition.Lifecycle.ScheduledPass
+	pivot, last := pass.Scan.Pivot, pass.Scan.Last
+	ctx, cancel := context.WithTimeout(context.Background(), l.conf.ReadTimeout)
+	pass.Scan.ResetPage()
+	err := partition.Store.ScanForScheduled(ctx, &pass.Scan, now)
+	cancel()
+	if err != nil {
+		return fmt.Errorf("scan for scheduled items: %w", err)
+	}
+
+	if len(pass.Scan.Actions) == 0 {
+		return nil
+	}
+
+	batch := types.LifeCycleBatch{Requests: []*types.LifeCycleRequest{{
+		PartitionNum: partition.Info.PartitionNum,
+		Actions:      pass.Scan.Actions,
+	}}}
+	ctx, cancel = context.WithTimeout(context.Background(), l.conf.WriteTimeout)
+	err = partition.Store.TakeAction(ctx, batch, &partition.State)
+	cancel()
+	for _, a := range pass.Scan.Actions {
+		partition.Lifecycle.RunLifecycleBy(a.Item.ExpireDeadline)
+	}
+	if err != nil {
+		pass.Scan.Pivot, pass.Scan.Last = pivot, last
+		return fmt.Errorf("enqueue scheduled items: %w", err)
+	}
+	return nil
+}
+
+func (l *Logical) timedRunDue(state *QueueState) bool {
+	now := l.conf.Clock.Now().UTC()
+	for _, p := range state.Partitions {
+		if p.Lifecycle.RunDue(now) {
+			return true
+		}
+	}
+	return false
+}
+
+func duePartition(partitions []*Partition, now clock.Time, nextRun func(*Partition) clock.Time) *Partition {
+	var due *Partition
+	for _, p := range partitions {
+		if nextRun(p).After(now) {
+			continue
+		}
+		if due == nil || nextRun(p).Before(nextRun(due)) {
+			due = p
+		}
+	}
+	return due
+}
+
 func (l *Logical) minNextLifecycleRun(state *QueueState) clock.Duration {
 	now := l.conf.Clock.Now().UTC()
 	var minTime clock.Time
@@ -232,7 +354,6 @@ func (l *Logical) minNextLifecycleRun(state *QueueState) clock.Duration {
 	return minTime.Sub(now)
 }
 
-// minNextScheduledRun finds the minimum NextScheduledRun across all partitions
 func (l *Logical) minNextScheduledRun(state *QueueState) clock.Duration {
 	now := l.conf.Clock.Now().UTC()
 	var minTime clock.Time
@@ -254,7 +375,6 @@ func (l *Logical) minNextScheduledRun(state *QueueState) clock.Duration {
 	return minTime.Sub(now)
 }
 
-// recoverPartition attempts to recover a failed partition
 func (l *Logical) recoverPartition(partition *Partition, now clock.Time) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), l.conf.ReadTimeout)
 	var stats types.PartitionStats
@@ -262,7 +382,7 @@ func (l *Logical) recoverPartition(partition *Partition, now clock.Time) bool {
 
 	if err := partition.Store.Stats(ctx, &stats, now); err != nil {
 		partition.Lifecycle.Failures++
-		retryIn := lifecycleBackOff.Next(partition.Lifecycle.Failures)
+		retryIn := lifecycleBackOff.Next(min(partition.Lifecycle.Failures, lifecycleBackOffAttemptLimit))
 		partition.Lifecycle.NextLifecycleRun = now.Add(retryIn)
 		partition.State.Failures = partition.Lifecycle.Failures
 
@@ -274,6 +394,8 @@ func (l *Logical) recoverPartition(partition *Partition, now clock.Time) bool {
 	}
 
 	if stats.Total-stats.NumLeased < 0 {
+		partition.Lifecycle.Failures++
+		partition.Lifecycle.NextLifecycleRun = now.Add(lifecycleBackOff.Next(min(partition.Lifecycle.Failures, lifecycleBackOffAttemptLimit)))
 		l.log.Error("assertion failed; total count of items in the partition "+
 			"cannot be more than the total leased count",
 			"partition", partition.Info.PartitionNum,
@@ -282,7 +404,6 @@ func (l *Logical) recoverPartition(partition *Partition, now clock.Time) bool {
 		return false
 	}
 
-	partition.Lifecycle.Failures = 0
 	partition.State.Failures = 0
 	partition.State.UnLeased = stats.Total - stats.NumLeased
 	partition.State.NumLeased = stats.NumLeased
@@ -292,34 +413,4 @@ func (l *Logical) recoverPartition(partition *Partition, now clock.Time) bool {
 		"unleased", partition.State.UnLeased,
 		"leased", partition.State.NumLeased)
 	return true
-}
-
-// scanPartitionLifecycle scans a partition for lifecycle actions
-func (l *Logical) scanPartitionLifecycle(ctx context.Context, partition *Partition) ([]types.Action, error) {
-	now := l.conf.Clock.Now().UTC()
-	actions := make([]types.Action, 0, 1_000)
-
-	for a, err := range partition.Store.ScanForActions(ctx, now) {
-		if err != nil {
-			return actions, err
-		}
-		actions = append(actions, a)
-	}
-
-	return actions, nil
-}
-
-// scanPartitionScheduled scans a partition for scheduled items
-func (l *Logical) scanPartitionScheduled(ctx context.Context, partition *Partition) ([]types.Action, error) {
-	now := l.conf.Clock.Now().UTC()
-	actions := make([]types.Action, 0, 1_000)
-
-	for a, err := range partition.Store.ScanForScheduled(ctx, now) {
-		if err != nil {
-			return actions, err
-		}
-		actions = append(actions, a)
-	}
-
-	return actions, nil
 }

@@ -1,19 +1,28 @@
 package daemon_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/gob"
+	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/dgraph-io/badger/v4"
+	"github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/daemon"
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
+	pb "github.com/kapetan-io/querator/proto"
+	"github.com/kapetan-io/tackle/clock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestReadConfigErrs(t *testing.T) {
@@ -215,6 +224,39 @@ func TestApplyConfigFileErrs(t *testing.T) {
 			},
 			expectedErr: "invalid partition storage; queue 'test-queue' references 'non-existent' which is undefined",
 		},
+		{
+			name: "QueueRequestsMoreThanMaxPartitions",
+			file: daemon.File{
+				PartitionStorage: []daemon.PartitionStorage{
+					{Name: "test", Memory: &daemon.MemoryConfig{}, Affinity: 1},
+				},
+				Queues: []daemon.Queue{
+					{Name: "test-queue", RequestedPartitions: 1_025},
+				},
+			},
+			expectedErr: "invalid queue 'test-queue'; partitions is invalid; cannot be greater than 1024",
+		},
+		{
+			name: "AuthWithoutStorage",
+			file: daemon.File{Auth: &daemon.AuthConfig{}},
+			expectedErr: "invalid auth; 'storage' is required and must be one of (memory, badger); " +
+				"it holds namespaces, users, roles, role bindings and API keys",
+		},
+		{
+			name: "AuthWithTwoStorages",
+			file: daemon.File{Auth: &daemon.AuthConfig{Storage: daemon.AuthStorage{
+				Memory: &daemon.MemoryConfig{},
+				Badger: &daemon.BadgerConfig{StorageDir: "/tmp"},
+			}}},
+			expectedErr: "invalid auth; 'storage' defines multiple backends; only one of (memory, badger) is allowed",
+		},
+		{
+			name: "AuthBadgerWithoutStorageDir",
+			file: daemon.File{Auth: &daemon.AuthConfig{Storage: daemon.AuthStorage{
+				Badger: &daemon.BadgerConfig{},
+			}}},
+			expectedErr: "invalid auth storage; badger: 'storage-dir' is required",
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			conf := &daemon.Config{}
@@ -336,6 +378,161 @@ queues:
 	assert.Equal(t, "mem-00", info.PartitionInfo[0].StorageName)
 }
 
+func TestConfigQueuesAreListed(t *testing.T) {
+	ctx := context.Background()
+	file, err := daemon.ReadConfig(strings.NewReader(`
+partition-storage:
+  - name: mem-00
+    memory: {}
+    affinity: 1
+queue-storage:
+  memory: {}
+queues:
+  - name: from-config
+    requested-partitions: 1
+    lease-timeout: 1m
+    expire-timeout: 1h
+`))
+	require.NoError(t, err)
+
+	conf := daemon.Config{InMemoryListener: true}
+	require.NoError(t, daemon.ApplyConfigFile(ctx, &conf, file, io.Discard))
+	d, err := daemon.NewDaemon(ctx, conf)
+	require.NoError(t, err)
+	defer func() { _ = d.Shutdown(ctx) }()
+
+	c := d.MustClient()
+	require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+		QueueName:           "from-api",
+		LeaseTimeout:        "1m",
+		ExpireTimeout:       "1h",
+		RequestedPartitions: 1,
+	}))
+
+	var list pb.QueuesListResponse
+	require.NoError(t, c.QueuesList(ctx, &list, nil))
+	names := make([]string, 0, len(list.Items))
+	for _, item := range list.Items {
+		names = append(names, item.QueueName)
+	}
+	assert.ElementsMatch(t, []string{"from-config", "from-api"}, names)
+}
+
+func TestQueuesStoredWithoutNamespaceBehaveAsSystem(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	start := func(t *testing.T, queues string) *daemon.Daemon {
+		file, err := daemon.ReadConfig(strings.NewReader(fmt.Sprintf(`
+partition-storage:
+  - name: badger-00
+    affinity: 1
+    badger:
+      storage-dir: %[1]s/partitions
+queue-storage:
+  badger:
+    storage-dir: %[1]s/queues
+queues:
+%[2]s`, dir, queues)))
+		require.NoError(t, err)
+		conf := daemon.Config{InMemoryListener: true}
+		require.NoError(t, daemon.ApplyConfigFile(ctx, &conf, file, io.Discard))
+		d, err := daemon.NewDaemon(ctx, conf)
+		require.NoError(t, err)
+		return d
+	}
+	const both = `  - name: from-config
+    requested-partitions: 1
+    lease-timeout: 1m
+    expire-timeout: 1h
+  - name: removed-from-config
+    requested-partitions: 1
+    lease-timeout: 1m
+    expire-timeout: 1h
+`
+	const one = `  - name: from-config
+    requested-partitions: 1
+    lease-timeout: 1m
+    expire-timeout: 1h
+`
+
+	d := start(t, both)
+	c := d.MustClient()
+	require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+		QueueName:      "from-config",
+		RequestTimeout: "5s",
+		Items: []*pb.QueueProduceItem{
+			{Bytes: []byte("leased")},
+			{Bytes: []byte("unleased")},
+			{Bytes: []byte("scheduled"), EnqueueAt: timestamppb.New(clock.Now().UTC().Add(time.Hour))},
+		},
+	}))
+	var leased pb.QueueLeaseResponse
+	require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+		QueueName: "from-config", ClientId: "client-1", BatchSize: 1, RequestTimeout: "1s",
+	}, &leased))
+	require.Len(t, leased.Items, 1)
+	assert.Equal(t, []byte("leased"), leased.Items[0].Bytes)
+	require.NoError(t, d.Shutdown(ctx))
+
+	// Rewrite every stored queue into the shape an earlier version saved, with no namespace.
+	db, err := badger.Open(badger.DefaultOptions(dir + "/queues/~queue-storage-partition").WithLogger(nil))
+	require.NoError(t, err)
+	require.NoError(t, db.Update(func(txn *badger.Txn) error {
+		for _, name := range []string{"from-config", "removed-from-config"} {
+			found, err := txn.Get([]byte(name))
+			require.NoError(t, err)
+			var info types.QueueInfo
+			require.NoError(t, found.Value(func(v []byte) error {
+				return gob.NewDecoder(bytes.NewReader(v)).Decode(&info)
+			}))
+			assert.Equal(t, "_system", info.Namespace)
+			info.Namespace = ""
+			var buf bytes.Buffer
+			require.NoError(t, gob.NewEncoder(&buf).Encode(info))
+			require.NoError(t, txn.Set([]byte(name), buf.Bytes()))
+		}
+		return nil
+	}))
+	require.NoError(t, db.Close())
+
+	for run := range 2 {
+		d = start(t, one)
+		c = d.MustClient()
+
+		var list pb.QueuesListResponse
+		require.NoError(t, c.QueuesList(ctx, &list, nil))
+		names := make([]string, 0, len(list.Items))
+		for _, item := range list.Items {
+			names = append(names, item.QueueName)
+		}
+		assert.ElementsMatch(t, []string{"from-config", "removed-from-config"}, names)
+
+		for _, name := range names {
+			var info pb.QueueInfo
+			require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: name}, &info))
+			assert.Equal(t, "_system", info.Namespace)
+		}
+
+		if run == 0 {
+			var lease pb.QueueLeaseResponse
+			require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+				QueueName: "from-config", ClientId: "client-2", BatchSize: 10, RequestTimeout: "1s",
+			}, &lease))
+			require.Len(t, lease.Items, 1)
+			assert.Equal(t, []byte("unleased"), lease.Items[0].Bytes)
+
+			// An update must not move a queue into another namespace.
+			require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
+				QueueName: "removed-from-config", Namespace: "other", LeaseTimeout: "2m", ExpireTimeout: "1h",
+			}))
+			var other pb.QueuesListResponse
+			require.NoError(t, c.QueuesList(ctx, &other, &querator.ListOptions{Namespace: "other"}))
+			assert.Empty(t, other.Items)
+		}
+		require.NoError(t, d.Shutdown(ctx))
+	}
+}
+
 func TestBadgerConfig(t *testing.T) {
 	badgerConfig := `
 partition-storage:
@@ -432,4 +629,156 @@ queue-storage:
 	// sets the cap. An unset value here would let one path override the other's pool size.
 	assert.Equal(t, int32(25), queueConfig.MaxConns)
 	assert.Equal(t, 250, queueConfig.ScanBatchSize)
+}
+
+func TestApplyConfigFilePlacesUnlistedPartitions(t *testing.T) {
+	ctx := context.Background()
+	apply := func(t *testing.T, queue daemon.Queue) types.QueueInfo {
+		t.Helper()
+		conf := &daemon.Config{}
+		require.NoError(t, daemon.ApplyConfigFile(ctx, conf, daemon.File{
+			PartitionStorage: []daemon.PartitionStorage{
+				{Name: "mem-00", Memory: &daemon.MemoryConfig{}, Affinity: 1},
+				{Name: "mem-01", Memory: &daemon.MemoryConfig{}, Affinity: 3},
+				{Name: "mem-02", Memory: &daemon.MemoryConfig{}, Affinity: 0},
+			},
+			QueueStorage: daemon.QueueStorage{Memory: &daemon.MemoryConfig{}},
+			Queues:       []daemon.Queue{queue},
+		}, io.Discard))
+
+		var info types.QueueInfo
+		require.NoError(t, conf.Service.StorageConfig.Queues.Get(ctx, queue.Name, &info))
+		return info
+	}
+
+	t.Run("PlacedByAffinity", func(t *testing.T) {
+		info := apply(t, daemon.Queue{
+			Name: "queue-1", RequestedPartitions: 4,
+			LeaseTimeout: time.Minute, ExpireTimeout: time.Hour,
+		})
+
+		require.Len(t, info.PartitionInfo, 4)
+		counts := map[string]int{}
+		for idx, p := range info.PartitionInfo {
+			counts[p.StorageName]++
+			assert.Equal(t, idx, p.PartitionNum)
+			assert.Equal(t, "queue-1", p.Queue.Name)
+		}
+		assert.Equal(t, map[string]int{"mem-00": 1, "mem-01": 3}, counts)
+	})
+
+	t.Run("ListedPartitionsKeptAsIs", func(t *testing.T) {
+		info := apply(t, daemon.Queue{
+			Name: "queue-2", RequestedPartitions: 20,
+			LeaseTimeout: time.Minute, ExpireTimeout: time.Hour,
+			Partitions: []daemon.Partition{{Partition: 0, StorageName: "mem-02"}},
+		})
+
+		require.Len(t, info.PartitionInfo, 1)
+		assert.Equal(t, "mem-02", info.PartitionInfo[0].StorageName)
+	})
+}
+
+func TestAffinityFromYAML(t *testing.T) {
+	ctx := context.Background()
+	const template = `
+partition-storage:
+  - name: mem-00
+    memory: {}
+    affinity: %s
+  - name: mem-01
+    memory: {}
+    affinity: %s
+queue-storage:
+  memory: {}
+queues:
+  - name: queue-1
+    requested-partitions: 4
+    lease-timeout: 1m
+    expire-timeout: 1h
+`
+	// Loads the YAML into a running daemon and reads each partition's backend from /queues.info.
+	spread := func(t *testing.T, first, second string) (map[string]int, error) {
+		t.Helper()
+		file, err := daemon.ReadConfig(strings.NewReader(fmt.Sprintf(template, first, second)))
+		require.NoError(t, err)
+		conf := daemon.Config{InMemoryListener: true}
+		if err := daemon.ApplyConfigFile(ctx, &conf, file, io.Discard); err != nil {
+			return nil, err
+		}
+		d, err := daemon.NewDaemon(ctx, conf)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = d.Shutdown(ctx) }()
+
+		var info pb.QueueInfo
+		require.NoError(t, d.MustClient().QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: "queue-1"}, &info))
+		counts := map[string]int{}
+		for _, p := range info.Partitions {
+			counts[p.StorageName]++
+		}
+		return counts, nil
+	}
+
+	for _, test := range []struct {
+		name     string
+		first    string
+		second   string
+		expected map[string]int
+	}{
+		{name: "Fractions", first: "0.5", second: "1.5", expected: map[string]int{"mem-00": 1, "mem-01": 3}},
+		{name: "WholeNumbers", first: "1", second: "3", expected: map[string]int{"mem-00": 1, "mem-01": 3}},
+		{name: "Zero", first: "0", second: "1", expected: map[string]int{"mem-01": 4}},
+		{name: "Negative", first: "-1", second: "1", expected: map[string]int{"mem-01": 4}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			counts, err := spread(t, test.first, test.second)
+			require.NoError(t, err)
+			assert.Equal(t, test.expected, counts)
+		})
+	}
+
+	for _, test := range []struct {
+		name  string
+		value string
+	}{
+		{name: "NaN", value: ".nan"},
+		{name: "PositiveInfinity", value: ".inf"},
+		{name: "NegativeInfinity", value: "-.inf"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := spread(t, "1", test.value)
+			require.ErrorContains(t, err, "partition storage 'mem-01' affinity must be a finite number")
+		})
+	}
+}
+
+func TestDaemonRefusesUnusableAffinity(t *testing.T) {
+	ctx := context.Background()
+	for _, test := range []struct {
+		name       string
+		affinities []float64
+		wantErr    string
+	}{
+		{name: "NaN", affinities: []float64{1, math.NaN()}, wantErr: "partition storage 'mem-01' affinity must be a finite number"},
+		{name: "PositiveInfinity", affinities: []float64{math.Inf(1), math.Inf(1)}, wantErr: "partition storage 'mem-00' affinity must be a finite number"},
+		{name: "NegativeInfinity", affinities: []float64{1, math.Inf(-1)}, wantErr: "partition storage 'mem-01' affinity must be a finite number"},
+		{name: "SumOverflows", affinities: []float64{1e308, 1e308, 1}, wantErr: "sum of partition storage affinities is too large"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			conf := daemon.Config{InMemoryListener: true}
+			conf.Service.StorageConfig.Queues = store.NewMemoryQueues(slog.Default())
+			for i, affinity := range test.affinities {
+				conf.Service.StorageConfig.PartitionStorage = append(conf.Service.StorageConfig.PartitionStorage,
+					store.PartitionStorage{
+						Name:           fmt.Sprintf("mem-%02d", i),
+						Affinity:       affinity,
+						PartitionStore: store.NewMemoryPartitionStore(store.Config{}, slog.Default()),
+					})
+			}
+			_, err := daemon.NewDaemon(ctx, conf)
+			require.ErrorContains(t, err, test.wantErr)
+		})
+	}
 }

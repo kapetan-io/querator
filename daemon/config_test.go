@@ -507,6 +507,12 @@ queues:
 		}
 		assert.ElementsMatch(t, []string{"from-config", "removed-from-config"}, names)
 
+		for _, name := range names {
+			var info pb.QueueInfo
+			require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: name}, &info))
+			assert.Equal(t, "_system", info.Namespace)
+		}
+
 		if run == 0 {
 			var lease pb.QueueLeaseResponse
 			require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{

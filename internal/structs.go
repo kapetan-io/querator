@@ -21,6 +21,7 @@ type PartitionLifecycleState struct {
 	Failures          int
 	UnfinishedRuns    int
 	ScheduledFailures int
+	UnansweredMove    *types.LifeCycleRequest
 }
 
 func (s *PartitionLifecycleState) RunLifecycleBy(deadline clock.Time) bool {

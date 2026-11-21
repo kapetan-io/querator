@@ -601,8 +601,10 @@ func (p *MongoPartition) Produce(ctx context.Context, batch types.ProduceBatch, 
 	coll := p.collection(client)
 	var docs []interface{}
 	seen := make(map[string]struct{})
+	placed := make([][]int, len(batch.Requests))
 
 	for i := range batch.Requests {
+		batch.Requests[i].Stored = 0
 		for _, item := range batch.Requests[i].Items {
 			item.ID = []byte(p.nextID())
 			item.CreatedAt = now
@@ -623,6 +625,7 @@ func (p *MongoPartition) Produce(ctx context.Context, batch types.ProduceBatch, 
 			if item.SourceID != nil {
 				sid := string(item.SourceID)
 				if _, ok := seen[sid]; ok {
+					placed[i] = append(placed[i], -1)
 					continue
 				}
 				seen[sid] = struct{}{}
@@ -631,10 +634,12 @@ func (p *MongoPartition) Produce(ctx context.Context, batch types.ProduceBatch, 
 					return err
 				}
 				if exists {
+					placed[i] = append(placed[i], -1)
 					continue
 				}
 			}
 
+			placed[i] = append(placed[i], len(docs))
 			docs = append(docs, itemToDoc(string(item.ID), item))
 		}
 	}
@@ -643,10 +648,26 @@ func (p *MongoPartition) Produce(ctx context.Context, batch types.ProduceBatch, 
 		return nil
 	}
 
-	if _, err := coll.InsertMany(ctx, docs, options.InsertMany().SetOrdered(false)); err != nil {
-		return errors.Errorf("failed to insert items: %w", err)
+	_, err = coll.InsertMany(ctx, docs, options.InsertMany().SetOrdered(true))
+	if err == nil {
+		return nil
 	}
-	return nil
+	var bulk mongo.BulkWriteException
+	if errors.As(err, &bulk) && len(bulk.WriteErrors) != 0 {
+		failed := bulk.WriteErrors[0].Index
+		for _, e := range bulk.WriteErrors {
+			failed = min(failed, e.Index)
+		}
+		for i, r := range batch.Requests {
+			for _, doc := range placed[i] {
+				if doc >= failed {
+					break
+				}
+				r.Stored++
+			}
+		}
+	}
+	return errors.Errorf("failed to insert items: %w", err)
 }
 
 func (p *MongoPartition) sourceIDExists(ctx context.Context, coll *mongo.Collection, sourceID string) (bool, error) {

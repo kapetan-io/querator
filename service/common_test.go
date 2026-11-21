@@ -909,6 +909,9 @@ type partitionFault struct {
 	// statsCancelled hands each Stats call a context that is already cancelled, the way a caller
 	// that gave up does.
 	statsCancelled atomic.Bool
+	// statsCancelNext holds how many of the next Stats calls get an already cancelled context. Each
+	// call takes one, so later calls, such as a recovery scan, reach the backend untouched.
+	statsCancelNext atomic.Int32
 	// statsCancelAfter, when above zero, cancels each Stats call's context that long after the call
 	// starts, the way a caller that gives up partway through a scan does.
 	statsCancelAfter atomic.Int64
@@ -1012,6 +1015,14 @@ func (f faultyPartition) Clear(ctx context.Context, req types.ClearRequest) erro
 
 var errScanFailed = errors.New("injected lifecycle scan failure")
 
+func (f *partitionFault) takeStatsCancelNext() bool {
+	if f.statsCancelNext.Add(-1) >= 0 {
+		return true
+	}
+	f.statsCancelNext.Add(1)
+	return false
+}
+
 func (f faultyPartition) Stats(ctx context.Context, stats *types.PartitionStats, now clock.Time) error {
 	if _, ok := ctx.Deadline(); ok && f.fault.statsHung.Load() {
 		<-ctx.Done()
@@ -1027,7 +1038,7 @@ func (f faultyPartition) Stats(ctx context.Context, stats *types.PartitionStats,
 		defer timer.Stop()
 		return f.Partition.Stats(cancellable, stats, now)
 	}
-	if f.fault.statsCancelled.Load() {
+	if f.fault.statsCancelled.Load() || f.fault.takeStatsCancelNext() {
 		cancelled, cancel := context.WithCancel(ctx)
 		cancel()
 		return f.Partition.Stats(cancelled, stats, now)

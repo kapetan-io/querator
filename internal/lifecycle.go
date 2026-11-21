@@ -2,7 +2,6 @@ package internal
 
 import (
 	"context"
-
 	"fmt"
 
 	"github.com/dustin/go-humanize"
@@ -79,7 +78,6 @@ func (l *Logical) runLifecycle(state *QueueState) {
 			} else {
 				dlqActions = append(dlqActions, a)
 			}
-
 		case types.ActionDeleteItem:
 			partition.LifeCycleRequests.Add(&types.LifeCycleRequest{
 				PartitionNum: partition.Info.PartitionNum,
@@ -385,7 +383,6 @@ func (l *Logical) recoverPartition(partition *Partition, now clock.Time) bool {
 		retryIn := lifecycleBackOff.Next(min(partition.Lifecycle.Failures, lifecycleBackOffAttemptLimit))
 		partition.Lifecycle.NextLifecycleRun = now.Add(retryIn)
 		partition.State.Failures = partition.Lifecycle.Failures
-
 		l.log.Warn("recover partition attempt failed; retrying...",
 			"partition", partition.Info.PartitionNum,
 			"retry", retryIn,
@@ -407,7 +404,6 @@ func (l *Logical) recoverPartition(partition *Partition, now clock.Time) bool {
 	partition.State.Failures = 0
 	partition.State.UnLeased = stats.Total - stats.NumLeased
 	partition.State.NumLeased = stats.NumLeased
-
 	l.log.Info("partition recovered",
 		"partition", partition.Info.PartitionNum,
 		"unleased", partition.State.UnLeased,

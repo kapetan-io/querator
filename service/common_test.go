@@ -534,12 +534,8 @@ func storageItemFieldsOf(item *pb.StorageItem) storageItemFields {
 
 //nolint:unparam // conf param kept for consistency with other setup functions
 func setupMemoryStorage(conf store.Config) store.Config {
-	conf.Namespaces = store.NewMemoryNamespaces(log)
+	conf = withMemoryAuth(conf)
 	conf.Queues = store.NewMemoryQueues(log)
-	conf.Users = store.NewMemoryUsers(log)
-	conf.APIKeys = store.NewMemoryAPIKeys(log)
-	conf.Roles = store.NewMemoryRoles(log)
-	conf.RoleBindings = store.NewMemoryRoleBindings(log)
 	conf.PartitionStorage = []store.PartitionStorage{
 		{
 			PartitionStore: store.NewMemoryPartitionStore(conf, log),
@@ -547,6 +543,15 @@ func setupMemoryStorage(conf store.Config) store.Config {
 			Affinity:       1,
 		},
 	}
+	return conf
+}
+
+func withMemoryAuth(conf store.Config) store.Config {
+	conf.Namespaces = store.NewMemoryNamespaces(log)
+	conf.Users = store.NewMemoryUsers(log)
+	conf.APIKeys = store.NewMemoryAPIKeys(log)
+	conf.Roles = store.NewMemoryRoles(log)
+	conf.RoleBindings = store.NewMemoryRoleBindings(log)
 	return conf
 }
 

@@ -11,6 +11,7 @@ import (
 
 	"github.com/kapetan-io/errors"
 	"github.com/kapetan-io/querator/internal/types"
+	"github.com/kapetan-io/querator/transport/auth"
 	"github.com/kapetan-io/querator/transport/reply"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/set"
@@ -422,8 +423,16 @@ func (q *MongoQueues) List(ctx context.Context, queues *[]types.QueueInfo, opts 
 		pivot = string(opts.Pivot)
 	}
 
-	cur, err := q.collection(client).Find(ctx,
-		bson.M{"_id": bson.M{"$gte": pivot}},
+	filter := bson.M{"_id": bson.M{"$gte": pivot}}
+	switch opts.Namespace {
+	case "":
+	case auth.SystemNamespace:
+		filter["namespace"] = bson.M{"$in": bson.A{auth.SystemNamespace, "", nil}}
+	default:
+		filter["namespace"] = opts.Namespace
+	}
+
+	cur, err := q.collection(client).Find(ctx, filter,
 		options.Find().SetSort(bson.D{{Key: "_id", Value: 1}}).SetLimit(int64(opts.Limit)))
 	if err != nil {
 		return errors.Errorf("query queues: %w", err)
@@ -441,9 +450,6 @@ func (q *MongoQueues) List(ctx context.Context, queues *[]types.QueueInfo, opts 
 			return err
 		}
 
-		if opts.Namespace != "" && info.Namespace != opts.Namespace {
-			continue
-		}
 		*queues = append(*queues, info)
 	}
 	if err := ctx.Err(); err != nil {

@@ -980,6 +980,12 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		}()
 		c, ctx := d.MustClient(), d.Context()
 
+		// The last queue in the chain has no dead_queue and one partition, so it updates
+		require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
+			QueueName: queueC,
+			Reference: new("tail"),
+		}))
+
 		err := c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
 			QueueName: queueB,
 			DeadQueue: new(queueC),
@@ -1125,6 +1131,73 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		var info pb.QueueInfo
 		require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: stored}, &info))
 		assert.Equal(t, "", info.DeadQueue)
+		assert.Equal(t, "owner", info.Reference)
+	})
+
+	t.Run("StoredDeadQueueWithPartitions", func(t *testing.T) {
+		conf := setup()
+		dead := random.String("dead-", 10)
+		source1 := random.String("source1-", 10)
+		source2 := random.String("source2-", 10)
+		other := random.String("other-", 10)
+
+		// The API refuses a dead_queue with more than one partition, so these queues are
+		// written to storage before the daemon starts, as the config file would leave them
+		for _, queue := range []struct {
+			name, dead string
+			partitions int
+		}{{dead, "", 2}, {other, "", 1}, {source1, dead, 1}, {source2, dead, 1}} {
+			info := types.QueueInfo{
+				Name:                queue.name,
+				DeadQueue:           queue.dead,
+				LeaseTimeout:        clock.Minute,
+				ExpireTimeout:       10 * clock.Minute,
+				RequestedPartitions: queue.partitions,
+			}
+			placed, err := store.PlacePartitions(conf.PartitionStorage, info)
+			require.NoError(t, err)
+			info.PartitionInfo = placed
+			require.NoError(t, conf.Queues.Add(context.Background(), info))
+		}
+
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+		c, ctx := d.MustClient(), d.Context()
+
+		for _, name := range []string{source1, dead} {
+			err := c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
+				QueueName: name,
+				Reference: new("owner"),
+			})
+			require.Error(t, err)
+			var duhErr duh.Error
+			require.True(t, errors.As(err, &duhErr))
+			assert.Equal(t, duh.CodeBadRequest, duhErr.Code())
+			assert.Contains(t, duhErr.Message(), "must have a single partition")
+		}
+
+		require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
+			QueueName: source1,
+			DeadQueue: new(""),
+		}))
+		require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
+			QueueName: source2,
+			DeadQueue: new(other),
+		}))
+		require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
+			QueueName: dead,
+			Reference: new("owner"),
+		}))
+
+		var info pb.QueueInfo
+		require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: source1}, &info))
+		assert.Equal(t, "", info.DeadQueue)
+		require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: source2}, &info))
+		assert.Equal(t, other, info.DeadQueue)
+		require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: dead}, &info))
 		assert.Equal(t, "owner", info.Reference)
 	})
 
@@ -1631,6 +1704,15 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					Code: duh.CodeBadRequest,
 				},
 				{
+					Name: "InvalidNamespace",
+					Req: &pb.QueuesUpdateRequest{
+						QueueName: queueName,
+						Namespace: "invalid~namespace",
+					},
+					Msg:  "namespace name is invalid; 'invalid~namespace' cannot contain '~' character",
+					Code: duh.CodeBadRequest,
+				},
+				{
 					Name: "ReferenceMaxLength",
 					Req: &pb.QueuesUpdateRequest{
 						QueueName: queueName,
@@ -2006,6 +2088,16 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &info))
 			assert.Equal(t, dlqName, info.DeadQueue)
 			assert.Len(t, info.Partitions, 1)
+
+			post(`{"queue_name":"` + queueName + `","dead_queue":null,"max_attempts":null,"reference":null,` +
+				`"lease_timeout":"0s","expire_timeout":"","requested_partitions":0}`)
+			require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &info))
+			assert.Equal(t, "2m0s", info.LeaseTimeout)
+			assert.Equal(t, ExpireTimeout, info.ExpireTimeout)
+			assert.Equal(t, dlqName, info.DeadQueue)
+			assert.Equal(t, int32(7), info.MaxAttempts)
+			assert.Equal(t, "owner-1", info.Reference)
+			assert.Equal(t, int32(1), info.RequestedPartitions)
 
 			post(`{"queue_name":"` + queueName + `","dead_queue":"","max_attempts":0,"reference":""}`)
 			require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &info))

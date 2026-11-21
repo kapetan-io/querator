@@ -213,6 +213,12 @@ func (s *Service) validateQueueUpdateProto(in *proto.QueuesUpdateRequest, out *t
 		return err
 	}
 
+	if in.Namespace != "" {
+		if err := validateNamespaceName(in.Namespace); err != nil {
+			return err
+		}
+	}
+
 	out.RequestedPartitions = int(in.RequestedPartitions)
 	if in.MaxAttempts != nil {
 		out.MaxAttempts = new(int(*in.MaxAttempts))

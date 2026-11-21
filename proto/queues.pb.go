@@ -258,8 +258,8 @@ func (x *QueuesInfoRequest) GetQueueName() string {
 }
 
 // QueuesUpdateRequest changes the settings of an existing queue. A setting the request leaves
-// out keeps its current value. `dead_queue`, `reference` and `max_attempts` can be cleared by
-// sending them explicitly: `"dead_queue": ""` removes the dead letter queue, `"reference": ""`
+// out, or sends as JSON `null`, keeps its current value. `dead_queue`, `reference` and
+// `max_attempts` can be cleared by sending them explicitly: `"dead_queue": ""` removes the dead letter queue, `"reference": ""`
 // removes the reference and `"max_attempts": 0` allows unlimited attempts.
 //
 // Its field numbers match QueueInfo, so a QueueInfo sent here decodes. Binary protobuf never
@@ -278,11 +278,11 @@ type QueuesUpdateRequest struct {
 	// A user supplied field which could contain metadata or specify who owns this queue.
 	// Left out, the current reference is kept. An empty string removes it.
 	Reference *string `protobuf:"bytes,5,opt,name=reference,proto3,oneof" json:"reference,omitempty"`
-	// The lease timeout for this queue. Left out or empty, the current lease timeout is kept.
+	// The lease timeout for this queue. Left out, empty or '0s', the current lease timeout is kept.
 	// Example: '60m', '24h', '10s'
 	LeaseTimeout string `protobuf:"bytes,6,opt,name=leaseTimeout,json=lease_timeout,proto3" json:"leaseTimeout,omitempty"`
 	// How long the item can wait in the queue regardless of attempts before it is moved
-	// to the dead letter queue. Left out or empty, the current expire timeout is kept.
+	// to the dead letter queue. Left out, empty or '0s', the current expire timeout is kept.
 	// Example: '24h', '60m', '10s'
 	ExpireTimeout string `protobuf:"bytes,7,opt,name=expireTimeout,json=expire_timeout,proto3" json:"expireTimeout,omitempty"`
 	// The maximum number of times an item can be retried by a consumer before it is placed in
@@ -292,7 +292,7 @@ type QueuesUpdateRequest struct {
 	// The number of partitions the queue is requesting. Left out or '0', the current count is kept.
 	RequestedPartitions int32 `protobuf:"varint,9,opt,name=requestedPartitions,json=requested_partitions,proto3" json:"requestedPartitions,omitempty"`
 	// The fields below are accepted so a JSON body copied from '/queues.info' is not refused as
-	// having unknown fields. All four are ignored on update.
+	// having unknown fields. All four are ignored on update, but a malformed namespace is refused.
 	CreatedAt  *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=createdAt,json=created_at,proto3" json:"createdAt,omitempty"`
 	UpdatedAt  *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=updatedAt,json=updated_at,proto3" json:"updatedAt,omitempty"`
 	Partitions []*PartitionInfo       `protobuf:"bytes,10,rep,name=partitions,proto3" json:"partitions,omitempty"`

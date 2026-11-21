@@ -15,3 +15,4 @@ benchmarks/benchmark_results/
 cmd/querator/querator
 /quickstart
 cmd/quickstart/quickstart
+.VSCodeCounter/

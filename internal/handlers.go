@@ -3,10 +3,11 @@ package internal
 import (
 	"context"
 	"fmt"
+	"log/slog"
+
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/tiger/assert"
-	"log/slog"
 )
 
 func (l *Logical) handleColdRequests(state *QueueState, req *Request) {

@@ -97,8 +97,9 @@ func (l *Logical) assignProduceRequests(state *QueueState) {
 			slog.Int("partition", state.Partitions[0].Info.PartitionNum),
 			slog.Int("items", len(req.Items)))
 
-		if state.Partitions[0].State.Failures != 0 {
-			l.log.Warn("no healthy partitions, produce request not assigned",
+		p := state.Partitions[0]
+		if p.State.Failures != 0 || p.Info.ReadOnly {
+			l.log.Warn("no healthy partitions or partitions are read-only, produce request not assigned",
 				"num_items", len(req.Items))
 			return
 		}
@@ -113,8 +114,8 @@ func (l *Logical) assignLeaseRequests(state *QueueState) {
 		if req == nil {
 			continue
 		}
-		assigned := lastHealthyPartition(state.Partitions)
 
+		assigned := lastHealthyPartition(state.Partitions)
 		if assigned == nil {
 			l.log.Warn("no healthy partitions, lease request not assigned",
 				"client_id", req.ClientID,
@@ -138,6 +139,7 @@ func (l *Logical) assignCompleteRequests(state *QueueState) {
 		if req == nil {
 			continue
 		}
+
 		p := state.GetPartition(req.Partition)
 		if p == nil {
 			req.Err = reply.NewRetryRequest("partition not found;"+
@@ -188,6 +190,12 @@ func sortPartitionsByLoad(partitions []*Partition) {
 			return -1
 		}
 		if a.State.Failures > b.State.Failures {
+			return +1
+		}
+		if !a.Info.ReadOnly && b.Info.ReadOnly {
+			return -1
+		}
+		if a.Info.ReadOnly && !b.Info.ReadOnly {
 			return +1
 		}
 		if a.State.UnLeased < b.State.UnLeased {

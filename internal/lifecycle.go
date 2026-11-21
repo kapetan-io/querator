@@ -3,6 +3,7 @@ package internal
 import (
 	"context"
 	"fmt"
+
 	"github.com/dustin/go-humanize"
 	"github.com/kapetan-io/errors"
 	"github.com/kapetan-io/querator/internal/types"

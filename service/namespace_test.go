@@ -1,10 +1,12 @@
 package service_test
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
 	"github.com/duh-rpc/duh-go"
+	"github.com/jackc/pgx/v5"
 	"github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/internal/store"
 	pb "github.com/kapetan-io/querator/proto"
@@ -14,10 +16,15 @@ import (
 	"github.com/kapetan-io/tackle/random"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.mongodb.org/mongo-driver/bson"
+	mongodriver "go.mongodb.org/mongo-driver/mongo"
+	mongoopts "go.mongodb.org/mongo-driver/mongo/options"
 	"go.uber.org/goleak"
 )
 
 func TestNamespaces(t *testing.T) {
+	postgres := postgresTestSetup{}
+	mongo := mongoTestSetup{}
 	for _, tc := range []struct {
 		Setup    NewStorageFunc
 		TearDown func()
@@ -40,6 +47,20 @@ func TestNamespaces(t *testing.T) {
 				return badger.Setup(store.BadgerConfig{})
 			},
 			TearDown: func() {},
+		},
+		{
+			Name: "PostgreSQL",
+			Setup: func() store.Config {
+				return withMemoryAuth(postgres.Setup(store.PostgresConfig{}))
+			},
+			TearDown: postgres.Teardown,
+		},
+		{
+			Name: "MongoDB",
+			Setup: func() store.Config {
+				return withMemoryAuth(mongo.Setup(store.MongoConfig{}))
+			},
+			TearDown: mongo.Teardown,
 		},
 	} {
 		t.Run(tc.Name, func(t *testing.T) {
@@ -490,6 +511,38 @@ func testNamespaces(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			}
 		})
 
+		t.Run("NamespacesDeleteWithQueueBehindSystemQueue", func(t *testing.T) {
+			d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
+			defer func() {
+				d.Shutdown(t)
+				tearDown()
+			}()
+			c, ctx := d.MustClient(), d.Context()
+
+			// The _system queue sorts first, so a list that counts it before the namespace filter hides the target's queue
+			target := "z-target-" + random.String("", 6)
+			require.NoError(t, c.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: target}))
+			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+				QueueName:           "a-" + random.String("", 6),
+				LeaseTimeout:        "1m",
+				ExpireTimeout:       "10m",
+				RequestedPartitions: 1,
+			}))
+			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+				QueueName:           "b-" + random.String("", 6),
+				Namespace:           target,
+				LeaseTimeout:        "1m",
+				ExpireTimeout:       "10m",
+				RequestedPartitions: 1,
+			}))
+
+			err := c.NamespacesDelete(ctx, &pb.NamespacesDeleteRequest{Name: target})
+			require.Error(t, err)
+			var e duh.Error
+			require.ErrorAs(t, err, &e)
+			assert.Contains(t, e.Message(), "has queues")
+		})
+
 		t.Run("Errors", func(t *testing.T) {
 			t.Run("QueuesCreate", func(t *testing.T) {
 				d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: setup()})
@@ -734,4 +787,95 @@ func testNamespacesUpdate(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			assert.Equal(t, duh.CodeBadRequest, e.Code())
 		})
 	})
+}
+
+func TestQueuesListLegacyNamespace(t *testing.T) {
+	postgres := postgresTestSetup{}
+	mongo := mongoTestSetup{}
+
+	for _, tc := range []struct {
+		Setup       NewStorageFunc
+		StoreLegacy func(ctx context.Context, name string)
+		TearDown    func()
+		Name        string
+	}{
+		{
+			Name: "PostgreSQL",
+			Setup: func() store.Config {
+				return withMemoryAuth(postgres.Setup(store.PostgresConfig{}))
+			},
+			StoreLegacy: func(ctx context.Context, name string) {
+				conn, err := pgx.Connect(ctx, postgres.dsn)
+				require.NoError(t, err)
+				defer func() { _ = conn.Close(ctx) }()
+				_, err = conn.Exec(ctx, "UPDATE queues SET namespace = '' WHERE name = $1", name)
+				require.NoError(t, err)
+			},
+			TearDown: postgres.Teardown,
+		},
+		{
+			Name: "MongoDB",
+			Setup: func() store.Config {
+				return withMemoryAuth(mongo.Setup(store.MongoConfig{}))
+			},
+			StoreLegacy: func(ctx context.Context, name string) {
+				container, err := getSharedMongoContainer()
+				require.NoError(t, err)
+				client, err := mongodriver.Connect(ctx, mongoopts.Client().ApplyURI(container.uri))
+				require.NoError(t, err)
+				defer func() { _ = client.Disconnect(ctx) }()
+				// Earlier versions saved the field missing or empty
+				update := bson.M{"$unset": bson.M{"namespace": ""}}
+				if name == "c-legacy-empty" {
+					update = bson.M{"$set": bson.M{"namespace": ""}}
+				}
+				_, err = client.Database(mongo.dbName).Collection("queues").UpdateOne(ctx,
+					bson.M{"_id": name}, update)
+				require.NoError(t, err)
+			},
+			TearDown: mongo.Teardown,
+		},
+	} {
+		t.Run(tc.Name, func(t *testing.T) {
+			d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: tc.Setup()})
+			defer func() {
+				d.Shutdown(t)
+				tc.TearDown()
+			}()
+			c, ctx := d.MustClient(), d.Context()
+
+			other := "z-other-" + random.String("", 6)
+			require.NoError(t, c.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: other}))
+			create := func(name, namespace string) {
+				require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+					QueueName:           name,
+					Namespace:           namespace,
+					LeaseTimeout:        "1m",
+					ExpireTimeout:       "10m",
+					RequestedPartitions: 1,
+				}))
+			}
+			create("a-other", other)
+			create("b-legacy", "")
+			create("c-legacy-empty", "")
+			create("d-system", "")
+			create("e-other", other)
+			tc.StoreLegacy(ctx, "b-legacy")
+			tc.StoreLegacy(ctx, "c-legacy-empty")
+
+			var system pb.QueuesListResponse
+			require.NoError(t, c.QueuesList(ctx, &system, &querator.ListOptions{Namespace: auth.SystemNamespace, Limit: 3}))
+			require.Len(t, system.Items, 3)
+			assert.Equal(t, "b-legacy", system.Items[0].QueueName)
+			assert.Equal(t, auth.SystemNamespace, system.Items[0].Namespace)
+			assert.Equal(t, "c-legacy-empty", system.Items[1].QueueName)
+			assert.Equal(t, "d-system", system.Items[2].QueueName)
+
+			var others pb.QueuesListResponse
+			require.NoError(t, c.QueuesList(ctx, &others, &querator.ListOptions{Namespace: other}))
+			require.Len(t, others.Items, 2)
+			assert.Equal(t, "a-other", others.Items[0].QueueName)
+			assert.Equal(t, "e-other", others.Items[1].QueueName)
+		})
+	}
 }

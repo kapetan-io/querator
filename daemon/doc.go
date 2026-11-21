@@ -53,6 +53,6 @@ limitations under the License.
 // takes exactly one. The memory backend has no options and is selected with an
 // empty mapping (memory: {}). In queue storage and auth storage a backend key
 // with no value, such as a bare "memory:" or "badger:", still names that
-// backend; in partition storage it is an error. See docs/packages/daemon.md for
-// how queues listed in the file are applied.
+// backend. See docs/packages/daemon.md for how queues listed in the file are
+// applied.
 package daemon

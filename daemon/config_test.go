@@ -685,6 +685,13 @@ func TestConfigFileRefusesWhatItWouldIgnore(t *testing.T) {
 		})
 	}
 
+	t.Run("EmptyDocumentsAtTheCap", func(t *testing.T) {
+		_, err := daemon.ReadConfig(strings.NewReader("address: localhost:0\n" + strings.Repeat("---\n", 16)))
+		require.NoError(t, err)
+		_, err = daemon.ReadConfig(strings.NewReader("address: localhost:0\n" + strings.Repeat("---\n", 17)))
+		require.ErrorContains(t, err, "more than 16 empty YAML documents")
+	})
+
 	t.Run("QueueStorageMemoryWithoutSettings", func(t *testing.T) {
 		file, err := daemon.ReadConfig(strings.NewReader("queue-storage:\n  memory:\n"))
 		require.NoError(t, err)

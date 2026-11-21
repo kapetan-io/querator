@@ -199,7 +199,7 @@ func ReadConfig(r io.Reader) (File, error) {
 }
 
 func refuseExtraDocuments(dec *yaml.Decoder) error {
-	for extras := 0; extras < maxEmptyDocuments; extras++ {
+	for extras := 0; extras <= maxEmptyDocuments; extras++ {
 		var extra yaml.Node
 		err := dec.Decode(&extra)
 		if errors.Is(err, io.EOF) {

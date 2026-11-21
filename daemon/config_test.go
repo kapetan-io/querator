@@ -782,3 +782,82 @@ func TestDaemonRefusesUnusableAffinity(t *testing.T) {
 		})
 	}
 }
+
+func TestConfigFileRefusesWhatItWouldIgnore(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		config  string
+		wantErr string
+	}{
+		{
+			name:    "SecondDocumentWithAuthStorage",
+			config:  "address: localhost:0\n---\nauth:\n  storage:\n    memory: {}\n",
+			wantErr: "holds one YAML document",
+		},
+		{
+			name:    "SecondDocumentWithBareAuth",
+			config:  "address: localhost:0\n---\nauth:\n",
+			wantErr: "holds one YAML document",
+		},
+		{
+			name:    "SecondDocumentWithCommentThenContent",
+			config:  "address: localhost:0\n---\n# note\n---\nauth:\n",
+			wantErr: "holds one YAML document",
+		},
+		{
+			name:    "QueueStorageMongoWithoutSettings",
+			config:  "queue-storage:\n  mongo:\n",
+			wantErr: "connection-string",
+		},
+		{
+			name:    "QueueStoragePostgresWithoutSettings",
+			config:  "queue-storage:\n  postgres:\n",
+			wantErr: "connection-string",
+		},
+		{
+			name:    "QueueStorageBadgerWithoutSettings",
+			config:  "queue-storage:\n  badger:\n",
+			wantErr: "storage-dir",
+		},
+		{
+			name:    "QueueStorageTwoEmptyBackends",
+			config:  "queue-storage:\n  memory:\n  badger:\n",
+			wantErr: "multiple backends",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			file, err := daemon.ReadConfig(strings.NewReader(test.config))
+			if err == nil {
+				err = daemon.ApplyConfigFile(context.Background(), &daemon.Config{}, file, io.Discard)
+			}
+			require.ErrorContains(t, err, test.wantErr)
+		})
+	}
+
+	for _, test := range []struct{ name, config string }{
+		{"TrailingSeparator", "address: localhost:0\n---\n"},
+		{"TrailingSeparatorComment", "address: localhost:0\n--- # end\n"},
+		{"TrailingCommentDocument", "address: localhost:0\n---\n# nothing here\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			file, err := daemon.ReadConfig(strings.NewReader(test.config))
+			require.NoError(t, err)
+			assert.Equal(t, "localhost:0", file.Address)
+		})
+	}
+
+	t.Run("EmptyDocumentsAtTheCap", func(t *testing.T) {
+		_, err := daemon.ReadConfig(strings.NewReader("address: localhost:0\n" + strings.Repeat("---\n", 16)))
+		require.NoError(t, err)
+		_, err = daemon.ReadConfig(strings.NewReader("address: localhost:0\n" + strings.Repeat("---\n", 17)))
+		require.ErrorContains(t, err, "more than 16 empty YAML documents")
+	})
+
+	t.Run("QueueStorageMemoryWithoutSettings", func(t *testing.T) {
+		file, err := daemon.ReadConfig(strings.NewReader("queue-storage:\n  memory:\n"))
+		require.NoError(t, err)
+		var conf daemon.Config
+		require.NoError(t, daemon.ApplyConfigFile(context.Background(), &conf, file, io.Discard))
+		assert.IsType(t, &store.MemoryQueues{}, conf.Service.StorageConfig.Queues)
+	})
+}

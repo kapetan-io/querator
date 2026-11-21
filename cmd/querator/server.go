@@ -15,28 +15,31 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var serverCommand = &cobra.Command{
-	Use:   "server",
-	Short: "Start the Querator daemon",
-	Long: `Start the Querator daemon server.
+func NewServerCommand(w io.Writer) *cobra.Command {
+	var params FlagParams
+	command := &cobra.Command{
+		Use:   "server",
+		Short: "Start the Querator daemon",
+		Long: `Start the Querator daemon server.
 
 The server command starts the HTTP API server that handles queue operations.
 Configuration can be provided via flags, environment variables, or a config file.`,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return StartServer(context.Background(), os.Stdout, flags)
-	},
-}
-
-func init() {
-	serverCommand.Flags().StringVar(&flags.ConfigFile, "config",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if params.Address == "" {
+				params.Address = os.Getenv("QUERATOR_ADDRESS")
+			}
+			return StartServer(cmd.Context(), w, params)
+		},
+	}
+	command.Flags().StringVar(&params.ConfigFile, "config",
 		os.Getenv("QUERATOR_CONFIG"),
 		"Configuration file path")
-	serverCommand.Flags().StringVar(&flags.Address, "address",
-		os.Getenv("QUERATOR_ADDRESS"),
-		"HTTP address to bind, overrides the config file (default localhost:2319)")
-	serverCommand.Flags().StringVar(&flags.LogLevel, "log-level",
+	command.Flags().StringVar(&params.Address, "address", "",
+		"HTTP address to bind. When not set, QUERATOR_ADDRESS is used, then the config file's address")
+	command.Flags().StringVar(&params.LogLevel, "log-level",
 		cmp.Or(os.Getenv("QUERATOR_LOG_LEVEL"), "info"),
 		"Logging level (debug,error,warn,info)")
+	return command
 }
 
 func StartServer(ctx context.Context, w io.Writer, params FlagParams) error {

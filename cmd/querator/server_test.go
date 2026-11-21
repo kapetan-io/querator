@@ -24,16 +24,27 @@ func freeAddress(t *testing.T) string {
 	return address
 }
 
-func withServer(t *testing.T, params main.FlagParams, check func()) {
+func writeConfig(t *testing.T, address string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("address: "+address+"\n"), 0o600))
+	return path
+}
+
+func withServer(t *testing.T, args []string, check func()) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	var served error
-	wg.Go(func() { served = main.StartServer(ctx, io.Discard, params) })
+	command := main.NewServerCommand(io.Discard)
+	command.SetArgs(args)
+	wg.Go(func() { served = command.ExecuteContext(ctx) })
+	defer func() {
+		cancel()
+		wg.Wait()
+		require.NoError(t, served)
+	}()
 	check()
-	cancel()
-	wg.Wait()
-	require.NoError(t, served)
 }
 
 func requireListening(t *testing.T, address string) {
@@ -47,27 +58,48 @@ func requireListening(t *testing.T, address string) {
 func TestServerAddress(t *testing.T) {
 	t.Run("FlagSetsListenAddress", func(t *testing.T) {
 		address := freeAddress(t)
-		withServer(t, main.FlagParams{Address: address}, func() {
+		withServer(t, []string{"--address", address}, func() {
 			requireListening(t, address)
 		})
 	})
 
-	t.Run("ConfigFileSetsListenAddressWhenFlagUnset", func(t *testing.T) {
+	t.Run("EnvSetsListenAddress", func(t *testing.T) {
 		address := freeAddress(t)
-		path := filepath.Join(t.TempDir(), "config.yaml")
-		require.NoError(t, os.WriteFile(path, []byte("address: "+address+"\n"), 0o600))
-		withServer(t, main.FlagParams{ConfigFile: path}, func() {
+		t.Setenv("QUERATOR_ADDRESS", address)
+		withServer(t, nil, func() {
 			requireListening(t, address)
 		})
 	})
 
-	t.Run("FlagWinsOverConfigFile", func(t *testing.T) {
+	t.Run("ConfigFileSetsListenAddressWhenNothingElseSet", func(t *testing.T) {
+		address := freeAddress(t)
+		t.Setenv("QUERATOR_ADDRESS", "")
+		withServer(t, []string{"--config", writeConfig(t, address)}, func() {
+			requireListening(t, address)
+		})
+	})
+
+	t.Run("FlagWinsOverEnvAndConfigFile", func(t *testing.T) {
 		fileAddress := freeAddress(t)
+		envAddress := freeAddress(t)
 		flagAddress := freeAddress(t)
-		path := filepath.Join(t.TempDir(), "config.yaml")
-		require.NoError(t, os.WriteFile(path, []byte("address: "+fileAddress+"\n"), 0o600))
-		withServer(t, main.FlagParams{ConfigFile: path, Address: flagAddress}, func() {
+		t.Setenv("QUERATOR_ADDRESS", envAddress)
+		args := []string{"--address", flagAddress, "--config", writeConfig(t, fileAddress)}
+		withServer(t, args, func() {
 			requireListening(t, flagAddress)
+			_, err := net.DialTimeout("tcp", fileAddress, 200*time.Millisecond)
+			require.Error(t, err)
+			_, err = net.DialTimeout("tcp", envAddress, 200*time.Millisecond)
+			require.Error(t, err)
+		})
+	})
+
+	t.Run("EnvWinsOverConfigFile", func(t *testing.T) {
+		fileAddress := freeAddress(t)
+		envAddress := freeAddress(t)
+		t.Setenv("QUERATOR_ADDRESS", envAddress)
+		withServer(t, []string{"--config", writeConfig(t, fileAddress)}, func() {
+			requireListening(t, envAddress)
 			_, err := net.DialTimeout("tcp", fileAddress, 200*time.Millisecond)
 			require.Error(t, err)
 		})

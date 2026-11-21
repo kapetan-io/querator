@@ -66,7 +66,7 @@ func TestServerAddress(t *testing.T) {
 	t.Run("EnvSetsListenAddress", func(t *testing.T) {
 		address := freeAddress(t)
 		t.Setenv("QUERATOR_ADDRESS", address)
-		withServer(t, nil, func() {
+		withServer(t, []string{}, func() {
 			requireListening(t, address)
 		})
 	})

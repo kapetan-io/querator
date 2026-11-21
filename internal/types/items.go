@@ -185,6 +185,38 @@ func (i *QueueInfo) Update(r QueueInfo) bool {
 	return true
 }
 
+type QueueUpdate struct {
+	Name                string
+	LeaseTimeout        clock.Duration
+	ExpireTimeout       clock.Duration
+	RequestedPartitions int
+	DeadQueue           *string
+	Reference           *string
+	MaxAttempts         *int
+}
+
+func (u QueueUpdate) ApplyTo(info QueueInfo) QueueInfo {
+	if u.LeaseTimeout != 0 {
+		info.LeaseTimeout = u.LeaseTimeout
+	}
+	if u.ExpireTimeout != 0 {
+		info.ExpireTimeout = u.ExpireTimeout
+	}
+	if u.RequestedPartitions != 0 {
+		info.RequestedPartitions = u.RequestedPartitions
+	}
+	if u.DeadQueue != nil {
+		info.DeadQueue = *u.DeadQueue
+	}
+	if u.Reference != nil {
+		info.Reference = *u.Reference
+	}
+	if u.MaxAttempts != nil {
+		info.MaxAttempts = *u.MaxAttempts
+	}
+	return info
+}
+
 type LifeCycleScan struct {
 	Pivot                  ItemID
 	Last                   ItemID

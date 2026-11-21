@@ -19,7 +19,7 @@ type QueueOps interface {
 type QueueAdmin interface {
 	QueuesCreate(context.Context, *pb.QueueInfo) error
 	QueuesList(context.Context, *pb.QueuesListRequest, *pb.QueuesListResponse) error
-	QueuesUpdate(context.Context, *pb.QueueInfo) error
+	QueuesUpdate(context.Context, *pb.QueuesUpdateRequest) error
 	QueuesDelete(context.Context, *pb.QueuesDeleteRequest) error
 	QueuesInfo(context.Context, *pb.QueuesInfoRequest, *pb.QueueInfo) error
 }

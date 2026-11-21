@@ -398,7 +398,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 
 			// Before fix: service layer sees AnonymousPrincipal → denies admin
 			// After fix: service layer reads real principal → allows admin
-			err = c.QueuesUpdate(ctx, &pb.QueueInfo{
+			err = c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
 				QueueName:    queueName,
 				LeaseTimeout: "2m0s",
 			})
@@ -451,7 +451,7 @@ func testAuth(t *testing.T, setup NewStorageFunc) {
 			limitedKey := CreateUserWithLimitedPermissions(t, ctx, adminClient, []string{auth.QueueList})
 			limitedClient := newClientWithAPIKey(t, d, limitedKey)
 
-			err = limitedClient.QueuesUpdate(ctx, &pb.QueueInfo{
+			err = limitedClient.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
 				QueueName:    queueName,
 				LeaseTimeout: "2m0s",
 			})

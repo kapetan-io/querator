@@ -365,7 +365,7 @@ func (h *HTTPHandler) QueuesList(ctx context.Context, w http.ResponseWriter, r *
 }
 
 func (h *HTTPHandler) QueuesUpdate(ctx context.Context, w http.ResponseWriter, r *http.Request) {
-	var req pb.QueueInfo
+	var req pb.QueuesUpdateRequest
 	if err := duh.ReadRequest(r, &req, 512*duh.Kilobyte); err != nil {
 		h.ReplyError(w, r, err)
 		return

@@ -241,6 +241,7 @@ func (p *PostgresQueues) Get(ctx context.Context, name string, queue *types.Queu
 		return errors.Errorf("query queue: %w", err)
 	}
 
+	queue.Namespace = systemIfEmpty(queue.Namespace)
 	queue.LeaseTimeout = clock.Duration(leaseNs)
 	queue.ExpireTimeout = clock.Duration(expireNs)
 
@@ -257,6 +258,7 @@ func (p *PostgresQueues) Add(ctx context.Context, info types.QueueInfo) error {
 	if err := p.validateAdd(info); err != nil {
 		return err
 	}
+	info.Namespace = systemIfEmpty(info.Namespace)
 
 	pool, err := p.conf.getOrCreatePool(ctx)
 	if err != nil {
@@ -411,6 +413,7 @@ func (p *PostgresQueues) List(ctx context.Context, queues *[]types.QueueInfo, op
 			return errors.Errorf("scan queue row: %w", err)
 		}
 
+		info.Namespace = systemIfEmpty(info.Namespace)
 		info.LeaseTimeout = clock.Duration(leaseNs)
 		info.ExpireTimeout = clock.Duration(expireNs)
 

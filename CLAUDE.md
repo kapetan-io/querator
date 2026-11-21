@@ -117,7 +117,8 @@ the tests are all nested under a single test function.
 
 ### Documentation
 - A change to the implementation needs no documentation edit. `docs/operating-limits.md` holds only limits an operator sees or must work around, and changes only when what an operator sees or must do changes. `docs/CONTEXT.md` is the glossary. If your change makes a sentence in any of these false, delete the sentence and say so in the pull request.
-- A rule or trap that must stay true goes in a test that fails when the code breaks it. A reason why something is built the way it is goes in an ADR under `docs/adr/`, written as the decision as it stands, and no longer in a package comment (`doc.go`). Tiger (the static checker, `GOTOOLCHAIN=go1.26.10 tiger check ./...`) allows no comments below the `package` line, so a reason cannot sit next to the code it explains.
+- A rule or trap that must stay true goes in a test that fails when the code breaks it. Any other reason why something is built the way it is goes in the commit message and the PR description. Tiger (the static checker, `GOTOOLCHAIN=go1.26.10 tiger check ./...`) allows no comments below the `package` line, so a reason cannot sit next to the code it explains.
+- ADRs under `docs/adr/` hold architecture decisions the user approved. Never create, edit or delete a file under `docs/adr/` unless the user asked for that ADR in chat. If your change makes a sentence in an ADR false, leave it and list it under Concerns and risks in the PR description.
 
 ### Naming Conventions
 - Follow `docs/NAMING.md` guidelines

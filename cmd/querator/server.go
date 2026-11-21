@@ -23,7 +23,7 @@ var serverCommand = &cobra.Command{
 The server command starts the HTTP API server that handles queue operations.
 Configuration can be provided via flags, environment variables, or a config file.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return StartServer(context.Background(), os.Stdout)
+		return StartServer(context.Background(), os.Stdout, flags)
 	},
 }
 
@@ -32,17 +32,17 @@ func init() {
 		os.Getenv("QUERATOR_CONFIG"),
 		"Configuration file path")
 	serverCommand.Flags().StringVar(&flags.Address, "address",
-		cmp.Or(os.Getenv("QUERATOR_ADDRESS"), "localhost:2319"),
-		"HTTP address to bind")
+		os.Getenv("QUERATOR_ADDRESS"),
+		"HTTP address to bind, overrides the config file (default localhost:2319)")
 	serverCommand.Flags().StringVar(&flags.LogLevel, "log-level",
 		cmp.Or(os.Getenv("QUERATOR_LOG_LEVEL"), "info"),
 		"Logging level (debug,error,warn,info)")
 }
 
-func StartServer(ctx context.Context, w io.Writer) error {
+func StartServer(ctx context.Context, w io.Writer, params FlagParams) error {
 	var file daemon.File
-	if flags.ConfigFile != "" {
-		reader, err := os.Open(flags.ConfigFile)
+	if params.ConfigFile != "" {
+		reader, err := os.Open(params.ConfigFile)
 		if err != nil {
 			return fmt.Errorf("while opening config file: %w", err)
 		}
@@ -52,12 +52,16 @@ func StartServer(ctx context.Context, w io.Writer) error {
 		if err != nil {
 			return err
 		}
-		file.ConfigFile = flags.ConfigFile
+		file.ConfigFile = params.ConfigFile
 	}
 
 	var conf daemon.Config
 	if err := daemon.ApplyConfigFile(ctx, &conf, file, w); err != nil {
 		return fmt.Errorf("while applying config file: %w", err)
+	}
+
+	if params.Address != "" {
+		conf.ListenAddress = params.Address
 	}
 
 	conf.Service.Log.Info(fmt.Sprintf("Querator %s (%s/%s)", querator.Version, runtime.GOARCH, runtime.GOOS))

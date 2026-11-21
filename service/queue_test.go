@@ -4877,12 +4877,9 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				ExpireTimeout:       ExpireTimeout,
 				RequestedPartitions: 1,
 			})
-			require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
-				QueueName:     queueName,
-				LeaseTimeout:  "1m0s",
-				ExpireTimeout: ExpireTimeout,
-				MaxAttempts:   1,
-				DeadQueue:     nextDLQ,
+			require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
+				QueueName: queueName,
+				DeadQueue: new(nextDLQ),
 			}))
 			require.NoError(t, c.QueuesDelete(ctx, &pb.QueuesDeleteRequest{QueueName: dlqName}))
 			require.Eventually(t, func() bool {

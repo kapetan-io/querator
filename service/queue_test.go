@@ -4746,6 +4746,156 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			assert.Equal(t, "dead", resp.Items[0].Reference)
 		})
 
+		t.Run("UnansweredMoveWaitsOnceInFailedDeadLetterQueue", func(t *testing.T) {
+			now := clock.NewProvider()
+			now.Freeze(clock.Now())
+			defer now.UnFreeze()
+
+			var fault partitionFault
+			d := newDaemon(t, 30*clock.Second, svc.Config{
+				StorageConfig: fault.Wrap(setup()),
+				Clock:         now,
+				WriteTimeout:  200 * clock.Millisecond,
+			})
+			defer func() {
+				d.Shutdown(t)
+				tearDown()
+			}()
+			c, ctx := d.MustClient(), d.Context()
+
+			queueName := random.String("queue-", 10)
+			dlqName := random.String("dlq-", 10)
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				QueueName:           dlqName,
+				LeaseTimeout:        "1m0s",
+				ExpireTimeout:       ExpireTimeout,
+				RequestedPartitions: 1,
+			})
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				QueueName:           queueName,
+				LeaseTimeout:        "1m0s",
+				ExpireTimeout:       ExpireTimeout,
+				MaxAttempts:         1,
+				DeadQueue:           dlqName,
+				RequestedPartitions: 1,
+			})
+			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+				QueueName:      queueName,
+				RequestTimeout: "5s",
+				Items:          []*pb.QueueProduceItem{{Reference: "dead", Bytes: []byte("x")}},
+			}))
+			require.Equal(t, "dead", leaseOne(t, ctx, c, queueName).Reference)
+
+			// The dead letter queue's only partition fails its lifecycle scan, so a move waits there
+			// unassigned and the source stops waiting for it at the write timeout.
+			fault.scanFailing.Store(&dlqName)
+			now.Advance(clock.Millisecond)
+			var stats pb.QueueStatsResponse
+			require.Eventually(t, func() bool {
+				if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: dlqName}, &stats); err != nil {
+					return false
+				}
+				return stats.LogicalQueues[0].Partitions[0].Failures != 0
+			}, 5*clock.Second, 20*clock.Millisecond)
+
+			now.Advance(2 * clock.Minute)
+			waitForLifecycleRun(t, ctx, c, queueName)
+
+			// Later passes of the source send nothing while the first move is unanswered.
+			for range 3 {
+				now.Advance(5 * clock.Second)
+				waitForLifecycleRun(t, ctx, c, queueName)
+			}
+			require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: dlqName}, &stats))
+			assert.Equal(t, int32(1), stats.LogicalQueues[0].ProduceWaiting)
+			assert.True(t, isLeased(t, ctx, c, queueName, "dead"))
+
+			// Once the partition recovers, the waiting move is stored and the source deletes the item.
+			fault.scanFailing.Store(nil)
+			require.Eventually(t, func() bool {
+				now.Advance(clock.Second)
+				return partitionTotal(t, ctx, c, queueName) == 0
+			}, 10*clock.Second, 50*clock.Millisecond)
+
+			var list pb.StorageItemsListResponse
+			require.NoError(t, c.StorageItemsList(ctx, dlqName, 0, &list, nil))
+			require.Len(t, list.Items, 1)
+			assert.Equal(t, "dead", list.Items[0].Reference)
+		})
+
+		t.Run("UnansweredMoveEndsWhenDeadLetterQueueIsDeleted", func(t *testing.T) {
+			now := clock.NewProvider()
+			now.Freeze(clock.Now())
+			defer now.UnFreeze()
+
+			d := newDaemon(t, 20*clock.Second, svc.Config{
+				StorageConfig: setup(),
+				Clock:         now,
+				WriteTimeout:  200 * clock.Millisecond,
+			})
+			defer func() {
+				d.Shutdown(t)
+				tearDown()
+			}()
+			c, ctx := d.MustClient(), d.Context()
+
+			queueName := random.String("queue-", 10)
+			dlqName := random.String("dlq-", 10)
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				QueueName:           dlqName,
+				LeaseTimeout:        "1m0s",
+				ExpireTimeout:       ExpireTimeout,
+				RequestedPartitions: 1,
+			})
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				QueueName:           queueName,
+				LeaseTimeout:        "1m0s",
+				ExpireTimeout:       ExpireTimeout,
+				MaxAttempts:         1,
+				DeadQueue:           dlqName,
+				RequestedPartitions: 1,
+			})
+			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+				QueueName:      queueName,
+				RequestTimeout: "5s",
+				Items:          []*pb.QueueProduceItem{{Reference: "dead", Bytes: []byte("x")}},
+			}))
+			require.Equal(t, "dead", leaseOne(t, ctx, c, queueName).Reference)
+
+			// The move waits in the paused dead letter queue after the source stops waiting for it.
+			require.NoError(t, d.Service().PauseQueue(ctx, dlqName))
+			now.Advance(2 * clock.Minute)
+			waitForLifecycleRun(t, ctx, c, queueName)
+			assert.True(t, isLeased(t, ctx, c, queueName, "dead"))
+
+			// Deleting the dead letter queue answers the waiting move, so the source moves the item
+			// to the dead letter queue it names now.
+			nextDLQ := random.String("dlq-", 10)
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				QueueName:           nextDLQ,
+				LeaseTimeout:        "1m0s",
+				ExpireTimeout:       ExpireTimeout,
+				RequestedPartitions: 1,
+			})
+			require.NoError(t, c.QueuesUpdate(ctx, &pb.QueueInfo{
+				QueueName:     queueName,
+				LeaseTimeout:  "1m0s",
+				ExpireTimeout: ExpireTimeout,
+				MaxAttempts:   1,
+				DeadQueue:     nextDLQ,
+			}))
+			require.NoError(t, c.QueuesDelete(ctx, &pb.QueuesDeleteRequest{QueueName: dlqName}))
+			require.Eventually(t, func() bool {
+				now.Advance(clock.Second)
+				return partitionTotal(t, ctx, c, queueName) == 0
+			}, 10*clock.Second, 50*clock.Millisecond)
+
+			var list pb.StorageItemsListResponse
+			require.NoError(t, c.StorageItemsList(ctx, nextDLQ, 0, &list, nil))
+			require.Len(t, list.Items, 1)
+			assert.Equal(t, "dead", list.Items[0].Reference)
+		})
+
 		t.Run("ExpiredUnLeasedItemLeavesSourceQueue", func(t *testing.T) {
 			now := clock.NewProvider()
 			now.Freeze(clock.Now())

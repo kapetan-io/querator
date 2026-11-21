@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/kapetan-io/errors"
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/transport/reply"
@@ -59,6 +60,9 @@ var (
 	ErrRequestTimeout = reply.NewRetryRequest(MsgRequestTimeout)
 	ErrInternalRetry  = reply.NewRetryRequest("internal error, try your request again")
 
+	ErrMoveUnanswered = errors.New("dead letter queue has not answered the move yet")
+	ErrMovedItemsKept = errors.New("source partition still holds items the dead letter queue stored")
+
 	lifecycleBackOff = retry.IntervalBackOff{
 		Min:    500 * time.Millisecond,
 		Max:    5 * time.Second,
@@ -88,6 +92,7 @@ type Logical struct {
 	requestCh requestInbox
 
 	shutdownCh    shutdownRequests
+	moveAnswered  readySignal
 	untilShutdown context.Context
 	beginShutdown context.CancelFunc
 	wg            sync.WaitGroup
@@ -108,10 +113,11 @@ func SpawnLogicalQueue(conf LogicalConfig) (*Logical, error) {
 	set.Default(&conf.Clock, clock.NewProvider())
 
 	l := &Logical{
-		shutdownCh: make(shutdownRequests),
-		requestCh:  make(requestInbox, conf.MaxRequestsPerQueue),
-		instanceID: random.Alpha("", 10),
-		conf:       conf,
+		shutdownCh:   make(shutdownRequests),
+		moveAnswered: make(readySignal, 1),
+		requestCh:    make(requestInbox, conf.MaxRequestsPerQueue),
+		instanceID:   random.Alpha("", 10),
+		conf:         conf,
 	}
 	l.untilShutdown, l.beginShutdown = context.WithCancel(context.Background())
 	l.log = conf.Log.With("code.namespace", "Logical", "queue", conf.Name, "instance-id", l.instanceID)
@@ -347,7 +353,7 @@ func (l *Logical) ProduceDeadLetter(ctx context.Context, req *types.ProduceReque
 	case <-req.ReadyCh:
 		return req.Stored, req.Err
 	case <-ctx.Done():
-		return 0, ctx.Err()
+		return 0, ErrMoveUnanswered
 	}
 }
 
@@ -621,6 +627,9 @@ func (l *Logical) requestLoop() {
 			l.runLifecycle(&state)
 			l.assignWaitingRequests(&state)
 			state.LifecycleTimer.Reset(l.minNextLifecycleRun(&state))
+
+		case <-l.moveAnswered:
+			l.wakeForAnsweredMoves(&state)
 
 		case <-scheduledCh:
 			l.log.LogAttrs(context.Background(), LevelDebugAll, "scheduled timer fired")

@@ -142,11 +142,20 @@ changes pause traffic for as long as the read takes.
 
 **Workaround**: Make queue changes outside peak traffic.
 
-## Dead-letter chains saved by older releases must be broken on update
+## Queues saved without the dead-letter checks must be fixed on update
 
 Querator refuses a dead-letter queue that has its own dead-letter queue, but older releases did not check
-this when the second queue was updated. Such chains stay in storage. An update to a queue in the chain
-that sends its `dead_queue` unchanged is refused.
+this when the second queue was updated. Such chains stay in storage. In a chain where A's `dead_queue`
+is B and B's is C, an update to A or B that leaves `dead_queue` out, or sends it unchanged, is refused. C
+updates as usual. The same holds for a queue whose saved `dead_queue` does not exist or has more than one
+partition, and for a dead-letter queue saved with more than one partition. Older releases saved such
+queues, and queues loaded from the config file are saved without these checks.
 
-**Workaround**: When updating a queue in such a chain, clear its `dead_queue` or point it at a queue with
-no dead-letter queue of its own.
+**Workaround**: Fix the dead-letter setup in the same update.
+
+* A queue whose `dead_queue` does not exist, has its own dead-letter queue or has more than one
+  partition: send `"dead_queue": ""`, or name an existing single-partition queue with no dead-letter
+  queue of its own.
+* A dead-letter queue that has its own `dead_queue`: send `"dead_queue": ""`.
+* A dead-letter queue saved with more than one partition: first fix every queue that names it as its
+  `dead_queue`, as above.

@@ -8,6 +8,7 @@ import (
 	"slices"
 
 	"github.com/kapetan-io/querator/internal/types"
+	"github.com/kapetan-io/querator/transport/auth"
 	"github.com/kapetan-io/querator/transport/reply"
 	"github.com/kapetan-io/tackle/clock"
 )
@@ -23,6 +24,13 @@ var (
 	ErrQueueAlreadyExists = reply.NewInvalidOption("queue already exists")
 	ErrQueueNotExist      = reply.NewRequestFailed("queue does not exist")
 )
+
+func systemIfEmpty(namespace string) string {
+	if namespace == "" {
+		return auth.SystemNamespace
+	}
+	return namespace
+}
 
 type LeaseOptions struct {
 	LeaseDeadline clock.Time

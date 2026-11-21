@@ -1,7 +1,9 @@
 package daemon_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/gob"
 	"fmt"
 	"io"
 	"log/slog"
@@ -11,12 +13,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dgraph-io/badger/v4"
+	"github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/daemon"
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
 	pb "github.com/kapetan-io/querator/proto"
+	"github.com/kapetan-io/tackle/clock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestReadConfigErrs(t *testing.T) {
@@ -370,6 +376,161 @@ queues:
 	assert.Equal(t, 0, info.PartitionInfo[0].PartitionNum)
 	assert.False(t, info.PartitionInfo[0].ReadOnly)
 	assert.Equal(t, "mem-00", info.PartitionInfo[0].StorageName)
+}
+
+func TestConfigQueuesAreListed(t *testing.T) {
+	ctx := context.Background()
+	file, err := daemon.ReadConfig(strings.NewReader(`
+partition-storage:
+  - name: mem-00
+    memory: {}
+    affinity: 1
+queue-storage:
+  memory: {}
+queues:
+  - name: from-config
+    requested-partitions: 1
+    lease-timeout: 1m
+    expire-timeout: 1h
+`))
+	require.NoError(t, err)
+
+	conf := daemon.Config{InMemoryListener: true}
+	require.NoError(t, daemon.ApplyConfigFile(ctx, &conf, file, io.Discard))
+	d, err := daemon.NewDaemon(ctx, conf)
+	require.NoError(t, err)
+	defer func() { _ = d.Shutdown(ctx) }()
+
+	c := d.MustClient()
+	require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+		QueueName:           "from-api",
+		LeaseTimeout:        "1m",
+		ExpireTimeout:       "1h",
+		RequestedPartitions: 1,
+	}))
+
+	var list pb.QueuesListResponse
+	require.NoError(t, c.QueuesList(ctx, &list, nil))
+	names := make([]string, 0, len(list.Items))
+	for _, item := range list.Items {
+		names = append(names, item.QueueName)
+	}
+	assert.ElementsMatch(t, []string{"from-config", "from-api"}, names)
+}
+
+func TestQueuesStoredWithoutNamespaceBehaveAsSystem(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	start := func(t *testing.T, queues string) *daemon.Daemon {
+		file, err := daemon.ReadConfig(strings.NewReader(fmt.Sprintf(`
+partition-storage:
+  - name: badger-00
+    affinity: 1
+    badger:
+      storage-dir: %[1]s/partitions
+queue-storage:
+  badger:
+    storage-dir: %[1]s/queues
+queues:
+%[2]s`, dir, queues)))
+		require.NoError(t, err)
+		conf := daemon.Config{InMemoryListener: true}
+		require.NoError(t, daemon.ApplyConfigFile(ctx, &conf, file, io.Discard))
+		d, err := daemon.NewDaemon(ctx, conf)
+		require.NoError(t, err)
+		return d
+	}
+	const both = `  - name: from-config
+    requested-partitions: 1
+    lease-timeout: 1m
+    expire-timeout: 1h
+  - name: removed-from-config
+    requested-partitions: 1
+    lease-timeout: 1m
+    expire-timeout: 1h
+`
+	const one = `  - name: from-config
+    requested-partitions: 1
+    lease-timeout: 1m
+    expire-timeout: 1h
+`
+
+	d := start(t, both)
+	c := d.MustClient()
+	require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+		QueueName:      "from-config",
+		RequestTimeout: "5s",
+		Items: []*pb.QueueProduceItem{
+			{Bytes: []byte("leased")},
+			{Bytes: []byte("unleased")},
+			{Bytes: []byte("scheduled"), EnqueueAt: timestamppb.New(clock.Now().UTC().Add(time.Hour))},
+		},
+	}))
+	var leased pb.QueueLeaseResponse
+	require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+		QueueName: "from-config", ClientId: "client-1", BatchSize: 1, RequestTimeout: "1s",
+	}, &leased))
+	require.Len(t, leased.Items, 1)
+	assert.Equal(t, []byte("leased"), leased.Items[0].Bytes)
+	require.NoError(t, d.Shutdown(ctx))
+
+	// Rewrite every stored queue into the shape an earlier version saved, with no namespace.
+	db, err := badger.Open(badger.DefaultOptions(dir + "/queues/~queue-storage-partition").WithLogger(nil))
+	require.NoError(t, err)
+	require.NoError(t, db.Update(func(txn *badger.Txn) error {
+		for _, name := range []string{"from-config", "removed-from-config"} {
+			found, err := txn.Get([]byte(name))
+			require.NoError(t, err)
+			var info types.QueueInfo
+			require.NoError(t, found.Value(func(v []byte) error {
+				return gob.NewDecoder(bytes.NewReader(v)).Decode(&info)
+			}))
+			assert.Equal(t, "_system", info.Namespace)
+			info.Namespace = ""
+			var buf bytes.Buffer
+			require.NoError(t, gob.NewEncoder(&buf).Encode(info))
+			require.NoError(t, txn.Set([]byte(name), buf.Bytes()))
+		}
+		return nil
+	}))
+	require.NoError(t, db.Close())
+
+	for run := range 2 {
+		d = start(t, one)
+		c = d.MustClient()
+
+		var list pb.QueuesListResponse
+		require.NoError(t, c.QueuesList(ctx, &list, nil))
+		names := make([]string, 0, len(list.Items))
+		for _, item := range list.Items {
+			names = append(names, item.QueueName)
+		}
+		assert.ElementsMatch(t, []string{"from-config", "removed-from-config"}, names)
+
+		for _, name := range names {
+			var info pb.QueueInfo
+			require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: name}, &info))
+			assert.Equal(t, "_system", info.Namespace)
+		}
+
+		if run == 0 {
+			var lease pb.QueueLeaseResponse
+			require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+				QueueName: "from-config", ClientId: "client-2", BatchSize: 10, RequestTimeout: "1s",
+			}, &lease))
+			require.Len(t, lease.Items, 1)
+			assert.Equal(t, []byte("unleased"), lease.Items[0].Bytes)
+
+			// An update must not move a queue into another namespace.
+			require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
+				QueueName: "removed-from-config", Namespace: "other", LeaseTimeout: "2m", ExpireTimeout: "1h",
+			}))
+			var other pb.QueuesListResponse
+			require.NoError(t, c.QueuesList(ctx, &other, &querator.ListOptions{Namespace: "other"}))
+			assert.Empty(t, other.Items)
+		}
+		require.NoError(t, d.Shutdown(ctx))
+	}
 }
 
 func TestBadgerConfig(t *testing.T) {

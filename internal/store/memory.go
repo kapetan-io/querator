@@ -609,6 +609,7 @@ func (s *MemoryQueues) Add(_ context.Context, info types.QueueInfo) error {
 	if err := s.validateAdd(info); err != nil {
 		return err
 	}
+	info.Namespace = systemIfEmpty(info.Namespace)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -1274,6 +1274,7 @@ func (b *BadgerQueues) Get(_ context.Context, name string, queue *types.QueueInf
 		if err := gob.NewDecoder(bytes.NewReader(v)).Decode(queue); err != nil {
 			return errors.Errorf("during Decode(): %w", err)
 		}
+		queue.Namespace = systemIfEmpty(queue.Namespace)
 		return nil
 	})
 }
@@ -1282,6 +1283,7 @@ func (b *BadgerQueues) Add(_ context.Context, info types.QueueInfo) error {
 	if err := b.validateAdd(info); err != nil {
 		return err
 	}
+	info.Namespace = systemIfEmpty(info.Namespace)
 
 	db, err := b.getDB()
 	if err != nil {
@@ -1393,6 +1395,7 @@ func (b *BadgerQueues) List(ctx context.Context, queues *[]types.QueueInfo, opts
 			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(&info); err != nil {
 				return errors.Errorf("during Decode(): %w", err)
 			}
+			info.Namespace = systemIfEmpty(info.Namespace)
 			if opts.Namespace != "" && info.Namespace != opts.Namespace {
 				continue
 			}

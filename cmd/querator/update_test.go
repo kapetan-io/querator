@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -191,17 +192,33 @@ func TestUpdateCommandLeaseTimeoutKeepsExpireTimeout(t *testing.T) {
 	assert.Equal(t, "24h0m0s", info.ExpireTimeout)
 }
 
-func TestUpdateCommandHelpExamplesParse(t *testing.T) {
-	for _, name := range []string{"lease-timeout", "expire-timeout"} {
-		t.Run(name, func(t *testing.T) {
-			flag := main.UpdateCommand.Flags().Lookup(name)
-			require.NotNil(t, flag)
-			examples := regexp.MustCompile(`'([^']+)'`).FindAllStringSubmatch(flag.Usage, -1)
-			require.NotEmpty(t, examples)
-			for _, example := range examples {
-				_, err := time.ParseDuration(example[1])
-				assert.NoError(t, err, "help example %q", example[1])
+func TestCommandHelpDurationExamplesParse(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "querator")
+	_, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput()
+	require.NoError(t, err)
+
+	examples := regexp.MustCompile(`\(e\.g\.,\s*([^)]+)\)`)
+	for command, want := range map[string]int{"create": 2, "update": 4} {
+		t.Run(command, func(t *testing.T) {
+			help, err := exec.Command(binary, command, "--help").CombinedOutput()
+			require.NoError(t, err)
+
+			var found int
+			for _, line := range strings.Split(string(help), "\n") {
+				if !strings.Contains(line, "timeout") {
+					continue
+				}
+				match := examples.FindStringSubmatch(line)
+				if match == nil {
+					continue
+				}
+				for _, example := range strings.Split(match[1], ",") {
+					_, err := time.ParseDuration(strings.Trim(strings.TrimSpace(example), "'\""))
+					assert.NoError(t, err)
+					found++
+				}
 			}
+			assert.Equal(t, want, found)
 		})
 	}
 }

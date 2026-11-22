@@ -24,8 +24,7 @@ run). The evidence supports any limit from about 256 to 4,096.
 
 A queue may request at most 1,024 partitions when it is created. A larger request through `/queues.create`
 fails with an invalid-option error (HTTP 400) before any partition is placed, and a config-file queue that
-asks for more fails startup with an error naming the queue. The limit is the constant `maxQueuePartitions`
-in `internal/store/validation.go`, not a setting, and `store.PlacePartitions` enforces it.
+asks for more fails startup with an error naming the queue. The limit is a constant in the store's validation, not a setting, and `store.PlacePartitions` enforces it.
 
 The limit applies only where Querator places partitions. It is not checked on `/queues.update`, when a queue
 loads from storage, or for config-file queues that list their partitions explicitly, so queues stored with

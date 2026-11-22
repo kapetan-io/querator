@@ -1,0 +1,16 @@
+name: adr-check
+
+on:
+  pull_request:
+    branches:
+      - master
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  adr:
+    uses: kapetan-io/dispatch/.github/workflows/adr-check.yml@main
+    with:
+      ticket-keys: ENG

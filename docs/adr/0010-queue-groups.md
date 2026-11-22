@@ -4,9 +4,7 @@ Date: 2024-07-04
 
 ## Status
 
-Proposal
-
-Superceded by [16. Queue Partitions](0016-queue-partitions.md)
+Superseded by ADR 16
 
 ## Context
 

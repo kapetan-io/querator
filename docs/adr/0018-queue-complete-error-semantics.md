@@ -4,7 +4,7 @@ Date: 2024-09-05
 
 ## Status
 
-Superceded by [20. API Semantics](0019-api-semantics.md)
+Superseded by ADR 20
 
 ## Context
 

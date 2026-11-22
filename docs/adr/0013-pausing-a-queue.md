@@ -4,13 +4,14 @@ Date: 2024-07-16
 
 ## Status
 
-Rejected. Do not implement `/queue.pause`.
-
-[16. Queue Partitions](0016-queue-partitions.md) replaces pausing with read-only (draining) partitions. The
-implementation proved more complex than assumed, and maintenance windows can outlast the time clients are willing
-to wait. `Service.PauseQueue` exists only to simulate contention in tests and is not part of the API.
+Rejected
 
 ## Context
+
+Do not implement `/queue.pause`. [16. Queue Partitions](0016-queue-partitions.md) replaces pausing with read-only
+(draining) partitions. The implementation proved more complex than assumed, and maintenance windows can outlast the
+time clients are willing to wait. `Service.PauseQueue` exists only to simulate contention in tests and is not part of
+the API.
 
 Querator queue's can and should assume they have exclusive access to the data store used to keep items in the queue.
 However, their may be some operations which must occur on that underlying data store which require direct access to

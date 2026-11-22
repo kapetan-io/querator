@@ -26,7 +26,7 @@ write, a scan and a move to deliver it a few milliseconds later.
 
 An import (`/v1/storage/items.import`) is meant to restore items exactly as they were, so an imported
 item keeps the `enqueue_at` it was given. The code does not meet this yet: an import drops
-`enqueue_at` (ENG-798).
+`enqueue_at`.
 
 #### Retried Items
 When an item is retried with a `retry_at` timestamp set to a future date, it will be placed into the

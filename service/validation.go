@@ -180,10 +180,10 @@ func (s *Service) validateQueueOptionsProto(in *proto.QueueInfo, out *types.Queu
 		return reply.NewInvalidOption("lease timeout is invalid; cannot be greater than '%d' characters", maxTimeoutLength)
 	}
 	var err error
-	if out.ExpireTimeout, err = parseExpireTimeout(in.ExpireTimeout); err != nil {
+	if out.LeaseTimeout, err = parseLeaseTimeout(in.LeaseTimeout); err != nil {
 		return err
 	}
-	if out.LeaseTimeout, err = parseLeaseTimeout(in.LeaseTimeout); err != nil {
+	if out.ExpireTimeout, err = parseExpireTimeout(in.ExpireTimeout); err != nil {
 		return err
 	}
 
@@ -206,10 +206,10 @@ func (s *Service) validateQueueUpdateProto(in *proto.QueuesUpdateRequest, out *t
 		return reply.NewInvalidOption("lease timeout is invalid; cannot be greater than '%d' characters", maxTimeoutLength)
 	}
 	var err error
-	if out.ExpireTimeout, err = parseExpireTimeout(in.ExpireTimeout); err != nil {
+	if out.LeaseTimeout, err = parseLeaseTimeout(in.LeaseTimeout); err != nil {
 		return err
 	}
-	if out.LeaseTimeout, err = parseLeaseTimeout(in.LeaseTimeout); err != nil {
+	if out.ExpireTimeout, err = parseExpireTimeout(in.ExpireTimeout); err != nil {
 		return err
 	}
 
@@ -240,6 +240,9 @@ func parseLeaseTimeout(lease string) (clock.Duration, error) {
 	if err != nil {
 		return 0, reply.NewInvalidOption("lease timeout is invalid; %s - expected format: 8m, 15m or 1h", err.Error())
 	}
+	if timeout < 0 {
+		return 0, reply.NewInvalidOption("lease timeout is invalid; cannot be negative")
+	}
 	return timeout, nil
 }
 
@@ -253,6 +256,9 @@ func parseExpireTimeout(expire string) (clock.Duration, error) {
 	timeout, err := clock.ParseDuration(expire)
 	if err != nil {
 		return 0, reply.NewInvalidOption("expire timeout is invalid; %s - expected format: 60m, 2h or 24h", err.Error())
+	}
+	if timeout < 0 {
+		return 0, reply.NewInvalidOption("expire timeout is invalid; cannot be negative")
 	}
 	return timeout, nil
 }

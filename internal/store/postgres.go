@@ -322,6 +322,10 @@ func (p *PostgresQueues) Update(ctx context.Context, info types.QueueInfo) error
 		return err
 	}
 
+	if err := p.validateTimeoutChange(timeoutChange{Stored: found, Proposed: info}); err != nil {
+		return err
+	}
+
 	found.Update(info)
 
 	if err := p.validateUpdate(found); err != nil {

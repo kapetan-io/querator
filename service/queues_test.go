@@ -450,6 +450,77 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			t.Run("DeleteAlreadyDeletedIsOk", func(t *testing.T) {})
 		})
 
+		t.Run("NegativeTimeouts", func(t *testing.T) {
+			refused := func(t *testing.T, err error, contains string) {
+				require.Error(t, err)
+				var duhErr duh.Error
+				require.True(t, errors.As(err, &duhErr))
+				assert.Equal(t, duh.CodeBadRequest, duhErr.Code())
+				assert.Contains(t, duhErr.Message(), contains)
+			}
+
+			for _, tc := range []struct {
+				Name, Lease, Expire, Message string
+			}{
+				{"NegativeLease", "-5m", "10m", "lease timeout is invalid; cannot be negative"},
+				{"NegativeExpire", "1m", "-5m", "expire timeout is invalid; cannot be negative"},
+				{"BothNegative", "-10m", "-5m", "lease timeout is invalid; cannot be negative"},
+			} {
+				t.Run("Create"+tc.Name, func(t *testing.T) {
+					queueName := random.String("queue-", 10)
+					refused(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+						QueueName:           queueName,
+						LeaseTimeout:        tc.Lease,
+						ExpireTimeout:       tc.Expire,
+						RequestedPartitions: 1,
+					}), tc.Message)
+
+					var info pb.QueueInfo
+					require.Error(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &info))
+				})
+
+				t.Run("Update"+tc.Name, func(t *testing.T) {
+					queueName := random.String("queue-", 10)
+					require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+						QueueName:           queueName,
+						LeaseTimeout:        "1m",
+						ExpireTimeout:       "10m",
+						RequestedPartitions: 1,
+					}))
+
+					refused(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
+						QueueName:     queueName,
+						LeaseTimeout:  tc.Lease,
+						ExpireTimeout: tc.Expire,
+					}), tc.Message)
+
+					var info pb.QueueInfo
+					require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &info))
+					assert.Equal(t, "1m0s", info.LeaseTimeout)
+					assert.Equal(t, "10m0s", info.ExpireTimeout)
+				})
+			}
+
+			t.Run("UpdateNegativeLeaseOnly", func(t *testing.T) {
+				queueName := random.String("queue-", 10)
+				require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+					QueueName:           queueName,
+					LeaseTimeout:        "1m",
+					ExpireTimeout:       "10m",
+					RequestedPartitions: 1,
+				}))
+				refused(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
+					QueueName:    queueName,
+					LeaseTimeout: "-5m",
+				}), "lease timeout is invalid; cannot be negative")
+
+				var info pb.QueueInfo
+				require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &info))
+				assert.Equal(t, "1m0s", info.LeaseTimeout)
+				assert.Equal(t, "10m0s", info.ExpireTimeout)
+			})
+		})
+
 		t.Run("DeadLetterQueue", func(t *testing.T) {
 			t.Run("Validation", func(t *testing.T) {
 				t.Run("NonExistentDLQ", func(t *testing.T) {

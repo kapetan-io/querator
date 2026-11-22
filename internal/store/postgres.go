@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/kapetan-io/errors"
 	"github.com/kapetan-io/querator/internal/types"
+	"github.com/kapetan-io/querator/transport/auth"
 	"github.com/kapetan-io/querator/transport/reply"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/set"
@@ -377,9 +378,10 @@ func (p *PostgresQueues) List(ctx context.Context, queues *[]types.QueueInfo, op
 
 	query := `SELECT name, namespace, lease_timeout_ns, expire_timeout_ns, dead_queue, max_attempts,
 	                 reference, requested_partitions, partition_info, created_at, updated_at
-	          FROM queues WHERE name >= $1 ORDER BY name LIMIT $2`
+	          FROM queues WHERE name >= $1 AND ($3 = '' OR namespace = $3 OR ($3 = $4 AND namespace = ''))
+	          ORDER BY name LIMIT $2`
 
-	rows, err := pool.Query(ctx, query, pivot, opts.Limit)
+	rows, err := pool.Query(ctx, query, pivot, opts.Limit, opts.Namespace, auth.SystemNamespace)
 	if err != nil {
 		return errors.Errorf("query queues: %w", err)
 	}
@@ -418,9 +420,6 @@ func (p *PostgresQueues) List(ctx context.Context, queues *[]types.QueueInfo, op
 			}
 		}
 
-		if opts.Namespace != "" && info.Namespace != opts.Namespace {
-			continue
-		}
 		*queues = append(*queues, info)
 	}
 

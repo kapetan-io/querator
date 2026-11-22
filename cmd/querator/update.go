@@ -66,15 +66,6 @@ func RunUpdate(flags FlagParams, queueName string) error {
 
 	if leaseTimeoutSet {
 		req.LeaseTimeout = flags.LeaseTimeoutUpdate
-
-		if !expireTimeoutSet {
-			leaseTimeout, err := time.ParseDuration(flags.LeaseTimeoutUpdate)
-			if err != nil {
-				return fmt.Errorf("invalid lease-timeout format: %w", err)
-			}
-			expireTimeout := leaseTimeout * 60
-			req.ExpireTimeout = expireTimeout.String()
-		}
 	}
 
 	if expireTimeoutSet {

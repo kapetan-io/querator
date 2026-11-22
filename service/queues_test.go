@@ -2005,6 +2005,53 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			}
 		})
 
+		t.Run("RaiseLeaseAndExpireTogether", func(t *testing.T) {
+			queueName := random.String("queue-", 10)
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				QueueName:           queueName,
+				LeaseTimeout:        "1m0s",
+				ExpireTimeout:       "10m0s",
+				RequestedPartitions: 1,
+			})
+
+			require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
+				QueueName:     queueName,
+				LeaseTimeout:  "20m0s",
+				ExpireTimeout: "30m0s",
+			}))
+
+			var info pb.QueueInfo
+			require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &info))
+			assert.Equal(t, "20m0s", info.LeaseTimeout)
+			assert.Equal(t, "30m0s", info.ExpireTimeout)
+		})
+
+		t.Run("LeaseLongerThanResultingExpireIsRefused", func(t *testing.T) {
+			queueName := random.String("queue-", 10)
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				QueueName:           queueName,
+				LeaseTimeout:        "1m0s",
+				ExpireTimeout:       "10m0s",
+				RequestedPartitions: 1,
+			})
+
+			for _, update := range []*pb.QueuesUpdateRequest{
+				{QueueName: queueName, LeaseTimeout: "20m0s"},
+				{QueueName: queueName, LeaseTimeout: "20m0s", ExpireTimeout: "15m0s"},
+			} {
+				err := c.QueuesUpdate(ctx, update)
+				var duhErr duh.Error
+				require.True(t, errors.As(err, &duhErr))
+				assert.Equal(t, duh.CodeBadRequest, duhErr.Code())
+				assert.Contains(t, duhErr.Message(), "lease timeout is too long")
+			}
+
+			var info pb.QueueInfo
+			require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &info))
+			assert.Equal(t, "1m0s", info.LeaseTimeout)
+			assert.Equal(t, "10m0s", info.ExpireTimeout)
+		})
+
 		t.Run("ExplicitClear", func(t *testing.T) {
 			dlqName := random.String("dlq-", 10)
 			createQueueAndWait(t, ctx, c, &pb.QueueInfo{

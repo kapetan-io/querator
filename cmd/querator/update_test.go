@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"testing"
 	"time"
 
@@ -188,4 +189,19 @@ func TestUpdateCommandLeaseTimeoutKeepsExpireTimeout(t *testing.T) {
 	require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &info))
 	assert.Equal(t, "2m0s", info.LeaseTimeout)
 	assert.Equal(t, "24h0m0s", info.ExpireTimeout)
+}
+
+func TestUpdateCommandHelpExamplesParse(t *testing.T) {
+	for _, name := range []string{"lease-timeout", "expire-timeout"} {
+		t.Run(name, func(t *testing.T) {
+			flag := main.UpdateCommand.Flags().Lookup(name)
+			require.NotNil(t, flag)
+			examples := regexp.MustCompile(`'([^']+)'`).FindAllStringSubmatch(flag.Usage, -1)
+			require.NotEmpty(t, examples)
+			for _, example := range examples {
+				_, err := time.ParseDuration(example[1])
+				assert.NoError(t, err, "help example %q", example[1])
+			}
+		})
+	}
 }

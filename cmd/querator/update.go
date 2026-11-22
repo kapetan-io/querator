@@ -30,7 +30,7 @@ func init() {
 	UpdateCommand.Flags().StringVar(&flags.LeaseTimeoutUpdate, "lease-timeout",
 		"", "Lease timeout duration (e.g., '5m', '1h')")
 	UpdateCommand.Flags().StringVar(&flags.ExpireTimeoutUpdate, "expire-timeout",
-		"", "Item expiration timeout (e.g., '24h', '7d')")
+		"", "Item expiration timeout (e.g., '24h', '168h')")
 	UpdateCommand.Flags().Int32Var(&flags.MaxAttemptsUpdate, "max-attempts",
 		0, "Maximum retry attempts (0 for unlimited)")
 	UpdateCommand.Flags().StringVar(&flags.DeadQueueUpdate, "dead-queue",

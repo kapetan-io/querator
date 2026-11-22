@@ -1213,3 +1213,36 @@ func TestConfigFileWithUnusableBackendsSavesNoListedQueue(t *testing.T) {
 		})
 	}
 }
+
+func TestQueueConfigRefusesNegativeTimeouts(t *testing.T) {
+	for _, tc := range []struct {
+		Name, Lease, Expire, Message string
+	}{
+		{"NegativeLease", "-1m", "1h", "lease timeout is invalid; cannot be negative"},
+		{"NegativeExpire", "1m", "-1h", "expire timeout is invalid; cannot be negative"},
+		{"BothNegative", "-2h", "-1h", "lease timeout is invalid; cannot be negative"},
+	} {
+		t.Run(tc.Name, func(t *testing.T) {
+			file, err := daemon.ReadConfig(strings.NewReader(fmt.Sprintf(`
+partition-storage:
+  - name: mem-00
+    affinity: 1
+    memory: {}
+queue-storage:
+  memory: {}
+queues:
+  - name: bad-queue
+    lease-timeout: %s
+    expire-timeout: %s
+    requested-partitions: 1
+`, tc.Lease, tc.Expire)))
+			require.NoError(t, err)
+
+			conf := daemon.Config{InMemoryListener: true}
+			err = daemon.ApplyConfigFile(context.Background(), &conf, file, io.Discard)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "bad-queue")
+			assert.Contains(t, err.Error(), tc.Message)
+		})
+	}
+}

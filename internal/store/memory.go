@@ -637,6 +637,10 @@ func (s *MemoryQueues) Update(_ context.Context, info types.QueueInfo) error {
 	}
 
 	found := s.mem[idx]
+	if err := s.validateTimeoutChange(timeoutChange{Stored: found, Proposed: info}); err != nil {
+		return err
+	}
+
 	found.Update(info)
 
 	if err := s.validateUpdate(found); err != nil {

@@ -377,6 +377,10 @@ func (q *MongoQueues) Update(ctx context.Context, info types.QueueInfo) error {
 		return err
 	}
 
+	if err := q.validateTimeoutChange(timeoutChange{Stored: found, Proposed: info}); err != nil {
+		return err
+	}
+
 	found.Update(info)
 
 	if err := q.validateUpdate(found); err != nil {

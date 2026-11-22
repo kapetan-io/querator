@@ -1147,3 +1147,69 @@ func TestConfigFileQueueSavesNextPartition(t *testing.T) {
 		})
 	}
 }
+
+func TestConfigFileWithUnusableBackendsSavesNoListedQueue(t *testing.T) {
+	ctx := context.Background()
+	for _, test := range []struct {
+		name    string
+		storage []daemon.PartitionStorage
+		wantErr string
+	}{
+		{
+			name: "DuplicateNames",
+			storage: []daemon.PartitionStorage{
+				{Name: "m-a", Memory: &daemon.MemoryConfig{}, Affinity: 1},
+				{Name: "m-a", Memory: &daemon.MemoryConfig{}, Affinity: 1},
+				{Name: "m-b", Memory: &daemon.MemoryConfig{}, Affinity: 1},
+			},
+			wantErr: "duplicate partition storage name 'm-a'",
+		},
+		{
+			name: "SumOverflows",
+			storage: []daemon.PartitionStorage{
+				{Name: "m-a", Memory: &daemon.MemoryConfig{}, Affinity: 1e308},
+				{Name: "m-b", Memory: &daemon.MemoryConfig{}, Affinity: 1e308},
+			},
+			wantErr: "sum of partition storage affinities is too large",
+		},
+		{
+			name: "EmptyName",
+			storage: []daemon.PartitionStorage{
+				{Name: "", Memory: &daemon.MemoryConfig{}, Affinity: 1},
+				{Name: "m-b", Memory: &daemon.MemoryConfig{}, Affinity: 1},
+			},
+			wantErr: "partition storage name cannot be empty",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			failed := daemon.Config{InMemoryListener: true}
+			err := daemon.ApplyConfigFile(ctx, &failed, daemon.File{
+				PartitionStorage: test.storage,
+				QueueStorage:     daemon.QueueStorage{Badger: &daemon.BadgerConfig{StorageDir: dir}},
+				Queues: []daemon.Queue{
+					{Name: "queue-listed", RequestedPartitions: 1, LeaseTimeout: time.Minute, ExpireTimeout: time.Hour,
+						Partitions: []daemon.Partition{{Partition: 0, StorageName: "m-b"}}},
+					{Name: "queue-placed", RequestedPartitions: 6, LeaseTimeout: time.Minute, ExpireTimeout: time.Hour},
+				},
+			}, io.Discard)
+			require.ErrorContains(t, err, test.wantErr)
+			if failed.Service.StorageConfig.Queues != nil {
+				require.NoError(t, failed.Service.StorageConfig.Queues.Close(ctx))
+			}
+
+			conf := daemon.Config{InMemoryListener: true}
+			require.NoError(t, daemon.ApplyConfigFile(ctx, &conf, daemon.File{
+				PartitionStorage: []daemon.PartitionStorage{{Name: "m-b", Memory: &daemon.MemoryConfig{}, Affinity: 1}},
+				QueueStorage:     daemon.QueueStorage{Badger: &daemon.BadgerConfig{StorageDir: dir}},
+			}, io.Discard))
+			d, err := daemon.NewDaemon(ctx, conf)
+			require.NoError(t, err)
+			defer func() { require.NoError(t, d.Shutdown(ctx)) }()
+
+			var list pb.QueuesListResponse
+			require.NoError(t, d.MustClient().QueuesList(ctx, &list, &querator.ListOptions{}))
+			assert.Empty(t, list.Items)
+		})
+	}
+}

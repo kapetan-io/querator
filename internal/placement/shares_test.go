@@ -37,6 +37,12 @@ func TestSharesRefuses(t *testing.T) {
 			wantErr:  "sum of partition storage affinities is too large",
 		},
 		{
+			name:     "EmptyName",
+			count:    10,
+			backends: []placement.Backend{{Name: "", Affinity: 1}, {Name: "m-b", Affinity: 1}},
+			wantErr:  "partition storage name cannot be empty",
+		},
+		{
 			name:     "NoAffinityAboveZero",
 			count:    1,
 			backends: []placement.Backend{{Name: "mem-00", Affinity: 0}},

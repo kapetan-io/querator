@@ -38,6 +38,9 @@ func CheckBackends(backends []Backend) error {
 	var total float64
 	seen := make(map[string]struct{}, len(backends))
 	for _, backend := range backends {
+		if backend.Name == "" {
+			return errors.New("partition storage name cannot be empty")
+		}
 		if _, ok := seen[backend.Name]; ok {
 			return fmt.Errorf("duplicate partition storage name '%s'; every partition storage must have a unique name",
 				backend.Name)

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
 	pb "github.com/kapetan-io/querator/proto"
@@ -19,8 +20,6 @@ import (
 	mongoopts "go.mongodb.org/mongo-driver/mongo/options"
 )
 
-// A queue stored before negative timeouts were refused must stay updatable through the API.
-// The InMemory and BadgerDB records are seeded in internal/store, where their storage is reachable.
 func TestQueuesUpdateOnStoredNegativeLease(t *testing.T) {
 	postgres := postgresTestSetup{}
 	mongo := mongoTestSetup{}
@@ -85,6 +84,14 @@ func TestQueuesUpdateOnStoredNegativeLease(t *testing.T) {
 				return name
 			}
 
+			stored := func(t *testing.T, name string) *pb.QueueInfo {
+				var list pb.QueuesListResponse
+				require.NoError(t, c.QueuesList(ctx, &list, &querator.ListOptions{Pivot: name, Limit: 1}))
+				require.Len(t, list.Items, 1)
+				require.Equal(t, name, list.Items[0].QueueName)
+				return list.Items[0]
+			}
+
 			t.Run("ReferenceOnly", func(t *testing.T) {
 				name := seed(t)
 				require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
@@ -92,10 +99,9 @@ func TestQueuesUpdateOnStoredNegativeLease(t *testing.T) {
 					Reference: new("owner"),
 				}))
 
-				var stored types.QueueInfo
-				require.NoError(t, conf.Queues.Get(ctx, name, &stored))
-				assert.Equal(t, "owner", stored.Reference)
-				assert.Equal(t, -5*time.Minute, stored.LeaseTimeout)
+				info := stored(t, name)
+				assert.Equal(t, "owner", info.Reference)
+				assert.Equal(t, "-5m0s", info.LeaseTimeout)
 			})
 
 			t.Run("PositiveLeaseRepairs", func(t *testing.T) {
@@ -105,21 +111,18 @@ func TestQueuesUpdateOnStoredNegativeLease(t *testing.T) {
 					LeaseTimeout: "2m",
 				}))
 
-				var stored types.QueueInfo
-				require.NoError(t, conf.Queues.Get(ctx, name, &stored))
-				assert.Equal(t, 2*time.Minute, stored.LeaseTimeout)
+				assert.Equal(t, "2m0s", stored(t, name).LeaseTimeout)
 			})
 
 			t.Run("DifferentNegativeRefused", func(t *testing.T) {
 				name := seed(t)
-				require.Error(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
-					QueueName:    name,
-					LeaseTimeout: "-6m",
-				}))
+				var current types.QueueInfo
+				require.NoError(t, conf.Queues.Get(ctx, name, &current))
 
-				var stored types.QueueInfo
-				require.NoError(t, conf.Queues.Get(ctx, name, &stored))
-				assert.Equal(t, -5*time.Minute, stored.LeaseTimeout)
+				err := conf.Queues.Update(ctx, types.QueueUpdate{Name: name, LeaseTimeout: -6 * time.Minute}.ApplyTo(current))
+				require.ErrorContains(t, err, "lease timeout is invalid; cannot be negative")
+
+				assert.Equal(t, "-5m0s", stored(t, name).LeaseTimeout)
 			})
 		})
 	}

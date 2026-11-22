@@ -16,8 +16,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// The service parsers refuse a negative timeout before it reaches the store, so only a direct
-// call can show that the store itself holds the rule.
 func TestQueuesRefuseNegativeTimeoutOnUpdate(t *testing.T) {
 	ctx := context.Background()
 	for _, backend := range []struct {
@@ -62,9 +60,6 @@ func TestQueuesRefuseNegativeTimeoutOnUpdate(t *testing.T) {
 	}
 }
 
-// A queue stored before negative timeouts were refused must stay updatable. The queues manager
-// hands the store the merged record, so the stored negative arrives as if it were new. Only
-// BadgerDB keeps records across versions, so it is the one backend here that can hold such a record.
 func TestQueuesUpdateOnStoredNegativeLease(t *testing.T) {
 	ctx := context.Background()
 

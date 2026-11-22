@@ -98,4 +98,67 @@ func TestQueuePartitionLimit(t *testing.T) {
 		require.ErrorContains(t, err, "invalid queue 'queue-listed'; lists 1025 partitions, cannot be more than 1024")
 		require.NoError(t, second.Service.StorageConfig.Queues.Close(context.Background()))
 	})
+
+	t.Run("ConfigFileQueueAtLimitKeepsUpdateAfterRestart", func(t *testing.T) {
+		const count = 1_024
+		name := random.String("queue-", 10)
+		partitions := make([]daemon.Partition, count)
+		for i := range partitions {
+			partitions[i] = daemon.Partition{Partition: i, StorageName: "mem-00"}
+		}
+
+		conf := &daemon.Config{}
+		require.NoError(t, daemon.ApplyConfigFile(context.Background(), conf, daemon.File{
+			PartitionStorage: []daemon.PartitionStorage{
+				{Name: "mem-00", Memory: &daemon.MemoryConfig{}, Affinity: 1},
+			},
+			QueueStorage: daemon.QueueStorage{Badger: &daemon.BadgerConfig{StorageDir: t.TempDir()}},
+			Queues: []daemon.Queue{{
+				Name:                name,
+				LeaseTimeout:        time.Minute,
+				ExpireTimeout:       10 * time.Minute,
+				RequestedPartitions: count,
+				Partitions:          partitions,
+			}},
+		}, io.Discard))
+
+		func() {
+			d := newDaemon(t, 10*clock.Second, conf.Service)
+			defer d.Shutdown(t)
+			c, ctx := d.MustClient(), d.Context()
+
+			var info pb.QueueInfo
+			require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: name}, &info))
+			assert.Len(t, info.Partitions, count)
+
+			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+				QueueName:      name,
+				RequestTimeout: "1m",
+				Items:          produceRandomItems(10),
+			}))
+			var lease pb.QueueLeaseResponse
+			require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+				ClientId:       random.String("client-", 10),
+				RequestTimeout: "5s",
+				QueueName:      name,
+				BatchSize:      1,
+			}, &lease))
+			assert.Len(t, lease.Items, 1)
+
+			require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
+				QueueName: name,
+				Reference: new("updated"),
+			}))
+		}()
+
+		d := newDaemon(t, 10*clock.Second, conf.Service)
+		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
+
+		var info pb.QueueInfo
+		require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: name}, &info))
+		assert.Equal(t, "updated", info.Reference)
+		assert.Equal(t, int32(count), info.RequestedPartitions)
+		assert.Len(t, info.Partitions, count)
+	})
 }

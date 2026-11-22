@@ -21,7 +21,7 @@ queue-storage:
 
 # Partition Storage defines where partitions are stored. Each backend's affinity is its share of a
 # queue's partitions, so 1.5 gets three times the partitions of 0.5. Fractions are accepted. A backend
-# with 0 or a negative affinity gets none of the partitions Querator places itself.
+# with affinity 0 gets none of the partitions Querator places itself. A negative affinity fails start.
 partition-storage:
   - name: badger-01
     affinity: 1
@@ -99,13 +99,10 @@ partition-storage:
 #    requested-partitions: 20
 #    partitions:
 #      - partition: 0
-#        read-only: false
 #        storage-name: badger-01
 #      - partition: 1
-#        read-only: false
 #        storage-name: postgres-01
 #      - partition: 2
-#        read-only: false
 #        storage-name: mongodb-01
 #  - name: queue-1-dead
 #    lease-timeout: 10m

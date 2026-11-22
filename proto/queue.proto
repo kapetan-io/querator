@@ -244,11 +244,15 @@ message QueueInfo {
 }
 
 message PartitionInfo {
-  // TODO: Information on the partitions availability, migration or rebalance status.
+  // The partition number. Never reused within a queue.
   int32 partition = 1;
   // The name of the storage backend which holds this partition, as given by the `name` of an
   // entry under `partition-storage` in the Querator config. Set by Querator; ignored on create and update.
   string storageName = 2 [json_name = "storage_name"];
+  // Either 'available' or 'draining'. A draining partition takes no new items and is removed once
+  // empty. Whether a partition is failing is reported by `failures` in '/queue.stats'.
+  // Set by Querator; ignored on create and update.
+  string state = 3;
 }
 
 message QueueClearRequest {

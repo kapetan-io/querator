@@ -254,4 +254,151 @@ func TestPlacement(t *testing.T) {
 		}, 5*clock.Second, 10*clock.Millisecond)
 		assert.Equal(t, 6, leased)
 	})
+
+	t.Run("ConfigFileQueueListingPartitions2And3", func(t *testing.T) {
+		conf := &daemon.Config{ListenAddress: "localhost:0"}
+		require.NoError(t, daemon.ApplyConfigFile(context.Background(), conf, daemon.File{
+			PartitionStorage: []daemon.PartitionStorage{
+				{Name: "mem-a", Memory: &daemon.MemoryConfig{}, Affinity: 1},
+				{Name: "mem-b", Memory: &daemon.MemoryConfig{}, Affinity: 1},
+			},
+			QueueStorage: daemon.QueueStorage{Memory: &daemon.MemoryConfig{}},
+			Queues: []daemon.Queue{{
+				Name: "queue-1", LeaseTimeout: clock.Minute, ExpireTimeout: 10 * clock.Minute,
+				RequestedPartitions: 2,
+				Partitions: []daemon.Partition{
+					{Partition: 2, StorageName: "mem-a"},
+					{Partition: 3, StorageName: "mem-b"},
+				},
+			}},
+		}, nil))
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*clock.Second)
+		defer cancel()
+		d, err := daemon.NewDaemon(ctx, *conf)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, d.Shutdown(ctx)) }()
+		c := d.MustClient()
+
+		var info pb.QueueInfo
+		require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: "queue-1"}, &info))
+		require.Len(t, info.Partitions, 2)
+		assert.Equal(t, int32(2), info.Partitions[0].Partition)
+		assert.Equal(t, int32(3), info.Partitions[1].Partition)
+
+		// Produce goes to the partition with the fewest unleased items, so two requests fill both
+		for range 2 {
+			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+				QueueName:      "queue-1",
+				RequestTimeout: "1s",
+				Items:          produceRandomItems(2),
+			}))
+		}
+		for _, number := range []int{2, 3} {
+			var list pb.StorageItemsListResponse
+			require.NoError(t, c.StorageItemsList(ctx, "queue-1", number, &list, nil))
+			assert.Len(t, list.Items, 2)
+		}
+
+		// A lease reads one partition at a time, so lease and complete until both are empty
+		completed := map[int32]int{}
+		require.Eventually(t, func() bool {
+			var lease pb.QueueLeaseResponse
+			require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+				QueueName:      "queue-1",
+				ClientId:       "client-1",
+				BatchSize:      4,
+				RequestTimeout: "1s",
+			}, &lease))
+			var ids []string
+			for _, item := range lease.Items {
+				ids = append(ids, item.Id)
+			}
+			if len(ids) != 0 {
+				require.NoError(t, c.QueueComplete(ctx, &pb.QueueCompleteRequest{
+					QueueName:      "queue-1",
+					Partition:      lease.Partition,
+					RequestTimeout: "1s",
+					Ids:            ids,
+				}))
+				completed[lease.Partition] += len(ids)
+			}
+			return completed[2]+completed[3] == 4
+		}, 5*clock.Second, 10*clock.Millisecond)
+		assert.Equal(t, map[int32]int{2: 2, 3: 2}, completed)
+
+		for _, number := range []int{2, 3} {
+			var list pb.StorageItemsListResponse
+			require.NoError(t, c.StorageItemsList(ctx, "queue-1", number, &list, nil))
+			assert.Empty(t, list.Items)
+		}
+	})
+
+	t.Run("ConfigFileQueuesListingSamePartitionKeepTheirOwnItems", func(t *testing.T) {
+		listed := func(name string) daemon.Queue {
+			return daemon.Queue{
+				Name: name, LeaseTimeout: clock.Minute, ExpireTimeout: 10 * clock.Minute,
+				RequestedPartitions: 1,
+				Partitions:          []daemon.Partition{{Partition: 0, StorageName: "mem-a"}},
+			}
+		}
+		conf := &daemon.Config{ListenAddress: "localhost:0"}
+		require.NoError(t, daemon.ApplyConfigFile(context.Background(), conf, daemon.File{
+			PartitionStorage: []daemon.PartitionStorage{
+				{Name: "mem-a", Memory: &daemon.MemoryConfig{}, Affinity: 1},
+			},
+			QueueStorage: daemon.QueueStorage{Memory: &daemon.MemoryConfig{}},
+			Queues:       []daemon.Queue{listed("queue-a"), listed("queue-b")},
+		}, nil))
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*clock.Second)
+		defer cancel()
+		d, err := daemon.NewDaemon(ctx, *conf)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, d.Shutdown(ctx)) }()
+		c := d.MustClient()
+
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			QueueName:      "queue-a",
+			RequestTimeout: "1s",
+			Items:          produceRandomItems(1),
+		}))
+
+		var list pb.StorageItemsListResponse
+		require.NoError(t, c.StorageItemsList(ctx, "queue-a", 0, &list, nil))
+		assert.Len(t, list.Items, 1)
+		require.NoError(t, c.StorageItemsList(ctx, "queue-b", 0, &list, nil))
+		assert.Empty(t, list.Items)
+	})
+
+	t.Run("StoredQueuesListingSamePartitionKeepTheirOwnItems", func(t *testing.T) {
+		conf := memoryBackends(store.PartitionStorage{Name: "mem-a", Affinity: 1})
+		// A queue record added to the queue store directly holds partitions without their queue
+		for _, name := range []string{"queue-a", "queue-b"} {
+			require.NoError(t, conf.Queues.Add(context.Background(), types.QueueInfo{
+				Name:                name,
+				LeaseTimeout:        clock.Minute,
+				ExpireTimeout:       10 * clock.Minute,
+				RequestedPartitions: 1,
+				NextPartition:       1,
+				PartitionInfo:       []types.PartitionInfo{{PartitionNum: 0, StorageName: "mem-a"}},
+			}))
+		}
+
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
+
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			QueueName:      "queue-a",
+			RequestTimeout: "1s",
+			Items:          produceRandomItems(1),
+		}))
+
+		var list pb.StorageItemsListResponse
+		require.NoError(t, c.StorageItemsList(ctx, "queue-a", 0, &list, nil))
+		assert.Len(t, list.Items, 1)
+		require.NoError(t, c.StorageItemsList(ctx, "queue-b", 0, &list, nil))
+		assert.Empty(t, list.Items)
+	})
 }

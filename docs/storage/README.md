@@ -111,14 +111,17 @@ partition-storage:
 
 This configuration would place 30% of partitions on BadgerDB and 70% on PostgreSQL.
 
-Affinity splits each queue's partitions, not the set of queues. Querator rounds each backend's
-share down and gives the leftover partitions one each to the backends with the highest affinity,
-ties going to the backend listed first. A queue with 10 partitions gets 3 on BadgerDB and 7 on
-PostgreSQL, while a queue with 1 partition always lands on PostgreSQL. A backend with an affinity
-of 0 or less receives no new partitions. Affinity may be fractional, so `0.5` and `1.5` split
-partitions 1 to 3, the same as `1` and `3`. Querator refuses to start when an affinity is `.nan`,
-`.inf` or `-.inf`, or when the affinities add up to more than a float64 can hold. `/queues.info`
-lists each partition with the `storage_name` of the backend which holds it.
+Affinity splits each queue's partitions, not the set of queues. Querator hands a new queue's
+partitions out one at a time, each to a backend still below its share in proportion to affinity.
+Among those backends it prefers the one furthest below its share, weighed by a hash of the queue
+name and the backend name, and on a tie the backend whose name sorts first. A queue with 10
+partitions gets 3 on BadgerDB and 7 on PostgreSQL. A queue with 1 partition lands on either, and
+which one depends on the queue's name. The order of backends in the config file does not change
+where partitions go. A backend with an affinity of 0 receives no new partitions. Affinity may be
+fractional, so `0.5` and `1.5` split partitions 1 to 3, the same as `1` and `3`. Querator refuses
+to start when an affinity is negative, `.nan`, `.inf` or `-.inf`, or when the affinities add up to
+more than a float64 can hold. `/queues.info` lists each partition with the `storage_name` of the
+backend which holds it.
 
 ## Storage Directory Structure
 

@@ -4,8 +4,7 @@
 // Queues, Namespaces, Users, APIKeys, Roles and RoleBindings hold metadata. A Partition holds the
 // items of one partition of one queue, and a PartitionStore hands out Partitions. Config gathers
 // the backends the QueuesManager is built with, and PartitionStorage pairs a PartitionStore with
-// its name and affinity. PlacePartitions spreads a new queue's partitions across the configured
-// backends in proportion to their affinity.
+// its name and affinity. The placement package decides which backend holds each partition.
 //
 // Every backend contacts storage lazily, on first use, and a Partition is driven by a single
 // goroutine, the logical queue that owns it, except Info and UpdateQueueInfo, which must be safe

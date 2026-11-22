@@ -46,7 +46,7 @@ answer could store an item a second time once a consumer had completed the first
 |---|---|
 | A queue cannot be its own dead-letter queue. | `orders` would wait on itself. |
 | A dead-letter queue has no dead-letter queue of its own. | Items never move back, so two queues can never wait on each other. |
-| A dead-letter queue has one partition. | `orders-dead` can skip an item it already holds only when every item lands in the same partition. |
+| A dead-letter queue has one partition taking produce. | `orders-dead` can skip an item it already holds only when every item lands in the same partition. |
 | The rules hold from both sides. | Saving either queue is refused if it would break a rule for the other, and `orders-dead` cannot be deleted while `orders` names it. |
 
 ## Consequences

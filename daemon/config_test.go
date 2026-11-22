@@ -293,7 +293,6 @@ func TestApplyConfigFile(t *testing.T) {
 				Partitions: []daemon.Partition{
 					{
 						Partition:   0,
-						ReadOnly:    false,
 						StorageName: "mem-00",
 					},
 				},
@@ -324,7 +323,7 @@ func TestApplyConfigFile(t *testing.T) {
 	assert.Len(t, info.PartitionInfo, 1)
 
 	assert.Equal(t, 0, info.PartitionInfo[0].PartitionNum)
-	assert.False(t, info.PartitionInfo[0].ReadOnly)
+	assert.False(t, info.PartitionInfo[0].Draining)
 	assert.Equal(t, "mem-00", info.PartitionInfo[0].StorageName)
 }
 
@@ -348,7 +347,6 @@ queues:
     requested-partitions: 20
     partitions:
       - partition: 0
-        read-only: false
         storage-name: mem-00
   - name: queue-1-dead
     lease-timeout: 10m
@@ -381,7 +379,7 @@ queues:
 	assert.Equal(t, 20, info.RequestedPartitions)
 	assert.Len(t, info.PartitionInfo, 1)
 	assert.Equal(t, 0, info.PartitionInfo[0].PartitionNum)
-	assert.False(t, info.PartitionInfo[0].ReadOnly)
+	assert.False(t, info.PartitionInfo[0].Draining)
 	assert.Equal(t, "mem-00", info.PartitionInfo[0].StorageName)
 }
 
@@ -737,7 +735,6 @@ queues:
 		{name: "Fractions", first: "0.5", second: "1.5", expected: map[string]int{"mem-00": 1, "mem-01": 3}},
 		{name: "WholeNumbers", first: "1", second: "3", expected: map[string]int{"mem-00": 1, "mem-01": 3}},
 		{name: "Zero", first: "0", second: "1", expected: map[string]int{"mem-01": 4}},
-		{name: "Negative", first: "-1", second: "1", expected: map[string]int{"mem-01": 4}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			counts, err := spread(t, test.first, test.second)
@@ -745,6 +742,11 @@ queues:
 			assert.Equal(t, test.expected, counts)
 		})
 	}
+
+	t.Run("Negative", func(t *testing.T) {
+		_, err := spread(t, "-1", "1")
+		require.ErrorContains(t, err, "partition storage 'mem-00' affinity cannot be negative")
+	})
 
 	for _, test := range []struct {
 		name  string
@@ -919,6 +921,25 @@ func TestConfigFileRefusesWhatItWouldIgnore(t *testing.T) {
 		require.NoError(t, daemon.ApplyConfigFile(context.Background(), &conf, file, io.Discard))
 		require.Len(t, conf.Service.StorageConfig.PartitionStorage, 1)
 		assert.IsType(t, &store.MemoryPartitionStore{}, conf.Service.StorageConfig.PartitionStorage[0].PartitionStore)
+	})
+
+	t.Run("PartitionReadOnlyKey", func(t *testing.T) {
+		_, err := daemon.ReadConfig(strings.NewReader(`
+partition-storage:
+  - name: mem-00
+    memory: {}
+    affinity: 1
+queues:
+  - name: queue-1
+    lease-timeout: 1m
+    expire-timeout: 1h
+    requested-partitions: 1
+    partitions:
+      - partition: 0
+        read-only: true
+        storage-name: mem-00
+`))
+		require.ErrorContains(t, err, "field read-only not found")
 	})
 
 	t.Run("PartitionStorageMemoryMapping", func(t *testing.T) {

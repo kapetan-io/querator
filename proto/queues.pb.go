@@ -290,6 +290,7 @@ type QueuesUpdateRequest struct {
 	// unlimited attempts.
 	MaxAttempts *int32 `protobuf:"varint,8,opt,name=maxAttempts,json=max_attempts,proto3,oneof" json:"maxAttempts,omitempty"`
 	// The number of partitions the queue is requesting. Left out or '0', the current count is kept.
+	// Above 1024 is rejected and nothing is saved.
 	RequestedPartitions int32 `protobuf:"varint,9,opt,name=requestedPartitions,json=requested_partitions,proto3" json:"requestedPartitions,omitempty"`
 	// The fields below are accepted so a JSON body copied from '/queues.info' is not refused as
 	// having unknown fields. All four are ignored on update, but a malformed namespace is refused.

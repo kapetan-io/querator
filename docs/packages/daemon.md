@@ -7,7 +7,8 @@ Why `daemon` skips config-file queues that already exist. The package comment in
 
 `ApplyConfigFile` adds each queue listed under `queues:` to queue storage. A
 queue that queue storage already holds is skipped, before any partition
-placement runs.
+placement runs. A queue that lists more than 1,024 partitions is not skipped: it
+fails start on every start, whether or not queue storage holds it.
 
 The skip lets a restart succeed when every partition storage has affinity 0.
 It applies only with persistent queue storage (badger, mongo or postgres); with

@@ -8,6 +8,9 @@ Superseded by ADR 16
 
 ## Context
 
+This ADR was only ever a proposal and was never accepted. [16. Queue Partitions](0016-queue-partitions.md)
+supersedes it.
+
 A queue is a single synchronization R/W point for producers and consumers. As such, eventually throughput will suffer
 as the bandwidth of items increases. In order to scale, Querator must provide some method of multiplexing production
 and lease of items across queues.

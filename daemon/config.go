@@ -574,22 +574,14 @@ func checkDeadLetterRules(ctx context.Context, declared []Queue, queues store.Qu
 
 func listStoredQueues(ctx context.Context, queues store.Queues) (map[string]types.QueueInfo, error) {
 	stored := make(map[string]types.QueueInfo)
-	const pageSize = 1000
-	var pivot []byte
-	for ctx.Err() == nil {
-		var page []types.QueueInfo
-		if err := queues.List(ctx, &page, types.ListOptions{Pivot: pivot, Limit: pageSize}); err != nil {
-			return nil, fmt.Errorf("while listing stored queues; %w", err)
-		}
-		for _, info := range page {
-			stored[info.Name] = info
-		}
-		if len(page) < pageSize {
-			return stored, nil
-		}
-		pivot = []byte(page[len(page)-1].Name)
+	err := store.ForEachQueue(ctx, queues, func(info types.QueueInfo) bool {
+		stored[info.Name] = info
+		return true
+	})
+	if err != nil {
+		return nil, fmt.Errorf("while listing stored queues; %w", err)
 	}
-	return nil, ctx.Err()
+	return stored, nil
 }
 
 func deadLetterRulesOver(queues map[string]types.QueueInfo) internal.DeadLetterRules {
@@ -604,7 +596,7 @@ func deadLetterRulesOver(queues map[string]types.QueueInfo) internal.DeadLetterR
 		},
 		SourceOf: func(_ context.Context, name string) (string, error) {
 			for _, source := range names {
-				if source != name && queues[source].DeadQueue == name {
+				if queues[source].DeadQueue == name {
 					return source, nil
 				}
 			}

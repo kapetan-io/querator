@@ -371,26 +371,15 @@ func (qm *QueuesManager) deadLetterRules() DeadLetterRules {
 }
 
 func (qm *QueuesManager) sourceQueueOf(ctx context.Context, name string) (string, error) {
-	const pageSize = 1000
-	var pivot []byte
-	for ctx.Err() == nil {
-		var page []types.QueueInfo
-		if err := qm.conf.StorageConfig.Queues.List(ctx, &page, types.ListOptions{Pivot: pivot, Limit: pageSize}); err != nil {
-			return "", errors.Errorf("Queues.List(): %w", err)
+	var source string
+	err := store.ForEachQueue(ctx, qm.conf.StorageConfig.Queues, func(queue types.QueueInfo) bool {
+		if queue.DeadQueue == name && queue.Name != name {
+			source = queue.Name
+			return false
 		}
-
-		for _, queue := range page {
-			if queue.DeadQueue == name && queue.Name != name {
-				return queue.Name, nil
-			}
-		}
-
-		if len(page) < pageSize {
-			return "", nil
-		}
-		pivot = []byte(page[len(page)-1].Name)
-	}
-	return "", ctx.Err()
+		return true
+	})
+	return source, err
 }
 
 func (qm *QueuesManager) Delete(ctx context.Context, name string) error {

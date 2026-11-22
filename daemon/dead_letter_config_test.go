@@ -2,6 +2,7 @@ package daemon_test
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -465,5 +466,41 @@ queues:
 		var dlq types.QueueInfo
 		require.NoError(t, conf.Service.StorageConfig.Queues.Get(ctx, "dlq", &dlq))
 		assert.Equal(t, 4, dlq.RequestedPartitions)
+	})
+
+	t.Run("SourceStoredPastFirstPageOfQueues", func(t *testing.T) {
+		dir := t.TempDir()
+		conf, err := apply(t, dir, "")
+		require.NoError(t, err)
+		for i := range 1_000 {
+			require.NoError(t, conf.Service.StorageConfig.Queues.Add(ctx, types.QueueInfo{
+				Name:                fmt.Sprintf("filler-%04d", i),
+				LeaseTimeout:        time.Minute,
+				ExpireTimeout:       time.Hour,
+				RequestedPartitions: 1,
+			}))
+		}
+		require.NoError(t, conf.Service.StorageConfig.Queues.Add(ctx, types.QueueInfo{
+			Name:                "src",
+			DeadQueue:           "dlq",
+			LeaseTimeout:        time.Minute,
+			ExpireTimeout:       time.Hour,
+			RequestedPartitions: 1,
+		}))
+		require.NoError(t, conf.Service.StorageConfig.Queues.Close(ctx))
+
+		conf, err = apply(t, dir, `
+queues:
+  - name: dlq
+    lease-timeout: 1m
+    expire-timeout: 1h
+    requested-partitions: 4
+`)
+		require.EqualError(t, err, "invalid queue 'dlq'; partitions is invalid; 'dlq' is the dead_queue of 'src' and must have "+
+			"a single partition, clear or change dead_queue on 'src' first")
+		defer func() { require.NoError(t, conf.Service.StorageConfig.Queues.Close(ctx)) }()
+
+		var stored types.QueueInfo
+		assert.ErrorIs(t, conf.Service.StorageConfig.Queues.Get(ctx, "dlq", &stored), store.ErrQueueNotExist)
 	})
 }

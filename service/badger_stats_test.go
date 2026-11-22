@@ -18,7 +18,7 @@ import (
 )
 
 // TestBadgerStats runs against BadgerDB only, because only BadgerDB's stats scan runs past the read
-// timeout; the other backends stop at it. See docs/adr/0030-badger-stats-scan-past-read-timeout.md.
+// timeout; the other backends stop at it.
 func TestBadgerStats(t *testing.T) {
 	badgerdb := badgerTestSetup{Dir: t.TempDir()}
 	testBadgerStats(t, func() store.Config {

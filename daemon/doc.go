@@ -51,8 +51,7 @@ limitations under the License.
 // Config. Queue storage takes at most one backend section (memory, badger,
 // mongo or postgres) and uses memory when none is set; each partition storage
 // takes exactly one. The memory backend has no options and is selected with an
-// empty mapping (memory: {}). In queue storage and auth storage a backend key
-// with no value, such as a bare "memory:" or "badger:", still names that
-// backend. See docs/packages/daemon.md for how queues listed in the file are
-// applied.
+// empty mapping (memory: {}). A backend key written with no value, such as a
+// bare "memory:" or "badger:", still names that backend. See
+// docs/packages/daemon.md for how queues listed in the file are applied.
 package daemon

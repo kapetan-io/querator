@@ -820,6 +820,51 @@ func TestConfigFileRefusesWhatItWouldIgnore(t *testing.T) {
 			wantErr: "storage-dir",
 		},
 		{
+			name:    "PartitionStorageBadgerWithoutSettings",
+			config:  "partition-storage:\n  - name: p0\n    badger:\n",
+			wantErr: "storage-dir",
+		},
+		{
+			name:    "PartitionStorageMongoWithoutSettings",
+			config:  "partition-storage:\n  - name: p0\n    mongo:\n",
+			wantErr: "connection-string",
+		},
+		{
+			name:    "PartitionStoragePostgresWithoutSettings",
+			config:  "partition-storage:\n  - name: p0\n    postgres:\n",
+			wantErr: "connection-string",
+		},
+		{
+			name:    "PartitionStorageMemoryBesideBareBadger",
+			config:  "partition-storage:\n  - name: p0\n    memory: {}\n    badger:\n",
+			wantErr: "partition storage 'p0' defines multiple backends; only one of (memory, badger, mongo, postgres) is allowed",
+		},
+		{
+			name:    "PartitionStorageTwoBareBackends",
+			config:  "partition-storage:\n  - name: p0\n    memory:\n    badger:\n",
+			wantErr: "multiple backends",
+		},
+		{
+			name:    "PartitionStorageSecondEntryBareBadgerBesideMemory",
+			config:  "partition-storage:\n  - name: p0\n    memory: {}\n  - name: p1\n    memory: {}\n    badger:\n",
+			wantErr: "partition storage 'p1' defines multiple backends",
+		},
+		{
+			name:    "PartitionStorageNullEntry",
+			config:  "partition-storage:\n  - ~\n  - name: a\n    memory: {}\n  - name: b\n    badger:\n",
+			wantErr: "partition-storage entry 1 is empty",
+		},
+		{
+			name:    "PartitionStorageNullKeywordEntry",
+			config:  "partition-storage:\n  - name: a\n    memory: {}\n  - null\n",
+			wantErr: "partition-storage entry 2 is empty",
+		},
+		{
+			name:    "PartitionStorageBareDashEntry",
+			config:  "partition-storage:\n  -\n  - name: a\n    memory: {}\n",
+			wantErr: "partition-storage entry 1 is empty",
+		},
+		{
 			name:    "QueueStorageTwoEmptyBackends",
 			config:  "queue-storage:\n  memory:\n  badger:\n",
 			wantErr: "multiple backends",
@@ -859,5 +904,22 @@ func TestConfigFileRefusesWhatItWouldIgnore(t *testing.T) {
 		var conf daemon.Config
 		require.NoError(t, daemon.ApplyConfigFile(context.Background(), &conf, file, io.Discard))
 		assert.IsType(t, &store.MemoryQueues{}, conf.Service.StorageConfig.Queues)
+	})
+	t.Run("PartitionStorageMemoryWithoutSettings", func(t *testing.T) {
+		file, err := daemon.ReadConfig(strings.NewReader("partition-storage:\n  - name: p0\n    memory:\n"))
+		require.NoError(t, err)
+		var conf daemon.Config
+		require.NoError(t, daemon.ApplyConfigFile(context.Background(), &conf, file, io.Discard))
+		require.Len(t, conf.Service.StorageConfig.PartitionStorage, 1)
+		assert.IsType(t, &store.MemoryPartitionStore{}, conf.Service.StorageConfig.PartitionStorage[0].PartitionStore)
+	})
+
+	t.Run("PartitionStorageMemoryMapping", func(t *testing.T) {
+		file, err := daemon.ReadConfig(strings.NewReader("partition-storage:\n  - name: p0\n    memory: {}\n"))
+		require.NoError(t, err)
+		var conf daemon.Config
+		require.NoError(t, daemon.ApplyConfigFile(context.Background(), &conf, file, io.Discard))
+		require.Len(t, conf.Service.StorageConfig.PartitionStorage, 1)
+		assert.IsType(t, &store.MemoryPartitionStore{}, conf.Service.StorageConfig.PartitionStorage[0].PartitionStore)
 	})
 }

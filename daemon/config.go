@@ -194,7 +194,9 @@ func ReadConfig(r io.Reader) (File, error) {
 	if err := yaml.Unmarshal(content, &doc); err != nil {
 		return File{}, fmt.Errorf("while reading config file: %w", err)
 	}
-	keepEmptyBackendKeys(&doc, &file)
+	if err := keepEmptyBackendKeys(&doc, &file); err != nil {
+		return File{}, fmt.Errorf("while reading config file: %w", err)
+	}
 	return file, nil
 }
 
@@ -223,23 +225,36 @@ func isEmptyDocument(doc *yaml.Node) bool {
 	return doc.Content[0].Kind == yaml.ScalarNode && doc.Content[0].Tag == "!!null"
 }
 
-func keepEmptyBackendKeys(doc *yaml.Node, file *File) {
+func keepEmptyBackendKeys(doc *yaml.Node, file *File) error {
 	if len(doc.Content) == 0 {
-		return
+		return nil
 	}
 	if queues := mappingValue(doc.Content[0], "queue-storage"); queues != nil {
 		keepEmptyQueueStorageKeys(queues, &file.QueueStorage)
 	}
+	if parts := mappingValue(doc.Content[0], "partition-storage"); parts != nil && parts.Kind == yaml.SequenceNode {
+		for i, entry := range parts.Content {
+			if entry.Kind == yaml.AliasNode {
+				entry = entry.Alias
+			}
+			if entry.Kind == yaml.ScalarNode && entry.Tag == "!!null" {
+				return fmt.Errorf("partition-storage entry %d is empty; remove it or give it a name and a backend", i+1)
+			}
+		}
+		for i, entry := range parts.Content {
+			keepEmptyPartitionStorageKeys(entry, &file.PartitionStorage[i])
+		}
+	}
 	section := mappingValue(doc.Content[0], "auth")
 	if section == nil {
-		return
+		return nil
 	}
 	if file.Auth == nil {
 		file.Auth = &AuthConfig{}
 	}
 	storage := mappingValue(section, "storage")
 	if storage == nil {
-		return
+		return nil
 	}
 	if mappingValue(storage, "memory") != nil && file.Auth.Storage.Memory == nil {
 		file.Auth.Storage.Memory = &MemoryConfig{}
@@ -247,9 +262,25 @@ func keepEmptyBackendKeys(doc *yaml.Node, file *File) {
 	if mappingValue(storage, "badger") != nil && file.Auth.Storage.Badger == nil {
 		file.Auth.Storage.Badger = &BadgerConfig{}
 	}
+	return nil
 }
 
 func keepEmptyQueueStorageKeys(node *yaml.Node, storage *QueueStorage) {
+	if mappingValue(node, "memory") != nil && storage.Memory == nil {
+		storage.Memory = &MemoryConfig{}
+	}
+	if mappingValue(node, "badger") != nil && storage.Badger == nil {
+		storage.Badger = &BadgerConfig{}
+	}
+	if mappingValue(node, "mongo") != nil && storage.Mongo == nil {
+		storage.Mongo = &MongoConfig{}
+	}
+	if mappingValue(node, "postgres") != nil && storage.Postgres == nil {
+		storage.Postgres = &PostgresConfig{}
+	}
+}
+
+func keepEmptyPartitionStorageKeys(node *yaml.Node, storage *PartitionStorage) {
 	if mappingValue(node, "memory") != nil && storage.Memory == nil {
 		storage.Memory = &MemoryConfig{}
 	}

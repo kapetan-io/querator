@@ -1,6 +1,7 @@
 package main_test
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net"
@@ -31,12 +32,42 @@ func writeConfig(t *testing.T, address string) string {
 	return path
 }
 
+type logBuffer struct {
+	mutex  sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (b *logBuffer) Write(p []byte) (int, error) {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+	return b.buffer.Write(p)
+}
+
+func (b *logBuffer) String() string {
+	b.mutex.Lock()
+	defer b.mutex.Unlock()
+	return b.buffer.String()
+}
+
+func writeLevelConfig(t *testing.T, address, level string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	content := "address: " + address + "\nlogging:\n  level: " + level + "\n"
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	return path
+}
+
 func withServer(t *testing.T, args []string, check func()) {
+	t.Helper()
+	withLoggedServer(t, io.Discard, args, check)
+}
+
+func withLoggedServer(t *testing.T, w io.Writer, args []string, check func()) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	var served error
-	command := main.NewServerCommand(io.Discard)
+	command := main.NewServerCommand(w)
 	command.SetArgs(args)
 	wg.Go(func() { served = command.ExecuteContext(ctx) })
 	defer func() {
@@ -103,5 +134,71 @@ func TestServerAddress(t *testing.T) {
 			_, err := net.DialTimeout("tcp", fileAddress, 200*time.Millisecond)
 			require.Error(t, err)
 		})
+	})
+}
+
+func TestServerLogLevel(t *testing.T) {
+	const debugLine = "Shutdown complete"
+
+	t.Run("FlagSetsLogLevel", func(t *testing.T) {
+		address := freeAddress(t)
+		t.Setenv("QUERATOR_LOG_LEVEL", "")
+		logs := &logBuffer{}
+		args := []string{"--log-level", "debug", "--config", writeLevelConfig(t, address, "error")}
+		withLoggedServer(t, logs, args, func() {
+			requireListening(t, address)
+		})
+		require.Contains(t, logs.String(), debugLine)
+	})
+
+	t.Run("EnvSetsLogLevel", func(t *testing.T) {
+		address := freeAddress(t)
+		t.Setenv("QUERATOR_LOG_LEVEL", "debug")
+		logs := &logBuffer{}
+		withLoggedServer(t, logs, []string{"--config", writeLevelConfig(t, address, "error")}, func() {
+			requireListening(t, address)
+		})
+		require.Contains(t, logs.String(), debugLine)
+	})
+
+	t.Run("ConfigFileSetsLogLevelWhenNothingElseSet", func(t *testing.T) {
+		address := freeAddress(t)
+		t.Setenv("QUERATOR_LOG_LEVEL", "")
+		logs := &logBuffer{}
+		withLoggedServer(t, logs, []string{"--config", writeLevelConfig(t, address, "error")}, func() {
+			requireListening(t, address)
+		})
+		require.NotContains(t, logs.String(), debugLine)
+	})
+
+	t.Run("ConfigFileDebugStillApplies", func(t *testing.T) {
+		address := freeAddress(t)
+		t.Setenv("QUERATOR_LOG_LEVEL", "")
+		logs := &logBuffer{}
+		withLoggedServer(t, logs, []string{"--config", writeLevelConfig(t, address, "debug")}, func() {
+			requireListening(t, address)
+		})
+		require.Contains(t, logs.String(), debugLine)
+	})
+
+	t.Run("FlagWinsOverEnvAndConfigFile", func(t *testing.T) {
+		address := freeAddress(t)
+		t.Setenv("QUERATOR_LOG_LEVEL", "debug")
+		logs := &logBuffer{}
+		args := []string{"--log-level", "error", "--config", writeLevelConfig(t, address, "debug")}
+		withLoggedServer(t, logs, args, func() {
+			requireListening(t, address)
+		})
+		require.NotContains(t, logs.String(), debugLine)
+	})
+
+	t.Run("EnvWinsOverConfigFile", func(t *testing.T) {
+		address := freeAddress(t)
+		t.Setenv("QUERATOR_LOG_LEVEL", "error")
+		logs := &logBuffer{}
+		withLoggedServer(t, logs, []string{"--config", writeLevelConfig(t, address, "debug")}, func() {
+			requireListening(t, address)
+		})
+		require.NotContains(t, logs.String(), debugLine)
 	})
 }

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"cmp"
 	"context"
 	"fmt"
 	"io"
@@ -28,6 +27,9 @@ Configuration can be provided via flags, environment variables, or a config file
 			if params.Address == "" {
 				params.Address = os.Getenv("QUERATOR_ADDRESS")
 			}
+			if params.LogLevel == "" {
+				params.LogLevel = os.Getenv("QUERATOR_LOG_LEVEL")
+			}
 			return StartServer(cmd.Context(), w, params)
 		},
 	}
@@ -37,8 +39,8 @@ Configuration can be provided via flags, environment variables, or a config file
 	command.Flags().StringVar(&params.Address, "address", "",
 		"HTTP address to bind. When not set, QUERATOR_ADDRESS is used, then the config file's address")
 	command.Flags().StringVar(&params.LogLevel, "log-level",
-		cmp.Or(os.Getenv("QUERATOR_LOG_LEVEL"), "info"),
-		"Logging level (debug,error,warn,info)")
+		"",
+		"Logging level (debug,error,warn,info). When not set, QUERATOR_LOG_LEVEL is used, then the config file's logging level")
 	return command
 }
 
@@ -56,6 +58,10 @@ func StartServer(ctx context.Context, w io.Writer, params FlagParams) error {
 			return err
 		}
 		file.ConfigFile = params.ConfigFile
+	}
+
+	if params.LogLevel != "" {
+		file.Logging.Level = params.LogLevel
 	}
 
 	var conf daemon.Config

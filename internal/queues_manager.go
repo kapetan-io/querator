@@ -4,7 +4,6 @@ import (
 	"context"
 	"log/slog"
 	"maps"
-	"math"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -48,22 +47,8 @@ func NewQueuesManager(conf QueuesManagerConfig) (*QueuesManager, error) {
 		return nil, errors.New("conf.Config.PartitionStorage cannot be empty")
 	}
 
-	var total float64
-	seen := make(map[string]struct{}, len(conf.StorageConfig.PartitionStorage))
-	for _, b := range conf.StorageConfig.PartitionStorage {
-		if _, ok := seen[b.Name]; ok {
-			return nil, errors.Errorf("duplicate partition storage name '%s'; every partition storage must have a unique name", b.Name)
-		}
-		seen[b.Name] = struct{}{}
-		if math.IsNaN(b.Affinity) || math.IsInf(b.Affinity, 0) {
-			return nil, errors.Errorf("partition storage '%s' affinity must be a finite number, got %v", b.Name, b.Affinity)
-		}
-		if b.Affinity > 0 {
-			total += b.Affinity
-		}
-	}
-	if math.IsInf(total, 0) {
-		return nil, errors.New("the sum of partition storage affinities is too large; lower the affinities")
+	if err := placement.CheckBackends(conf.StorageConfig.Backends()); err != nil {
+		return nil, err
 	}
 
 	qm := &QueuesManager{

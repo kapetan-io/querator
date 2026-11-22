@@ -3,3 +3,4 @@ participle:
   allow:
     - value: draining
       reason: Draining is a partition state in docs/CONTEXT.md and the value of `state` in the API, not an activity.
+      packages: [internal/types]

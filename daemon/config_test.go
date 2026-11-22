@@ -987,3 +987,163 @@ queues:` + test.queue))
 		})
 	}
 }
+
+func TestConfigFileWithUnusableBackendsSavesNoQueue(t *testing.T) {
+	ctx := context.Background()
+	start := func(t *testing.T, dir string, storage []daemon.PartitionStorage) (*daemon.Daemon, error) {
+		t.Helper()
+		conf := daemon.Config{InMemoryListener: true}
+		err := daemon.ApplyConfigFile(ctx, &conf, daemon.File{
+			PartitionStorage: storage,
+			QueueStorage:     daemon.QueueStorage{Badger: &daemon.BadgerConfig{StorageDir: dir}},
+			Queues: []daemon.Queue{{
+				Name:                "queue-placed",
+				RequestedPartitions: 6,
+				LeaseTimeout:        time.Minute,
+				ExpireTimeout:       time.Hour,
+			}},
+		}, io.Discard)
+		var d *daemon.Daemon
+		if err == nil {
+			d, err = daemon.NewDaemon(ctx, conf)
+		}
+		if err == nil {
+			return d, nil
+		}
+		if conf.Service.StorageConfig.Queues != nil {
+			require.NoError(t, conf.Service.StorageConfig.Queues.Close(ctx))
+		}
+		return nil, err
+	}
+
+	for _, test := range []struct {
+		name    string
+		storage []daemon.PartitionStorage
+		wantErr string
+	}{
+		{
+			name: "DuplicateNames",
+			storage: []daemon.PartitionStorage{
+				{Name: "m-a", Memory: &daemon.MemoryConfig{}, Affinity: 1},
+				{Name: "m-a", Memory: &daemon.MemoryConfig{}, Affinity: 1},
+				{Name: "m-b", Memory: &daemon.MemoryConfig{}, Affinity: 1},
+			},
+			wantErr: "duplicate partition storage name 'm-a'",
+		},
+		{
+			name: "SumOverflows",
+			storage: []daemon.PartitionStorage{
+				{Name: "m-a", Memory: &daemon.MemoryConfig{}, Affinity: 1e308},
+				{Name: "m-b", Memory: &daemon.MemoryConfig{}, Affinity: 1e308},
+			},
+			wantErr: "sum of partition storage affinities is too large",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			_, err := start(t, dir, test.storage)
+			require.ErrorContains(t, err, test.wantErr)
+
+			d, err := start(t, dir, []daemon.PartitionStorage{
+				{Name: "m-a", Memory: &daemon.MemoryConfig{}, Affinity: 1},
+				{Name: "m-b", Memory: &daemon.MemoryConfig{}, Affinity: 1},
+			})
+			require.NoError(t, err)
+			defer func() { require.NoError(t, d.Shutdown(ctx)) }()
+			c := d.MustClient()
+
+			var info pb.QueueInfo
+			require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: "queue-placed"}, &info))
+			require.Len(t, info.Partitions, 6)
+			for _, p := range info.Partitions {
+				assert.Contains(t, []string{"m-a", "m-b"}, p.StorageName)
+			}
+			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+				QueueName:      "queue-placed",
+				RequestTimeout: "5s",
+				Items:          []*pb.QueueProduceItem{{Bytes: []byte("after-fix")}},
+			}))
+		})
+	}
+}
+
+func TestConfigFileListingAboveLimitSavesNoQueue(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	storage := []daemon.PartitionStorage{{Name: "mem-00", Memory: &daemon.MemoryConfig{}, Affinity: 1}}
+	listed := make([]daemon.Partition, 1_025)
+	for i := range listed {
+		listed[i] = daemon.Partition{Partition: i, StorageName: "mem-00"}
+	}
+
+	failed := daemon.Config{InMemoryListener: true}
+	err := daemon.ApplyConfigFile(ctx, &failed, daemon.File{
+		PartitionStorage: storage,
+		QueueStorage:     daemon.QueueStorage{Badger: &daemon.BadgerConfig{StorageDir: dir}},
+		Queues: []daemon.Queue{
+			{Name: "q-ok", RequestedPartitions: 1, LeaseTimeout: time.Minute, ExpireTimeout: time.Hour},
+			{Name: "q-big", RequestedPartitions: 1_025, LeaseTimeout: time.Minute, ExpireTimeout: time.Hour,
+				Partitions: listed},
+		},
+	}, io.Discard)
+	require.ErrorContains(t, err, "invalid queue 'q-big'; lists 1025 partitions, cannot be more than 1024")
+	require.NoError(t, failed.Service.StorageConfig.Queues.Close(ctx))
+
+	conf := daemon.Config{InMemoryListener: true}
+	require.NoError(t, daemon.ApplyConfigFile(ctx, &conf, daemon.File{
+		PartitionStorage: storage,
+		QueueStorage:     daemon.QueueStorage{Badger: &daemon.BadgerConfig{StorageDir: dir}},
+	}, io.Discard))
+	d, err := daemon.NewDaemon(ctx, conf)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, d.Shutdown(ctx)) }()
+
+	var list pb.QueuesListResponse
+	require.NoError(t, d.MustClient().QueuesList(ctx, &list, &querator.ListOptions{}))
+	assert.Empty(t, list.Items)
+}
+
+func TestConfigFileQueueSavesNextPartition(t *testing.T) {
+	ctx := context.Background()
+	for _, test := range []struct {
+		name     string
+		queue    daemon.Queue
+		wantNext int
+	}{
+		{
+			name: "ListedPartitions2And3",
+			queue: daemon.Queue{
+				Name: "queue-listed", RequestedPartitions: 2,
+				LeaseTimeout: time.Minute, ExpireTimeout: time.Hour,
+				Partitions: []daemon.Partition{
+					{Partition: 3, StorageName: "mem-00"},
+					{Partition: 2, StorageName: "mem-00"},
+				},
+			},
+			wantNext: 4,
+		},
+		{
+			name: "PlacedPartitions",
+			queue: daemon.Queue{
+				Name: "queue-placed", RequestedPartitions: 4,
+				LeaseTimeout: time.Minute, ExpireTimeout: time.Hour,
+			},
+			wantNext: 4,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			conf := &daemon.Config{}
+			require.NoError(t, daemon.ApplyConfigFile(ctx, conf, daemon.File{
+				PartitionStorage: []daemon.PartitionStorage{
+					{Name: "mem-00", Memory: &daemon.MemoryConfig{}, Affinity: 1},
+				},
+				QueueStorage: daemon.QueueStorage{Memory: &daemon.MemoryConfig{}},
+				Queues:       []daemon.Queue{test.queue},
+			}, io.Discard))
+
+			var info types.QueueInfo
+			require.NoError(t, conf.Service.StorageConfig.Queues.Get(ctx, test.queue.Name, &info))
+			assert.Equal(t, test.wantNext, info.NextPartition)
+		})
+	}
+}

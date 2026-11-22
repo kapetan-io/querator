@@ -34,6 +34,29 @@ func CanPlace(backends []Backend) bool {
 	return false
 }
 
+func CheckBackends(backends []Backend) error {
+	var total float64
+	seen := make(map[string]struct{}, len(backends))
+	for _, backend := range backends {
+		if _, ok := seen[backend.Name]; ok {
+			return fmt.Errorf("duplicate partition storage name '%s'; every partition storage must have a unique name",
+				backend.Name)
+		}
+		seen[backend.Name] = struct{}{}
+		if math.IsNaN(backend.Affinity) || math.IsInf(backend.Affinity, 0) {
+			return fmt.Errorf("partition storage '%s' affinity must be a finite number, got %v",
+				backend.Name, backend.Affinity)
+		}
+		if backend.Affinity > 0 {
+			total += backend.Affinity
+		}
+	}
+	if math.IsInf(total*MaxPartitions, 0) {
+		return errors.New("the sum of partition storage affinities is too large; lower the affinities")
+	}
+	return nil
+}
+
 func hashUnit(queue string, backend Backend) float64 {
 	sum := sha256.Sum256([]byte(queue + "\x00" + backend.Name))
 	value := binary.BigEndian.Uint64(sum[:8]) >> 11
@@ -43,6 +66,9 @@ func hashUnit(queue string, backend Backend) float64 {
 func Shares(queue string, count int, backends []Backend) (map[string]int, error) {
 	if count > MaxPartitions {
 		return nil, fmt.Errorf("cannot place %d partitions, more than %d", count, MaxPartitions)
+	}
+	if err := CheckBackends(backends); err != nil {
+		return nil, err
 	}
 	var taking []Backend
 	for _, backend := range backends {
@@ -156,54 +182,81 @@ func ProduceTo(queue types.QueueInfo, failing func(types.PartitionInfo) bool) []
 
 func ProduceInto(queue types.QueueInfo, unleased func(types.PartitionInfo) int,
 	failing func(types.PartitionInfo) bool) (types.PartitionInfo, bool) {
-	var emptiest types.PartitionInfo
-	var found bool
+	chosen := -1
 	var fewest int
-	for _, partition := range ProduceTo(queue, failing) {
-		count := unleased(partition)
-		if found && count > fewest {
+	for i := range queue.PartitionInfo {
+		partition := &queue.PartitionInfo[i]
+		if partition.Draining || failing(*partition) {
 			continue
 		}
-		if found && count == fewest && partition.PartitionNum > emptiest.PartitionNum {
+		count := unleased(*partition)
+		if chosen >= 0 && count > fewest {
 			continue
 		}
-		emptiest, fewest, found = partition, count, true
+		if chosen >= 0 && count == fewest && partition.PartitionNum > queue.PartitionInfo[chosen].PartitionNum {
+			continue
+		}
+		chosen, fewest = i, count
 	}
-	return emptiest, found
+	if chosen < 0 {
+		return types.PartitionInfo{}, false
+	}
+	return queue.PartitionInfo[chosen], true
 }
 
 func LeaseFrom(queue types.QueueInfo, unleased func(types.PartitionInfo) int,
 	failing func(types.PartitionInfo) bool) (types.PartitionInfo, bool) {
-	partitions := make([]types.PartitionInfo, len(queue.PartitionInfo))
-	copy(partitions, queue.PartitionInfo)
-	sort.Slice(partitions, func(i, j int) bool { return partitions[i].PartitionNum < partitions[j].PartitionNum })
+	draining, blocked := firstDraining(queue, unleased, failing)
+	if blocked {
+		return types.PartitionInfo{}, false
+	}
+	if draining >= 0 {
+		return queue.PartitionInfo[draining], true
+	}
 
+	chosen := -1
+	var most int
+	for i := range queue.PartitionInfo {
+		partition := &queue.PartitionInfo[i]
+		if partition.Draining || failing(*partition) {
+			continue
+		}
+		count := unleased(*partition)
+		if chosen >= 0 && count < most {
+			continue
+		}
+		if chosen >= 0 && count == most && partition.PartitionNum > queue.PartitionInfo[chosen].PartitionNum {
+			continue
+		}
+		chosen, most = i, count
+	}
+	if chosen < 0 {
+		return types.PartitionInfo{}, false
+	}
+	return queue.PartitionInfo[chosen], true
+}
+
+func firstDraining(queue types.QueueInfo, unleased func(types.PartitionInfo) int,
+	failing func(types.PartitionInfo) bool) (int, bool) {
 	ordered := queue.RequestedPartitions == 1
-	for _, partition := range partitions {
+	chosen := -1
+	var blocked bool
+	for i := range queue.PartitionInfo {
+		partition := &queue.PartitionInfo[i]
 		if !partition.Draining {
 			continue
 		}
-		if failing(partition) {
-			if ordered {
-				return types.PartitionInfo{}, false
-			}
+		if chosen >= 0 && partition.PartitionNum > queue.PartitionInfo[chosen].PartitionNum {
 			continue
 		}
-		if unleased(partition) > 0 {
-			return partition, true
-		}
-	}
-
-	var fullest types.PartitionInfo
-	var found bool
-	var most int
-	for _, partition := range partitions {
-		if partition.Draining || failing(partition) {
+		down := failing(*partition)
+		if down && ordered {
+			chosen, blocked = i, true
 			continue
 		}
-		if count := unleased(partition); count > most || !found {
-			fullest, most, found = partition, count, true
+		if !down && unleased(*partition) > 0 {
+			chosen, blocked = i, false
 		}
 	}
-	return fullest, found
+	return chosen, blocked
 }

@@ -6,6 +6,8 @@ Date: 2026-11-19
 
 Accepted
 
+Superseded in part by [31. Partition placement and rebalance](0031-partition-placement-and-rebalance.md)
+
 ## Context
 
 A queue can name another queue as its dead-letter queue. When an item in `orders` expires or reaches

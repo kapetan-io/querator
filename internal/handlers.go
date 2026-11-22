@@ -27,6 +27,7 @@ func (l *Logical) handleColdRequests(state *QueueState, req *Request) {
 			d.Store.UpdateQueueInfo(info)
 			d.Info.Queue = info
 		}
+		state.load = l.loadOf(state)
 		close(req.ReadyCh)
 	case MethodReload:
 		l.handleReload(state, req)

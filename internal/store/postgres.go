@@ -152,7 +152,8 @@ func (c *PostgresConfig) Ping(ctx context.Context) error {
 
 type PostgresQueues struct {
 	QueuesValidation
-	conf PostgresConfig
+	conf     PostgresConfig
+	upgraded atomic.Bool
 }
 
 var _ Queues = &PostgresQueues{}
@@ -199,6 +200,14 @@ func (p *PostgresQueues) ensureTable(_ context.Context, pool *pgxpool.Pool) erro
 	if err != nil {
 		return errors.Errorf("create queues table: %w", err)
 	}
+	if p.upgraded.Load() {
+		return nil
+	}
+	if _, err := pool.Exec(bgCtx,
+		`ALTER TABLE queues ADD COLUMN IF NOT EXISTS next_partition INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return errors.Errorf("add next_partition to queues table: %w", err)
+	}
+	p.upgraded.Store(true)
 	return nil
 }
 

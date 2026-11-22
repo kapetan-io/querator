@@ -553,6 +553,44 @@ func testQueueStorage(t *testing.T, setUp NewStorageFunc, tearDown func()) {
 		}
 	})
 
+	t.Run("QueuesKeepPlacement", func(t *testing.T) {
+		name := random.String("queue-", 10)
+		backend := storage.PartitionStorage[0].Name
+		ctx := context.Background()
+		require.NoError(t, storage.Queues.Add(ctx, types.QueueInfo{
+			Name:                name,
+			LeaseTimeout:        clock.Minute,
+			ExpireTimeout:       clock.Hour,
+			RequestedPartitions: 1,
+			NextPartition:       5,
+			PartitionInfo: []types.PartitionInfo{
+				{PartitionNum: 3, StorageName: backend, Draining: true},
+				{PartitionNum: 4, StorageName: backend},
+			},
+		}))
+
+		var saved types.QueueInfo
+		require.NoError(t, storage.Queues.Get(ctx, name, &saved))
+		assert.Equal(t, 5, saved.NextPartition)
+		require.Len(t, saved.PartitionInfo, 2)
+		assert.Equal(t, 3, saved.PartitionInfo[0].PartitionNum)
+		assert.True(t, saved.PartitionInfo[0].Draining)
+		assert.Equal(t, 4, saved.PartitionInfo[1].PartitionNum)
+		assert.False(t, saved.PartitionInfo[1].Draining)
+
+		require.NoError(t, storage.Queues.Update(ctx, types.QueueInfo{
+			Name:      name,
+			Reference: "updated",
+			UpdatedAt: clock.Now().UTC(),
+		}))
+		var updated types.QueueInfo
+		require.NoError(t, storage.Queues.Get(ctx, name, &updated))
+		assert.Equal(t, "updated", updated.Reference)
+		assert.Equal(t, 5, updated.NextPartition)
+		require.Len(t, updated.PartitionInfo, 2)
+		assert.True(t, updated.PartitionInfo[0].Draining)
+	})
+
 	t.Run("QueuesAddDuplicateName", func(t *testing.T) {
 		info := types.QueueInfo{
 			Name:                random.String("queue-", 10),

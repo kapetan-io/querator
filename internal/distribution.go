@@ -87,7 +87,7 @@ func (l *Logical) notifyExpired(p *Partition) bool {
 }
 
 func (l *Logical) assignProduceRequests(state *QueueState) {
-	load := l.loadOf(state)
+	load := state.load
 	for _, req := range state.Producers.Requests {
 		for _, item := range req.Items {
 			item.ExpireDeadline = l.conf.Clock.Now().UTC().Add(l.conf.ExpireTimeout)
@@ -109,7 +109,7 @@ func (l *Logical) assignProduceRequests(state *QueueState) {
 }
 
 func (l *Logical) assignLeaseRequests(state *QueueState) {
-	load := l.loadOf(state)
+	load := state.load
 	for _, req := range state.Leases.Requests {
 		if req == nil {
 			continue

@@ -318,6 +318,12 @@ func ApplyConfigFile(ctx context.Context, conf *Config, file File, w io.Writer) 
 		return err
 	}
 
+	if len(file.Queues) != 0 {
+		if err := placement.CheckBackends(conf.Service.StorageConfig.Backends()); err != nil {
+			return err
+		}
+	}
+
 	if err := setupQueueStorage(ctx, file, conf); err != nil {
 		return err
 	}
@@ -523,15 +529,18 @@ func setupQueueStorage(ctx context.Context, file File, conf *Config) error {
 		return fmt.Errorf("unknown backend %q", name)
 	}
 
-	if err := checkDeadLetterRules(ctx, file.Queues, conf.Service.StorageConfig.Queues); err != nil {
-		return err
-	}
-
 	for _, queue := range file.Queues {
 		if len(queue.Partitions) > placement.MaxPartitions {
 			return fmt.Errorf("invalid queue '%s'; lists %d partitions, cannot be more than %d",
 				queue.Name, len(queue.Partitions), placement.MaxPartitions)
 		}
+	}
+
+	if err := checkDeadLetterRules(ctx, file.Queues, conf.Service.StorageConfig.Queues); err != nil {
+		return err
+	}
+
+	for _, queue := range file.Queues {
 		var stored types.QueueInfo
 		if err := conf.Service.StorageConfig.Queues.Get(ctx, queue.Name, &stored); err == nil {
 			continue

@@ -120,7 +120,7 @@ which one depends on the queue's name. The order of backends in the config file 
 where partitions go. A backend with an affinity of 0 receives no new partitions. Affinity may be
 fractional, so `0.5` and `1.5` split partitions 1 to 3, the same as `1` and `3`. Querator refuses
 to start when an affinity is negative, `.nan`, `.inf` or `-.inf`, or when the affinities add up to
-more than a float64 can hold. `/queues.info` lists each partition with the `storage_name` of the
+more than a float64 can hold once multiplied by 1,024. `/queues.info` lists each partition with the `storage_name` of the
 backend which holds it.
 
 ## Storage Directory Structure

@@ -526,6 +526,7 @@ func (l *Logical) prepareQueueState(state *QueueState) {
 
 		state.Partitions[i] = partition
 	}
+	state.load = l.loadOf(state)
 
 	state.LifecycleTimer = l.conf.Clock.NewTimer(0)
 
@@ -545,6 +546,7 @@ type QueueState struct {
 	ScheduledTimer    clock.Timer
 	Partitions        []*Partition
 	Paused            bool
+	load              queueLoad
 }
 
 func (q *QueueState) GetPartition(num int) *Partition {

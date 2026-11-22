@@ -1434,11 +1434,11 @@ components:
           description: >-
             A draining partition takes no new items and is removed once empty.
             Whether a partition is failing is reported by `failures` in
-            `/queue.stats`, not here.
+            `/queue.stats`, not here. Set by Querator; ignored by
+            `/queues.create` and `/queues.update`.
       required:
         - partition
         - storage_name
-        - state
     StorageItem:
       type: object
       properties:

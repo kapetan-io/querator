@@ -260,6 +260,11 @@ call `service.New()` to get a `Service` to work with directly.
 ### HTTP API
 See [Querator API Reference](https://querator.io/api) for API documentation
 
+### Roadmap and open work
+The roadmap lives on the public [project board](https://github.com/orgs/kapetan-io/projects/2), and every open
+item is on the [issue list](https://github.com/kapetan-io/querator/issues). Comment on an issue to pick it up or
+weigh in, or open a new issue for a bug or an idea.
+
 ### Contributing 
 - Join our [Discord](https://discord.gg/XwfBdN9wdg)
 - Checkout [querator.io](https://querator.io/api) for the HTML OpenAPI docs

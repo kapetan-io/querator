@@ -230,6 +230,13 @@ func keepEmptyBackendKeys(doc *yaml.Node, file *File) {
 	if queues := mappingValue(doc.Content[0], "queue-storage"); queues != nil {
 		keepEmptyQueueStorageKeys(queues, &file.QueueStorage)
 	}
+	if parts := mappingValue(doc.Content[0], "partition-storage"); parts != nil && parts.Kind == yaml.SequenceNode {
+		for i, entry := range parts.Content {
+			if i < len(file.PartitionStorage) {
+				keepEmptyPartitionStorageKeys(entry, &file.PartitionStorage[i])
+			}
+		}
+	}
 	section := mappingValue(doc.Content[0], "auth")
 	if section == nil {
 		return
@@ -250,6 +257,21 @@ func keepEmptyBackendKeys(doc *yaml.Node, file *File) {
 }
 
 func keepEmptyQueueStorageKeys(node *yaml.Node, storage *QueueStorage) {
+	if mappingValue(node, "memory") != nil && storage.Memory == nil {
+		storage.Memory = &MemoryConfig{}
+	}
+	if mappingValue(node, "badger") != nil && storage.Badger == nil {
+		storage.Badger = &BadgerConfig{}
+	}
+	if mappingValue(node, "mongo") != nil && storage.Mongo == nil {
+		storage.Mongo = &MongoConfig{}
+	}
+	if mappingValue(node, "postgres") != nil && storage.Postgres == nil {
+		storage.Postgres = &PostgresConfig{}
+	}
+}
+
+func keepEmptyPartitionStorageKeys(node *yaml.Node, storage *PartitionStorage) {
 	if mappingValue(node, "memory") != nil && storage.Memory == nil {
 		storage.Memory = &MemoryConfig{}
 	}

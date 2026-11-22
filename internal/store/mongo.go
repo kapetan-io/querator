@@ -352,7 +352,7 @@ func (q *MongoQueues) Add(ctx context.Context, info types.QueueInfo) error {
 	_, err = q.collection(client).InsertOne(ctx, doc)
 	if err != nil {
 		if mongo.IsDuplicateKeyError(err) {
-			return reply.NewInvalidOption("queue '%s' already exists", info.Name)
+			return reply.NewInvalidOptionKind(types.KindQueueAlreadyExists, "queue '%s' already exists", info.Name)
 		}
 		return errors.Errorf("insert queue: %w", err)
 	}

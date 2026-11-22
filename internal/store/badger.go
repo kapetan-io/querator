@@ -1294,7 +1294,7 @@ func (b *BadgerQueues) Add(_ context.Context, info types.QueueInfo) error {
 
 		_, err := txn.Get([]byte(info.Name))
 		if err == nil {
-			return reply.NewInvalidOption("invalid queue; '%s' already exists", info.Name)
+			return reply.NewInvalidOptionKind(types.KindQueueAlreadyExists, "invalid queue; '%s' already exists", info.Name)
 		}
 
 		var buf bytes.Buffer

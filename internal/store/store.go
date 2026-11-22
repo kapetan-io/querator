@@ -21,8 +21,7 @@ const (
 )
 
 var (
-	ErrQueueAlreadyExists = reply.NewInvalidOption("queue already exists")
-	ErrQueueNotExist      = reply.NewRequestFailed("queue does not exist")
+	ErrQueueNotExist = reply.NewRequestFailed("queue does not exist")
 )
 
 func systemIfEmpty(namespace string) string {

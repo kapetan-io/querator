@@ -89,6 +89,14 @@ func (s QueuesValidation) validateAdd(info types.QueueInfo) error {
 		return err
 	}
 
+	if info.LeaseTimeout < 0 {
+		return reply.NewInvalidOption("lease timeout is invalid; cannot be negative")
+	}
+
+	if info.ExpireTimeout < 0 {
+		return reply.NewInvalidOption("expire timeout is invalid; cannot be negative")
+	}
+
 	if info.LeaseTimeout.Microseconds() == 0 {
 		return reply.NewInvalidOption("lease timeout is invalid; cannot be empty")
 	}

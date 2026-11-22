@@ -80,7 +80,7 @@ to interact with a running Querator instance via its HTTP API.`,
 		},
 	})
 
-	root.AddCommand(serverCommand)
+	root.AddCommand(NewServerCommand(os.Stdout))
 
 	root.AddCommand(produceCommand)
 	root.AddCommand(leaseCommand)

@@ -850,6 +850,21 @@ func TestConfigFileRefusesWhatItWouldIgnore(t *testing.T) {
 			wantErr: "partition storage 'p1' defines multiple backends",
 		},
 		{
+			name:    "PartitionStorageNullEntry",
+			config:  "partition-storage:\n  - ~\n  - name: a\n    memory: {}\n  - name: b\n    badger:\n",
+			wantErr: "partition-storage entry 1 is empty",
+		},
+		{
+			name:    "PartitionStorageNullKeywordEntry",
+			config:  "partition-storage:\n  - name: a\n    memory: {}\n  - null\n",
+			wantErr: "partition-storage entry 2 is empty",
+		},
+		{
+			name:    "PartitionStorageBareDashEntry",
+			config:  "partition-storage:\n  -\n  - name: a\n    memory: {}\n",
+			wantErr: "partition-storage entry 1 is empty",
+		},
+		{
 			name:    "QueueStorageTwoEmptyBackends",
 			config:  "queue-storage:\n  memory:\n  badger:\n",
 			wantErr: "multiple backends",

@@ -1,3 +1,5 @@
+// Package store keeps querator's durable state behind interfaces, so a queue runs unchanged on
+// any backend. InMemory, Badger, Postgres and MongoDB are the backends today.
 package store
 
 import (

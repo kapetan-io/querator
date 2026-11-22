@@ -1,3 +1,6 @@
+// Package placement decides which storage backend holds each of a queue's partitions, and which
+// partition a produce or a lease goes to. It reads queue records and backend affinities and holds
+// no storage or network code, so the same saved facts always give the same answer.
 package placement
 
 import (

@@ -591,6 +591,27 @@ func testQueueStorage(t *testing.T, setUp NewStorageFunc, tearDown func()) {
 		assert.True(t, updated.PartitionInfo[0].Draining)
 	})
 
+	t.Run("PartitionInfoSafeForConcurrentUse", func(t *testing.T) {
+		name := random.String("queue-", 10)
+		partition := storage.PartitionStorage[0].PartitionStore.Get(types.PartitionInfo{
+			PartitionNum: 0,
+			StorageName:  storage.PartitionStorage[0].Name,
+			Queue:        types.QueueInfo{Name: name, MaxAttempts: 1},
+		})
+		defer func() { require.NoError(t, partition.Close(context.Background())) }()
+
+		concurrently(8, func(i int) {
+			for range 100 {
+				if i%2 == 0 {
+					partition.UpdateQueueInfo(types.QueueInfo{Name: name, MaxAttempts: i + 2})
+					continue
+				}
+				assert.Equal(t, name, partition.Info().Queue.Name)
+			}
+		})
+		assert.Greater(t, partition.Info().Queue.MaxAttempts, 1)
+	})
+
 	t.Run("QueuesAddDuplicateName", func(t *testing.T) {
 		info := types.QueueInfo{
 			Name:                random.String("queue-", 10),

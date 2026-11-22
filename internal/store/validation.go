@@ -84,17 +84,25 @@ func (s QueuesValidation) validateQueueInfo(info types.QueueInfo) error {
 	return nil
 }
 
-func (s QueuesValidation) validateAdd(info types.QueueInfo) error {
-	if err := s.validateQueueInfo(info); err != nil {
-		return err
-	}
-
+func (s QueuesValidation) validateNegativeTimeouts(info types.QueueInfo) error {
 	if info.LeaseTimeout < 0 {
 		return reply.NewInvalidOption("lease timeout is invalid; cannot be negative")
 	}
 
 	if info.ExpireTimeout < 0 {
 		return reply.NewInvalidOption("expire timeout is invalid; cannot be negative")
+	}
+
+	return nil
+}
+
+func (s QueuesValidation) validateAdd(info types.QueueInfo) error {
+	if err := s.validateQueueInfo(info); err != nil {
+		return err
+	}
+
+	if err := s.validateNegativeTimeouts(info); err != nil {
+		return err
 	}
 
 	if info.LeaseTimeout.Microseconds() == 0 {

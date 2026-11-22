@@ -464,7 +464,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			}{
 				{"NegativeLease", "-5m", "10m", "lease timeout is invalid; cannot be negative"},
 				{"NegativeExpire", "1m", "-5m", "expire timeout is invalid; cannot be negative"},
-				{"BothNegative", "-10m", "-5m", "cannot be negative"},
+				{"BothNegative", "-10m", "-5m", "lease timeout is invalid; cannot be negative"},
 			} {
 				t.Run("Create"+tc.Name, func(t *testing.T) {
 					queueName := random.String("queue-", 10)
@@ -513,6 +513,11 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					QueueName:    queueName,
 					LeaseTimeout: "-5m",
 				}), "lease timeout is invalid; cannot be negative")
+
+				var info pb.QueueInfo
+				require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &info))
+				assert.Equal(t, "1m0s", info.LeaseTimeout)
+				assert.Equal(t, "10m0s", info.ExpireTimeout)
 			})
 		})
 

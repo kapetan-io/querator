@@ -973,7 +973,7 @@ func TestQueueConfigRefusesNegativeTimeouts(t *testing.T) {
 	}{
 		{"NegativeLease", "-1m", "1h", "lease timeout is invalid; cannot be negative"},
 		{"NegativeExpire", "1m", "-1h", "expire timeout is invalid; cannot be negative"},
-		{"BothNegative", "-2h", "-1h", "cannot be negative"},
+		{"BothNegative", "-2h", "-1h", "lease timeout is invalid; cannot be negative"},
 	} {
 		t.Run(tc.Name, func(t *testing.T) {
 			file, err := daemon.ReadConfig(strings.NewReader(fmt.Sprintf(`

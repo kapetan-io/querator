@@ -1340,7 +1340,7 @@ func (b *BadgerQueues) Update(_ context.Context, info types.QueueInfo) error {
 			return errors.Errorf("during Decode(): %w", err)
 		}
 
-		if err := b.validateNegativeTimeouts(info); err != nil {
+		if err := b.validateTimeoutChange(timeoutChange{Stored: found, Proposed: info}); err != nil {
 			return err
 		}
 

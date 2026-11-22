@@ -84,12 +84,17 @@ func (s QueuesValidation) validateQueueInfo(info types.QueueInfo) error {
 	return nil
 }
 
-func (s QueuesValidation) validateNegativeTimeouts(info types.QueueInfo) error {
-	if info.LeaseTimeout < 0 {
+type timeoutChange struct {
+	Stored   types.QueueInfo
+	Proposed types.QueueInfo
+}
+
+func (s QueuesValidation) validateTimeoutChange(change timeoutChange) error {
+	if change.Proposed.LeaseTimeout < 0 && change.Proposed.LeaseTimeout != change.Stored.LeaseTimeout {
 		return reply.NewInvalidOption("lease timeout is invalid; cannot be negative")
 	}
 
-	if info.ExpireTimeout < 0 {
+	if change.Proposed.ExpireTimeout < 0 && change.Proposed.ExpireTimeout != change.Stored.ExpireTimeout {
 		return reply.NewInvalidOption("expire timeout is invalid; cannot be negative")
 	}
 
@@ -101,7 +106,7 @@ func (s QueuesValidation) validateAdd(info types.QueueInfo) error {
 		return err
 	}
 
-	if err := s.validateNegativeTimeouts(info); err != nil {
+	if err := s.validateTimeoutChange(timeoutChange{Proposed: info}); err != nil {
 		return err
 	}
 

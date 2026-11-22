@@ -374,7 +374,7 @@ func (q *MongoQueues) Update(ctx context.Context, info types.QueueInfo) error {
 		return err
 	}
 
-	if err := q.validateNegativeTimeouts(info); err != nil {
+	if err := q.validateTimeoutChange(timeoutChange{Stored: found, Proposed: info}); err != nil {
 		return err
 	}
 

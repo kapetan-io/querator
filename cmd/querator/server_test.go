@@ -49,10 +49,15 @@ func (b *logBuffer) String() string {
 	return b.buffer.String()
 }
 
-func writeLevelConfig(t *testing.T, address, level string) string {
+type levelFile struct {
+	Address string
+	Level   string
+}
+
+func writeLevelConfig(t *testing.T, file levelFile) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	content := "address: " + address + "\nlogging:\n  level: " + level + "\n"
+	content := "address: " + file.Address + "\nlogging:\n  level: " + file.Level + "\n"
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 	return path
 }
@@ -139,12 +144,13 @@ func TestServerAddress(t *testing.T) {
 
 func TestServerLogLevel(t *testing.T) {
 	const debugLine = "Shutdown complete"
+	const infoLine = "HTTP Server Started"
 
 	t.Run("FlagSetsLogLevel", func(t *testing.T) {
 		address := freeAddress(t)
 		t.Setenv("QUERATOR_LOG_LEVEL", "")
 		logs := &logBuffer{}
-		args := []string{"--log-level", "debug", "--config", writeLevelConfig(t, address, "error")}
+		args := []string{"--log-level", "debug", "--config", writeLevelConfig(t, levelFile{Address: address, Level: "error"})}
 		withLoggedServer(t, logs, args, func() {
 			requireListening(t, address)
 		})
@@ -155,7 +161,7 @@ func TestServerLogLevel(t *testing.T) {
 		address := freeAddress(t)
 		t.Setenv("QUERATOR_LOG_LEVEL", "debug")
 		logs := &logBuffer{}
-		withLoggedServer(t, logs, []string{"--config", writeLevelConfig(t, address, "error")}, func() {
+		withLoggedServer(t, logs, []string{"--config", writeLevelConfig(t, levelFile{Address: address, Level: "error"})}, func() {
 			requireListening(t, address)
 		})
 		require.Contains(t, logs.String(), debugLine)
@@ -165,17 +171,18 @@ func TestServerLogLevel(t *testing.T) {
 		address := freeAddress(t)
 		t.Setenv("QUERATOR_LOG_LEVEL", "")
 		logs := &logBuffer{}
-		withLoggedServer(t, logs, []string{"--config", writeLevelConfig(t, address, "error")}, func() {
+		withLoggedServer(t, logs, []string{"--config", writeLevelConfig(t, levelFile{Address: address, Level: "error"})}, func() {
 			requireListening(t, address)
 		})
 		require.NotContains(t, logs.String(), debugLine)
+		require.NotContains(t, logs.String(), infoLine)
 	})
 
 	t.Run("ConfigFileDebugStillApplies", func(t *testing.T) {
 		address := freeAddress(t)
 		t.Setenv("QUERATOR_LOG_LEVEL", "")
 		logs := &logBuffer{}
-		withLoggedServer(t, logs, []string{"--config", writeLevelConfig(t, address, "debug")}, func() {
+		withLoggedServer(t, logs, []string{"--config", writeLevelConfig(t, levelFile{Address: address, Level: "debug"})}, func() {
 			requireListening(t, address)
 		})
 		require.Contains(t, logs.String(), debugLine)
@@ -185,7 +192,7 @@ func TestServerLogLevel(t *testing.T) {
 		address := freeAddress(t)
 		t.Setenv("QUERATOR_LOG_LEVEL", "debug")
 		logs := &logBuffer{}
-		args := []string{"--log-level", "error", "--config", writeLevelConfig(t, address, "debug")}
+		args := []string{"--log-level", "error", "--config", writeLevelConfig(t, levelFile{Address: address, Level: "debug"})}
 		withLoggedServer(t, logs, args, func() {
 			requireListening(t, address)
 		})
@@ -196,9 +203,32 @@ func TestServerLogLevel(t *testing.T) {
 		address := freeAddress(t)
 		t.Setenv("QUERATOR_LOG_LEVEL", "error")
 		logs := &logBuffer{}
-		withLoggedServer(t, logs, []string{"--config", writeLevelConfig(t, address, "debug")}, func() {
+		withLoggedServer(t, logs, []string{"--config", writeLevelConfig(t, levelFile{Address: address, Level: "debug"})}, func() {
 			requireListening(t, address)
 		})
+		require.NotContains(t, logs.String(), debugLine)
+	})
+
+	t.Run("FlagSetsLogLevelWithoutConfigFile", func(t *testing.T) {
+		address := freeAddress(t)
+		t.Setenv("QUERATOR_LOG_LEVEL", "")
+		t.Setenv("QUERATOR_CONFIG", "")
+		logs := &logBuffer{}
+		withLoggedServer(t, logs, []string{"--log-level", "debug", "--address", address}, func() {
+			requireListening(t, address)
+		})
+		require.Contains(t, logs.String(), debugLine)
+	})
+
+	t.Run("ExplicitInfoFlagWinsOverDebugConfigFile", func(t *testing.T) {
+		address := freeAddress(t)
+		t.Setenv("QUERATOR_LOG_LEVEL", "")
+		logs := &logBuffer{}
+		args := []string{"--log-level", "info", "--config", writeLevelConfig(t, levelFile{Address: address, Level: "debug"})}
+		withLoggedServer(t, logs, args, func() {
+			requireListening(t, address)
+		})
+		require.Contains(t, logs.String(), infoLine)
 		require.NotContains(t, logs.String(), debugLine)
 	})
 }

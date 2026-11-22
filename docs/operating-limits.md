@@ -148,8 +148,9 @@ Querator refuses a dead-letter queue that has its own dead-letter queue, but old
 this when the second queue was updated. Such chains stay in storage. In a chain where A's `dead_queue`
 is B and B's is C, an update to A or B that leaves `dead_queue` out, or sends it unchanged, is refused. C
 updates as usual. The same holds for a queue whose saved `dead_queue` does not exist or has more than one
-partition, and for a dead-letter queue saved with more than one partition. Older releases saved such
-queues, and queues loaded from the config file are saved without these checks.
+partition, and for a dead-letter queue saved with more than one partition. Such queues
+can already be in storage, for example from an older release's config file. A config file does not
+change a queue already in storage.
 
 **Workaround**: Fix the dead-letter setup in the same update.
 
@@ -159,3 +160,5 @@ queues, and queues loaded from the config file are saved without these checks.
 * A dead-letter queue that has its own `dead_queue`: send `"dead_queue": ""`.
 * A dead-letter queue saved with more than one partition: first fix every queue that names it as its
   `dead_queue`, as above.
+* A config file that still declares the broken setup refuses to start, and the error names the queue
+  and the rule. Fix the config file's entries as the error says, then fix the stored queues as above.

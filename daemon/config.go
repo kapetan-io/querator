@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"math"
+	"slices"
 	"time"
 
 	"github.com/duh-rpc/duh-go"
@@ -194,7 +196,9 @@ func ReadConfig(r io.Reader) (File, error) {
 	if err := yaml.Unmarshal(content, &doc); err != nil {
 		return File{}, fmt.Errorf("while reading config file: %w", err)
 	}
-	keepEmptyBackendKeys(&doc, &file)
+	if err := keepEmptyBackendKeys(&doc, &file); err != nil {
+		return File{}, fmt.Errorf("while reading config file: %w", err)
+	}
 	return file, nil
 }
 
@@ -223,23 +227,36 @@ func isEmptyDocument(doc *yaml.Node) bool {
 	return doc.Content[0].Kind == yaml.ScalarNode && doc.Content[0].Tag == "!!null"
 }
 
-func keepEmptyBackendKeys(doc *yaml.Node, file *File) {
+func keepEmptyBackendKeys(doc *yaml.Node, file *File) error {
 	if len(doc.Content) == 0 {
-		return
+		return nil
 	}
 	if queues := mappingValue(doc.Content[0], "queue-storage"); queues != nil {
 		keepEmptyQueueStorageKeys(queues, &file.QueueStorage)
 	}
+	if parts := mappingValue(doc.Content[0], "partition-storage"); parts != nil && parts.Kind == yaml.SequenceNode {
+		for i, entry := range parts.Content {
+			if entry.Kind == yaml.AliasNode {
+				entry = entry.Alias
+			}
+			if entry.Kind == yaml.ScalarNode && entry.Tag == "!!null" {
+				return fmt.Errorf("partition-storage entry %d is empty; remove it or give it a name and a backend", i+1)
+			}
+		}
+		for i, entry := range parts.Content {
+			keepEmptyPartitionStorageKeys(entry, &file.PartitionStorage[i])
+		}
+	}
 	section := mappingValue(doc.Content[0], "auth")
 	if section == nil {
-		return
+		return nil
 	}
 	if file.Auth == nil {
 		file.Auth = &AuthConfig{}
 	}
 	storage := mappingValue(section, "storage")
 	if storage == nil {
-		return
+		return nil
 	}
 	if mappingValue(storage, "memory") != nil && file.Auth.Storage.Memory == nil {
 		file.Auth.Storage.Memory = &MemoryConfig{}
@@ -247,9 +264,25 @@ func keepEmptyBackendKeys(doc *yaml.Node, file *File) {
 	if mappingValue(storage, "badger") != nil && file.Auth.Storage.Badger == nil {
 		file.Auth.Storage.Badger = &BadgerConfig{}
 	}
+	return nil
 }
 
 func keepEmptyQueueStorageKeys(node *yaml.Node, storage *QueueStorage) {
+	if mappingValue(node, "memory") != nil && storage.Memory == nil {
+		storage.Memory = &MemoryConfig{}
+	}
+	if mappingValue(node, "badger") != nil && storage.Badger == nil {
+		storage.Badger = &BadgerConfig{}
+	}
+	if mappingValue(node, "mongo") != nil && storage.Mongo == nil {
+		storage.Mongo = &MongoConfig{}
+	}
+	if mappingValue(node, "postgres") != nil && storage.Postgres == nil {
+		storage.Postgres = &PostgresConfig{}
+	}
+}
+
+func keepEmptyPartitionStorageKeys(node *yaml.Node, storage *PartitionStorage) {
 	if mappingValue(node, "memory") != nil && storage.Memory == nil {
 		storage.Memory = &MemoryConfig{}
 	}
@@ -487,6 +520,10 @@ func setupQueueStorage(ctx context.Context, file File, conf *Config) error {
 		return fmt.Errorf("unknown backend %q", name)
 	}
 
+	if err := checkDeadLetterRules(ctx, file.Queues, conf.Service.StorageConfig.Queues); err != nil {
+		return err
+	}
+
 	for _, queue := range file.Queues {
 		var stored types.QueueInfo
 		if err := conf.Service.StorageConfig.Queues.Get(ctx, queue.Name, &stored); err == nil {
@@ -515,13 +552,88 @@ func setupQueueStorage(ctx context.Context, file File, conf *Config) error {
 		}
 
 		if err := conf.Service.StorageConfig.Queues.Add(ctx, info); err != nil {
-			if conf.Service.StorageConfig.Queues.Get(ctx, queue.Name, &stored) == nil {
+			if errors.Is(err, types.ErrQueueAlreadyExists) {
 				continue
 			}
 			return fmt.Errorf("invalid queue '%s'; %w", queue.Name, err)
 		}
 	}
 	return nil
+}
+
+func checkDeadLetterRules(ctx context.Context, declared []Queue, queues store.Queues) error {
+	if len(declared) == 0 {
+		return nil
+	}
+
+	stored, err := listStoredQueues(ctx, queues)
+	if err != nil {
+		return err
+	}
+
+	var kept []types.QueueInfo
+	seen := make(map[string]bool)
+	for _, queue := range declared {
+		if !seen[queue.Name] {
+			seen[queue.Name] = true
+			kept = append(kept, queue.ToQueueInfo())
+		}
+	}
+
+	asDeclared := maps.Clone(stored)
+	asSaved := maps.Clone(stored)
+	for _, info := range kept {
+		asDeclared[info.Name] = info
+		if _, ok := stored[info.Name]; !ok {
+			asSaved[info.Name] = info
+		}
+	}
+
+	for _, info := range kept {
+		if err := deadLetterRulesOver(asDeclared).Check(ctx, info); err != nil {
+			return fmt.Errorf("invalid queue '%s'; %w", info.Name, err)
+		}
+		if _, ok := stored[info.Name]; ok {
+			continue
+		}
+		if err := deadLetterRulesOver(asSaved).Check(ctx, info); err != nil {
+			return fmt.Errorf("invalid queue '%s'; %w", info.Name, err)
+		}
+	}
+	return nil
+}
+
+func listStoredQueues(ctx context.Context, queues store.Queues) (map[string]types.QueueInfo, error) {
+	stored := make(map[string]types.QueueInfo)
+	err := store.ForEachQueue(ctx, queues, func(info types.QueueInfo) bool {
+		stored[info.Name] = info
+		return true
+	})
+	if err != nil {
+		return nil, fmt.Errorf("while listing stored queues; %w", err)
+	}
+	return stored, nil
+}
+
+func deadLetterRulesOver(queues map[string]types.QueueInfo) internal.DeadLetterRules {
+	names := slices.Sorted(maps.Keys(queues))
+	return internal.DeadLetterRules{
+		Find: func(_ context.Context, name string) (types.QueueInfo, error) {
+			info, ok := queues[name]
+			if !ok {
+				return types.QueueInfo{}, store.ErrQueueNotExist
+			}
+			return info, nil
+		},
+		SourceOf: func(_ context.Context, name string) (string, error) {
+			for _, source := range names {
+				if queues[source].DeadQueue == name {
+					return source, nil
+				}
+			}
+			return "", nil
+		},
+	}
 }
 
 func setupAuthBackend(file File, conf *Config) error {

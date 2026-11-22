@@ -6,10 +6,8 @@ import (
 	"maps"
 	"math"
 	"slices"
-	"strings"
 	"sync"
 	"sync/atomic"
-	"unicode"
 
 	"github.com/kapetan-io/errors"
 	"github.com/kapetan-io/querator/internal/store"
@@ -93,11 +91,7 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Que
 			"at least one partition storage needs an affinity above 0")
 	}
 
-	if err := qm.validateDeadQueue(ctx, info); err != nil {
-		return nil, err
-	}
-
-	if err := qm.validateAsDeadQueue(ctx, info); err != nil {
+	if err := qm.deadLetterRules().Check(ctx, info); err != nil {
 		return nil, err
 	}
 
@@ -211,11 +205,7 @@ func (qm *QueuesManager) Update(ctx context.Context, update types.QueueUpdate) e
 	}
 	info := update.ApplyTo(current)
 
-	if err := qm.validateDeadQueue(ctx, info); err != nil {
-		return err
-	}
-
-	if err := qm.validateAsDeadQueue(ctx, info); err != nil {
+	if err := qm.deadLetterRules().Check(ctx, info); err != nil {
 		return err
 	}
 
@@ -363,94 +353,33 @@ func (qm *QueuesManager) ProduceToQueue(ctx context.Context, queueName string, r
 	return stored, nil
 }
 
-func (qm *QueuesManager) validateDeadQueue(ctx context.Context, info types.QueueInfo) error {
-	if info.DeadQueue == "" {
-		return nil
+func (qm *QueuesManager) deadLetterRules() DeadLetterRules {
+	return DeadLetterRules{
+		Find: func(ctx context.Context, name string) (types.QueueInfo, error) {
+			q, err := qm.get(ctx, name)
+			if err != nil {
+				var invalid *reply.ErrInvalidOption
+				if errors.As(err, &invalid) {
+					return types.QueueInfo{}, store.ErrQueueNotExist
+				}
+				return types.QueueInfo{}, err
+			}
+			return q.Info(), nil
+		},
+		SourceOf: qm.sourceQueueOf,
 	}
-
-	const maxQueueNameLength = 500
-	if len(info.DeadQueue) > maxQueueNameLength {
-		return reply.NewInvalidOption("dead queue is invalid; cannot be greater than '%d' characters", maxQueueNameLength)
-	}
-
-	if strings.ContainsFunc(info.DeadQueue, unicode.IsSpace) {
-		return reply.NewInvalidOption("dead queue is invalid; '%s' cannot contain whitespace", info.DeadQueue)
-	}
-
-	if strings.Contains(info.DeadQueue, "~") {
-		return reply.NewInvalidOption("dead queue is invalid; '%s' cannot contain '~' character", info.DeadQueue)
-	}
-
-	if info.DeadQueue == info.Name {
-		return reply.NewInvalidOption("dead_queue cannot reference itself")
-	}
-
-	dlq, err := qm.get(ctx, info.DeadQueue)
-	if err != nil {
-		var invalidOpt *reply.ErrInvalidOption
-		if errors.Is(err, store.ErrQueueNotExist) || errors.As(err, &invalidOpt) {
-			return reply.NewInvalidOption("dead_queue does not exist; '%s' was not found, create it first", info.DeadQueue)
-		}
-		return err
-	}
-
-	dlqInfo := dlq.Info()
-	if dlqInfo.DeadQueue != "" {
-		return reply.NewInvalidOption("dead_queue is invalid; '%s' already has its own dead_queue configured, "+
-			"clear or change dead_queue on '%s' first", info.DeadQueue, info.DeadQueue)
-	}
-
-	if dlqInfo.RequestedPartitions > 1 {
-		return reply.NewInvalidOption("dead_queue is invalid; '%s' must have a single partition, but has '%d'",
-			info.DeadQueue, dlqInfo.RequestedPartitions)
-	}
-
-	return nil
-}
-
-func (qm *QueuesManager) validateAsDeadQueue(ctx context.Context, info types.QueueInfo) error {
-	if info.DeadQueue == "" && info.RequestedPartitions <= 1 {
-		return nil
-	}
-
-	source, err := qm.sourceQueueOf(ctx, info.Name)
-	if err != nil {
-		return err
-	}
-	if source == "" {
-		return nil
-	}
-
-	if info.DeadQueue != "" {
-		return reply.NewInvalidOption("dead_queue is invalid; '%s' is the dead_queue of '%s' and cannot have its own dead_queue, "+
-			"clear or change dead_queue on '%s' first", info.Name, source, source)
-	}
-
-	return reply.NewInvalidOption("partitions is invalid; '%s' is the dead_queue of '%s' and must have a single partition, "+
-		"clear or change dead_queue on '%s' first", info.Name, source, source)
 }
 
 func (qm *QueuesManager) sourceQueueOf(ctx context.Context, name string) (string, error) {
-	const pageSize = 1000
-	var pivot []byte
-	for ctx.Err() == nil {
-		var page []types.QueueInfo
-		if err := qm.conf.StorageConfig.Queues.List(ctx, &page, types.ListOptions{Pivot: pivot, Limit: pageSize}); err != nil {
-			return "", errors.Errorf("Queues.List(): %w", err)
+	var source string
+	err := store.ForEachQueue(ctx, qm.conf.StorageConfig.Queues, func(queue types.QueueInfo) bool {
+		if queue.DeadQueue == name && queue.Name != name {
+			source = queue.Name
+			return false
 		}
-
-		for _, queue := range page {
-			if queue.DeadQueue == name && queue.Name != name {
-				return queue.Name, nil
-			}
-		}
-
-		if len(page) < pageSize {
-			return "", nil
-		}
-		pivot = []byte(page[len(page)-1].Name)
-	}
-	return "", ctx.Err()
+		return true
+	})
+	return source, err
 }
 
 func (qm *QueuesManager) Delete(ctx context.Context, name string) error {

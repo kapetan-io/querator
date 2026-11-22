@@ -295,7 +295,7 @@ func (p *PostgresQueues) Add(ctx context.Context, info types.QueueInfo) error {
 
 	if err != nil {
 		if pgErr, ok := err.(*pgconn.PgError); ok && pgErr.Code == "23505" {
-			return reply.NewInvalidOption("queue '%s' already exists", info.Name)
+			return reply.NewInvalidOptionKind(types.KindQueueAlreadyExists, "queue '%s' already exists", info.Name)
 		}
 		return errors.Errorf("insert queue: %w", err)
 	}

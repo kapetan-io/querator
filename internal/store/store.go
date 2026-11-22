@@ -7,6 +7,7 @@ import (
 	"math"
 	"slices"
 
+	"github.com/kapetan-io/errors"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/transport/auth"
 	"github.com/kapetan-io/querator/transport/reply"
@@ -29,6 +30,27 @@ func systemIfEmpty(namespace string) string {
 		return auth.SystemNamespace
 	}
 	return namespace
+}
+
+func ForEachQueue(ctx context.Context, queues Queues, visit func(types.QueueInfo) bool) error {
+	const pageSize = 1_000
+	var pivot []byte
+	for ctx.Err() == nil {
+		var page []types.QueueInfo
+		if err := queues.List(ctx, &page, types.ListOptions{Pivot: pivot, Limit: pageSize}); err != nil {
+			return errors.Errorf("Queues.List(): %w", err)
+		}
+		for _, queue := range page {
+			if !visit(queue) {
+				return nil
+			}
+		}
+		if len(page) < pageSize {
+			return nil
+		}
+		pivot = []byte(page[len(page)-1].Name)
+	}
+	return ctx.Err()
 }
 
 type LeaseOptions struct {

@@ -107,3 +107,7 @@ partition-storage:
 #      - partition: 2
 #        read-only: false
 #        storage-name: mongodb-01
+#  - name: queue-1-dead
+#    lease-timeout: 10m
+#    expire-timeout: 10m
+#    requested-partitions: 1

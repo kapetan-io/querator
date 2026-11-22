@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"math"
+	"slices"
 	"time"
 
 	"github.com/duh-rpc/duh-go"
@@ -518,6 +520,10 @@ func setupQueueStorage(ctx context.Context, file File, conf *Config) error {
 		return fmt.Errorf("unknown backend %q", name)
 	}
 
+	if err := checkDeadLetterRules(ctx, file.Queues, conf.Service.StorageConfig.Queues); err != nil {
+		return err
+	}
+
 	for _, queue := range file.Queues {
 		var stored types.QueueInfo
 		if err := conf.Service.StorageConfig.Queues.Get(ctx, queue.Name, &stored); err == nil {
@@ -553,6 +559,81 @@ func setupQueueStorage(ctx context.Context, file File, conf *Config) error {
 		}
 	}
 	return nil
+}
+
+func checkDeadLetterRules(ctx context.Context, declared []Queue, queues store.Queues) error {
+	if len(declared) == 0 {
+		return nil
+	}
+
+	stored, err := listStoredQueues(ctx, queues)
+	if err != nil {
+		return err
+	}
+
+	var kept []types.QueueInfo
+	seen := make(map[string]bool)
+	for _, queue := range declared {
+		if !seen[queue.Name] {
+			seen[queue.Name] = true
+			kept = append(kept, queue.ToQueueInfo())
+		}
+	}
+
+	asDeclared := maps.Clone(stored)
+	asSaved := maps.Clone(stored)
+	for _, info := range kept {
+		asDeclared[info.Name] = info
+		if _, ok := stored[info.Name]; !ok {
+			asSaved[info.Name] = info
+		}
+	}
+
+	for _, info := range kept {
+		if err := deadLetterRulesOver(asDeclared).Check(ctx, info); err != nil {
+			return fmt.Errorf("invalid queue '%s'; %w", info.Name, err)
+		}
+		if _, ok := stored[info.Name]; ok {
+			continue
+		}
+		if err := deadLetterRulesOver(asSaved).Check(ctx, info); err != nil {
+			return fmt.Errorf("invalid queue '%s'; %w", info.Name, err)
+		}
+	}
+	return nil
+}
+
+func listStoredQueues(ctx context.Context, queues store.Queues) (map[string]types.QueueInfo, error) {
+	stored := make(map[string]types.QueueInfo)
+	err := store.ForEachQueue(ctx, queues, func(info types.QueueInfo) bool {
+		stored[info.Name] = info
+		return true
+	})
+	if err != nil {
+		return nil, fmt.Errorf("while listing stored queues; %w", err)
+	}
+	return stored, nil
+}
+
+func deadLetterRulesOver(queues map[string]types.QueueInfo) internal.DeadLetterRules {
+	names := slices.Sorted(maps.Keys(queues))
+	return internal.DeadLetterRules{
+		Find: func(_ context.Context, name string) (types.QueueInfo, error) {
+			info, ok := queues[name]
+			if !ok {
+				return types.QueueInfo{}, store.ErrQueueNotExist
+			}
+			return info, nil
+		},
+		SourceOf: func(_ context.Context, name string) (string, error) {
+			for _, source := range names {
+				if queues[source].DeadQueue == name {
+					return source, nil
+				}
+			}
+			return "", nil
+		},
+	}
 }
 
 func setupAuthBackend(file File, conf *Config) error {

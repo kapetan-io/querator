@@ -350,6 +350,13 @@ queues:
       - partition: 0
         read-only: false
         storage-name: mem-00
+  - name: queue-1-dead
+    lease-timeout: 10m
+    expire-timeout: 10m
+    requested-partitions: 1
+    partitions:
+      - partition: 0
+        storage-name: mem-00
 `
 	file, err := daemon.ReadConfig(strings.NewReader(validConfig))
 	require.NoError(t, err)

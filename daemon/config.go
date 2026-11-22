@@ -546,10 +546,10 @@ func setupQueueStorage(ctx context.Context, file File, conf *Config) error {
 		}
 
 		if err := conf.Service.StorageConfig.Queues.Add(ctx, info); err != nil {
-			if errors.Is(err, store.ErrQueueAlreadyExists) {
+			if errors.Is(err, types.ErrQueueAlreadyExists) {
 				continue
 			}
-			return err
+			return fmt.Errorf("invalid queue '%s'; %w", queue.Name, err)
 		}
 	}
 	return nil

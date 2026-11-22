@@ -3,6 +3,7 @@ package types
 import "github.com/kapetan-io/querator/transport/reply"
 
 const (
+	KindQueueAlreadyExists       reply.Kind = "queue.already_exists"
 	KindNamespaceAlreadyExists   reply.Kind = "namespace.already_exists"
 	KindUserAlreadyExists        reply.Kind = "user.already_exists"
 	KindUsernameAlreadyTaken     reply.Kind = "user.username_taken"
@@ -12,6 +13,7 @@ const (
 )
 
 var (
+	ErrQueueAlreadyExists       = reply.NewInvalidOptionKind(KindQueueAlreadyExists, "")
 	ErrNamespaceAlreadyExists   = reply.NewInvalidOptionKind(KindNamespaceAlreadyExists, "")
 	ErrUserAlreadyExists        = reply.NewInvalidOptionKind(KindUserAlreadyExists, "")
 	ErrUsernameAlreadyTaken     = reply.NewInvalidOptionKind(KindUsernameAlreadyTaken, "")

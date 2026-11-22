@@ -1,12 +1,14 @@
 package service_test
 
 import (
+	"context"
 	"errors"
 	"testing"
 
 	"github.com/duh-rpc/duh-go"
 	"github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/internal/store"
+	"github.com/kapetan-io/querator/internal/types"
 	pb "github.com/kapetan-io/querator/proto"
 	svc "github.com/kapetan-io/querator/service"
 	"github.com/kapetan-io/tackle/clock"
@@ -549,5 +551,22 @@ func testQueueStorage(t *testing.T, setUp NewStorageFunc, tearDown func()) {
 				}
 			})
 		}
+	})
+
+	t.Run("QueuesAddDuplicateName", func(t *testing.T) {
+		info := types.QueueInfo{
+			Name:                random.String("queue-", 10),
+			LeaseTimeout:        clock.Minute,
+			ExpireTimeout:       clock.Hour,
+			RequestedPartitions: 1,
+		}
+		ctx := context.Background()
+		defer func() { require.NoError(t, storage.Queues.Close(ctx)) }()
+		require.NoError(t, storage.Queues.Add(ctx, info))
+
+		err := storage.Queues.Add(ctx, info)
+		require.ErrorIs(t, err, types.ErrQueueAlreadyExists)
+		require.ErrorContains(t, err, info.Name)
+		assert.NotErrorIs(t, err, types.ErrNamespaceAlreadyExists)
 	})
 }

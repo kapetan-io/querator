@@ -923,3 +923,39 @@ func TestConfigFileRefusesWhatItWouldIgnore(t *testing.T) {
 		assert.IsType(t, &store.MemoryPartitionStore{}, conf.Service.StorageConfig.PartitionStorage[0].PartitionStore)
 	})
 }
+
+func TestConfigQueueFailingValidationFailsStart(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		queue   string
+		wantErr string
+	}{
+		{
+			name: "MissingRequestedPartitions",
+			queue: `
+  - name: queue-1
+    lease-timeout: 10m
+    expire-timeout: 20m
+`,
+			wantErr: "queue-1",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			file, err := daemon.ReadConfig(strings.NewReader(`
+partition-storage:
+  - name: mem-00
+    memory: {}
+    affinity: 1
+
+queue-storage:
+  memory: {}
+
+queues:` + test.queue))
+			require.NoError(t, err)
+
+			err = daemon.ApplyConfigFile(context.Background(), &daemon.Config{}, file, io.Discard)
+			require.ErrorContains(t, err, test.wantErr)
+			require.ErrorContains(t, err, "partitions is invalid")
+		})
+	}
+}

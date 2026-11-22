@@ -616,7 +616,7 @@ func (s *MemoryQueues) Add(_ context.Context, info types.QueueInfo) error {
 
 	_, ok := s.findQueue(info.Name)
 	if ok {
-		return reply.NewInvalidOption("invalid queue; '%s' already exists", info.Name)
+		return reply.NewInvalidOptionKind(types.KindQueueAlreadyExists, "invalid queue; '%s' already exists", info.Name)
 	}
 
 	s.mem = append(s.mem, info)

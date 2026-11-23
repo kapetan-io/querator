@@ -1209,9 +1209,10 @@ func badgerTransactionLimit(memTableSize int64) int64 {
 
 type BadgerQueues struct {
 	QueuesValidation
-	mu   sync.Mutex
-	db   *badger.DB
-	conf BadgerConfig
+	mu       sync.Mutex
+	db       *badger.DB
+	backends *badger.DB
+	conf     BadgerConfig
 }
 
 func NewBadgerQueues(conf BadgerConfig) Queues {
@@ -1224,25 +1225,31 @@ func NewBadgerQueues(conf BadgerConfig) Queues {
 var _ Queues = &BadgerQueues{}
 
 func (b *BadgerQueues) getDB() (*badger.DB, error) {
+	return b.open(&b.db, fmt.Sprintf("~queue-storage-%s", bucketName))
+}
+
+func (b *BadgerQueues) getBackendsDB() (*badger.DB, error) {
+	return b.open(&b.backends, "~backend-records")
+}
+
+func (b *BadgerQueues) open(db **badger.DB, name string) (*badger.DB, error) {
 	b.mu.Lock()
-	if b.db != nil {
-		b.mu.Unlock()
-		return b.db, nil
+	defer b.mu.Unlock()
+	if *db != nil {
+		return *db, nil
 	}
 
-	dir := filepath.Join(b.conf.StorageDir, fmt.Sprintf("~queue-storage-%s", bucketName))
+	dir := filepath.Join(b.conf.StorageDir, name)
 
 	opts := badger.DefaultOptions(dir)
 	opts.Logger = newBadgerLogger(b.conf.Log)
-	db, err := badger.Open(opts)
+	opened, err := badger.Open(opts)
 	if err != nil {
-		b.mu.Unlock()
 		return nil, errors.Errorf("while opening db '%s': %w", dir, err)
 	}
 
-	b.db = db
-	b.mu.Unlock()
-	return db, nil
+	*db = opened
+	return opened, nil
 }
 
 func (b *BadgerQueues) Get(_ context.Context, name string, queue *types.QueueInfo) error {
@@ -1430,15 +1437,96 @@ func (b *BadgerQueues) Delete(_ context.Context, name string) error {
 	})
 }
 
+func (b *BadgerQueues) AddBackend(_ context.Context, backend types.Backend) error {
+	if err := b.validateBackend(backend); err != nil {
+		return err
+	}
+
+	db, err := b.getBackendsDB()
+	if err != nil {
+		return err
+	}
+
+	return db.Update(func(txn *badger.Txn) error {
+		if _, err := txn.Get([]byte(backend.Name)); err == nil {
+			return types.ErrBackendAlreadyExists
+		}
+		return putBackend(txn, backend)
+	})
+}
+
+func (b *BadgerQueues) UpdateBackend(_ context.Context, backend types.Backend) error {
+	if err := b.validateBackend(backend); err != nil {
+		return err
+	}
+
+	db, err := b.getBackendsDB()
+	if err != nil {
+		return err
+	}
+
+	return db.Update(func(txn *badger.Txn) error {
+		if _, err := txn.Get([]byte(backend.Name)); err != nil {
+			if errors.Is(err, badger.ErrKeyNotFound) {
+				return types.ErrBackendNotExist
+			}
+			return errors.Errorf("during Get(): %w", err)
+		}
+		return putBackend(txn, backend)
+	})
+}
+
+func putBackend(txn *badger.Txn, backend types.Backend) error {
+	var buf bytes.Buffer
+	if err := gob.NewEncoder(&buf).Encode(backend); err != nil {
+		return errors.Errorf("during gob.Encode(): %w", err)
+	}
+	if err := txn.Set([]byte(backend.Name), buf.Bytes()); err != nil {
+		return errors.Errorf("during Put(): %w", err)
+	}
+	return nil
+}
+
+func (b *BadgerQueues) ListBackends(ctx context.Context, backends *[]types.Backend) error {
+	db, err := b.getBackendsDB()
+	if err != nil {
+		return err
+	}
+
+	return db.View(func(txn *badger.Txn) error {
+		var v []byte
+		iter := txn.NewIterator(badger.DefaultIteratorOptions)
+		defer iter.Close()
+
+		for iter.Rewind(); iter.Valid() && ctx.Err() == nil; iter.Next() {
+			v, err := iter.Item().ValueCopy(v)
+			if err != nil {
+				return errors.Errorf("during ValueCopy(): %w", err)
+			}
+			var backend types.Backend
+			if err := gob.NewDecoder(bytes.NewReader(v)).Decode(&backend); err != nil {
+				return errors.Errorf("during Decode(): %w", err)
+			}
+			*backends = append(*backends, backend)
+		}
+		return ctx.Err()
+	})
+}
+
 func (b *BadgerQueues) Close(_ context.Context) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.db == nil {
-		return nil
+	var first error
+	for _, db := range []**badger.DB{&b.db, &b.backends} {
+		if *db == nil {
+			continue
+		}
+		if err := (*db).Close(); err != nil && first == nil {
+			first = err
+		}
+		*db = nil
 	}
-	err := b.db.Close()
-	b.db = nil
-	return err
+	return first
 }
 
 func (b *BadgerQueues) Config() BadgerConfig {

@@ -254,6 +254,20 @@ func (b *RetryBatch) UnLeased() int {
 	return n
 }
 
+func (b *RetryBatch) Scheduled() int {
+	var n int
+	for _, req := range b.Requests {
+		var dead int
+		for _, item := range req.Items {
+			if item.Dead {
+				dead++
+			}
+		}
+		n += max(0, req.Retried-req.UnLeased-dead)
+	}
+	return n
+}
+
 func (b *RetryBatch) MarkRolledBack() {
 	for _, req := range b.Requests {
 		req.Retried = 0

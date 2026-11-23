@@ -462,6 +462,100 @@ func (p *PostgresQueues) Delete(ctx context.Context, name string) error {
 	return nil
 }
 
+func (p *PostgresQueues) backendsPool(ctx context.Context) (*pgxpool.Pool, error) {
+	pool, err := p.conf.getOrCreatePool(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	query := `
+		CREATE TABLE IF NOT EXISTS storage_backends (
+			name TEXT PRIMARY KEY,
+			affinity DOUBLE PRECISION NOT NULL
+		)`
+
+	_, err = pool.Exec(bgCtx, query)
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && isCreateTableRace(pgErr.Code) {
+		_, err = pool.Exec(bgCtx, query)
+	}
+	if err != nil {
+		return nil, errors.Errorf("create storage_backends table: %w", err)
+	}
+	return pool, nil
+}
+
+func (p *PostgresQueues) AddBackend(ctx context.Context, backend types.Backend) error {
+	if err := p.validateBackend(backend); err != nil {
+		return err
+	}
+
+	pool, err := p.backendsPool(ctx)
+	if err != nil {
+		return err
+	}
+
+	_, err = pool.Exec(ctx, `INSERT INTO storage_backends (name, affinity) VALUES ($1, $2)`,
+		backend.Name, backend.Affinity)
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		return types.ErrBackendAlreadyExists
+	}
+	if err != nil {
+		return errors.Errorf("insert storage backend: %w", err)
+	}
+	return nil
+}
+
+func (p *PostgresQueues) UpdateBackend(ctx context.Context, backend types.Backend) error {
+	if err := p.validateBackend(backend); err != nil {
+		return err
+	}
+
+	pool, err := p.backendsPool(ctx)
+	if err != nil {
+		return err
+	}
+
+	tag, err := pool.Exec(ctx, `UPDATE storage_backends SET affinity = $2 WHERE name = $1`,
+		backend.Name, backend.Affinity)
+	if err != nil {
+		return errors.Errorf("update storage backend: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return types.ErrBackendNotExist
+	}
+	return nil
+}
+
+func (p *PostgresQueues) ListBackends(ctx context.Context, backends *[]types.Backend) error {
+	pool, err := p.backendsPool(ctx)
+	if err != nil {
+		return err
+	}
+
+	rows, err := pool.Query(ctx, `SELECT name, affinity FROM storage_backends ORDER BY name`)
+	if err != nil {
+		return errors.Errorf("list storage backends: %w", err)
+	}
+	defer rows.Close()
+
+	for ctx.Err() == nil && rows.Next() {
+		var backend types.Backend
+		if err := rows.Scan(&backend.Name, &backend.Affinity); err != nil {
+			return errors.Errorf("scan storage backend: %w", err)
+		}
+		*backends = append(*backends, backend)
+	}
+	if err := rows.Err(); err != nil {
+		return errors.Errorf("list storage backends: %w", err)
+	}
+	return ctx.Err()
+}
+
 func (p *PostgresQueues) Close(ctx context.Context) error {
 	p.conf.Close()
 	return nil

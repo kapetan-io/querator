@@ -2,6 +2,7 @@ package store
 
 import (
 	"bytes"
+	"math"
 	"strings"
 	"unicode"
 
@@ -15,6 +16,8 @@ var ErrEmptyQueueName = reply.NewInvalidOption("queue name is invalid; queue nam
 
 const maxReferenceLength = 2_000
 const maxQueueNameLength = 512
+
+const maxBackendNameLength = 512
 const maxInt16 = 65536
 
 type QueuesValidation struct{}
@@ -188,5 +191,27 @@ func (s QueuesValidation) validateDelete(name string) error {
 	if strings.Contains(name, "~") {
 		return reply.NewInvalidOption("queue name is invalid; '%s' cannot contain '~' character", name)
 	}
+	return nil
+}
+
+func (s QueuesValidation) validateBackend(backend types.Backend) error {
+	if strings.TrimSpace(backend.Name) == "" {
+		return reply.NewInvalidOption("backend is invalid; backend name cannot be empty")
+	}
+
+	if len(backend.Name) > maxBackendNameLength {
+		return reply.NewInvalidOption("backend is invalid; cannot be greater than '%d' characters", maxBackendNameLength)
+	}
+
+	if math.IsNaN(backend.Affinity) || math.IsInf(backend.Affinity, 0) {
+		return reply.NewInvalidOption("affinity is invalid; backend '%s' affinity must be a finite number, got %v",
+			backend.Name, backend.Affinity)
+	}
+
+	if backend.Affinity < 0 {
+		return reply.NewInvalidOption("affinity is invalid; backend '%s' affinity cannot be negative, got %v",
+			backend.Name, backend.Affinity)
+	}
+
 	return nil
 }

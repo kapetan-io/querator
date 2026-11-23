@@ -79,6 +79,7 @@ BadgerDB creates a directory structure like this:
 ```
 /data/
 ├── queues/
+│   ├── ~backend-records/            # Saved storage backend affinities
 │   └── ~queue-storage-partition/    # Queue metadata
 │       ├── 000000.vlog               # Value log
 │       ├── 000001.sst                # SSTable files

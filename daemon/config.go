@@ -540,14 +540,24 @@ func setupQueueStorage(ctx context.Context, file File, conf *Config) error {
 		return err
 	}
 
+	backends := internal.NewStorageBackends(conf.Service.StorageConfig.Queues,
+		conf.Service.StorageConfig.PartitionStorage, conf.Service.Log)
+	var placeable []types.Backend
 	for _, queue := range file.Queues {
 		var stored types.QueueInfo
 		if err := conf.Service.StorageConfig.Queues.Get(ctx, queue.Name, &stored); err == nil {
 			continue
 		}
-		if len(queue.Partitions) == 0 && !placement.CanPlace(conf.Service.StorageConfig.Backends()) {
+		if len(queue.Partitions) == 0 && placeable == nil {
+			var err error
+			if placeable, err = backends.Placeable(ctx); err != nil {
+				return fmt.Errorf("invalid queue '%s'; %w", queue.Name, err)
+			}
+		}
+		if len(queue.Partitions) == 0 && !placement.CanPlace(placeable) {
 			return fmt.Errorf("invalid queue '%s'; no storage backend can take partitions, "+
-				"at least one partition storage needs an affinity above 0", queue.Name)
+				"at least one storage backend needs a saved affinity above 0, see 'querator backends update'",
+				queue.Name)
 		}
 		for _, p := range queue.Partitions {
 			found := store.Find(p.StorageName, conf.Service.StorageConfig.PartitionStorage)
@@ -563,7 +573,7 @@ func setupQueueStorage(ctx context.Context, file File, conf *Config) error {
 				return fmt.Errorf("invalid queue '%s'; partitions is invalid; cannot be greater than %d",
 					queue.Name, placement.MaxPartitions)
 			}
-			placed, err := placement.Create(info, conf.Service.StorageConfig.Backends())
+			placed, err := placement.Create(info, placeable)
 			if err != nil {
 				return fmt.Errorf("invalid queue '%s'; %w", queue.Name, err)
 			}

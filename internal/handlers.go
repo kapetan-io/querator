@@ -2,6 +2,7 @@ package internal
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
@@ -13,9 +14,11 @@ import (
 func (l *Logical) handleColdRequests(state *QueueState, req *Request) {
 	switch req.Method {
 	case MethodStorageItemsList, MethodStorageItemsImport, MethodStorageItemsDelete:
-		l.handleStorageRequests(req)
+		l.handleStorageRequests(state, req)
 	case MethodQueueStats:
 		l.handleStats(state, req)
+	case MethodPartitionCounts:
+		l.handlePartitionCounts(state, req)
 	case MethodQueuePause:
 		l.handlePause(state, req)
 	case MethodQueueClear:
@@ -45,7 +48,7 @@ func (l *Logical) storagePartition(number int) store.Partition {
 	return nil
 }
 
-func (l *Logical) handleStorageRequests(req *Request) {
+func (l *Logical) handleStorageRequests(state *QueueState, req *Request) {
 	sr := req.Request.(StorageRequest)
 	partition := l.storagePartition(sr.Partition)
 	if partition == nil {
@@ -75,7 +78,9 @@ func (l *Logical) handleStorageRequests(req *Request) {
 	case MethodStorageItemsDelete:
 		if err := partition.Delete(req.Context, sr.IDs); err != nil {
 			req.Err = err
+			break
 		}
+		l.refreshCounts(req.Context, state, sr.Partition)
 	default:
 		assert.Unreachable(fmt.Sprintf("undefined request method '%d'", req.Method))
 	}
@@ -92,7 +97,7 @@ func (l *Logical) handleStats(state *QueueState, r *Request) {
 	now := l.conf.Clock.Now().UTC()
 	for _, p := range l.conf.StoragePartitions {
 		var ps types.PartitionStats
-		if err := p.Stats(r.Context, &ps, now); err != nil {
+		if err := p.Stats(r.Context, &ps, now); err != nil && !errors.Is(err, store.ErrBackendNotConfigured) {
 			r.Err = err
 		}
 		ps.Partition = p.Info().PartitionNum
@@ -126,13 +131,16 @@ func (l *Logical) handlePause(state *QueueState, r *Request) {
 	l.handleHotRequests(state, nil)
 }
 
-func (l *Logical) handleClear(_ *QueueState, req *Request) {
+func (l *Logical) handleClear(state *QueueState, req *Request) {
 	cr := req.Request.(*types.ClearRequest)
 
 	if cr.Queue || cr.Scheduled {
 		for _, p := range l.conf.StoragePartitions {
 			err := p.Clear(l.untilShutdown, *cr)
 			if err == nil {
+				if partition := state.GetPartition(p.Info().PartitionNum); partition != nil && cr.Scheduled {
+					partition.State.Scheduled = 0
+				}
 				continue
 			}
 			if l.untilShutdown.Err() != nil {
@@ -166,6 +174,7 @@ func (l *Logical) handleReload(state *QueueState, req *Request) {
 		} else {
 			partition.State.UnLeased = stats.Total - stats.NumLeased
 			partition.State.NumLeased = stats.NumLeased
+			partition.State.Scheduled = stats.Scheduled
 			partition.State.Failures = 0
 		}
 		partition.Lifecycle.RestartPasses(l.conf.Clock.Now().UTC())
@@ -269,10 +278,35 @@ func rejectWithShutdown(r *Request) {
 		close(o.ReadyCh)
 	case MethodStorageItemsList, MethodStorageItemsImport, MethodStorageItemsDelete,
 		MethodQueueStats, MethodQueuePause, MethodQueueClear, MethodUpdateInfo,
-		MethodReload:
+		MethodReload, MethodPartitionCounts:
 		r.Err = ErrQueueShutdown
 		close(r.ReadyCh)
 	default:
 		assert.Unreachable(fmt.Sprintf("undefined request method '%d'", r.Method))
+	}
+}
+
+func (l *Logical) handlePartitionCounts(state *QueueState, req *Request) {
+	counts := req.Request.(*[]types.PartitionCount)
+	for _, p := range state.Partitions {
+		*counts = append(*counts, types.PartitionCount{Partition: p.Info.PartitionNum, State: p.State})
+	}
+	close(req.ReadyCh)
+}
+
+func (l *Logical) refreshCounts(ctx context.Context, state *QueueState, number int) {
+	for _, p := range state.Partitions {
+		if p.Info.PartitionNum != number {
+			continue
+		}
+		var stats types.PartitionStats
+		if err := p.Store.Stats(ctx, &stats, l.conf.Clock.Now().UTC()); err != nil {
+			l.log.Warn("cannot refresh partition counts after delete", "partition", number, "error", err)
+			return
+		}
+		p.State.UnLeased = stats.Total - stats.NumLeased
+		p.State.NumLeased = stats.NumLeased
+		p.State.Scheduled = stats.Scheduled
+		return
 	}
 }

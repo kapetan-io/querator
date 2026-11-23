@@ -477,6 +477,85 @@ func (q *MongoQueues) Delete(ctx context.Context, name string) error {
 	return nil
 }
 
+func (q *MongoQueues) backendsCollection(ctx context.Context) (*mongo.Collection, error) {
+	client, err := q.conf.getOrCreateClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return client.Database(q.conf.database()).Collection("storage_backends"), nil
+}
+
+type backendDoc struct {
+	Name     string  `bson:"_id"`
+	Affinity float64 `bson:"affinity"`
+}
+
+func (q *MongoQueues) AddBackend(ctx context.Context, backend types.Backend) error {
+	if err := q.validateBackend(backend); err != nil {
+		return err
+	}
+
+	backends, err := q.backendsCollection(ctx)
+	if err != nil {
+		return err
+	}
+
+	_, err = backends.InsertOne(ctx, backendDoc{Name: backend.Name, Affinity: backend.Affinity})
+	if mongo.IsDuplicateKeyError(err) {
+		return types.ErrBackendAlreadyExists
+	}
+	if err != nil {
+		return errors.Errorf("insert storage backend: %w", err)
+	}
+	return nil
+}
+
+func (q *MongoQueues) UpdateBackend(ctx context.Context, backend types.Backend) error {
+	if err := q.validateBackend(backend); err != nil {
+		return err
+	}
+
+	backends, err := q.backendsCollection(ctx)
+	if err != nil {
+		return err
+	}
+
+	result, err := backends.UpdateOne(ctx, bson.M{"_id": backend.Name},
+		bson.M{"$set": bson.M{"affinity": backend.Affinity}})
+	if err != nil {
+		return errors.Errorf("update storage backend: %w", err)
+	}
+	if result.MatchedCount == 0 {
+		return types.ErrBackendNotExist
+	}
+	return nil
+}
+
+func (q *MongoQueues) ListBackends(ctx context.Context, backends *[]types.Backend) error {
+	collection, err := q.backendsCollection(ctx)
+	if err != nil {
+		return err
+	}
+
+	cursor, err := collection.Find(ctx, bson.M{}, options.Find().SetSort(bson.D{{Key: "_id", Value: 1}}))
+	if err != nil {
+		return errors.Errorf("list storage backends: %w", err)
+	}
+	defer func() { _ = cursor.Close(ctx) }()
+
+	for ctx.Err() == nil && cursor.Next(ctx) {
+		var doc backendDoc
+		if err := cursor.Decode(&doc); err != nil {
+			return errors.Errorf("decode storage backend: %w", err)
+		}
+		*backends = append(*backends, types.Backend{Name: doc.Name, Affinity: doc.Affinity})
+	}
+	if err := cursor.Err(); err != nil {
+		return errors.Errorf("list storage backends: %w", err)
+	}
+	return ctx.Err()
+}
+
 func (q *MongoQueues) Close(_ context.Context) error {
 	q.conf.Close()
 	return nil

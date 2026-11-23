@@ -487,6 +487,458 @@ func (x *StorageItem) GetPayload() []byte {
 	return nil
 }
 
+type StorageBackendsUpdateRequest struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	// The storage backend's name.
+	Backend string `protobuf:"bytes,1,opt,name=backend,proto3" json:"backend,omitempty"`
+	// How large a part of every queue's partitions the backend holds. Zero means none.
+	// Left out, the saved affinity is kept.
+	Affinity *float64 `protobuf:"fixed64,2,opt,name=affinity,proto3,oneof" json:"affinity,omitempty"`
+}
+
+func (x *StorageBackendsUpdateRequest) Reset() {
+	*x = StorageBackendsUpdateRequest{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_proto_storage_proto_msgTypes[6]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *StorageBackendsUpdateRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StorageBackendsUpdateRequest) ProtoMessage() {}
+
+func (x *StorageBackendsUpdateRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_storage_proto_msgTypes[6]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StorageBackendsUpdateRequest.ProtoReflect.Descriptor instead.
+func (*StorageBackendsUpdateRequest) Descriptor() ([]byte, []int) {
+	return file_proto_storage_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *StorageBackendsUpdateRequest) GetBackend() string {
+	if x != nil {
+		return x.Backend
+	}
+	return ""
+}
+
+func (x *StorageBackendsUpdateRequest) GetAffinity() float64 {
+	if x != nil && x.Affinity != nil {
+		return *x.Affinity
+	}
+	return 0
+}
+
+type StorageBackendsListRequest struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+}
+
+func (x *StorageBackendsListRequest) Reset() {
+	*x = StorageBackendsListRequest{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_proto_storage_proto_msgTypes[7]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *StorageBackendsListRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StorageBackendsListRequest) ProtoMessage() {}
+
+func (x *StorageBackendsListRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_storage_proto_msgTypes[7]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StorageBackendsListRequest.ProtoReflect.Descriptor instead.
+func (*StorageBackendsListRequest) Descriptor() ([]byte, []int) {
+	return file_proto_storage_proto_rawDescGZIP(), []int{7}
+}
+
+type StorageBackendsListResponse struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	// One entry per storage backend with a saved record.
+	Backends []*StorageBackend `protobuf:"bytes,1,rep,name=backends,proto3" json:"backends,omitempty"`
+}
+
+func (x *StorageBackendsListResponse) Reset() {
+	*x = StorageBackendsListResponse{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_proto_storage_proto_msgTypes[8]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *StorageBackendsListResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StorageBackendsListResponse) ProtoMessage() {}
+
+func (x *StorageBackendsListResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_storage_proto_msgTypes[8]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StorageBackendsListResponse.ProtoReflect.Descriptor instead.
+func (*StorageBackendsListResponse) Descriptor() ([]byte, []int) {
+	return file_proto_storage_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *StorageBackendsListResponse) GetBackends() []*StorageBackend {
+	if x != nil {
+		return x.Backends
+	}
+	return nil
+}
+
+type StorageBackend struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	// The storage backend's name.
+	Backend string `protobuf:"bytes,1,opt,name=backend,proto3" json:"backend,omitempty"`
+	// The saved affinity.
+	Affinity *float64 `protobuf:"fixed64,2,opt,name=affinity,proto3,oneof" json:"affinity,omitempty"`
+	// False when the backend has a saved record and is not in this instance's config file.
+	Configured *bool `protobuf:"varint,3,opt,name=configured,proto3,oneof" json:"configured,omitempty"`
+	// True only when affinity is 0 and no partition of any queue is left on the backend.
+	SafeToStop *bool `protobuf:"varint,4,opt,name=safeToStop,json=safe_to_stop,proto3,oneof" json:"safeToStop,omitempty"`
+	// Every partition on the backend.
+	Partitions []*BackendPartition `protobuf:"bytes,5,rep,name=partitions,proto3" json:"partitions,omitempty"`
+	// What a rebalance would do to this backend right now.
+	Pending *PendingRebalance `protobuf:"bytes,6,opt,name=pending,proto3" json:"pending,omitempty"`
+}
+
+func (x *StorageBackend) Reset() {
+	*x = StorageBackend{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_proto_storage_proto_msgTypes[9]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *StorageBackend) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*StorageBackend) ProtoMessage() {}
+
+func (x *StorageBackend) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_storage_proto_msgTypes[9]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use StorageBackend.ProtoReflect.Descriptor instead.
+func (*StorageBackend) Descriptor() ([]byte, []int) {
+	return file_proto_storage_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *StorageBackend) GetBackend() string {
+	if x != nil {
+		return x.Backend
+	}
+	return ""
+}
+
+func (x *StorageBackend) GetAffinity() float64 {
+	if x != nil && x.Affinity != nil {
+		return *x.Affinity
+	}
+	return 0
+}
+
+func (x *StorageBackend) GetConfigured() bool {
+	if x != nil && x.Configured != nil {
+		return *x.Configured
+	}
+	return false
+}
+
+func (x *StorageBackend) GetSafeToStop() bool {
+	if x != nil && x.SafeToStop != nil {
+		return *x.SafeToStop
+	}
+	return false
+}
+
+func (x *StorageBackend) GetPartitions() []*BackendPartition {
+	if x != nil {
+		return x.Partitions
+	}
+	return nil
+}
+
+func (x *StorageBackend) GetPending() *PendingRebalance {
+	if x != nil {
+		return x.Pending
+	}
+	return nil
+}
+
+type BackendPartition struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	// The queue the partition belongs to.
+	QueueName string `protobuf:"bytes,1,opt,name=queueName,json=queue_name,proto3" json:"queueName,omitempty"`
+	// The partition number.
+	Partition *int32 `protobuf:"varint,2,opt,name=partition,proto3,oneof" json:"partition,omitempty"`
+	// Either 'available' or 'draining'.
+	State string `protobuf:"bytes,3,opt,name=state,proto3" json:"state,omitempty"`
+	// Items waiting to be leased. Left out when Querator cannot read the partition.
+	Unleased *int32 `protobuf:"varint,4,opt,name=unleased,proto3,oneof" json:"unleased,omitempty"`
+	// Items leased and not yet completed. Left out when Querator cannot read the partition.
+	Leased *int32 `protobuf:"varint,5,opt,name=leased,proto3,oneof" json:"leased,omitempty"`
+	// Items scheduled and not yet due. Left out when Querator cannot read the partition.
+	Scheduled *int32 `protobuf:"varint,6,opt,name=scheduled,proto3,oneof" json:"scheduled,omitempty"`
+	// The same meaning as `failures` in '/queue.stats'. Above 0 means the partition is failing.
+	// 1 when Querator could not load the queue or read its counts.
+	Failures *int32 `protobuf:"varint,7,opt,name=failures,proto3,oneof" json:"failures,omitempty"`
+}
+
+func (x *BackendPartition) Reset() {
+	*x = BackendPartition{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_proto_storage_proto_msgTypes[10]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *BackendPartition) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BackendPartition) ProtoMessage() {}
+
+func (x *BackendPartition) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_storage_proto_msgTypes[10]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BackendPartition.ProtoReflect.Descriptor instead.
+func (*BackendPartition) Descriptor() ([]byte, []int) {
+	return file_proto_storage_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *BackendPartition) GetQueueName() string {
+	if x != nil {
+		return x.QueueName
+	}
+	return ""
+}
+
+func (x *BackendPartition) GetPartition() int32 {
+	if x != nil && x.Partition != nil {
+		return *x.Partition
+	}
+	return 0
+}
+
+func (x *BackendPartition) GetState() string {
+	if x != nil {
+		return x.State
+	}
+	return ""
+}
+
+func (x *BackendPartition) GetUnleased() int32 {
+	if x != nil && x.Unleased != nil {
+		return *x.Unleased
+	}
+	return 0
+}
+
+func (x *BackendPartition) GetLeased() int32 {
+	if x != nil && x.Leased != nil {
+		return *x.Leased
+	}
+	return 0
+}
+
+func (x *BackendPartition) GetScheduled() int32 {
+	if x != nil && x.Scheduled != nil {
+		return *x.Scheduled
+	}
+	return 0
+}
+
+func (x *BackendPartition) GetFailures() int32 {
+	if x != nil && x.Failures != nil {
+		return *x.Failures
+	}
+	return 0
+}
+
+type PendingRebalance struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	// Partitions a rebalance would create on this backend.
+	Create []*QueuePartitions `protobuf:"bytes,1,rep,name=create,proto3" json:"create,omitempty"`
+	// Partitions on this backend a rebalance would mark draining.
+	Drain []*QueuePartitions `protobuf:"bytes,2,rep,name=drain,proto3" json:"drain,omitempty"`
+}
+
+func (x *PendingRebalance) Reset() {
+	*x = PendingRebalance{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_proto_storage_proto_msgTypes[11]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *PendingRebalance) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PendingRebalance) ProtoMessage() {}
+
+func (x *PendingRebalance) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_storage_proto_msgTypes[11]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PendingRebalance.ProtoReflect.Descriptor instead.
+func (*PendingRebalance) Descriptor() ([]byte, []int) {
+	return file_proto_storage_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *PendingRebalance) GetCreate() []*QueuePartitions {
+	if x != nil {
+		return x.Create
+	}
+	return nil
+}
+
+func (x *PendingRebalance) GetDrain() []*QueuePartitions {
+	if x != nil {
+		return x.Drain
+	}
+	return nil
+}
+
+type QueuePartitions struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	QueueName  string  `protobuf:"bytes,1,opt,name=queueName,json=queue_name,proto3" json:"queueName,omitempty"`
+	Partitions []int32 `protobuf:"varint,2,rep,packed,name=partitions,proto3" json:"partitions,omitempty"`
+}
+
+func (x *QueuePartitions) Reset() {
+	*x = QueuePartitions{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_proto_storage_proto_msgTypes[12]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *QueuePartitions) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*QueuePartitions) ProtoMessage() {}
+
+func (x *QueuePartitions) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_storage_proto_msgTypes[12]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use QueuePartitions.ProtoReflect.Descriptor instead.
+func (*QueuePartitions) Descriptor() ([]byte, []int) {
+	return file_proto_storage_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *QueuePartitions) GetQueueName() string {
+	if x != nil {
+		return x.QueueName
+	}
+	return ""
+}
+
+func (x *QueuePartitions) GetPartitions() []int32 {
+	if x != nil {
+		return x.Partitions
+	}
+	return nil
+}
+
 var File_proto_storage_proto protoreflect.FileDescriptor
 
 var file_proto_storage_proto_rawDesc = []byte{
@@ -566,10 +1018,75 @@ var file_proto_storage_proto_rawDesc = []byte{
 	0x09, 0x52, 0x08, 0x65, 0x6e, 0x63, 0x6f, 0x64, 0x69, 0x6e, 0x67, 0x12, 0x12, 0x0a, 0x04, 0x6b,
 	0x69, 0x6e, 0x64, 0x18, 0x0e, 0x20, 0x01, 0x28, 0x09, 0x52, 0x04, 0x6b, 0x69, 0x6e, 0x64, 0x12,
 	0x18, 0x0a, 0x07, 0x70, 0x61, 0x79, 0x6c, 0x6f, 0x61, 0x64, 0x18, 0x0f, 0x20, 0x01, 0x28, 0x0c,
-	0x52, 0x07, 0x70, 0x61, 0x79, 0x6c, 0x6f, 0x61, 0x64, 0x42, 0x26, 0x5a, 0x24, 0x67, 0x69, 0x74,
-	0x68, 0x75, 0x62, 0x2e, 0x63, 0x6f, 0x6d, 0x2f, 0x6b, 0x61, 0x70, 0x65, 0x74, 0x61, 0x6e, 0x2d,
-	0x69, 0x6f, 0x2f, 0x71, 0x75, 0x65, 0x72, 0x61, 0x74, 0x6f, 0x72, 0x2f, 0x70, 0x72, 0x6f, 0x74,
-	0x6f, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
+	0x52, 0x07, 0x70, 0x61, 0x79, 0x6c, 0x6f, 0x61, 0x64, 0x22, 0x66, 0x0a, 0x1c, 0x53, 0x74, 0x6f,
+	0x72, 0x61, 0x67, 0x65, 0x42, 0x61, 0x63, 0x6b, 0x65, 0x6e, 0x64, 0x73, 0x55, 0x70, 0x64, 0x61,
+	0x74, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x12, 0x18, 0x0a, 0x07, 0x62, 0x61, 0x63,
+	0x6b, 0x65, 0x6e, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x62, 0x61, 0x63, 0x6b,
+	0x65, 0x6e, 0x64, 0x12, 0x1f, 0x0a, 0x08, 0x61, 0x66, 0x66, 0x69, 0x6e, 0x69, 0x74, 0x79, 0x18,
+	0x02, 0x20, 0x01, 0x28, 0x01, 0x48, 0x00, 0x52, 0x08, 0x61, 0x66, 0x66, 0x69, 0x6e, 0x69, 0x74,
+	0x79, 0x88, 0x01, 0x01, 0x42, 0x0b, 0x0a, 0x09, 0x5f, 0x61, 0x66, 0x66, 0x69, 0x6e, 0x69, 0x74,
+	0x79, 0x22, 0x1c, 0x0a, 0x1a, 0x53, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x42, 0x61, 0x63, 0x6b,
+	0x65, 0x6e, 0x64, 0x73, 0x4c, 0x69, 0x73, 0x74, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x22,
+	0x53, 0x0a, 0x1b, 0x53, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65, 0x42, 0x61, 0x63, 0x6b, 0x65, 0x6e,
+	0x64, 0x73, 0x4c, 0x69, 0x73, 0x74, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x34,
+	0x0a, 0x08, 0x62, 0x61, 0x63, 0x6b, 0x65, 0x6e, 0x64, 0x73, 0x18, 0x01, 0x20, 0x03, 0x28, 0x0b,
+	0x32, 0x18, 0x2e, 0x71, 0x75, 0x65, 0x72, 0x61, 0x74, 0x6f, 0x72, 0x2e, 0x53, 0x74, 0x6f, 0x72,
+	0x61, 0x67, 0x65, 0x42, 0x61, 0x63, 0x6b, 0x65, 0x6e, 0x64, 0x52, 0x08, 0x62, 0x61, 0x63, 0x6b,
+	0x65, 0x6e, 0x64, 0x73, 0x22, 0xb4, 0x02, 0x0a, 0x0e, 0x53, 0x74, 0x6f, 0x72, 0x61, 0x67, 0x65,
+	0x42, 0x61, 0x63, 0x6b, 0x65, 0x6e, 0x64, 0x12, 0x18, 0x0a, 0x07, 0x62, 0x61, 0x63, 0x6b, 0x65,
+	0x6e, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x07, 0x62, 0x61, 0x63, 0x6b, 0x65, 0x6e,
+	0x64, 0x12, 0x1f, 0x0a, 0x08, 0x61, 0x66, 0x66, 0x69, 0x6e, 0x69, 0x74, 0x79, 0x18, 0x02, 0x20,
+	0x01, 0x28, 0x01, 0x48, 0x00, 0x52, 0x08, 0x61, 0x66, 0x66, 0x69, 0x6e, 0x69, 0x74, 0x79, 0x88,
+	0x01, 0x01, 0x12, 0x23, 0x0a, 0x0a, 0x63, 0x6f, 0x6e, 0x66, 0x69, 0x67, 0x75, 0x72, 0x65, 0x64,
+	0x18, 0x03, 0x20, 0x01, 0x28, 0x08, 0x48, 0x01, 0x52, 0x0a, 0x63, 0x6f, 0x6e, 0x66, 0x69, 0x67,
+	0x75, 0x72, 0x65, 0x64, 0x88, 0x01, 0x01, 0x12, 0x25, 0x0a, 0x0a, 0x73, 0x61, 0x66, 0x65, 0x54,
+	0x6f, 0x53, 0x74, 0x6f, 0x70, 0x18, 0x04, 0x20, 0x01, 0x28, 0x08, 0x48, 0x02, 0x52, 0x0c, 0x73,
+	0x61, 0x66, 0x65, 0x5f, 0x74, 0x6f, 0x5f, 0x73, 0x74, 0x6f, 0x70, 0x88, 0x01, 0x01, 0x12, 0x3a,
+	0x0a, 0x0a, 0x70, 0x61, 0x72, 0x74, 0x69, 0x74, 0x69, 0x6f, 0x6e, 0x73, 0x18, 0x05, 0x20, 0x03,
+	0x28, 0x0b, 0x32, 0x1a, 0x2e, 0x71, 0x75, 0x65, 0x72, 0x61, 0x74, 0x6f, 0x72, 0x2e, 0x42, 0x61,
+	0x63, 0x6b, 0x65, 0x6e, 0x64, 0x50, 0x61, 0x72, 0x74, 0x69, 0x74, 0x69, 0x6f, 0x6e, 0x52, 0x0a,
+	0x70, 0x61, 0x72, 0x74, 0x69, 0x74, 0x69, 0x6f, 0x6e, 0x73, 0x12, 0x34, 0x0a, 0x07, 0x70, 0x65,
+	0x6e, 0x64, 0x69, 0x6e, 0x67, 0x18, 0x06, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x1a, 0x2e, 0x71, 0x75,
+	0x65, 0x72, 0x61, 0x74, 0x6f, 0x72, 0x2e, 0x50, 0x65, 0x6e, 0x64, 0x69, 0x6e, 0x67, 0x52, 0x65,
+	0x62, 0x61, 0x6c, 0x61, 0x6e, 0x63, 0x65, 0x52, 0x07, 0x70, 0x65, 0x6e, 0x64, 0x69, 0x6e, 0x67,
+	0x42, 0x0b, 0x0a, 0x09, 0x5f, 0x61, 0x66, 0x66, 0x69, 0x6e, 0x69, 0x74, 0x79, 0x42, 0x0d, 0x0a,
+	0x0b, 0x5f, 0x63, 0x6f, 0x6e, 0x66, 0x69, 0x67, 0x75, 0x72, 0x65, 0x64, 0x42, 0x0d, 0x0a, 0x0b,
+	0x5f, 0x73, 0x61, 0x66, 0x65, 0x54, 0x6f, 0x53, 0x74, 0x6f, 0x70, 0x22, 0xad, 0x02, 0x0a, 0x10,
+	0x42, 0x61, 0x63, 0x6b, 0x65, 0x6e, 0x64, 0x50, 0x61, 0x72, 0x74, 0x69, 0x74, 0x69, 0x6f, 0x6e,
+	0x12, 0x1d, 0x0a, 0x09, 0x71, 0x75, 0x65, 0x75, 0x65, 0x4e, 0x61, 0x6d, 0x65, 0x18, 0x01, 0x20,
+	0x01, 0x28, 0x09, 0x52, 0x0a, 0x71, 0x75, 0x65, 0x75, 0x65, 0x5f, 0x6e, 0x61, 0x6d, 0x65, 0x12,
+	0x21, 0x0a, 0x09, 0x70, 0x61, 0x72, 0x74, 0x69, 0x74, 0x69, 0x6f, 0x6e, 0x18, 0x02, 0x20, 0x01,
+	0x28, 0x05, 0x48, 0x00, 0x52, 0x09, 0x70, 0x61, 0x72, 0x74, 0x69, 0x74, 0x69, 0x6f, 0x6e, 0x88,
+	0x01, 0x01, 0x12, 0x14, 0x0a, 0x05, 0x73, 0x74, 0x61, 0x74, 0x65, 0x18, 0x03, 0x20, 0x01, 0x28,
+	0x09, 0x52, 0x05, 0x73, 0x74, 0x61, 0x74, 0x65, 0x12, 0x1f, 0x0a, 0x08, 0x75, 0x6e, 0x6c, 0x65,
+	0x61, 0x73, 0x65, 0x64, 0x18, 0x04, 0x20, 0x01, 0x28, 0x05, 0x48, 0x01, 0x52, 0x08, 0x75, 0x6e,
+	0x6c, 0x65, 0x61, 0x73, 0x65, 0x64, 0x88, 0x01, 0x01, 0x12, 0x1b, 0x0a, 0x06, 0x6c, 0x65, 0x61,
+	0x73, 0x65, 0x64, 0x18, 0x05, 0x20, 0x01, 0x28, 0x05, 0x48, 0x02, 0x52, 0x06, 0x6c, 0x65, 0x61,
+	0x73, 0x65, 0x64, 0x88, 0x01, 0x01, 0x12, 0x21, 0x0a, 0x09, 0x73, 0x63, 0x68, 0x65, 0x64, 0x75,
+	0x6c, 0x65, 0x64, 0x18, 0x06, 0x20, 0x01, 0x28, 0x05, 0x48, 0x03, 0x52, 0x09, 0x73, 0x63, 0x68,
+	0x65, 0x64, 0x75, 0x6c, 0x65, 0x64, 0x88, 0x01, 0x01, 0x12, 0x1f, 0x0a, 0x08, 0x66, 0x61, 0x69,
+	0x6c, 0x75, 0x72, 0x65, 0x73, 0x18, 0x07, 0x20, 0x01, 0x28, 0x05, 0x48, 0x04, 0x52, 0x08, 0x66,
+	0x61, 0x69, 0x6c, 0x75, 0x72, 0x65, 0x73, 0x88, 0x01, 0x01, 0x42, 0x0c, 0x0a, 0x0a, 0x5f, 0x70,
+	0x61, 0x72, 0x74, 0x69, 0x74, 0x69, 0x6f, 0x6e, 0x42, 0x0b, 0x0a, 0x09, 0x5f, 0x75, 0x6e, 0x6c,
+	0x65, 0x61, 0x73, 0x65, 0x64, 0x42, 0x09, 0x0a, 0x07, 0x5f, 0x6c, 0x65, 0x61, 0x73, 0x65, 0x64,
+	0x42, 0x0c, 0x0a, 0x0a, 0x5f, 0x73, 0x63, 0x68, 0x65, 0x64, 0x75, 0x6c, 0x65, 0x64, 0x42, 0x0b,
+	0x0a, 0x09, 0x5f, 0x66, 0x61, 0x69, 0x6c, 0x75, 0x72, 0x65, 0x73, 0x22, 0x76, 0x0a, 0x10, 0x50,
+	0x65, 0x6e, 0x64, 0x69, 0x6e, 0x67, 0x52, 0x65, 0x62, 0x61, 0x6c, 0x61, 0x6e, 0x63, 0x65, 0x12,
+	0x31, 0x0a, 0x06, 0x63, 0x72, 0x65, 0x61, 0x74, 0x65, 0x18, 0x01, 0x20, 0x03, 0x28, 0x0b, 0x32,
+	0x19, 0x2e, 0x71, 0x75, 0x65, 0x72, 0x61, 0x74, 0x6f, 0x72, 0x2e, 0x51, 0x75, 0x65, 0x75, 0x65,
+	0x50, 0x61, 0x72, 0x74, 0x69, 0x74, 0x69, 0x6f, 0x6e, 0x73, 0x52, 0x06, 0x63, 0x72, 0x65, 0x61,
+	0x74, 0x65, 0x12, 0x2f, 0x0a, 0x05, 0x64, 0x72, 0x61, 0x69, 0x6e, 0x18, 0x02, 0x20, 0x03, 0x28,
+	0x0b, 0x32, 0x19, 0x2e, 0x71, 0x75, 0x65, 0x72, 0x61, 0x74, 0x6f, 0x72, 0x2e, 0x51, 0x75, 0x65,
+	0x75, 0x65, 0x50, 0x61, 0x72, 0x74, 0x69, 0x74, 0x69, 0x6f, 0x6e, 0x73, 0x52, 0x05, 0x64, 0x72,
+	0x61, 0x69, 0x6e, 0x22, 0x50, 0x0a, 0x0f, 0x51, 0x75, 0x65, 0x75, 0x65, 0x50, 0x61, 0x72, 0x74,
+	0x69, 0x74, 0x69, 0x6f, 0x6e, 0x73, 0x12, 0x1d, 0x0a, 0x09, 0x71, 0x75, 0x65, 0x75, 0x65, 0x4e,
+	0x61, 0x6d, 0x65, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0a, 0x71, 0x75, 0x65, 0x75, 0x65,
+	0x5f, 0x6e, 0x61, 0x6d, 0x65, 0x12, 0x1e, 0x0a, 0x0a, 0x70, 0x61, 0x72, 0x74, 0x69, 0x74, 0x69,
+	0x6f, 0x6e, 0x73, 0x18, 0x02, 0x20, 0x03, 0x28, 0x05, 0x52, 0x0a, 0x70, 0x61, 0x72, 0x74, 0x69,
+	0x74, 0x69, 0x6f, 0x6e, 0x73, 0x42, 0x26, 0x5a, 0x24, 0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e,
+	0x63, 0x6f, 0x6d, 0x2f, 0x6b, 0x61, 0x70, 0x65, 0x74, 0x61, 0x6e, 0x2d, 0x69, 0x6f, 0x2f, 0x71,
+	0x75, 0x65, 0x72, 0x61, 0x74, 0x6f, 0x72, 0x2f, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x62, 0x06, 0x70,
+	0x72, 0x6f, 0x74, 0x6f, 0x33,
 }
 
 var (
@@ -584,31 +1101,43 @@ func file_proto_storage_proto_rawDescGZIP() []byte {
 	return file_proto_storage_proto_rawDescData
 }
 
-var file_proto_storage_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_proto_storage_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_proto_storage_proto_goTypes = []interface{}{
-	(*StorageItemsListRequest)(nil),    // 0: querator.StorageItemsListRequest
-	(*StorageItemsListResponse)(nil),   // 1: querator.StorageItemsListResponse
-	(*StorageItemsImportRequest)(nil),  // 2: querator.StorageItemsImportRequest
-	(*StorageItemsImportResponse)(nil), // 3: querator.StorageItemsImportResponse
-	(*StorageItemsDeleteRequest)(nil),  // 4: querator.StorageItemsDeleteRequest
-	(*StorageItem)(nil),                // 5: querator.StorageItem
-	(*timestamppb.Timestamp)(nil),      // 6: google.protobuf.Timestamp
+	(*StorageItemsListRequest)(nil),      // 0: querator.StorageItemsListRequest
+	(*StorageItemsListResponse)(nil),     // 1: querator.StorageItemsListResponse
+	(*StorageItemsImportRequest)(nil),    // 2: querator.StorageItemsImportRequest
+	(*StorageItemsImportResponse)(nil),   // 3: querator.StorageItemsImportResponse
+	(*StorageItemsDeleteRequest)(nil),    // 4: querator.StorageItemsDeleteRequest
+	(*StorageItem)(nil),                  // 5: querator.StorageItem
+	(*StorageBackendsUpdateRequest)(nil), // 6: querator.StorageBackendsUpdateRequest
+	(*StorageBackendsListRequest)(nil),   // 7: querator.StorageBackendsListRequest
+	(*StorageBackendsListResponse)(nil),  // 8: querator.StorageBackendsListResponse
+	(*StorageBackend)(nil),               // 9: querator.StorageBackend
+	(*BackendPartition)(nil),             // 10: querator.BackendPartition
+	(*PendingRebalance)(nil),             // 11: querator.PendingRebalance
+	(*QueuePartitions)(nil),              // 12: querator.QueuePartitions
+	(*timestamppb.Timestamp)(nil),        // 13: google.protobuf.Timestamp
 }
 var file_proto_storage_proto_depIdxs = []int32{
-	5, // 0: querator.StorageItemsListResponse.items:type_name -> querator.StorageItem
-	5, // 1: querator.StorageItemsImportRequest.items:type_name -> querator.StorageItem
-	5, // 2: querator.StorageItemsImportResponse.items:type_name -> querator.StorageItem
-	6, // 3: querator.StorageItem.leaseDeadline:type_name -> google.protobuf.Timestamp
-	6, // 4: querator.StorageItem.expireDeadline:type_name -> google.protobuf.Timestamp
-	6, // 5: querator.StorageItem.deadDeadline:type_name -> google.protobuf.Timestamp
-	6, // 6: querator.StorageItem.createdAt:type_name -> google.protobuf.Timestamp
-	6, // 7: querator.StorageItem.updatedAt:type_name -> google.protobuf.Timestamp
-	6, // 8: querator.StorageItem.enqueueAt:type_name -> google.protobuf.Timestamp
-	9, // [9:9] is the sub-list for method output_type
-	9, // [9:9] is the sub-list for method input_type
-	9, // [9:9] is the sub-list for extension type_name
-	9, // [9:9] is the sub-list for extension extendee
-	0, // [0:9] is the sub-list for field type_name
+	5,  // 0: querator.StorageItemsListResponse.items:type_name -> querator.StorageItem
+	5,  // 1: querator.StorageItemsImportRequest.items:type_name -> querator.StorageItem
+	5,  // 2: querator.StorageItemsImportResponse.items:type_name -> querator.StorageItem
+	13, // 3: querator.StorageItem.leaseDeadline:type_name -> google.protobuf.Timestamp
+	13, // 4: querator.StorageItem.expireDeadline:type_name -> google.protobuf.Timestamp
+	13, // 5: querator.StorageItem.deadDeadline:type_name -> google.protobuf.Timestamp
+	13, // 6: querator.StorageItem.createdAt:type_name -> google.protobuf.Timestamp
+	13, // 7: querator.StorageItem.updatedAt:type_name -> google.protobuf.Timestamp
+	13, // 8: querator.StorageItem.enqueueAt:type_name -> google.protobuf.Timestamp
+	9,  // 9: querator.StorageBackendsListResponse.backends:type_name -> querator.StorageBackend
+	10, // 10: querator.StorageBackend.partitions:type_name -> querator.BackendPartition
+	11, // 11: querator.StorageBackend.pending:type_name -> querator.PendingRebalance
+	12, // 12: querator.PendingRebalance.create:type_name -> querator.QueuePartitions
+	12, // 13: querator.PendingRebalance.drain:type_name -> querator.QueuePartitions
+	14, // [14:14] is the sub-list for method output_type
+	14, // [14:14] is the sub-list for method input_type
+	14, // [14:14] is the sub-list for extension type_name
+	14, // [14:14] is the sub-list for extension extendee
+	0,  // [0:14] is the sub-list for field type_name
 }
 
 func init() { file_proto_storage_proto_init() }
@@ -689,14 +1218,101 @@ func file_proto_storage_proto_init() {
 				return nil
 			}
 		}
+		file_proto_storage_proto_msgTypes[6].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*StorageBackendsUpdateRequest); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_proto_storage_proto_msgTypes[7].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*StorageBackendsListRequest); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_proto_storage_proto_msgTypes[8].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*StorageBackendsListResponse); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_proto_storage_proto_msgTypes[9].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*StorageBackend); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_proto_storage_proto_msgTypes[10].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*BackendPartition); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_proto_storage_proto_msgTypes[11].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*PendingRebalance); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_proto_storage_proto_msgTypes[12].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*QueuePartitions); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
 	}
+	file_proto_storage_proto_msgTypes[6].OneofWrappers = []interface{}{}
+	file_proto_storage_proto_msgTypes[9].OneofWrappers = []interface{}{}
+	file_proto_storage_proto_msgTypes[10].OneofWrappers = []interface{}{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_proto_storage_proto_rawDesc,
 			NumEnums:      0,
-			NumMessages:   6,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

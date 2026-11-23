@@ -248,6 +248,13 @@ func (l *Logical) storeProduce(ctx context.Context, p *Partition, batch types.Pr
 		p.State.UnLeased -= unstored
 		return stored != 0
 	}
+	for _, req := range batch.Requests {
+		for _, item := range req.Items {
+			if !item.EnqueueAt.IsZero() {
+				p.State.Scheduled++
+			}
+		}
+	}
 	return true
 }
 
@@ -321,6 +328,7 @@ func (l *Logical) applyToPartitions(state *QueueState) {
 		err = p.Store.Retry(ctx, p.RetryRequests)
 		p.State.NumLeased = max(0, p.State.NumLeased-p.RetryRequests.Retried())
 		p.State.UnLeased += p.RetryRequests.UnLeased()
+		p.State.Scheduled += p.RetryRequests.Scheduled()
 		immediate := l.conf.Clock.Now().UTC().Add(immediateRetryWindow)
 		for _, req := range p.RetryRequests.Requests {
 			for _, item := range req.Items {

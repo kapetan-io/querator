@@ -95,6 +95,11 @@ func New(ctx context.Context, conf Config) (*Service, error) {
 		return nil, err
 	}
 
+	if err := qm.SaveFirstSeenBackends(ctx); err != nil {
+		conf.Log.Error("cannot save storage backend records; will retry on the next queue create "+
+			"or storage backend request", "error", err)
+	}
+
 	return s, nil
 }
 
@@ -594,6 +599,70 @@ func (s *Service) QueueStats(ctx context.Context, req *proto.QueueStatsRequest,
 		res.LogicalQueues = append(res.LogicalQueues, ls)
 	}
 	return nil
+}
+
+func (s *Service) StorageBackendsUpdate(ctx context.Context, req *proto.StorageBackendsUpdateRequest) error {
+	if err := s.authorize(ctx, namespacePermission{Namespace: auth.SystemNamespace, Permission: auth.BackendUpdate}); err != nil {
+		return err
+	}
+
+	if strings.TrimSpace(req.Backend) == "" {
+		return reply.NewInvalidOption("backend is invalid; cannot be empty")
+	}
+
+	return s.queues.UpdateStorageBackend(ctx, internal.BackendUpdate{Name: req.Backend, Affinity: req.Affinity})
+}
+
+func (s *Service) StorageBackendsList(ctx context.Context, _ *proto.StorageBackendsListRequest,
+	resp *proto.StorageBackendsListResponse) error {
+	if err := s.authorize(ctx, namespacePermission{Namespace: auth.SystemNamespace, Permission: auth.BackendList}); err != nil {
+		return err
+	}
+
+	statuses, err := s.queues.ListStorageBackends(ctx)
+	if err != nil {
+		return err
+	}
+
+	for _, status := range statuses {
+		backend := &proto.StorageBackend{
+			Backend:    status.Backend.Name,
+			Affinity:   new(status.Backend.Affinity),
+			Configured: new(status.Configured),
+			SafeToStop: new(status.SafeToStop),
+			Pending:    &proto.PendingRebalance{},
+		}
+		for _, p := range status.Partitions {
+			partition := &proto.BackendPartition{
+				QueueName: p.Queue,
+				Partition: new(int32(p.Partition)),
+				State:     p.State,
+				Failures:  new(int32(p.Counts.Failures)),
+			}
+			if p.Readable {
+				partition.Unleased = new(int32(p.Counts.UnLeased))
+				partition.Leased = new(int32(p.Counts.NumLeased))
+				partition.Scheduled = new(int32(p.Counts.Scheduled))
+			}
+			backend.Partitions = append(backend.Partitions, partition)
+		}
+		backend.Pending.Create = queuePartitionsToProto(status.Rebalance.Create)
+		backend.Pending.Drain = queuePartitionsToProto(status.Rebalance.Drain)
+		resp.Backends = append(resp.Backends, backend)
+	}
+	return nil
+}
+
+func queuePartitionsToProto(in []internal.QueuePartitions) []*proto.QueuePartitions {
+	out := make([]*proto.QueuePartitions, 0, len(in))
+	for _, queue := range in {
+		numbers := make([]int32, 0, len(queue.Partitions))
+		for _, n := range queue.Partitions {
+			numbers = append(numbers, int32(n))
+		}
+		out = append(out, &proto.QueuePartitions{QueueName: queue.Queue, Partitions: numbers})
+	}
+	return out
 }
 
 func (s *Service) Health(ctx context.Context) (*transport.HealthResponse, error) {

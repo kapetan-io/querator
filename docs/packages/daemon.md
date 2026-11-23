@@ -14,8 +14,9 @@ The skip lets a restart succeed when every partition storage has affinity 0.
 It applies only with persistent queue storage (badger, mongo or postgres); with
 the default memory queue storage nothing survives a restart, so every listed
 queue is added again. A
-listed queue with no `partitions:` gets its partitions placed by affinity, and
-placement fails when no partition storage has an affinity above 0. On the first
+listed queue with no `partitions:` gets its partitions placed by each backend's
+saved affinity, and placement fails when no partition storage has a saved
+affinity above 0. On the first
 start that error is correct. On a restart the queue already exists with its
 partitions, so placing them again is unnecessary, and failing would stop a
 server whose config has not changed. The stored queue keeps the partitions it

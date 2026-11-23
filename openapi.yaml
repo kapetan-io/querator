@@ -676,6 +676,70 @@ paths:
                     code: 200
           headers: {}
       security: []
+  /v1/storage/backends.update:
+    post:
+      summary: Save a storage backend's affinity
+      deprecated: false
+      description: >-
+        Saves the affinity. Left out, it keeps its saved value. Rejects a
+        negative or non-finite affinity, and a backend with no saved record
+        that is also not in this instance's config file. Never changes where a
+        partition lives. Needs the `backend.update` permission in the `_system`
+        namespace.
+      operationId: post-v1-storage-backends.update
+      tags:
+        - Querator V1
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StorageBackendsUpdateRequest'
+            example:
+              backend: postgres-1
+              affinity: 0
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema: *ref_1
+              examples:
+                '1':
+                  summary: Success
+                  value:
+                    code: 200
+          headers: {}
+      security: []
+  /v1/storage/backends.list:
+    post:
+      summary: List storage backends with their partitions
+      deprecated: false
+      description: >-
+        Lists every storage backend with a saved record. Replies even when a
+        storage backend is down. Takes no filter and does not page. Needs the
+        `backend.list` permission in the `_system` namespace.
+      operationId: post-v1-storage-backends.list
+      tags:
+        - Querator V1
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StorageBackendsListRequest'
+            example: {}
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorageBackendsListResponse'
+          headers: {}
+      security: []
 components:
   schemas:
     InspectRequest:
@@ -987,6 +1051,142 @@ components:
         - queue_name
         - partition
         - items
+    StorageBackendsUpdateRequest:
+      type: object
+      properties:
+        backend:
+          type: string
+          description: The storage backend's name.
+        affinity:
+          type: number
+          format: double
+          minimum: 0
+          description: >-
+            How large a part of every queue's partitions the backend holds.
+            Zero means none. Left out, the saved affinity is kept.
+      required:
+        - backend
+    StorageBackendsListRequest:
+      type: object
+      description: Takes no fields.
+    StorageBackendsListResponse:
+      type: object
+      properties:
+        backends:
+          type: array
+          description: One entry per storage backend with a saved record.
+          items:
+            $ref: '#/components/schemas/StorageBackend'
+      required:
+        - backends
+    StorageBackend:
+      type: object
+      properties:
+        backend:
+          type: string
+          description: The storage backend's name.
+        affinity:
+          type: number
+          format: double
+          description: The saved affinity.
+        configured:
+          type: boolean
+          description: >-
+            False when the backend has a saved record and is not in this
+            instance's config file.
+        safe_to_stop:
+          type: boolean
+          description: >-
+            True only when affinity is 0 and no partition of any queue is left
+            on the backend. A partition Querator cannot read counts as left.
+        partitions:
+          type: array
+          description: Every partition on the backend.
+          items:
+            $ref: '#/components/schemas/BackendPartition'
+        pending:
+          $ref: '#/components/schemas/PendingRebalance'
+      required:
+        - backend
+        - affinity
+        - configured
+        - safe_to_stop
+        - partitions
+        - pending
+    BackendPartition:
+      type: object
+      description: >-
+        One partition on a storage backend. The three counts are left out when
+        Querator cannot read the partition.
+      properties:
+        queue_name:
+          type: string
+          description: The queue the partition belongs to.
+        partition:
+          type: integer
+          format: int32
+          description: The partition number.
+        state:
+          type: string
+          enum:
+            - available
+            - draining
+        unleased:
+          type: integer
+          format: int32
+          description: Items waiting to be leased.
+        leased:
+          type: integer
+          format: int32
+          description: Items leased and not yet completed.
+        scheduled:
+          type: integer
+          format: int32
+          description: Items scheduled and not yet due.
+        failures:
+          type: integer
+          format: int32
+          description: >-
+            The same meaning as `failures` in `/queue.stats`. Above 0 means the
+            partition is failing. 1 when Querator could not load the queue or
+            read its counts.
+      required:
+        - queue_name
+        - partition
+        - state
+        - failures
+    PendingRebalance:
+      type: object
+      description: >-
+        What a rebalance would do to this backend right now. Worked out on each
+        read, never saved.
+      properties:
+        create:
+          type: array
+          description: Partitions a rebalance would create on this backend.
+          items:
+            $ref: '#/components/schemas/QueuePartitions'
+        drain:
+          type: array
+          description: Partitions on this backend a rebalance would mark draining.
+          items:
+            $ref: '#/components/schemas/QueuePartitions'
+      required:
+        - create
+        - drain
+    QueuePartitions:
+      type: object
+      properties:
+        queue_name:
+          type: string
+        partitions:
+          type: array
+          items:
+            type: integer
+            format: int32
+      required:
+        - queue_name
+        - partitions
     StorageItemsDeleteRequest:
       type: object
       properties:
@@ -1421,8 +1621,9 @@ components:
             The name of the storage backend which holds this partition, as
             given by the `name` of an entry under `partition-storage` in the
             Querator config. `/queues.create` places a queue's partitions on
-            the storage backends in proportion to each backend's affinity, and
-            never on a backend with an affinity of 0. A queue defined in the
+            the storage backends in proportion to each backend's saved
+            affinity (see `/storage/backends.list`), and never on a backend
+            with an affinity of 0. A queue defined in the
             config file keeps the `storage-name` given there.
           examples:
             - badger-0

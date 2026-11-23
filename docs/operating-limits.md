@@ -63,9 +63,9 @@ or a Kubernetes NetworkPolicy) so that only trusted clients, probes and scrapers
 
 ## A failed write does not take a partition out of use, and a slow partition is never avoided
 
-A partition leaves the request distribution only when Querator cannot read it. A failed write does not
-take it out, a slow partition is never avoided, and a complete or retry always goes to the partition
-that holds its items.
+A partition leaves the request distribution only when Querator cannot read it, except that a draining
+partition takes no produce. A failed write does not take it out, a slow partition is never avoided, and
+a complete or retry always goes to the partition that holds its items.
 
 * When a write to a partition fails, produce, complete and retry requests on it get a retry error at
   once. A lease request keeps waiting and is tried again, and gets no items if the partition is still

@@ -48,10 +48,23 @@ func (q *Queue) Info() types.QueueInfo {
 	return q.info
 }
 
-func (q *Queue) UpdateInfo(info types.QueueInfo) {
+func (q *Queue) AdoptRevision(info types.QueueInfo) {
 	defer q.mutex.Unlock()
 	q.mutex.Lock()
-	q.info = info
+	if info.Revision > q.info.Revision {
+		q.info = info
+	}
+}
+
+func (q *Queue) RoutePartitions(info types.QueueInfo) {
+	defer q.mutex.Unlock()
+	q.mutex.Lock()
+	if len(q.ordered) == 0 {
+		return
+	}
+	for _, p := range info.PartitionInfo {
+		q.logical[p.PartitionNum] = q.ordered[0]
+	}
 }
 
 func (q *Queue) GetAll() []*Logical {

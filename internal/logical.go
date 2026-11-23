@@ -85,6 +85,7 @@ type LogicalConfig struct {
 	MaxRequestsPerQueue  int
 	Clock                *clock.Provider
 	StoragePartitions    []store.Partition
+	OpenPartition        func(types.PartitionInfo) store.Partition
 	Manager              *QueuesManager
 }
 
@@ -510,34 +511,7 @@ func (l *Logical) prepareQueueState(state *QueueState) {
 	state.Partitions = make([]*Partition, len(l.conf.StoragePartitions))
 
 	for i, p := range l.conf.StoragePartitions {
-		partition := &Partition{
-			Info:  p.Info(),
-			Store: p,
-			Lifecycle: PartitionLifecycleState{
-				NextLifecycleRun: now,
-				NextScheduledRun: now,
-			},
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), l.conf.ReadTimeout)
-		var stats types.PartitionStats
-		err := p.Stats(ctx, &stats, now)
-		cancel()
-
-		if err != nil {
-			l.log.Warn("partition unavailable; recovery will retry",
-				"partition", p.Info().PartitionNum,
-				"error", err)
-			partition.State.Failures = 1
-			partition.Lifecycle.Failures = 1
-		} else {
-			partition.State.Failures = 0
-			partition.State.UnLeased = stats.Total - stats.NumLeased
-			partition.State.NumLeased = stats.NumLeased
-			partition.State.Scheduled = stats.Scheduled
-		}
-
-		state.Partitions[i] = partition
+		state.Partitions[i] = l.loadPartition(p, now)
 	}
 	state.load = l.loadOf(state)
 
@@ -546,6 +520,68 @@ func (l *Logical) prepareQueueState(state *QueueState) {
 	l.runScheduled(state)
 	state.ScheduledTimer = l.conf.Clock.NewTimer(l.minNextScheduledRun(state))
 
+}
+
+func (l *Logical) loadPartition(p store.Partition, now clock.Time) *Partition {
+	partition := &Partition{
+		Info:  p.Info(),
+		Store: p,
+		Lifecycle: PartitionLifecycleState{
+			NextLifecycleRun: now,
+			NextScheduledRun: now,
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), l.conf.ReadTimeout)
+	var stats types.PartitionStats
+	err := p.Stats(ctx, &stats, now)
+	cancel()
+
+	if err != nil {
+		l.log.Warn("partition unavailable; recovery will retry",
+			"partition", p.Info().PartitionNum,
+			"error", err)
+		partition.State.Failures = 1
+		partition.Lifecycle.Failures = 1
+		return partition
+	}
+	partition.State.UnLeased = stats.Total - stats.NumLeased
+	partition.State.NumLeased = stats.NumLeased
+	partition.State.Scheduled = stats.Scheduled
+	return partition
+}
+
+func (l *Logical) adoptRecord(state *QueueState, info types.QueueInfo) {
+	if info.Revision < l.conf.Revision {
+		return
+	}
+	info.LinkPartitions()
+	l.conf.QueueInfo = info
+
+	now := l.conf.Clock.Now().UTC()
+	var opened bool
+	for _, saved := range info.PartitionInfo {
+		held := state.GetPartition(saved.PartitionNum)
+		if held != nil {
+			held.Info = saved
+			continue
+		}
+		storage := l.conf.OpenPartition(saved)
+		l.conf.StoragePartitions = append(l.conf.StoragePartitions, storage)
+		state.Partitions = append(state.Partitions, l.loadPartition(storage, now))
+		opened = true
+	}
+
+	for _, p := range state.Partitions {
+		p.Store.UpdateQueueInfo(info)
+		p.Info.Queue = info
+	}
+	state.load = l.loadOf(state)
+
+	if opened {
+		state.LifecycleTimer.Reset(l.minNextLifecycleRun(state))
+		state.ScheduledTimer.Reset(l.minNextScheduledRun(state))
+	}
 }
 
 type QueueState struct {

@@ -45,6 +45,18 @@ message QueuesDeleteRequest {
   bool force = 2;
 }
 
+message QueuesRebalanceRequest {
+}
+
+message QueuesRebalanceResponse {
+  // How many queues had their partition list changed.
+  optional int32 queuesChanged = 1 [json_name = "queues_changed"];
+  // How many new partitions were created across every queue.
+  optional int32 partitionsCreated = 2 [json_name = "partitions_created"];
+  // How many partitions were marked draining across every queue.
+  optional int32 partitionsDraining = 3 [json_name = "partitions_draining"];
+}
+
 message QueuesInfoRequest {
   // The name of the queue to retrieve information about
   string queueName = 1 [json_name = "queue_name"];

@@ -54,6 +54,7 @@ type Config struct {
 	MaxRequestsPerQueue   int
 	MaxConcurrentRequests int
 	Clock                 *clock.Provider
+	RebalanceStrandsItems bool
 }
 
 type Service struct {
@@ -77,8 +78,9 @@ func New(ctx context.Context, conf Config) (*Service, error) {
 			ReadTimeout:          conf.ReadTimeout,
 			Clock:                conf.Clock,
 		},
-		StorageConfig: conf.StorageConfig,
-		Log:           conf.Log,
+		RebalanceStrandsItems: conf.RebalanceStrandsItems,
+		StorageConfig:         conf.StorageConfig,
+		Log:                   conf.Log,
 	})
 	if err != nil {
 		return nil, err
@@ -598,6 +600,22 @@ func (s *Service) QueueStats(ctx context.Context, req *proto.QueueStatsRequest,
 		}
 		res.LogicalQueues = append(res.LogicalQueues, ls)
 	}
+	return nil
+}
+
+func (s *Service) QueuesRebalance(ctx context.Context, _ *proto.QueuesRebalanceRequest,
+	resp *proto.QueuesRebalanceResponse) error {
+	if err := s.authorize(ctx, namespacePermission{Namespace: auth.SystemNamespace, Permission: auth.QueueRebalance}); err != nil {
+		return err
+	}
+
+	rebalanced, err := s.queues.Rebalance(ctx)
+	if err != nil {
+		return err
+	}
+	resp.QueuesChanged = new(int32(rebalanced.ChangedQueues))
+	resp.PartitionsCreated = new(int32(rebalanced.CreatedPartitions))
+	resp.PartitionsDraining = new(int32(rebalanced.DrainingPartitions))
 	return nil
 }
 

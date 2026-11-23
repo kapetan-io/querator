@@ -294,6 +294,18 @@ func (m *MemoryPartition) Add(_ context.Context, items []*types.Item, now clock.
 	return nil
 }
 
+func (m *MemoryPartition) FindSources(_ context.Context, sources []types.ItemID, found *[]types.ItemID) error {
+	defer m.mu.RUnlock()
+	m.mu.RLock()
+
+	for _, source := range sources {
+		if _, ok := m.bySourceID[string(source)]; ok {
+			*found = append(*found, source)
+		}
+	}
+	return nil
+}
+
 func (m *MemoryPartition) Delete(_ context.Context, ids []types.ItemID) error {
 	defer m.mu.Unlock()
 	m.mu.Lock()
@@ -648,9 +660,35 @@ func (s *MemoryQueues) Update(_ context.Context, info types.QueueInfo) error {
 	if err := s.validateUpdate(found); err != nil {
 		return err
 	}
+	found.Revision++
 	s.mem[idx] = found
 	return nil
 
+}
+
+func (s *MemoryQueues) SavePartitions(_ context.Context, info types.QueueInfo) error {
+	if err := s.validateQueueName(info); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	idx, ok := s.findQueue(info.Name)
+	if !ok {
+		return ErrQueueNotExist
+	}
+
+	found := s.mem[idx]
+	if found.Revision != info.Revision {
+		return ErrQueueChanged
+	}
+	if err := s.validatePartitionChange(partitionChange{Stored: found, Proposed: info}); err != nil {
+		return err
+	}
+	found.AdoptPartitions(info)
+	s.mem[idx] = found
+	return nil
 }
 
 func (s *MemoryQueues) List(_ context.Context, queues *[]types.QueueInfo, opts types.ListOptions) error {
@@ -769,6 +807,7 @@ func (s *MemoryQueues) findQueue(name string) (int, bool) {
 
 type MemoryPartitionStore struct {
 	partitions map[types.PartitionHash]*MemoryPartition
+	mutex      *sync.Mutex
 	conf       Config
 	log        *slog.Logger
 }
@@ -780,12 +819,15 @@ func NewMemoryPartitionStore(conf Config, log *slog.Logger) *MemoryPartitionStor
 
 	return &MemoryPartitionStore{
 		partitions: make(map[types.PartitionHash]*MemoryPartition),
+		mutex:      &sync.Mutex{},
 		log:        log.With("store", "memory"),
 		conf:       conf,
 	}
 }
 
 func (m MemoryPartitionStore) Get(info types.PartitionInfo) Partition {
+	defer m.mutex.Unlock()
+	m.mutex.Lock()
 	p, ok := m.partitions[info.HashKey()]
 	if !ok {
 		m.partitions[info.HashKey()] = &MemoryPartition{

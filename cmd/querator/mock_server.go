@@ -110,6 +110,10 @@ func (ms *MockServer) respondToRequest(w http.ResponseWriter, r *http.Request, r
 		ms.handleQueuesDelete(w, req)
 	case transport.RPCQueuesInfo:
 		ms.handleQueuesInfo(w, req)
+	case transport.RPCQueuesRebalance:
+		ms.writeProtoResponse(w, &proto.QueuesRebalanceResponse{
+			QueuesChanged: new(int32(1)), PartitionsCreated: new(int32(2)), PartitionsDraining: new(int32(1)),
+		})
 	case transport.RPCStorageBackendsUpdate:
 		ms.handleStorageBackendsUpdate(w, req)
 	case transport.RPCStorageBackendsList:

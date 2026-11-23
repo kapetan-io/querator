@@ -66,6 +66,9 @@ func (qm *QueuesManager) ListStorageBackends(ctx context.Context) ([]StorageBack
 	}
 
 	rebalancing := rebalanceBackends(statuses)
+	if qm.conf.RebalanceStrandsItems {
+		rebalancing = nil
+	}
 	for _, queue := range queues {
 		counts := qm.partitionCounts(ctx, queue.Name)
 		for _, p := range queue.PartitionInfo {

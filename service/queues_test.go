@@ -21,6 +21,7 @@ import (
 	pb "github.com/kapetan-io/querator/proto"
 	svc "github.com/kapetan-io/querator/service"
 	"github.com/kapetan-io/querator/transport"
+	"github.com/kapetan-io/querator/transport/reply"
 	"github.com/kapetan-io/tackle/clock"
 	"github.com/kapetan-io/tackle/random"
 	"github.com/stretchr/testify/assert"
@@ -2025,6 +2026,131 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					}
 				})
 			}
+		})
+	})
+
+	// Calls the queue store directly, since no API request sends a partition list the store refuses.
+	t.Run("SavePartitions", func(t *testing.T) {
+		conf := setup()
+		ctx := context.Background()
+		defer func() {
+			require.NoError(t, conf.Queues.Close(ctx))
+			tearDown()
+		}()
+
+		name := random.String("queue-", 10)
+		require.NoError(t, conf.Queues.Add(ctx, types.QueueInfo{
+			Name:                name,
+			LeaseTimeout:        clock.Minute,
+			ExpireTimeout:       10 * clock.Minute,
+			RequestedPartitions: 2,
+			NextPartition:       3,
+			PartitionInfo: []types.PartitionInfo{
+				{PartitionNum: 0, StorageName: "backend-a"},
+				{PartitionNum: 2, StorageName: "backend-a", Draining: true},
+			},
+		}))
+		var stored types.QueueInfo
+		require.NoError(t, conf.Queues.Get(ctx, name, &stored))
+
+		proposal := func(change func(info *types.QueueInfo)) types.QueueInfo {
+			proposed := stored
+			proposed.PartitionInfo = append([]types.PartitionInfo{}, stored.PartitionInfo...)
+			change(&proposed)
+			return proposed
+		}
+
+		for _, test := range []struct {
+			name     string
+			proposed types.QueueInfo
+			wantErr  string
+		}{
+			{
+				name: "ReusedPartitionNumber",
+				proposed: proposal(func(info *types.QueueInfo) {
+					info.PartitionInfo = append(info.PartitionInfo, types.PartitionInfo{PartitionNum: 1, StorageName: "backend-a"})
+				}),
+				wantErr: "partition number 1 was used before, a partition number cannot be reused",
+			},
+			{
+				name: "PartitionListedTwice",
+				proposed: proposal(func(info *types.QueueInfo) {
+					info.PartitionInfo = append(info.PartitionInfo, types.PartitionInfo{PartitionNum: 0, StorageName: "backend-a"})
+				}),
+				wantErr: "lists partition 0 twice, a partition number cannot be reused",
+			},
+			{
+				name: "NextPartitionLowered",
+				proposed: proposal(func(info *types.QueueInfo) {
+					info.NextPartition = 2
+				}),
+				wantErr: "next partition number 2 is below 3, a partition number cannot be reused",
+			},
+			{
+				name: "NextPartitionNotAboveNewPartition",
+				proposed: proposal(func(info *types.QueueInfo) {
+					info.PartitionInfo = append(info.PartitionInfo, types.PartitionInfo{PartitionNum: 3, StorageName: "backend-a"})
+				}),
+				wantErr: "partition 3 is not below the next partition number 3, a partition number cannot be reused",
+			},
+			{
+				name: "DrainingCleared",
+				proposed: proposal(func(info *types.QueueInfo) {
+					info.PartitionInfo[1].Draining = false
+				}),
+				wantErr: "partition 2 is draining and cannot become available again",
+			},
+			{
+				name: "BackendChanged",
+				proposed: proposal(func(info *types.QueueInfo) {
+					info.PartitionInfo[0].StorageName = "backend-b"
+				}),
+				wantErr: "partition 0 is on storage backend 'backend-a' and cannot change to 'backend-b'",
+			},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				err := conf.Queues.SavePartitions(ctx, test.proposed)
+				require.ErrorContains(t, err, test.wantErr)
+				var invalid *reply.ErrInvalidOption
+				require.ErrorAs(t, err, &invalid)
+
+				var after types.QueueInfo
+				require.NoError(t, conf.Queues.Get(ctx, name, &after))
+				assert.Equal(t, stored, after)
+			})
+		}
+
+		t.Run("SavesNewAndDrainingPartitions", func(t *testing.T) {
+			require.NoError(t, conf.Queues.SavePartitions(ctx, proposal(func(info *types.QueueInfo) {
+				info.PartitionInfo[0].Draining = true
+				info.PartitionInfo = append(info.PartitionInfo, types.PartitionInfo{PartitionNum: 3, StorageName: "backend-b"})
+				info.NextPartition = 4
+			})))
+
+			var after types.QueueInfo
+			require.NoError(t, conf.Queues.Get(ctx, name, &after))
+			assert.Equal(t, 4, after.NextPartition)
+			require.Len(t, after.PartitionInfo, 3)
+			assert.True(t, after.PartitionInfo[0].Draining)
+			assert.True(t, after.PartitionInfo[1].Draining)
+			assert.Equal(t, 3, after.PartitionInfo[2].PartitionNum)
+			assert.Equal(t, "backend-b", after.PartitionInfo[2].StorageName)
+			assert.False(t, after.PartitionInfo[2].Draining)
+
+			// A save built from the record as it was before that save is refused
+			err := conf.Queues.SavePartitions(ctx, proposal(func(info *types.QueueInfo) {
+				info.PartitionInfo = append(info.PartitionInfo, types.PartitionInfo{PartitionNum: 3, StorageName: "backend-a"})
+				info.NextPartition = 4
+			}))
+			require.ErrorIs(t, err, store.ErrQueueChanged)
+			var unchanged types.QueueInfo
+			require.NoError(t, conf.Queues.Get(ctx, name, &unchanged))
+			assert.Equal(t, after, unchanged)
+		})
+
+		t.Run("QueueDoesNotExist", func(t *testing.T) {
+			err := conf.Queues.SavePartitions(ctx, types.QueueInfo{Name: random.String("missing-", 10), NextPartition: 1})
+			require.ErrorIs(t, err, store.ErrQueueNotExist)
 		})
 	})
 

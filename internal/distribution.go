@@ -3,6 +3,7 @@ package internal
 import (
 	"context"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/kapetan-io/querator/internal/placement"
@@ -258,6 +259,97 @@ func (l *Logical) storeProduce(ctx context.Context, p *Partition, batch types.Pr
 	return true
 }
 
+type heldHandOff struct {
+	request *types.ProduceRequest
+	items   []*types.Item
+	held    map[string]struct{}
+}
+
+func (h heldHandOff) restore(p *Partition) {
+	sent := h.request.Items
+	h.request.Items = h.items
+	p.State.UnLeased -= len(h.held)
+	if h.request.Err == nil {
+		return
+	}
+
+	var prefix, stored int
+	for _, item := range h.items {
+		if _, ok := h.held[string(item.SourceID)]; ok {
+			prefix++
+			continue
+		}
+		if stored == min(h.request.Stored, len(sent)) {
+			break
+		}
+		stored++
+		prefix++
+	}
+	h.request.Stored = prefix
+}
+
+func (l *Logical) storeHandOffs(ctx context.Context, state *QueueState, p *Partition,
+	handOffs types.ProduceBatch) bool {
+	var draining []*Partition
+	for _, other := range state.Partitions {
+		if other != p && other.Info.Draining {
+			draining = append(draining, other)
+		}
+	}
+	if len(draining) == 0 || len(handOffs.Requests) == 0 {
+		return l.storeProduce(ctx, p, handOffs)
+	}
+
+	var sending types.ProduceBatch
+	var restoring []heldHandOff
+	for _, req := range handOffs.Requests {
+		sources := make([]types.ItemID, 0, len(req.Items))
+		for _, item := range req.Items {
+			sources = append(sources, item.SourceID)
+		}
+
+		var found []types.ItemID
+		var err error
+		for _, other := range draining {
+			if err = other.Store.FindSources(ctx, sources, &found); err != nil {
+				l.log.Error("while calling store.Partition.FindSources()",
+					"partition", other.Info.PartitionNum,
+					"queueName", l.conf.Name,
+					"error", err)
+				break
+			}
+		}
+		if err != nil {
+			req.Err = ErrInternalRetry
+			p.State.UnLeased -= len(req.Items)
+			continue
+		}
+		if len(found) == 0 {
+			sending.Add(req)
+			continue
+		}
+
+		held := make(map[string]struct{}, len(found))
+		for _, source := range found {
+			held[string(source)] = struct{}{}
+		}
+		restoring = append(restoring, heldHandOff{request: req, items: req.Items, held: held})
+		req.Items = slices.DeleteFunc(slices.Clone(req.Items), func(item *types.Item) bool {
+			_, ok := held[string(item.SourceID)]
+			return ok
+		})
+		if len(req.Items) != 0 {
+			sending.Add(req)
+		}
+	}
+
+	stored := l.storeProduce(ctx, p, sending)
+	for _, h := range restoring {
+		h.restore(p)
+	}
+	return stored
+}
+
 func (l *Logical) applyToPartitions(state *QueueState) {
 
 	scheduledUpdated := false
@@ -271,7 +363,7 @@ func (l *Logical) applyToPartitions(state *QueueState) {
 				clients = p.ProduceRequests.ClientProduces()
 			}
 			stored := l.storeProduce(ctx, p, clients)
-			if l.storeProduce(ctx, p, handOffs) {
+			if l.storeHandOffs(ctx, state, p, handOffs) {
 				stored = true
 			}
 			if stored {

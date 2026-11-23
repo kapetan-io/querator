@@ -23,6 +23,7 @@ const (
 
 var (
 	ErrQueueNotExist = reply.NewRequestFailed("queue does not exist")
+	ErrQueueChanged  = errors.New("queue record changed since it was read")
 )
 
 func systemIfEmpty(namespace string) string {
@@ -64,6 +65,8 @@ type Queues interface {
 
 	Update(ctx context.Context, info types.QueueInfo) error
 
+	SavePartitions(ctx context.Context, info types.QueueInfo) error
+
 	List(ctx context.Context, queues *[]types.QueueInfo, opts types.ListOptions) error
 
 	Delete(ctx context.Context, queueName string) error
@@ -91,6 +94,8 @@ type Partition interface {
 	ListScheduled(ctx context.Context, items *[]*types.Item, opts types.ListOptions) error
 
 	Add(ctx context.Context, items []*types.Item, now clock.Time) error
+
+	FindSources(ctx context.Context, sources []types.ItemID, found *[]types.ItemID) error
 
 	Delete(ctx context.Context, ids []types.ItemID) error
 

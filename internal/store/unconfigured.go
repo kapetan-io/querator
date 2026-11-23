@@ -53,6 +53,10 @@ func (p *UnconfiguredPartition) Add(context.Context, []*types.Item, clock.Time) 
 	return p.err()
 }
 
+func (p *UnconfiguredPartition) FindSources(context.Context, []types.ItemID, *[]types.ItemID) error {
+	return p.err()
+}
+
 func (p *UnconfiguredPartition) Delete(context.Context, []types.ItemID) error {
 	return p.err()
 }

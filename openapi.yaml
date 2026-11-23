@@ -67,6 +67,7 @@ tags:
       - `queues.list` - List all available queues with pagination
       - `queues.info` - Get detailed information about a specific queue
       - `queues.update` - Update queue configuration
+      - `queues.rebalance` - Give every queue the partitions its requested count and the saved affinities call for
       - `queues.delete` - Delete queues and associated data
       
       **Storage Operations:**
@@ -676,6 +677,46 @@ paths:
                     code: 200
           headers: {}
       security: []
+  /v1/queues.rebalance:
+    post:
+      summary: Rebalance every queue's partitions
+      deprecated: false
+      description: >-
+        Gives every queue the partitions its requested partition count and
+        the saved affinities call for. A
+        partition a storage backend should no longer hold becomes draining,
+        and new partitions are created on the backends that hold too few.
+        Calling it again finishes a rebalance that stopped part way. Refused
+        with nothing changed when no storage backend has an affinity above 0,
+        when a storage backend with an affinity above 0 is missing from this
+        instance's config file, or when the queue store is InMemory and a
+        storage backend keeps items across restarts. The reply counts what
+        was saved and does not say a drain finished. Needs the
+        `queue.rebalance` permission in the `_system` namespace.
+      operationId: post-v1-queues.rebalance
+      tags:
+        - Querator V1
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QueuesRebalanceRequest'
+            example: {}
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueuesRebalanceResponse'
+              example:
+                queues_changed: 1
+                partitions_created: 2
+                partitions_draining: 1
+          headers: {}
+      security: []
   /v1/storage/backends.update:
     post:
       summary: Save a storage backend's affinity
@@ -1051,6 +1092,28 @@ components:
         - queue_name
         - partition
         - items
+    QueuesRebalanceRequest:
+      type: object
+      description: Takes no fields.
+    QueuesRebalanceResponse:
+      type: object
+      properties:
+        queues_changed:
+          type: integer
+          format: int32
+          description: How many queues had their partition list changed.
+        partitions_created:
+          type: integer
+          format: int32
+          description: How many new partitions were created across every queue.
+        partitions_draining:
+          type: integer
+          format: int32
+          description: How many partitions this call marked draining across every queue.
+      required:
+        - queues_changed
+        - partitions_created
+        - partitions_draining
     StorageBackendsUpdateRequest:
       type: object
       properties:

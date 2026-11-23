@@ -529,6 +529,11 @@ func setupQueueStorage(ctx context.Context, file File, conf *Config) error {
 		return fmt.Errorf("unknown backend %q", name)
 	}
 
+	if name == "" || name == "memory" {
+		conf.Service.RebalanceStrandsItems = slices.ContainsFunc(file.PartitionStorage,
+			func(ps PartitionStorage) bool { return ps.Memory == nil })
+	}
+
 	for _, queue := range file.Queues {
 		if len(queue.Partitions) > placement.MaxPartitions {
 			return fmt.Errorf("invalid queue '%s'; lists %d partitions, cannot be more than %d",

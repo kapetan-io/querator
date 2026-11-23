@@ -22,6 +22,7 @@ type QueueAdmin interface {
 	QueuesUpdate(context.Context, *pb.QueuesUpdateRequest) error
 	QueuesDelete(context.Context, *pb.QueuesDeleteRequest) error
 	QueuesInfo(context.Context, *pb.QueuesInfoRequest, *pb.QueueInfo) error
+	QueuesRebalance(context.Context, *pb.QueuesRebalanceRequest, *pb.QueuesRebalanceResponse) error
 }
 
 type StorageInspector interface {

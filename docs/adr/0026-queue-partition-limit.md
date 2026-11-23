@@ -6,7 +6,7 @@ Date: 2026-11-18
 
 Accepted
 
-Superseded in part by [31. Partition placement and rebalance](0031-partition-placement-and-rebalance.md)
+Superseded in part by ADR 31
 
 ## Context
 
@@ -26,8 +26,8 @@ run). The evidence supports any limit from about 256 to 4,096.
 
 A queue may request at most 1,024 partitions when it is created. A larger request through `/queues.create`
 fails with an invalid-option error (HTTP 400) before any partition is placed, and a config-file queue that
-asks for more fails startup with an error naming the queue. The limit is the constant `maxQueuePartitions`
-in `internal/store/validation.go`, not a setting, and `store.PlacePartitions` enforces it.
+asks for more fails startup with an error naming the queue. The limit is the constant `maxQueuePartitions` in the
+store's validation, not a setting, and `store.PlacePartitions` enforces it.
 
 > Superseded by [31. Partition placement and rebalance](0031-partition-placement-and-rebalance.md).
 

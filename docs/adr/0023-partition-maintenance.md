@@ -6,7 +6,7 @@ Date: 2025-03-25
 
 Proposed
 
-Superseded in part by [31. Partition placement and rebalance](0031-partition-placement-and-rebalance.md)
+Superseded in part by ADR 31
 
 ## Context
 

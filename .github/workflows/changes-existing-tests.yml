@@ -1,0 +1,12 @@
+name: changes-existing-tests
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+jobs:
+  changes-existing-tests:
+    permissions:
+      contents: read
+      pull-requests: write
+    uses: kapetan-io/dispatch/.github/workflows/changes-existing-tests.yml@main

@@ -6,13 +6,12 @@ Date: 2024-08-15
 
 Accepted
 
-Superseded in part by [31. Partition placement and rebalance](0031-partition-placement-and-rebalance.md)
-
-Supercedes [13. pausing a queue](0013-pausing-a-queue.md)
-
-Supercedes [10. Queue Groups](0010-queue-groups.md)
+Superseded in part by ADR 31
 
 ## Context
+
+This ADR supersedes [13. pausing a queue](0013-pausing-a-queue.md) and
+[10. Queue Groups](0010-queue-groups.md).
 
 This ADR attempts to address several issues with pause functionality and Queue Groups.
 
@@ -73,7 +72,7 @@ conditions
 Querator runs one Logical Queue per queue. Running several, as this ADR describes, waits until a
 queue needs more than one can handle.
 
-See [Querator Logical Queue Diagram](../Querator%20Logical%20Queue%20Diagram.png)
+![Querator Logical Queue Diagram](Querator%20Logical%20Queue%20Diagram.png)
 
 ### Notes
 The introduction of a Logical Queue creates a synchronization point that must exist on a Querator

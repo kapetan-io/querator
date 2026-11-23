@@ -6,12 +6,12 @@ Date: 2026-11-21
 
 Accepted
 
-Supersedes in part [16. Queue Partitions](0016-queue-partitions.md),
+## Context
+
+This ADR supersedes in part [16. Queue Partitions](0016-queue-partitions.md),
 [23. Partition Maintenance](0023-partition-maintenance.md),
 [26. Queue partition limit](0026-queue-partition-limit.md) and
-[27. Dead-letter queues](0027-dead-letter-queues.md)
-
-## Context
+[27. Dead-letter queues](0027-dead-letter-queues.md).
 
 An operator needs to change where a running queue's partitions live: to add a storage backend, weight one more
 heavily, or empty one before retiring it, while producers and consumers keep working.

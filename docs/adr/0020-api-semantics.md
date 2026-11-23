@@ -6,9 +6,9 @@ Date: 2024-09-14
 
 Proposed
 
-Supercedes [18. queue complete error semantics](0018-queue-complete-error-semantics.md)
-
 ## Context
+
+This ADR supersedes [18. queue complete error semantics](0018-queue-complete-error-semantics.md).
 
 This ADR is a collection of explanations on API semantics
 

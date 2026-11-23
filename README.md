@@ -230,7 +230,7 @@ Features below that work today are marked **Shipped**. Features we have designed
 A queue is made of logical queues, and a logical queue is made of partitions. Each partition is one table,
 collection or bucket in your database.
 
-![](docs/Querator%20Logical%20Queue%20Diagram.png)
+![](docs/adr/Querator%20Logical%20Queue%20Diagram.png)
 
 * **Shipped: partitions.** One partition gives you strict first-in-first-out order. If you need more throughput
   and can give up strict order, add partitions.

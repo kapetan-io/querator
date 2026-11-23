@@ -25,7 +25,7 @@ There are essentially 2 classes of errors.
    and a generic `Internal Error` message will be returned to the client.
 
 The `transport` package holds all the Human / Client readable errors. If you wish to return a message to the 
-client use one of the errors defined in `transport/errors.go`. All other non `duh.Error` errors will be treated
+client use one of the errors defined in the `transport` package. All other non `duh.Error` errors will be treated
 as internal errors.
 
 Internal errors should include as much detail about the error as possible and will use `github.com/kapetan-io/errors`

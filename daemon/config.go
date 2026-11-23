@@ -15,6 +15,7 @@ import (
 	"github.com/duh-rpc/duh-go"
 	"github.com/kapetan-io/errors"
 	"github.com/kapetan-io/querator/internal"
+	"github.com/kapetan-io/querator/internal/placement"
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/service"
@@ -169,7 +170,6 @@ type Queue struct {
 
 type Partition struct {
 	Partition   int    `yaml:"partition"`
-	ReadOnly    bool   `yaml:"read-only"`
 	StorageName string `yaml:"storage-name"`
 }
 
@@ -318,6 +318,12 @@ func ApplyConfigFile(ctx context.Context, conf *Config, file File, w io.Writer) 
 		return err
 	}
 
+	if len(file.Queues) != 0 {
+		if err := placement.CheckBackends(conf.Service.StorageConfig.Backends()); err != nil {
+			return err
+		}
+	}
+
 	if err := setupQueueStorage(ctx, file, conf); err != nil {
 		return err
 	}
@@ -427,6 +433,9 @@ func setupPartitionStorage(file File, d *Config) error {
 		if math.IsNaN(ps.Affinity) || math.IsInf(ps.Affinity, 0) {
 			return fmt.Errorf("%s affinity must be a finite number, got %v", section, ps.Affinity)
 		}
+		if ps.Affinity < 0 {
+			return fmt.Errorf("%s affinity cannot be negative, got %v", section, ps.Affinity)
+		}
 
 		var s store.PartitionStore
 		switch name {
@@ -520,6 +529,13 @@ func setupQueueStorage(ctx context.Context, file File, conf *Config) error {
 		return fmt.Errorf("unknown backend %q", name)
 	}
 
+	for _, queue := range file.Queues {
+		if len(queue.Partitions) > placement.MaxPartitions {
+			return fmt.Errorf("invalid queue '%s'; lists %d partitions, cannot be more than %d",
+				queue.Name, len(queue.Partitions), placement.MaxPartitions)
+		}
+	}
+
 	if err := checkDeadLetterRules(ctx, file.Queues, conf.Service.StorageConfig.Queues); err != nil {
 		return err
 	}
@@ -529,7 +545,7 @@ func setupQueueStorage(ctx context.Context, file File, conf *Config) error {
 		if err := conf.Service.StorageConfig.Queues.Get(ctx, queue.Name, &stored); err == nil {
 			continue
 		}
-		if len(queue.Partitions) == 0 && !store.CanPlacePartitions(conf.Service.StorageConfig.PartitionStorage) {
+		if len(queue.Partitions) == 0 && !placement.CanPlace(conf.Service.StorageConfig.Backends()) {
 			return fmt.Errorf("invalid queue '%s'; no storage backend can take partitions, "+
 				"at least one partition storage needs an affinity above 0", queue.Name)
 		}
@@ -539,17 +555,21 @@ func setupQueueStorage(ctx context.Context, file File, conf *Config) error {
 				return fmt.Errorf("invalid partition storage; queue '%s' references '%s' which is undefined",
 					queue.Name, p.StorageName)
 			}
-			p.StorageName = found.Name
 		}
 
 		info := queue.ToQueueInfo()
 		if len(queue.Partitions) == 0 {
-			placed, err := store.PlacePartitions(conf.Service.StorageConfig.PartitionStorage, info)
+			if info.RequestedPartitions > placement.MaxPartitions {
+				return fmt.Errorf("invalid queue '%s'; partitions is invalid; cannot be greater than %d",
+					queue.Name, placement.MaxPartitions)
+			}
+			placed, err := placement.Create(info, conf.Service.StorageConfig.Backends())
 			if err != nil {
 				return fmt.Errorf("invalid queue '%s'; %w", queue.Name, err)
 			}
-			info.PartitionInfo = placed
+			info = placed
 		}
+		info.LinkPartitions()
 
 		if err := conf.Service.StorageConfig.Queues.Add(ctx, info); err != nil {
 			if errors.Is(err, types.ErrQueueAlreadyExists) {
@@ -686,9 +706,10 @@ func setupAuthStorage(storage AuthStorage, conf *Config) error {
 
 func (q Queue) ToQueueInfo() types.QueueInfo {
 	partitionInfo := make([]types.PartitionInfo, 0, len(q.Partitions))
-
+	var next int
 	for _, partition := range q.Partitions {
 		partitionInfo = append(partitionInfo, partition.ToPartitionInfo())
+		next = max(next, partition.Partition+1)
 	}
 
 	return types.QueueInfo{
@@ -699,6 +720,7 @@ func (q Queue) ToQueueInfo() types.QueueInfo {
 		MaxAttempts:         q.MaxAttempts,
 		Reference:           q.Reference,
 		RequestedPartitions: q.RequestedPartitions,
+		NextPartition:       next,
 		PartitionInfo:       partitionInfo,
 	}
 }
@@ -706,7 +728,6 @@ func (q Queue) ToQueueInfo() types.QueueInfo {
 func (p Partition) ToPartitionInfo() types.PartitionInfo {
 	return types.PartitionInfo{
 		StorageName:  p.StorageName,
-		ReadOnly:     p.ReadOnly,
 		PartitionNum: p.Partition,
 	}
 }

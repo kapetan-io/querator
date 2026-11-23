@@ -140,12 +140,35 @@ _Avoid_: Consumer ID, subscriber ID
 A database Querator can keep partitions in (InMemory, BadgerDB, PostgreSQL, MongoDB). Each partition is kept in exactly one backend.
 _Avoid_: Driver, adapter, plugin
 
+**Affinity**:
+A number saved for a storage backend that sets how large a part of every queue's partitions it holds; zero means none.
+_Avoid_: Weight, priority
+
+**Share**:
+The number of one queue's partitions a storage backend should hold, worked out from the queue's requested partition count and every backend's affinity.
+_Avoid_: Quota, allocation
+
+**Draining**:
+The state of a partition that takes no new items and is removed once it is empty.
+_Avoid_: Read-only, decommissioning
+
+**Rebalance**:
+The operator's call that makes Querator reconcile each queue's partitions with its shares.
+_Avoid_: Migrate, move
+
+**Queue Store**:
+The one database that holds queue records and storage backend records.
+_Avoid_: Metadata store
+
 ## Relationships
 
 - A **Namespace** contains zero or more **Queues**
 - A **Queue** consists of one or more **Partitions**
 - A **Logical Queue** manages a subset of **Partitions** within a **Queue**
 - A **Partition** is backed by exactly one **Storage Backend**
+- A **Storage Backend** has one **Affinity**
+- A **Queue** has one **Share** per **Storage Backend**
+- A **Draining** **Partition** never becomes available again
 - An **Item** lives in exactly one **Partition** for its entire lifecycle
 - A **Lease** grants one consumer exclusive access to one **Item** until its **Deadline**
 - The **Logical Queue** runs the **Lifecycle** of each **Partition** it manages

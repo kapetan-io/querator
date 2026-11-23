@@ -11,14 +11,14 @@ import (
 type Queue struct {
 	info    types.QueueInfo
 	ordered []*Logical
-	logical []*Logical
+	logical map[int]*Logical
 	mutex   sync.RWMutex
 	idx     int
 }
 
 func NewQueue(info types.QueueInfo) *Queue {
 	q := &Queue{
-		logical: make([]*Logical, len(info.PartitionInfo)),
+		logical: make(map[int]*Logical, len(info.PartitionInfo)),
 		info:    info,
 	}
 	return q
@@ -81,13 +81,9 @@ func (q *Queue) GetByPartition(partition int) (*Logical, error) {
 	defer q.mutex.RUnlock()
 	q.mutex.RLock()
 
-	if partition < 0 || partition >= len(q.logical) {
+	l, ok := q.logical[partition]
+	if !ok {
 		return nil, reply.NewInvalidOption("partition is invalid; '%d' is not a valid partition", partition)
 	}
-
-	if q.logical[partition] == nil {
-		return nil, reply.NewInvalidOption("partition is invalid; '%d' has no valid logical queue", partition)
-	}
-
-	return q.logical[partition], nil
+	return l, nil
 }

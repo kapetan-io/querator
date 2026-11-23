@@ -553,6 +553,65 @@ func testQueueStorage(t *testing.T, setUp NewStorageFunc, tearDown func()) {
 		}
 	})
 
+	t.Run("QueuesKeepPlacement", func(t *testing.T) {
+		name := random.String("queue-", 10)
+		backend := storage.PartitionStorage[0].Name
+		ctx := context.Background()
+		require.NoError(t, storage.Queues.Add(ctx, types.QueueInfo{
+			Name:                name,
+			LeaseTimeout:        clock.Minute,
+			ExpireTimeout:       clock.Hour,
+			RequestedPartitions: 1,
+			NextPartition:       5,
+			PartitionInfo: []types.PartitionInfo{
+				{PartitionNum: 3, StorageName: backend, Draining: true},
+				{PartitionNum: 4, StorageName: backend},
+			},
+		}))
+
+		var saved types.QueueInfo
+		require.NoError(t, storage.Queues.Get(ctx, name, &saved))
+		assert.Equal(t, 5, saved.NextPartition)
+		require.Len(t, saved.PartitionInfo, 2)
+		assert.Equal(t, 3, saved.PartitionInfo[0].PartitionNum)
+		assert.True(t, saved.PartitionInfo[0].Draining)
+		assert.Equal(t, 4, saved.PartitionInfo[1].PartitionNum)
+		assert.False(t, saved.PartitionInfo[1].Draining)
+
+		require.NoError(t, storage.Queues.Update(ctx, types.QueueInfo{
+			Name:      name,
+			Reference: "updated",
+			UpdatedAt: clock.Now().UTC(),
+		}))
+		var updated types.QueueInfo
+		require.NoError(t, storage.Queues.Get(ctx, name, &updated))
+		assert.Equal(t, "updated", updated.Reference)
+		assert.Equal(t, 5, updated.NextPartition)
+		require.Len(t, updated.PartitionInfo, 2)
+		assert.True(t, updated.PartitionInfo[0].Draining)
+	})
+
+	t.Run("PartitionInfoSafeForConcurrentUse", func(t *testing.T) {
+		name := random.String("queue-", 10)
+		partition := storage.PartitionStorage[0].PartitionStore.Get(types.PartitionInfo{
+			PartitionNum: 0,
+			StorageName:  storage.PartitionStorage[0].Name,
+			Queue:        types.QueueInfo{Name: name, MaxAttempts: 1},
+		})
+		defer func() { require.NoError(t, partition.Close(context.Background())) }()
+
+		concurrently(8, func(i int) {
+			for range 100 {
+				if i%2 == 0 {
+					partition.UpdateQueueInfo(types.QueueInfo{Name: name, MaxAttempts: i + 2})
+					continue
+				}
+				assert.Equal(t, name, partition.Info().Queue.Name)
+			}
+		})
+		assert.Greater(t, partition.Info().Queue.MaxAttempts, 1)
+	})
+
 	t.Run("QueuesAddDuplicateName", func(t *testing.T) {
 		info := types.QueueInfo{
 			Name:                random.String("queue-", 10),

@@ -6,6 +6,8 @@ Date: 2026-11-18
 
 Accepted
 
+Superseded in part by [31. Partition placement and rebalance](0031-partition-placement-and-rebalance.md)
+
 ## Context
 
 A queue's partition count comes from the caller of `/queues.create` or from a `requested-partitions` entry
@@ -26,6 +28,8 @@ A queue may request at most 1,024 partitions when it is created. A larger reques
 fails with an invalid-option error (HTTP 400) before any partition is placed, and a config-file queue that
 asks for more fails startup with an error naming the queue. The limit is the constant `maxQueuePartitions`
 in `internal/store/validation.go`, not a setting, and `store.PlacePartitions` enforces it.
+
+> Superseded by [31. Partition placement and rebalance](0031-partition-placement-and-rebalance.md).
 
 The limit applies only where Querator places partitions. It is not checked on `/queues.update`, when a queue
 loads from storage, or for config-file queues that list their partitions explicitly, so queues stored with

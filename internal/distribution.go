@@ -3,9 +3,9 @@ package internal
 import (
 	"context"
 	"log/slog"
-	"slices"
 	"time"
 
+	"github.com/kapetan-io/querator/internal/placement"
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/transport/reply"
@@ -87,40 +87,41 @@ func (l *Logical) notifyExpired(p *Partition) bool {
 }
 
 func (l *Logical) assignProduceRequests(state *QueueState) {
-	sortPartitionsByLoad(state.Partitions)
+	load := state.load
 	for _, req := range state.Producers.Requests {
 		for _, item := range req.Items {
 			item.ExpireDeadline = l.conf.Clock.Now().UTC().Add(l.conf.ExpireTimeout)
 		}
 
-		l.log.LogAttrs(req.Context, LevelDebugAll, "Produce",
-			slog.Int("partition", state.Partitions[0].Info.PartitionNum),
-			slog.Int("items", len(req.Items)))
-
-		if state.Partitions[0].State.Failures != 0 {
+		info, ok := placement.ProduceInto(load.queue, load.unleased, load.failing)
+		if !ok {
 			l.log.Warn("no healthy partitions, produce request not assigned",
 				"num_items", len(req.Items))
 			return
 		}
 
-		state.Partitions[0].Produce(req)
-		sortPartitionsByLoad(state.Partitions)
+		l.log.LogAttrs(req.Context, LevelDebugAll, "Produce",
+			slog.Int("partition", info.PartitionNum),
+			slog.Int("items", len(req.Items)))
+
+		load.partitions[info.PartitionNum].Produce(req)
 	}
 }
 
 func (l *Logical) assignLeaseRequests(state *QueueState) {
+	load := state.load
 	for _, req := range state.Leases.Requests {
 		if req == nil {
 			continue
 		}
-		assigned := lastHealthyPartition(state.Partitions)
-
-		if assigned == nil {
+		info, ok := placement.LeaseFrom(load.queue, load.unleased, load.failing)
+		if !ok {
 			l.log.Warn("no healthy partitions, lease request not assigned",
 				"client_id", req.ClientID,
 				"num_requested", req.NumRequested)
 			continue
 		}
+		assigned := load.partitions[info.PartitionNum]
 
 		l.log.LogAttrs(req.Context, LevelDebugAll, "lease partition assignment",
 			slog.Int("partition", assigned.Info.PartitionNum),
@@ -128,9 +129,33 @@ func (l *Logical) assignLeaseRequests(state *QueueState) {
 			slog.String("client_id", req.ClientID))
 
 		assigned.Lease(req)
-
-		sortPartitionsByLoad(state.Partitions)
 	}
+}
+
+type queueLoad struct {
+	queue      types.QueueInfo
+	partitions map[int]*Partition
+}
+
+func (q queueLoad) unleased(info types.PartitionInfo) int {
+	return q.partitions[info.PartitionNum].State.UnLeased
+}
+
+func (q queueLoad) failing(info types.PartitionInfo) bool {
+	return q.partitions[info.PartitionNum].State.Failures != 0
+}
+
+func (l *Logical) loadOf(state *QueueState) queueLoad {
+	load := queueLoad{
+		queue:      l.conf.QueueInfo,
+		partitions: make(map[int]*Partition, len(state.Partitions)),
+	}
+	load.queue.PartitionInfo = make([]types.PartitionInfo, 0, len(state.Partitions))
+	for _, p := range state.Partitions {
+		load.partitions[p.Info.PartitionNum] = p
+		load.queue.PartitionInfo = append(load.queue.PartitionInfo, p.Info)
+	}
+	return load
 }
 
 func (l *Logical) assignCompleteRequests(state *QueueState) {
@@ -171,33 +196,6 @@ func (l *Logical) assignRetryRequests(state *QueueState) {
 		}
 		p.RetryRequests.Add(req)
 	}
-}
-
-func lastHealthyPartition(partitions []*Partition) *Partition {
-	for _, p := range slices.Backward(partitions) {
-		if p.State.Failures == 0 {
-			return p
-		}
-	}
-	return nil
-}
-
-func sortPartitionsByLoad(partitions []*Partition) {
-	slices.SortFunc(partitions, func(a, b *Partition) int {
-		if a.State.Failures < b.State.Failures {
-			return -1
-		}
-		if a.State.Failures > b.State.Failures {
-			return +1
-		}
-		if a.State.UnLeased < b.State.UnLeased {
-			return -1
-		}
-		if a.State.UnLeased > b.State.UnLeased {
-			return +1
-		}
-		return 0
-	})
 }
 
 func (l *Logical) finalizeRequests(state *QueueState) {

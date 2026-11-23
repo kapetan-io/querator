@@ -6,6 +6,8 @@ Date: 2024-08-15
 
 Accepted
 
+Superseded in part by [31. Partition placement and rebalance](0031-partition-placement-and-rebalance.md)
+
 Supercedes [13. pausing a queue](0013-pausing-a-queue.md)
 
 Supercedes [10. Queue Groups](0010-queue-groups.md)
@@ -89,12 +91,16 @@ still preform some optimizations on producing and consuming as the LQ knows how 
 in each partition.
 
 ### Partition Backend Storage Assignment
+> Superseded by [31. Partition placement and rebalance](0031-partition-placement-and-rebalance.md).
+
 Separate from partition assignment to Logical Queues is the assignment of partitions to backend data
 storage systems. To handle the management and distribution of partitions across backend data storage,
 I propose adding a `/queue.rebalance` API. This API would allow users to increase or decrease the
 number of partitions and re-balance them across all configured backend data storage instances.
 
 ## Scenarios
+> Superseded, with every scenario and note under it, by [31. Partition placement and rebalance](0031-partition-placement-and-rebalance.md).
+
 The implementation of the proposal in this ADR allows the possible operational scenarios
 
 ### Adding Partitions

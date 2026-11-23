@@ -119,13 +119,14 @@ partitions gets 3 on BadgerDB and 7 on PostgreSQL. A queue with 1 partition land
 which one depends on the queue's name. The order of backends in the config file does not change
 where partitions go. A backend with an affinity of 0 receives no new partitions. Affinity may be
 fractional, so `0.5` and `1.5` split partitions 1 to 3, the same as `1` and `3`. Querator refuses
-to start when an affinity is negative, `.nan`, `.inf` or `-.inf`, or when the affinities add up to
+to start when an affinity is left out, negative, `.nan`, `.inf` or `-.inf`, or when the affinities add up to
 more than a float64 can hold once multiplied by 1,024. `/queues.info` lists each partition with the `storage_name` of the
 backend which holds it.
 
 The config file's affinity only seeds a saved record. The first time Querator sees a backend it
 saves the backend's affinity in queue storage, and from then on placement uses the saved affinity.
-Editing the config file's affinity afterwards changes no saved affinity. `/v1/storage/backends.update` (or
+Editing the config file's affinity afterwards changes no saved affinity, and startup logs a warning
+when the file and the saved value differ. A start that is refused saves nothing. `/v1/storage/backends.update` (or
 `querator backends update <name> --affinity <n>`) changes the saved affinity, and
 `/v1/storage/backends.list` shows every backend with its saved affinity and partitions. Saving an
 affinity moves no existing partition. A queue whose partition sits on a backend missing from the

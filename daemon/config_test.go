@@ -830,17 +830,17 @@ func TestConfigFileRefusesWhatItWouldIgnore(t *testing.T) {
 		},
 		{
 			name:    "PartitionStorageBadgerWithoutSettings",
-			config:  "partition-storage:\n  - name: p0\n    badger:\n",
+			config:  "partition-storage:\n  - name: p0\n    affinity: 1\n    badger:\n",
 			wantErr: "storage-dir",
 		},
 		{
 			name:    "PartitionStorageMongoWithoutSettings",
-			config:  "partition-storage:\n  - name: p0\n    mongo:\n",
+			config:  "partition-storage:\n  - name: p0\n    affinity: 1\n    mongo:\n",
 			wantErr: "connection-string",
 		},
 		{
 			name:    "PartitionStoragePostgresWithoutSettings",
-			config:  "partition-storage:\n  - name: p0\n    postgres:\n",
+			config:  "partition-storage:\n  - name: p0\n    affinity: 1\n    postgres:\n",
 			wantErr: "connection-string",
 		},
 		{
@@ -855,7 +855,7 @@ func TestConfigFileRefusesWhatItWouldIgnore(t *testing.T) {
 		},
 		{
 			name:    "PartitionStorageSecondEntryBareBadgerBesideMemory",
-			config:  "partition-storage:\n  - name: p0\n    memory: {}\n  - name: p1\n    memory: {}\n    badger:\n",
+			config:  "partition-storage:\n  - name: p0\n    affinity: 1\n    memory: {}\n  - name: p1\n    affinity: 1\n    memory: {}\n    badger:\n",
 			wantErr: "partition storage 'p1' defines multiple backends",
 		},
 		{
@@ -915,7 +915,7 @@ func TestConfigFileRefusesWhatItWouldIgnore(t *testing.T) {
 		assert.IsType(t, &store.MemoryQueues{}, conf.Service.StorageConfig.Queues)
 	})
 	t.Run("PartitionStorageMemoryWithoutSettings", func(t *testing.T) {
-		file, err := daemon.ReadConfig(strings.NewReader("partition-storage:\n  - name: p0\n    memory:\n"))
+		file, err := daemon.ReadConfig(strings.NewReader("partition-storage:\n  - name: p0\n    affinity: 1\n    memory:\n"))
 		require.NoError(t, err)
 		var conf daemon.Config
 		require.NoError(t, daemon.ApplyConfigFile(context.Background(), &conf, file, io.Discard))
@@ -943,7 +943,7 @@ queues:
 	})
 
 	t.Run("PartitionStorageMemoryMapping", func(t *testing.T) {
-		file, err := daemon.ReadConfig(strings.NewReader("partition-storage:\n  - name: p0\n    memory: {}\n"))
+		file, err := daemon.ReadConfig(strings.NewReader("partition-storage:\n  - name: p0\n    affinity: 1\n    memory: {}\n"))
 		require.NoError(t, err)
 		var conf daemon.Config
 		require.NoError(t, daemon.ApplyConfigFile(context.Background(), &conf, file, io.Discard))

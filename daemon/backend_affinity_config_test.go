@@ -61,3 +61,50 @@ queue-storage:
 		assert.Equal(t, "mem-00", p.StorageName)
 	}
 }
+
+func TestRefusedStartSavesNoBackend(t *testing.T) {
+	ctx := context.Background()
+	const template = `
+partition-storage:
+  - name: mem-00
+    memory: {}
+%s
+queue-storage:
+  badger:
+    storage-dir: %q
+queues:
+  - name: queue-1
+    requested-partitions: 2
+    lease-timeout: 1m
+    expire-timeout: 1h
+`
+	dir := t.TempDir()
+	apply := func(affinity string) (*daemon.Daemon, error) {
+		file, err := daemon.ReadConfig(strings.NewReader(fmt.Sprintf(template, affinity, dir)))
+		require.NoError(t, err)
+		conf := daemon.Config{InMemoryListener: true}
+		if err := daemon.ApplyConfigFile(ctx, &conf, file, io.Discard); err != nil {
+			if conf.Service.StorageConfig.Queues != nil {
+				require.NoError(t, conf.Service.StorageConfig.Queues.Close(ctx))
+			}
+			return nil, err
+		}
+		return daemon.NewDaemon(ctx, conf)
+	}
+
+	t.Run("AffinityLeftOut", func(t *testing.T) {
+		_, err := apply("")
+		require.ErrorContains(t, err, "partition storage 'mem-00' affinity is required")
+	})
+
+	_, err := apply("    affinity: 0")
+	require.ErrorContains(t, err, "no storage backend can take partitions")
+
+	d, err := apply("    affinity: 1")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, d.Shutdown(ctx)) }()
+
+	var info pb.QueueInfo
+	require.NoError(t, d.MustClient().QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: "queue-1"}, &info))
+	assert.Len(t, info.Partitions, 2)
+}

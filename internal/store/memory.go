@@ -294,11 +294,11 @@ func (m *MemoryPartition) Add(_ context.Context, items []*types.Item, now clock.
 	return nil
 }
 
-func (m *MemoryPartition) FindSources(_ context.Context, sources []types.ItemID, found *[]types.ItemID) error {
+func (m *MemoryPartition) FindSourceIDs(_ context.Context, sourceIDs []types.ItemID, found *[]types.ItemID) error {
 	defer m.mu.RUnlock()
 	m.mu.RLock()
 
-	for _, source := range sources {
+	for _, source := range sourceIDs {
 		if _, ok := m.bySourceID[string(source)]; ok {
 			*found = append(*found, source)
 		}
@@ -666,27 +666,27 @@ func (s *MemoryQueues) Update(_ context.Context, info types.QueueInfo) error {
 
 }
 
-func (s *MemoryQueues) SavePartitions(_ context.Context, info types.QueueInfo) error {
-	if err := s.validateQueueName(info); err != nil {
+func (s *MemoryQueues) SavePartitions(_ context.Context, list types.PartitionList) error {
+	if err := s.validateQueueName(types.QueueInfo{Name: list.QueueName}); err != nil {
 		return err
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	idx, ok := s.findQueue(info.Name)
+	idx, ok := s.findQueue(list.QueueName)
 	if !ok {
 		return ErrQueueNotExist
 	}
 
 	found := s.mem[idx]
-	if found.Revision != info.Revision {
+	if found.Revision != list.Revision {
 		return ErrQueueChanged
 	}
-	if err := s.validatePartitionChange(partitionChange{Stored: found, Proposed: info}); err != nil {
+	if err := s.validatePartitionChange(partitionChange{Stored: found, Proposed: list}); err != nil {
 		return err
 	}
-	found.AdoptPartitions(info)
+	found.AdoptPartitions(list)
 	s.mem[idx] = found
 	return nil
 }

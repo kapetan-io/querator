@@ -89,15 +89,19 @@ func (s QueuesValidation) validateQueueInfo(info types.QueueInfo) error {
 		return reply.NewInvalidOption("partitions is invalid; cannot be greater than %d", placement.MaxPartitions)
 	}
 
+	return s.validateAvailablePartitions(info.Name, info.PartitionInfo)
+}
+
+func (s QueuesValidation) validateAvailablePartitions(queueName string, partitions []types.PartitionInfo) error {
 	var available int
-	for _, p := range info.PartitionInfo {
+	for _, p := range partitions {
 		if !p.Draining {
 			available++
 		}
 	}
 	if available > placement.MaxPartitions {
 		return reply.NewInvalidOption("partitions is invalid; queue '%s' lists %d available partitions, "+
-			"cannot be greater than %d", info.Name, available, placement.MaxPartitions)
+			"cannot be greater than %d", queueName, available, placement.MaxPartitions)
 	}
 
 	return nil
@@ -105,7 +109,7 @@ func (s QueuesValidation) validateQueueInfo(info types.QueueInfo) error {
 
 type partitionChange struct {
 	Stored   types.QueueInfo
-	Proposed types.QueueInfo
+	Proposed types.PartitionList
 }
 
 func (s QueuesValidation) validatePartitionChange(change partitionChange) error {
@@ -114,7 +118,7 @@ func (s QueuesValidation) validatePartitionChange(change partitionChange) error 
 		stored[p.PartitionNum] = p
 	}
 
-	name := change.Proposed.Name
+	name := change.Proposed.QueueName
 	if change.Proposed.NextPartition < change.Stored.NextPartition {
 		return reply.NewInvalidOption("partitions is invalid; queue '%s' next partition number %d is below %d, "+
 			"a partition number cannot be reused", name, change.Proposed.NextPartition, change.Stored.NextPartition)
@@ -152,7 +156,7 @@ func (s QueuesValidation) validatePartitionChange(change partitionChange) error 
 		}
 	}
 
-	return s.validateQueueInfo(change.Proposed)
+	return s.validateAvailablePartitions(name, change.Proposed.PartitionInfo)
 }
 
 type timeoutChange struct {

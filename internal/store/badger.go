@@ -632,14 +632,14 @@ func (b *BadgerPartition) Add(_ context.Context, items []*types.Item, now clock.
 	})
 }
 
-func (b *BadgerPartition) FindSources(_ context.Context, sources []types.ItemID, found *[]types.ItemID) error {
+func (b *BadgerPartition) FindSourceIDs(_ context.Context, sourceIDs []types.ItemID, found *[]types.ItemID) error {
 	db, err := b.getDB()
 	if err != nil {
 		return err
 	}
 
 	return db.View(func(txn *badger.Txn) error {
-		for _, source := range sources {
+		for _, source := range sourceIDs {
 			_, err := txn.Get([]byte("source:" + string(source)))
 			if errors.Is(err, badger.ErrKeyNotFound) {
 				continue
@@ -1391,18 +1391,18 @@ func (b *BadgerQueues) Update(_ context.Context, info types.QueueInfo) error {
 	}))
 }
 
-func (b *BadgerQueues) SavePartitions(_ context.Context, info types.QueueInfo) error {
+func (b *BadgerQueues) SavePartitions(_ context.Context, list types.PartitionList) error {
 	db, err := b.getDB()
 	if err != nil {
 		return err
 	}
 
-	if err := b.validateQueueName(info); err != nil {
+	if err := b.validateQueueName(types.QueueInfo{Name: list.QueueName}); err != nil {
 		return err
 	}
 
 	return queueChangedOnConflict(db.Update(func(txn *badger.Txn) error {
-		kvItem, err := txn.Get([]byte(info.Name))
+		kvItem, err := txn.Get([]byte(list.QueueName))
 		if err != nil {
 			if errors.Is(err, badger.ErrKeyNotFound) {
 				return ErrQueueNotExist
@@ -1421,20 +1421,20 @@ func (b *BadgerQueues) SavePartitions(_ context.Context, info types.QueueInfo) e
 			return errors.Errorf("during Decode(): %w", err)
 		}
 
-		if found.Revision != info.Revision {
+		if found.Revision != list.Revision {
 			return ErrQueueChanged
 		}
-		if err := b.validatePartitionChange(partitionChange{Stored: found, Proposed: info}); err != nil {
+		if err := b.validatePartitionChange(partitionChange{Stored: found, Proposed: list}); err != nil {
 			return err
 		}
-		found.AdoptPartitions(info)
+		found.AdoptPartitions(list)
 
 		var buf bytes.Buffer
 		if err := gob.NewEncoder(&buf).Encode(found); err != nil {
 			return errors.Errorf("during gob.Encode(): %w", err)
 		}
 
-		if err := txn.Set([]byte(info.Name), buf.Bytes()); err != nil {
+		if err := txn.Set([]byte(list.QueueName), buf.Bytes()); err != nil {
 			return errors.Errorf("during Put(): %w", err)
 		}
 		return nil

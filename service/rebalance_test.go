@@ -238,11 +238,11 @@ type faultyQueues struct {
 	fault *queueStoreFault
 }
 
-func (f faultyQueues) SavePartitions(ctx context.Context, info types.QueueInfo) error {
-	if failing := f.fault.failing.Load(); failing != nil && *failing == info.Name {
+func (f faultyQueues) SavePartitions(ctx context.Context, list types.PartitionList) error {
+	if failing := f.fault.failing.Load(); failing != nil && *failing == list.QueueName {
 		return errSaveFailed
 	}
-	return f.Queues.SavePartitions(ctx, info)
+	return f.Queues.SavePartitions(ctx, list)
 }
 
 func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime storageLifetime) {

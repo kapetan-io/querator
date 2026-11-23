@@ -365,8 +365,8 @@ func (p *PostgresQueues) Update(ctx context.Context, info types.QueueInfo) error
 	return nil
 }
 
-func (p *PostgresQueues) SavePartitions(ctx context.Context, info types.QueueInfo) error {
-	if err := p.validateQueueName(info); err != nil {
+func (p *PostgresQueues) SavePartitions(ctx context.Context, list types.PartitionList) error {
+	if err := p.validateQueueName(types.QueueInfo{Name: list.QueueName}); err != nil {
 		return err
 	}
 
@@ -376,18 +376,18 @@ func (p *PostgresQueues) SavePartitions(ctx context.Context, info types.QueueInf
 	}
 
 	var found types.QueueInfo
-	if err := p.Get(ctx, info.Name, &found); err != nil {
+	if err := p.Get(ctx, list.QueueName, &found); err != nil {
 		return err
 	}
 
-	if found.Revision != info.Revision {
+	if found.Revision != list.Revision {
 		return ErrQueueChanged
 	}
-	if err := p.validatePartitionChange(partitionChange{Stored: found, Proposed: info}); err != nil {
+	if err := p.validatePartitionChange(partitionChange{Stored: found, Proposed: list}); err != nil {
 		return err
 	}
 
-	partitionInfoJSON, err := json.Marshal(info.PartitionInfo)
+	partitionInfoJSON, err := json.Marshal(list.PartitionInfo)
 	if err != nil {
 		return errors.Errorf("marshal partition_info: %w", err)
 	}
@@ -396,10 +396,10 @@ func (p *PostgresQueues) SavePartitions(ctx context.Context, info types.QueueInf
 	                                   revision = revision + 1
 	                            WHERE name = $4 AND revision = $5`,
 		partitionInfoJSON,
-		info.NextPartition,
-		timeToMicroseconds(info.UpdatedAt),
-		info.Name,
-		info.Revision,
+		list.NextPartition,
+		timeToMicroseconds(list.UpdatedAt),
+		list.QueueName,
+		list.Revision,
 	)
 	if err != nil {
 		return errors.Errorf("save queue partitions: %w", err)
@@ -1410,7 +1410,7 @@ func (p *PostgresPartition) Add(ctx context.Context, items []*types.Item, now cl
 	return nil
 }
 
-func (p *PostgresPartition) FindSources(ctx context.Context, sources []types.ItemID, found *[]types.ItemID) error {
+func (p *PostgresPartition) FindSourceIDs(ctx context.Context, sourceIDs []types.ItemID, found *[]types.ItemID) error {
 	pool, err := p.conf.getOrCreatePool(ctx)
 	if err != nil {
 		return err
@@ -1420,8 +1420,8 @@ func (p *PostgresPartition) FindSources(ctx context.Context, sources []types.Ite
 		return err
 	}
 
-	wanted := make([]string, 0, len(sources))
-	for _, source := range sources {
+	wanted := make([]string, 0, len(sourceIDs))
+	for _, source := range sourceIDs {
 		wanted = append(wanted, string(source))
 	}
 

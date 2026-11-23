@@ -210,7 +210,15 @@ func (i *QueueInfo) Update(r QueueInfo) bool {
 	return true
 }
 
-func (i *QueueInfo) AdoptPartitions(r QueueInfo) {
+type PartitionList struct {
+	QueueName     string
+	Revision      int
+	NextPartition int
+	PartitionInfo []PartitionInfo
+	UpdatedAt     clock.Time
+}
+
+func (i *QueueInfo) AdoptPartitions(r PartitionList) {
 	i.PartitionInfo = slices.Clone(r.PartitionInfo)
 	i.NextPartition = r.NextPartition
 	i.UpdatedAt = r.UpdatedAt

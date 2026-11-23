@@ -413,8 +413,8 @@ func (q *MongoQueues) Update(ctx context.Context, info types.QueueInfo) error {
 	return nil
 }
 
-func (q *MongoQueues) SavePartitions(ctx context.Context, info types.QueueInfo) error {
-	if err := q.validateQueueName(info); err != nil {
+func (q *MongoQueues) SavePartitions(ctx context.Context, list types.PartitionList) error {
+	if err := q.validateQueueName(types.QueueInfo{Name: list.QueueName}); err != nil {
 		return err
 	}
 
@@ -424,29 +424,29 @@ func (q *MongoQueues) SavePartitions(ctx context.Context, info types.QueueInfo) 
 	}
 
 	var found types.QueueInfo
-	if err := q.Get(ctx, info.Name, &found); err != nil {
+	if err := q.Get(ctx, list.QueueName, &found); err != nil {
 		return err
 	}
 
-	if found.Revision != info.Revision {
+	if found.Revision != list.Revision {
 		return ErrQueueChanged
 	}
-	if err := q.validatePartitionChange(partitionChange{Stored: found, Proposed: info}); err != nil {
+	if err := q.validatePartitionChange(partitionChange{Stored: found, Proposed: list}); err != nil {
 		return err
 	}
 
-	partitionInfoJSON, err := json.Marshal(info.PartitionInfo)
+	partitionInfoJSON, err := json.Marshal(list.PartitionInfo)
 	if err != nil {
 		return errors.Errorf("marshal partition_info: %w", err)
 	}
 
 	result, err := q.collection(client).UpdateOne(ctx,
-		bson.M{"_id": info.Name, "revision": info.Revision},
+		bson.M{"_id": list.QueueName, "revision": list.Revision},
 		bson.M{
 			"$set": bson.M{
 				"partition_info": partitionInfoJSON,
-				"next_partition": info.NextPartition,
-				"updated_at":     toMicros(info.UpdatedAt),
+				"next_partition": list.NextPartition,
+				"updated_at":     toMicros(list.UpdatedAt),
 			},
 			"$inc": bson.M{"revision": 1},
 		})
@@ -1188,7 +1188,7 @@ func (p *MongoPartition) Add(ctx context.Context, items []*types.Item, now clock
 	return nil
 }
 
-func (p *MongoPartition) FindSources(ctx context.Context, sources []types.ItemID, found *[]types.ItemID) error {
+func (p *MongoPartition) FindSourceIDs(ctx context.Context, sourceIDs []types.ItemID, found *[]types.ItemID) error {
 	client, err := p.conf.getOrCreateClient(ctx)
 	if err != nil {
 		return err
@@ -1199,7 +1199,7 @@ func (p *MongoPartition) FindSources(ctx context.Context, sources []types.ItemID
 	}
 
 	coll := p.collection(client)
-	for _, source := range sources {
+	for _, source := range sourceIDs {
 		exists, err := p.sourceIDExists(ctx, coll, string(source))
 		if err != nil {
 			return err

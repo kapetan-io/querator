@@ -65,7 +65,7 @@ type Queues interface {
 
 	Update(ctx context.Context, info types.QueueInfo) error
 
-	SavePartitions(ctx context.Context, info types.QueueInfo) error
+	SavePartitions(ctx context.Context, list types.PartitionList) error
 
 	List(ctx context.Context, queues *[]types.QueueInfo, opts types.ListOptions) error
 
@@ -95,7 +95,7 @@ type Partition interface {
 
 	Add(ctx context.Context, items []*types.Item, now clock.Time) error
 
-	FindSources(ctx context.Context, sources []types.ItemID, found *[]types.ItemID) error
+	FindSourceIDs(ctx context.Context, sourceIDs []types.ItemID, found *[]types.ItemID) error
 
 	Delete(ctx context.Context, ids []types.ItemID) error
 

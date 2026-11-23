@@ -2053,57 +2053,62 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		var stored types.QueueInfo
 		require.NoError(t, conf.Queues.Get(ctx, name, &stored))
 
-		proposal := func(change func(info *types.QueueInfo)) types.QueueInfo {
-			proposed := stored
-			proposed.PartitionInfo = append([]types.PartitionInfo{}, stored.PartitionInfo...)
+		proposal := func(change func(list *types.PartitionList)) types.PartitionList {
+			proposed := types.PartitionList{
+				PartitionInfo: append([]types.PartitionInfo{}, stored.PartitionInfo...),
+				NextPartition: stored.NextPartition,
+				UpdatedAt:     stored.UpdatedAt,
+				Revision:      stored.Revision,
+				QueueName:     stored.Name,
+			}
 			change(&proposed)
 			return proposed
 		}
 
 		for _, test := range []struct {
 			name     string
-			proposed types.QueueInfo
+			proposed types.PartitionList
 			wantErr  string
 		}{
 			{
 				name: "ReusedPartitionNumber",
-				proposed: proposal(func(info *types.QueueInfo) {
-					info.PartitionInfo = append(info.PartitionInfo, types.PartitionInfo{PartitionNum: 1, StorageName: "backend-a"})
+				proposed: proposal(func(list *types.PartitionList) {
+					list.PartitionInfo = append(list.PartitionInfo, types.PartitionInfo{PartitionNum: 1, StorageName: "backend-a"})
 				}),
 				wantErr: "partition number 1 was used before, a partition number cannot be reused",
 			},
 			{
 				name: "PartitionListedTwice",
-				proposed: proposal(func(info *types.QueueInfo) {
-					info.PartitionInfo = append(info.PartitionInfo, types.PartitionInfo{PartitionNum: 0, StorageName: "backend-a"})
+				proposed: proposal(func(list *types.PartitionList) {
+					list.PartitionInfo = append(list.PartitionInfo, types.PartitionInfo{PartitionNum: 0, StorageName: "backend-a"})
 				}),
 				wantErr: "lists partition 0 twice, a partition number cannot be reused",
 			},
 			{
 				name: "NextPartitionLowered",
-				proposed: proposal(func(info *types.QueueInfo) {
-					info.NextPartition = 2
+				proposed: proposal(func(list *types.PartitionList) {
+					list.NextPartition = 2
 				}),
 				wantErr: "next partition number 2 is below 3, a partition number cannot be reused",
 			},
 			{
 				name: "NextPartitionNotAboveNewPartition",
-				proposed: proposal(func(info *types.QueueInfo) {
-					info.PartitionInfo = append(info.PartitionInfo, types.PartitionInfo{PartitionNum: 3, StorageName: "backend-a"})
+				proposed: proposal(func(list *types.PartitionList) {
+					list.PartitionInfo = append(list.PartitionInfo, types.PartitionInfo{PartitionNum: 3, StorageName: "backend-a"})
 				}),
 				wantErr: "partition 3 is not below the next partition number 3, a partition number cannot be reused",
 			},
 			{
 				name: "DrainingCleared",
-				proposed: proposal(func(info *types.QueueInfo) {
-					info.PartitionInfo[1].Draining = false
+				proposed: proposal(func(list *types.PartitionList) {
+					list.PartitionInfo[1].Draining = false
 				}),
 				wantErr: "partition 2 is draining and cannot become available again",
 			},
 			{
 				name: "BackendChanged",
-				proposed: proposal(func(info *types.QueueInfo) {
-					info.PartitionInfo[0].StorageName = "backend-b"
+				proposed: proposal(func(list *types.PartitionList) {
+					list.PartitionInfo[0].StorageName = "backend-b"
 				}),
 				wantErr: "partition 0 is on storage backend 'backend-a' and cannot change to 'backend-b'",
 			},
@@ -2121,10 +2126,10 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		}
 
 		t.Run("SavesNewAndDrainingPartitions", func(t *testing.T) {
-			require.NoError(t, conf.Queues.SavePartitions(ctx, proposal(func(info *types.QueueInfo) {
-				info.PartitionInfo[0].Draining = true
-				info.PartitionInfo = append(info.PartitionInfo, types.PartitionInfo{PartitionNum: 3, StorageName: "backend-b"})
-				info.NextPartition = 4
+			require.NoError(t, conf.Queues.SavePartitions(ctx, proposal(func(list *types.PartitionList) {
+				list.PartitionInfo[0].Draining = true
+				list.PartitionInfo = append(list.PartitionInfo, types.PartitionInfo{PartitionNum: 3, StorageName: "backend-b"})
+				list.NextPartition = 4
 			})))
 
 			var after types.QueueInfo
@@ -2138,9 +2143,9 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			assert.False(t, after.PartitionInfo[2].Draining)
 
 			// A save built from the record as it was before that save is refused
-			err := conf.Queues.SavePartitions(ctx, proposal(func(info *types.QueueInfo) {
-				info.PartitionInfo = append(info.PartitionInfo, types.PartitionInfo{PartitionNum: 3, StorageName: "backend-a"})
-				info.NextPartition = 4
+			err := conf.Queues.SavePartitions(ctx, proposal(func(list *types.PartitionList) {
+				list.PartitionInfo = append(list.PartitionInfo, types.PartitionInfo{PartitionNum: 3, StorageName: "backend-a"})
+				list.NextPartition = 4
 			}))
 			require.ErrorIs(t, err, store.ErrQueueChanged)
 			var unchanged types.QueueInfo
@@ -2149,7 +2154,7 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		})
 
 		t.Run("QueueDoesNotExist", func(t *testing.T) {
-			err := conf.Queues.SavePartitions(ctx, types.QueueInfo{Name: random.String("missing-", 10), NextPartition: 1})
+			err := conf.Queues.SavePartitions(ctx, types.PartitionList{QueueName: random.String("missing-", 10), NextPartition: 1})
 			require.ErrorIs(t, err, store.ErrQueueNotExist)
 		})
 	})

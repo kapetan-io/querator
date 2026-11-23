@@ -303,16 +303,16 @@ func (l *Logical) storeHandOffs(ctx context.Context, state *QueueState, p *Parti
 	var sending types.ProduceBatch
 	var restoring []heldHandOff
 	for _, req := range handOffs.Requests {
-		sources := make([]types.ItemID, 0, len(req.Items))
+		sourceIDs := make([]types.ItemID, 0, len(req.Items))
 		for _, item := range req.Items {
-			sources = append(sources, item.SourceID)
+			sourceIDs = append(sourceIDs, item.SourceID)
 		}
 
 		var found []types.ItemID
 		var err error
 		for _, other := range draining {
-			if err = other.Store.FindSources(ctx, sources, &found); err != nil {
-				l.log.Error("while calling store.Partition.FindSources()",
+			if err = other.Store.FindSourceIDs(ctx, sourceIDs, &found); err != nil {
+				l.log.Error("while calling store.Partition.FindSourceIDs()",
 					"partition", other.Info.PartitionNum,
 					"queueName", l.conf.Name,
 					"error", err)

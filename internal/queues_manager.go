@@ -343,8 +343,13 @@ func (qm *QueuesManager) rebalanceQueue(ctx context.Context, name string, backen
 			return qm.adoptRecord(ctx, queue)
 		}
 
-		rebalanced.Queue.UpdatedAt = qm.conf.LogicalConfig.Clock.Now().UTC()
-		err = qm.conf.StorageConfig.Queues.SavePartitions(ctx, rebalanced.Queue)
+		err = qm.conf.StorageConfig.Queues.SavePartitions(ctx, types.PartitionList{
+			UpdatedAt:     qm.conf.LogicalConfig.Clock.Now().UTC(),
+			PartitionInfo: rebalanced.Queue.PartitionInfo,
+			NextPartition: rebalanced.Queue.NextPartition,
+			Revision:      queue.Revision,
+			QueueName:     name,
+		})
 		if errors.Is(err, store.ErrQueueNotExist) {
 			return nil
 		}

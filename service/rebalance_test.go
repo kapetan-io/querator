@@ -88,7 +88,7 @@ type rebalanceCounts struct {
 func rebalance(t *testing.T, ctx context.Context, c *querator.Client) rebalanceCounts {
 	t.Helper()
 	var resp pb.QueuesRebalanceResponse
-	require.NoError(t, c.QueuesRebalance(ctx, &resp))
+	require.NoError(t, c.QueuesRebalance(ctx, &pb.QueuesRebalanceRequest{}, &resp))
 	require.NotNil(t, resp.QueuesChanged)
 	require.NotNil(t, resp.PartitionsCreated)
 	require.NotNil(t, resp.PartitionsDraining)
@@ -443,6 +443,111 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		assert.Equal(t, lease.Items[1].Reference, again.Items[0].Reference)
 	})
 
+	t.Run("OnePartitionQueueWaitsForBackendGoneFromConfig", func(t *testing.T) {
+		// The InMemory queue store keeps no record of the queue across a restart
+		if lifetime == endsWithDaemon {
+			return
+		}
+		const gone = "memory-gone"
+		conf := withExtraBackend(setup(), gone, 0, nil)
+		defer tearDown()
+		main := conf.PartitionStorage[0].Name
+		first := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+		c, ctx := first.MustClient(), first.Context()
+
+		queueName := random.String("queue-", 10)
+		setAffinity(t, ctx, c, gone, 1)
+		setAffinity(t, ctx, c, main, 0)
+		createQueueWithPartitions(t, ctx, c, queueName, 1)
+		require.Equal(t, []int32{0}, availableOn(listedPartitions(t, ctx, c, queueName), gone))
+		setAffinity(t, ctx, c, main, 1)
+		setAffinity(t, ctx, c, gone, 0)
+		first.Shutdown(t)
+
+		// The backend that holds the queue's only partition is taken out of the config
+		conf.PartitionStorage = conf.PartitionStorage[:1]
+		second := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+		defer second.Shutdown(t)
+		c, ctx = second.MustClient(), second.Context()
+
+		assert.Equal(t, rebalanceCounts{ChangedQueues: 1, CreatedPartitions: 1, DrainingPartitions: 1},
+			rebalance(t, ctx, c))
+		listed := listedPartitions(t, ctx, c, queueName)
+		assert.Equal(t, []int32{0}, drainingOn(listed, gone))
+		assert.Equal(t, []int32{1}, availableOn(listed, main))
+
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			QueueName:      queueName,
+			RequestTimeout: "5s",
+			Items:          []*pb.QueueProduceItem{{Reference: "after-move", Bytes: []byte("x")}},
+		}))
+
+		// The item waits until the backend is restored, since the partition it left may hold older items
+		var lease pb.QueueLeaseResponse
+		err := c.QueueLease(ctx, &pb.QueueLeaseRequest{
+			ClientId:       random.String("client-", 10),
+			RequestTimeout: "1s",
+			QueueName:      queueName,
+			BatchSize:      1,
+		}, &lease)
+		var e duh.Error
+		require.ErrorAs(t, err, &e)
+		assert.Equal(t, querator.MsgRequestTimeout, e.Message())
+		assert.Equal(t, duh.CodeRetryRequest, e.Code())
+		assert.Empty(t, lease.Items)
+	})
+
+	t.Run("DrainingPartitionStaysDrainingAfterRestart", func(t *testing.T) {
+		// The InMemory queue store keeps no record of the queue across a restart
+		if lifetime == endsWithDaemon {
+			return
+		}
+		conf := withExtraBackend(setup(), extraBackend, 0, nil)
+		defer tearDown()
+		main := conf.PartitionStorage[0].Name
+		first := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+		c, ctx := first.MustClient(), first.Context()
+
+		queueName := random.String("queue-", 10)
+		createQueueWithPartitions(t, ctx, c, queueName, 1)
+		produceInOrder(t, ctx, c, queueName, 2)
+		assert.Equal(t, rebalanceCounts{ChangedQueues: 1, CreatedPartitions: 1, DrainingPartitions: 1},
+			moveOnlyPartition(t, ctx, c, main))
+		first.Shutdown(t)
+
+		second := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+		defer second.Shutdown(t)
+		c, ctx = second.MustClient(), second.Context()
+
+		listed := listedPartitions(t, ctx, c, queueName)
+		assert.Equal(t, []int32{0}, drainingOn(listed, main))
+		assert.Equal(t, []int32{1}, availableOn(listed, extraBackend))
+		assert.Equal(t, rebalanceCounts{}, rebalance(t, ctx, c))
+
+		// A produce after the restart still stays out of the draining partition
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			QueueName:      queueName,
+			RequestTimeout: "5s",
+			Items:          []*pb.QueueProduceItem{{Reference: "after-restart", Bytes: []byte("x")}},
+		}))
+		drained := leaseBatch(t, ctx, c, queueName, 3)
+		require.Len(t, drained.Items, 2)
+		assert.Equal(t, int32(0), drained.Partition)
+		assert.Equal(t, "item-00000", drained.Items[0].Reference)
+		assert.Equal(t, "item-00001", drained.Items[1].Reference)
+		require.NoError(t, c.QueueComplete(ctx, &pb.QueueCompleteRequest{
+			QueueName:      queueName,
+			Partition:      drained.Partition,
+			RequestTimeout: "5s",
+			Ids:            []string{drained.Items[0].Id, drained.Items[1].Id},
+		}))
+
+		moved := leaseBatch(t, ctx, c, queueName, 3)
+		require.Len(t, moved.Items, 1)
+		assert.Equal(t, int32(1), moved.Partition)
+		assert.Equal(t, "after-restart", moved.Items[0].Reference)
+	})
+
 	t.Run("OnePartitionQueueKeepsOrderAfterMove", func(t *testing.T) {
 		conf := withExtraBackend(setup(), extraBackend, 0, nil)
 		defer tearDown()
@@ -586,7 +691,7 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		var replies [2]pb.QueuesRebalanceResponse
 		var errs [2]error
 		concurrently(2, func(i int) {
-			errs[i] = c.QueuesRebalance(ctx, &replies[i])
+			errs[i] = c.QueuesRebalance(ctx, &pb.QueuesRebalanceRequest{}, &replies[i])
 		})
 		require.NoError(t, errs[0])
 		require.NoError(t, errs[1])
@@ -623,7 +728,7 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 			var errs [2]error
 			concurrently(2, func(i int) {
 				if i == 0 {
-					errs[i] = c.QueuesRebalance(ctx, &pb.QueuesRebalanceResponse{})
+					errs[i] = c.QueuesRebalance(ctx, &pb.QueuesRebalanceRequest{}, &pb.QueuesRebalanceResponse{})
 					return
 				}
 				errs[i] = retry.On(ctx, retry.OnRetryable, func(ctx context.Context, _ int) error {
@@ -660,7 +765,7 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		var errs [created + 1]error
 		concurrently(created+1, func(i int) {
 			if i == created {
-				errs[i] = c.QueuesRebalance(ctx, &pb.QueuesRebalanceResponse{})
+				errs[i] = c.QueuesRebalance(ctx, &pb.QueuesRebalanceRequest{}, &pb.QueuesRebalanceResponse{})
 				return
 			}
 			errs[i] = c.QueuesCreate(ctx, &pb.QueueInfo{
@@ -704,7 +809,7 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		setPartitionCount(t, ctx, c, secondQueue, 3)
 
 		fault.FailSavesOf(secondQueue)
-		err := c.QueuesRebalance(ctx, &pb.QueuesRebalanceResponse{})
+		err := c.QueuesRebalance(ctx, &pb.QueuesRebalanceRequest{}, &pb.QueuesRebalanceResponse{})
 		var e duh.Error
 		require.ErrorAs(t, err, &e)
 		assert.Equal(t, duh.CodeInternalError, e.Code())
@@ -799,7 +904,7 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		require.Len(t, onExtra, 1)
 
 		fault.FailSavesOf(queueName)
-		err := c.QueuesRebalance(ctx, &pb.QueuesRebalanceResponse{})
+		err := c.QueuesRebalance(ctx, &pb.QueuesRebalanceRequest{}, &pb.QueuesRebalanceResponse{})
 		var e duh.Error
 		require.ErrorAs(t, err, &e)
 		assert.Equal(t, duh.CodeInternalError, e.Code())
@@ -853,7 +958,7 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 				setAffinity(t, ctx, c, name, 0)
 				before := listedPartitions(t, ctx, c, queueName)
 
-				err := c.QueuesRebalance(ctx, &pb.QueuesRebalanceResponse{})
+				err := c.QueuesRebalance(ctx, &pb.QueuesRebalanceRequest{}, &pb.QueuesRebalanceResponse{})
 				var e duh.Error
 				require.ErrorAs(t, err, &e)
 				assert.Equal(t, duh.CodeBadRequest, e.Code())
@@ -883,7 +988,7 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 				defer second.Shutdown(t)
 				c, ctx = second.MustClient(), second.Context()
 
-				err := c.QueuesRebalance(ctx, &pb.QueuesRebalanceResponse{})
+				err := c.QueuesRebalance(ctx, &pb.QueuesRebalanceRequest{}, &pb.QueuesRebalanceResponse{})
 				var e duh.Error
 				require.ErrorAs(t, err, &e)
 				assert.Equal(t, duh.CodeBadRequest, e.Code())
@@ -904,7 +1009,7 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 				setPartitionCount(t, ctx, c, queueName, 3)
 				before := listedPartitions(t, ctx, c, queueName)
 
-				err := c.QueuesRebalance(ctx, &pb.QueuesRebalanceResponse{})
+				err := c.QueuesRebalance(ctx, &pb.QueuesRebalanceRequest{}, &pb.QueuesRebalanceResponse{})
 				var e duh.Error
 				require.ErrorAs(t, err, &e)
 				assert.Equal(t, duh.CodeBadRequest, e.Code())
@@ -936,7 +1041,7 @@ func TestRebalancePermission(t *testing.T) {
 	t.Run("RefusedWithoutQueueRebalance", func(t *testing.T) {
 		limited := newClientWithAPIKey(t, d, CreateUserWithLimitedPermissions(t, ctx, admin,
 			[]string{auth.QueueList, auth.QueueUpdate, auth.BackendUpdate}))
-		err := limited.QueuesRebalance(ctx, &pb.QueuesRebalanceResponse{})
+		err := limited.QueuesRebalance(ctx, &pb.QueuesRebalanceRequest{}, &pb.QueuesRebalanceResponse{})
 		var e duh.Error
 		require.ErrorAs(t, err, &e)
 		assert.Equal(t, duh.CodeForbidden, e.Code())
@@ -948,7 +1053,7 @@ func TestRebalancePermission(t *testing.T) {
 		require.NoError(t, admin.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: namespace}))
 		scoped := newClientWithAPIKey(t, d, CreateUserWithNamespacePermissions(t, ctx, admin, namespace,
 			[]string{auth.QueueRebalance}))
-		err := scoped.QueuesRebalance(ctx, &pb.QueuesRebalanceResponse{})
+		err := scoped.QueuesRebalance(ctx, &pb.QueuesRebalanceRequest{}, &pb.QueuesRebalanceResponse{})
 		var e duh.Error
 		require.ErrorAs(t, err, &e)
 		assert.Equal(t, duh.CodeForbidden, e.Code())

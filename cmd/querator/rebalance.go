@@ -38,7 +38,7 @@ func RunRebalance(flags FlagParams) error {
 	defer cancel()
 
 	var resp proto.QueuesRebalanceResponse
-	if err := client.QueuesRebalance(ctx, &resp); err != nil {
+	if err := client.QueuesRebalance(ctx, &proto.QueuesRebalanceRequest{}, &resp); err != nil {
 		return fmt.Errorf("failed to rebalance queues: %w", err)
 	}
 

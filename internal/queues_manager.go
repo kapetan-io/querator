@@ -207,15 +207,7 @@ func (qm *QueuesManager) Update(ctx context.Context, update types.QueueUpdate) e
 	if err != nil || stored == nil {
 		return err
 	}
-	return qm.adoptRecord(*stored, func(l *Logical, record types.QueueInfo) error {
-		return l.UpdateInfo(ctx, record)
-	})
-}
-
-func (qm *QueuesManager) reloadRecord(ctx context.Context, stored types.QueueInfo) error {
-	return qm.adoptRecord(stored, func(l *Logical, record types.QueueInfo) error {
-		return l.ReloadPartitions(ctx, &types.ReloadRequest{Queue: &record})
-	})
+	return qm.adoptRecord(ctx, *stored)
 }
 
 func (qm *QueuesManager) saveUpdate(ctx context.Context, update types.QueueUpdate) (*types.QueueInfo, error) {
@@ -254,7 +246,7 @@ func (qm *QueuesManager) saveUpdate(ctx context.Context, update types.QueueUpdat
 	return &stored, nil
 }
 
-func (qm *QueuesManager) adoptRecord(stored types.QueueInfo, tell func(*Logical, types.QueueInfo) error) error {
+func (qm *QueuesManager) adoptRecord(ctx context.Context, stored types.QueueInfo) error {
 	qm.mutex.Lock()
 	q, ok := qm.queues[stored.Name]
 	if ok && len(q.GetAll()) == 0 && len(stored.PartitionInfo) != 0 {
@@ -269,8 +261,10 @@ func (qm *QueuesManager) adoptRecord(stored types.QueueInfo, tell func(*Logical,
 
 	stored.LinkPartitions()
 	q.RoutePartitions(stored)
+	saved, cancel := context.WithTimeout(context.WithoutCancel(ctx), qm.conf.LogicalConfig.WriteTimeout)
+	defer cancel()
 	for _, l := range q.GetAll() {
-		if err := tell(l, stored); err != nil {
+		if err := l.UpdateInfo(saved, stored); err != nil {
 			return errors.With("queue", stored.Name).Errorf("while the queue adopts its saved record: %w", err)
 		}
 	}
@@ -352,7 +346,7 @@ func (qm *QueuesManager) rebalanceQueue(ctx context.Context, name string, backen
 			return errors.With("queue", name).Errorf("placement.Rebalance(): %w", err)
 		}
 		if !rebalanced.Changed {
-			return qm.reloadRecord(ctx, queue)
+			return qm.adoptRecord(ctx, queue)
 		}
 
 		rebalanced.Queue.UpdatedAt = qm.conf.LogicalConfig.Clock.Now().UTC()
@@ -378,7 +372,7 @@ func (qm *QueuesManager) rebalanceQueue(ctx context.Context, name string, backen
 			}
 			return errors.With("queue", name).Errorf("Queues.Get(): %w", err)
 		}
-		return qm.reloadRecord(ctx, stored)
+		return qm.adoptRecord(ctx, stored)
 	}
 	return reply.NewRetryRequest("queue '%s' kept changing while it was being rebalanced; try again", name)
 }

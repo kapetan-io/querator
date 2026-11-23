@@ -70,7 +70,6 @@ type RetryItem struct {
 }
 type ReloadRequest struct {
 	Partitions []int
-	Queue      *QueueInfo
 }
 
 type ClearRequest struct {

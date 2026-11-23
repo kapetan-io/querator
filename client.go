@@ -189,8 +189,9 @@ func (c *Client) StorageItemsDelete(ctx context.Context, req *pb.StorageItemsDel
 	return c.do(ctx, doArgs{Path: transport.RPCStorageItemsDelete, Request: req, Reply: &v1.Reply{}})
 }
 
-func (c *Client) QueuesRebalance(ctx context.Context, res *pb.QueuesRebalanceResponse) error {
-	return c.do(ctx, doArgs{Path: transport.RPCQueuesRebalance, Request: &pb.QueuesRebalanceRequest{}, Reply: res})
+func (c *Client) QueuesRebalance(ctx context.Context, req *pb.QueuesRebalanceRequest,
+	res *pb.QueuesRebalanceResponse) error {
+	return c.do(ctx, doArgs{Path: transport.RPCQueuesRebalance, Request: req, Reply: res})
 }
 
 func (c *Client) StorageBackendsUpdate(ctx context.Context, req *pb.StorageBackendsUpdateRequest) error {

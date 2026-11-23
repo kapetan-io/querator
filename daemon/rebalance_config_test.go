@@ -65,7 +65,7 @@ queues:
 	}
 
 	var resp pb.QueuesRebalanceResponse
-	require.NoError(t, c.QueuesRebalance(ctx, &resp))
+	require.NoError(t, c.QueuesRebalance(ctx, &pb.QueuesRebalanceRequest{}, &resp))
 	assert.Equal(t, int32(1), resp.GetQueuesChanged())
 	assert.Equal(t, int32(2), resp.GetPartitionsCreated())
 	assert.Equal(t, int32(2), resp.GetPartitionsDraining())
@@ -117,7 +117,7 @@ queue-storage:
 		var before pb.QueueInfo
 		require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: "queue-1"}, &before))
 
-		err := c.QueuesRebalance(ctx, &pb.QueuesRebalanceResponse{})
+		err := c.QueuesRebalance(ctx, &pb.QueuesRebalanceRequest{}, &pb.QueuesRebalanceResponse{})
 		var e duh.Error
 		require.ErrorAs(t, err, &e)
 		assert.Equal(t, duh.CodeBadRequest, e.Code())
@@ -160,7 +160,7 @@ queue-storage:
 			Affinity: new(0.0),
 		}))
 		var resp pb.QueuesRebalanceResponse
-		require.NoError(t, c.QueuesRebalance(ctx, &resp))
+		require.NoError(t, c.QueuesRebalance(ctx, &pb.QueuesRebalanceRequest{}, &resp))
 		assert.Equal(t, int32(1), resp.GetQueuesChanged())
 		assert.Equal(t, int32(1), resp.GetPartitionsCreated())
 		assert.Equal(t, int32(1), resp.GetPartitionsDraining())

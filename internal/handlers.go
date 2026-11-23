@@ -154,9 +154,6 @@ func (l *Logical) handleClear(state *QueueState, req *Request) {
 }
 
 func (l *Logical) handleReload(state *QueueState, req *Request) {
-	if saved := req.Request.(*types.ReloadRequest).Queue; saved != nil {
-		l.adoptRecord(state, *saved)
-	}
 	for _, partition := range state.Partitions {
 		ctx, cancel := context.WithTimeout(req.Context, l.conf.ReadTimeout)
 		var stats types.PartitionStats

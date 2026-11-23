@@ -1,6 +1,7 @@
 package daemon_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -107,4 +108,42 @@ queues:
 	var info pb.QueueInfo
 	require.NoError(t, d.MustClient().QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: "queue-1"}, &info))
 	assert.Len(t, info.Partitions, 2)
+}
+
+func TestStartWarnsWhenFileAffinityDiffersFromSaved(t *testing.T) {
+	ctx := context.Background()
+	const template = `
+logging:
+  handler: text
+partition-storage:
+  - name: mem-00
+    memory: {}
+    affinity: %s
+queue-storage:
+  badger:
+    storage-dir: %q
+`
+	dir := t.TempDir()
+	start := func(t *testing.T, affinity string, logs *bytes.Buffer) {
+		t.Helper()
+		file, err := daemon.ReadConfig(strings.NewReader(fmt.Sprintf(template, affinity, dir)))
+		require.NoError(t, err)
+		conf := daemon.Config{InMemoryListener: true}
+		require.NoError(t, daemon.ApplyConfigFile(ctx, &conf, file, logs))
+		d, err := daemon.NewDaemon(ctx, conf)
+		require.NoError(t, err)
+		require.NoError(t, d.Shutdown(ctx))
+	}
+
+	var first bytes.Buffer
+	start(t, "1", &first)
+	assert.NotContains(t, first.String(), "differs from the saved affinity")
+
+	var second bytes.Buffer
+	start(t, "2", &second)
+	assert.Contains(t, second.String(), "config file affinity differs from the saved affinity")
+	assert.Contains(t, second.String(), "backend=mem-00")
+	assert.Contains(t, second.String(), "file=2")
+	assert.Contains(t, second.String(), "saved=1")
+	assert.Contains(t, second.String(), "querator backends update mem-00 --affinity <n>")
 }

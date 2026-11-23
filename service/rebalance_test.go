@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -1205,8 +1207,8 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		// Every produce was accepted, and every item was leased once
 		require.Empty(t, failures)
 		assert.Len(t, seen, int(produced.Load()))
-		for reference, count := range seen {
-			assert.Equal(t, 1, count, reference)
+		for _, reference := range slices.Sorted(maps.Keys(seen)) {
+			assert.Equal(t, 1, seen[reference], reference)
 		}
 		assert.Equal(t, int32(0), queueTotal(t, ctx, c, queueName))
 	})

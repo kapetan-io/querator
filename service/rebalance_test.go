@@ -816,6 +816,67 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		}
 	})
 
+	t.Run("QueueThatMissedARebalanceIsToldByTheNext", func(t *testing.T) {
+		var fault partitionFault
+		conf := withExtraBackend(fault.Wrap(setup()), extraBackend, 0, nil)
+		defer tearDown()
+		d := newDaemon(t, 20*clock.Second, svc.Config{
+			StorageConfig:       conf,
+			WriteTimeout:        300 * clock.Millisecond,
+			MaxRequestsPerQueue: 1,
+		})
+		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
+
+		queueName := random.String("queue-", 10)
+		createQueueWithPartitions(t, ctx, c, queueName, 1)
+		produceInOrder(t, ctx, c, queueName, 2)
+		setAffinity(t, ctx, c, extraBackend, 1)
+		setAffinity(t, ctx, c, conf.PartitionStorage[0].Name, 0)
+
+		// A held clear keeps the queue busy, and one waiting produce fills its inbox, so the
+		// rebalance saves the record and cannot tell the loaded queue
+		hold := &clearHold{Reached: make(chan struct{}), Release: make(chan struct{})}
+		fault.holdClear.Store(hold)
+		var cleared, rebalanced error
+		backgroundCall{
+			Call: func() {
+				cleared = c.QueueClear(ctx, &pb.QueueClearRequest{QueueName: queueName, Queue: true})
+			},
+			While: func() {
+				hold.WaitReached(t, ctx)
+				short, cancel := context.WithTimeout(ctx, 200*clock.Millisecond)
+				defer cancel()
+				require.Error(t, c.QueueProduce(short, &pb.QueueProduceRequest{
+					QueueName:      queueName,
+					RequestTimeout: "5s",
+					Items:          []*pb.QueueProduceItem{{Reference: "fills-the-inbox", Bytes: []byte("x")}},
+				}))
+				rebalanced = c.QueuesRebalance(ctx, &pb.QueuesRebalanceRequest{}, &pb.QueuesRebalanceResponse{})
+				close(hold.Release)
+			},
+		}.run()
+		require.NoError(t, cleared)
+		require.Error(t, rebalanced)
+		fault.holdClear.Store(nil)
+
+		// Nothing is left to change, and the queue is told what the first call saved
+		assert.Equal(t, rebalanceCounts{}, rebalance(t, ctx, c))
+		listed := listedPartitions(t, ctx, c, queueName)
+		assert.Equal(t, []int32{0}, drainingOn(listed, conf.PartitionStorage[0].Name))
+		assert.Equal(t, []int32{1}, availableOn(listed, extraBackend))
+
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			QueueName:      queueName,
+			RequestTimeout: "5s",
+			Items:          []*pb.QueueProduceItem{{Reference: "after-the-tell", Bytes: []byte("x")}},
+		}))
+		var moved pb.StorageItemsListResponse
+		require.NoError(t, c.StorageItemsList(ctx, queueName, 1, &moved, &querator.ListOptions{Limit: 10}))
+		require.Len(t, moved.Items, 1)
+		assert.Equal(t, "after-the-tell", moved.Items[0].Reference)
+	})
+
 	t.Run("StoppedRebalanceIsFinishedByCallingAgain", func(t *testing.T) {
 		fault := &queueStoreFault{}
 		conf := fault.Wrap(setup())

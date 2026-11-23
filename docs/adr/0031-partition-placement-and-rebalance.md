@@ -5,6 +5,10 @@ Date: 2026-11-21
 ## Status
 
 Accepted
+Supersedes in part ADR 16
+Supersedes in part ADR 23
+Supersedes in part ADR 26
+Supersedes in part ADR 27
 
 ## Context
 

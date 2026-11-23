@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -1026,6 +1027,231 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		listed := listedPartitions(t, ctx, c, queueName)
 		assert.Equal(t, onExtra, drainingOn(listed, extraBackend))
 		assert.Len(t, availableOn(listed, name), 2)
+	})
+
+	t.Run("ScheduledItemInDrainingPartitionIsDelivered", func(t *testing.T) {
+		now := clock.NewProvider()
+		now.Freeze(clock.Now())
+		defer now.UnFreeze()
+
+		conf := withExtraBackend(setup(), extraBackend, 0, nil)
+		defer tearDown()
+		d := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: conf, Clock: now})
+		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
+
+		queueName := random.String("queue-", 10)
+		createQueueWithPartitions(t, ctx, c, queueName, 1)
+		produceScheduled(t, ctx, c, queueName, 1, now.Now().Add(clock.Minute))
+
+		assert.Equal(t, rebalanceCounts{ChangedQueues: 1, CreatedPartitions: 1, DrainingPartitions: 1},
+			moveOnlyPartition(t, ctx, c, conf.PartitionStorage[0].Name))
+
+		// The item is not due, so the draining partition still holds it as scheduled
+		var stats pb.QueueStatsResponse
+		require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats))
+		require.Len(t, stats.LogicalQueues, 1)
+		require.Len(t, stats.LogicalQueues[0].Partitions, 2)
+		assert.Equal(t, int32(1), stats.LogicalQueues[0].Partitions[0].Scheduled)
+		assert.Equal(t, int32(0), stats.LogicalQueues[0].Partitions[1].Scheduled)
+
+		now.Advance(clock.Minute + clock.Second)
+		require.Eventually(t, func() bool {
+			var due pb.QueueStatsResponse
+			if err := c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &due); err != nil {
+				return false
+			}
+			return due.LogicalQueues[0].Partitions[0].Scheduled == 0
+		}, 10*clock.Second, 50*clock.Millisecond)
+
+		// Once due it is leased from the draining partition, and nothing is left behind
+		lease := leaseBatch(t, ctx, c, queueName, 1)
+		require.Len(t, lease.Items, 1)
+		assert.Equal(t, int32(0), lease.Partition)
+		assert.Equal(t, "item-00000", lease.Items[0].Reference)
+		require.NoError(t, c.QueueComplete(ctx, &pb.QueueCompleteRequest{
+			QueueName:      queueName,
+			Partition:      lease.Partition,
+			RequestTimeout: "5s",
+			Ids:            []string{lease.Items[0].Id},
+		}))
+		assert.Equal(t, int32(0), queueTotal(t, ctx, c, queueName))
+	})
+
+	t.Run("NoItemLostWhileProducedAndLeasedDuringRebalance", func(t *testing.T) {
+		conf := withExtraBackend(setup(), extraBackend, 1, nil)
+		defer tearDown()
+		d := newDaemon(t, 90*clock.Second, svc.Config{StorageConfig: conf})
+		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
+		first := conf.PartitionStorage[0].Name
+
+		queueName := random.String("queue-", 10)
+		createQueueWithPartitions(t, ctx, c, queueName, 4)
+
+		const producers, consumers, batch = 2, 4, 10
+		var produced, leased atomic.Int64
+		var mu sync.Mutex
+		seen := map[string]int{}
+		var failures []error
+		fail := func(err error) {
+			mu.Lock()
+			defer mu.Unlock()
+			failures = append(failures, err)
+		}
+
+		stop := make(chan struct{})
+		var producing sync.WaitGroup
+		for p := range producers {
+			producing.Go(func() {
+				for n := 0; ; n++ {
+					select {
+					case <-stop:
+						return
+					default:
+					}
+					items := make([]*pb.QueueProduceItem, batch)
+					for i := range items {
+						items[i] = &pb.QueueProduceItem{
+							Reference: fmt.Sprintf("producer-%d-%05d", p, n*batch+i),
+							Bytes:     []byte("x"),
+						}
+					}
+					if err := c.QueueProduce(ctx, &pb.QueueProduceRequest{
+						QueueName:      queueName,
+						RequestTimeout: "5s",
+						Items:          items,
+					}); err != nil {
+						fail(fmt.Errorf("produce: %w", err))
+						return
+					}
+					produced.Add(batch)
+				}
+			})
+		}
+
+		drained := make(chan struct{})
+		var consuming sync.WaitGroup
+		for range consumers {
+			consuming.Go(func() {
+				for {
+					select {
+					case <-drained:
+						return
+					default:
+					}
+					var lease pb.QueueLeaseResponse
+					err := c.QueueLease(ctx, &pb.QueueLeaseRequest{
+						ClientId:       random.String("client-", 10),
+						RequestTimeout: "1s",
+						QueueName:      queueName,
+						BatchSize:      batch,
+					}, &lease)
+					var e duh.Error
+					if errors.As(err, &e) && e.Code() == duh.CodeRetryRequest {
+						continue
+					}
+					if err != nil {
+						fail(fmt.Errorf("lease: %w", err))
+						return
+					}
+					ids := make([]string, 0, len(lease.Items))
+					mu.Lock()
+					for _, item := range lease.Items {
+						seen[item.Reference]++
+						ids = append(ids, item.Id)
+					}
+					mu.Unlock()
+					if err := c.QueueComplete(ctx, &pb.QueueCompleteRequest{
+						QueueName:      queueName,
+						Partition:      lease.Partition,
+						RequestTimeout: "5s",
+						Ids:            ids,
+					}); err != nil {
+						fail(fmt.Errorf("complete: %w", err))
+						return
+					}
+					leased.Add(int64(len(ids)))
+				}
+			})
+		}
+
+		moreProduced := func() {
+			from := produced.Load()
+			require.Eventually(t, func() bool { return produced.Load() >= from+10*batch },
+				20*clock.Second, 10*clock.Millisecond)
+		}
+
+		// Two rebalances land while items are produced, leased and completed. The first drains the
+		// extra backend's partitions, and the second drains the first backend's.
+		moreProduced()
+		setAffinity(t, ctx, c, extraBackend, 0)
+		assert.Equal(t, rebalanceCounts{ChangedQueues: 1, CreatedPartitions: 2, DrainingPartitions: 2},
+			rebalance(t, ctx, c))
+		moreProduced()
+		setAffinity(t, ctx, c, extraBackend, 1)
+		setAffinity(t, ctx, c, first, 0)
+		assert.Equal(t, rebalanceCounts{ChangedQueues: 1, CreatedPartitions: 4, DrainingPartitions: 4},
+			rebalance(t, ctx, c))
+		moreProduced()
+
+		close(stop)
+		producing.Wait()
+		assert.Eventually(t, func() bool { return leased.Load() == produced.Load() },
+			30*clock.Second, 20*clock.Millisecond)
+		close(drained)
+		consuming.Wait()
+
+		// Every produce was accepted, and every item was leased once
+		require.Empty(t, failures)
+		assert.Len(t, seen, int(produced.Load()))
+		for reference, count := range seen {
+			assert.Equal(t, 1, count, reference)
+		}
+		assert.Equal(t, int32(0), queueTotal(t, ctx, c, queueName))
+	})
+
+	t.Run("RebalanceWhileQueuesAreDeleted", func(t *testing.T) {
+		conf := setup()
+		defer tearDown()
+		d := newDaemon(t, 30*clock.Second, svc.Config{StorageConfig: conf})
+		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
+		name := conf.PartitionStorage[0].Name
+
+		// Every queue is owed two more partitions, and half of them are deleted as the rebalance runs
+		const kept, deleted = 5, 10
+		prefix := random.String("queue-", 10)
+		for i := range kept + deleted {
+			queueName := fmt.Sprintf("%s-%02d", prefix, i)
+			createQueueWithPartitions(t, ctx, c, queueName, 1)
+			setPartitionCount(t, ctx, c, queueName, 3)
+		}
+
+		var errs [deleted + 1]error
+		concurrently(deleted+1, func(i int) {
+			if i == deleted {
+				errs[i] = c.QueuesRebalance(ctx, &pb.QueuesRebalanceRequest{}, &pb.QueuesRebalanceResponse{})
+				return
+			}
+			errs[i] = c.QueuesDelete(ctx, &pb.QueuesDeleteRequest{QueueName: fmt.Sprintf("%s-%02d", prefix, kept+i)})
+		})
+		for _, err := range errs {
+			require.NoError(t, err)
+		}
+
+		for i := range kept {
+			queueName := fmt.Sprintf("%s-%02d", prefix, i)
+			assert.Equal(t, []int32{0, 1, 2}, availableOn(listedPartitions(t, ctx, c, queueName), name))
+		}
+		for i := range deleted {
+			var info pb.QueueInfo
+			err := c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: fmt.Sprintf("%s-%02d", prefix, kept+i)}, &info)
+			var e duh.Error
+			require.ErrorAs(t, err, &e)
+			assert.Equal(t, duh.CodeBadRequest, e.Code())
+		}
+		assert.Equal(t, rebalanceCounts{}, rebalance(t, ctx, c))
 	})
 
 	t.Run("Errors", func(t *testing.T) {

@@ -35,6 +35,8 @@ const (
 	RoleBindingDelete = "rolebinding.delete"
 	RoleBindingList   = "rolebinding.list"
 
+	QueueRebalance = "queue.rebalance"
+
 	BackendUpdate = "backend.update"
 	BackendList   = "backend.list"
 
@@ -65,6 +67,7 @@ var allPermissions = []string{
 	QueueRetry,
 	QueueStats,
 	QueueClear,
+	QueueRebalance,
 	UserCreate,
 	UserDelete,
 	UserList,

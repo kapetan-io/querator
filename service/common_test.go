@@ -930,7 +930,8 @@ type partitionFault struct {
 
 // clearHold stops a Clear partway through. On the Clear's After-th check of its context it
 // closes Reached, then waits until Release closes or the Clear's own context ends, so the test
-// knows the clear is running and decides when it goes on.
+// knows the clear is running and decides when it goes on. With After 0 the Clear waits before it
+// reaches the backend, which holds on every backend, including one whose Clear never checks its context.
 type clearHold struct {
 	After   int
 	Reached chan struct{}
@@ -1016,6 +1017,14 @@ func (f faultyPartition) Clear(ctx context.Context, req types.ClearRequest) erro
 		return errClearFailed
 	}
 	if hold := f.fault.holdClear.Load(); hold != nil {
+		if hold.After == 0 {
+			close(hold.Reached)
+			select {
+			case <-hold.Release:
+			case <-ctx.Done():
+			}
+			return f.Partition.Clear(ctx, req)
+		}
 		return f.Partition.Clear(&heldContext{Context: ctx, hold: hold}, req)
 	}
 	return f.Partition.Clear(ctx, req)

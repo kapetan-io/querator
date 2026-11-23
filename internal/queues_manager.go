@@ -80,7 +80,7 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Que
 	}
 	if !placement.CanPlace(backends) {
 		return nil, reply.NewRequestFailed("no storage backend can take partitions; " +
-			"at least one storage backend needs a saved affinity above 0, see 'querator backends update'")
+			"at least one storage backend needs a saved affinity above 0, see '/v1/storage/backends.update'")
 	}
 
 	if err := qm.deadLetterRules().Check(ctx, info); err != nil {
@@ -149,14 +149,7 @@ func (qm *QueuesManager) get(ctx context.Context, name string) (*Queue, error) {
 	queue.LinkPartitions()
 	var partitions []store.Partition
 	for _, info := range queue.PartitionInfo {
-		b := store.Find(info.StorageName, qm.conf.StorageConfig.PartitionStorage)
-		if b.Name == "" {
-			qm.log.Warn("partition is on a storage backend missing from the config; the partition is failing",
-				"queue", queue.Name, "partition", info.PartitionNum, "storage_name", info.StorageName)
-			partitions = append(partitions, store.NewUnconfiguredPartition(info))
-			continue
-		}
-		partitions = append(partitions, b.PartitionStore.Get(info))
+		partitions = append(partitions, qm.openPartition(info))
 	}
 
 	if len(partitions) == 0 {
@@ -174,6 +167,7 @@ func (qm *QueuesManager) get(ctx context.Context, name string) (*Queue, error) {
 		Clock:                qm.conf.LogicalConfig.Clock,
 		Log:                  qm.conf.Log,
 		StoragePartitions:    partitions,
+		OpenPartition:        qm.openPartition,
 		QueueInfo:            queue,
 		Manager:              qm,
 	})
@@ -182,6 +176,16 @@ func (qm *QueuesManager) get(ctx context.Context, name string) (*Queue, error) {
 	}
 	qm.queues[queue.Name] = NewQueue(queue).AddLogical(l)
 	return qm.queues[queue.Name], nil
+}
+
+func (qm *QueuesManager) openPartition(info types.PartitionInfo) store.Partition {
+	b := store.Find(info.StorageName, qm.conf.StorageConfig.PartitionStorage)
+	if b.Name == "" {
+		qm.log.Warn("partition is on a storage backend missing from the config; the partition is failing",
+			"queue", info.Queue.Name, "partition", info.PartitionNum, "storage_name", info.StorageName)
+		return store.NewUnconfiguredPartition(info)
+	}
+	return b.PartitionStore.Get(info)
 }
 
 func (qm *QueuesManager) List(ctx context.Context, items *[]types.QueueInfo, opts types.ListOptions) error {
@@ -198,45 +202,188 @@ func (qm *QueuesManager) Update(ctx context.Context, update types.QueueUpdate) e
 	if qm.inShutdown.Load() {
 		return ErrServiceShutdown
 	}
+	stored, err := qm.saveUpdate(ctx, update)
+	if err != nil || stored == nil {
+		return err
+	}
+	return qm.adoptRecord(ctx, *stored)
+}
+
+func (qm *QueuesManager) saveUpdate(ctx context.Context, update types.QueueUpdate) (*types.QueueInfo, error) {
 	defer qm.mutex.Unlock()
 	qm.mutex.Lock()
 
 	var current types.QueueInfo
 	if err := qm.conf.StorageConfig.Queues.Get(ctx, update.Name, &current); err != nil {
 		if errors.Is(err, store.ErrQueueNotExist) {
-			return err
+			return nil, err
 		}
-		return errors.Errorf("Queues.Get(): %w", err)
+		return nil, errors.Errorf("Queues.Get(): %w", err)
 	}
 	info := update.ApplyTo(current)
 
 	if err := qm.deadLetterRules().Check(ctx, info); err != nil {
-		return err
+		return nil, err
 	}
 
 	info.UpdatedAt = qm.conf.LogicalConfig.Clock.Now().UTC()
 	if err := qm.conf.StorageConfig.Queues.Update(ctx, info); err != nil {
-		return errors.Errorf("Queues.Update(): %w", err)
+		if errors.Is(err, store.ErrQueueChanged) {
+			return nil, reply.NewRetryRequest("queue '%s' changed while it was being updated; try again", info.Name)
+		}
+		return nil, errors.Errorf("Queues.Update(): %w", err)
 	}
 
-	q, ok := qm.queues[info.Name]
-	if !ok {
-		return nil
+	if _, ok := qm.queues[info.Name]; !ok {
+		return nil, nil
 	}
 
 	var stored types.QueueInfo
 	if err := qm.conf.StorageConfig.Queues.Get(ctx, info.Name, &stored); err != nil {
-		return errors.Errorf("Queues.Get(): %w", err)
+		return nil, errors.Errorf("Queues.Get(): %w", err)
 	}
-	q.UpdateInfo(stored)
+	return &stored, nil
+}
 
+func (qm *QueuesManager) adoptRecord(ctx context.Context, stored types.QueueInfo) error {
+	qm.mutex.Lock()
+	q, ok := qm.queues[stored.Name]
+	if ok && len(q.GetAll()) == 0 && len(stored.PartitionInfo) != 0 {
+		delete(qm.queues, stored.Name)
+		ok = false
+	}
+	qm.mutex.Unlock()
+
+	if !ok || q.Info().Revision >= stored.Revision {
+		return nil
+	}
+
+	stored.LinkPartitions()
+	q.RoutePartitions(stored)
+	saved, cancel := context.WithTimeout(context.WithoutCancel(ctx), qm.conf.LogicalConfig.WriteTimeout)
+	defer cancel()
 	for _, l := range q.GetAll() {
-		if err := l.UpdateInfo(ctx, stored); err != nil {
-			return errors.Errorf("LogicalQueue.UpdateInfo(): %w", err)
+		if err := l.UpdateInfo(saved, stored); err != nil {
+			return errors.With("queue", stored.Name).Errorf("while the queue adopts its saved record: %w", err)
 		}
 	}
-
+	q.AdoptRevision(stored)
 	return nil
+}
+
+type RebalanceCounts struct {
+	ChangedQueues      int
+	CreatedPartitions  int
+	DrainingPartitions int
+}
+
+const maxRebalanceAttempts = 10
+
+func (qm *QueuesManager) Rebalance(ctx context.Context) (RebalanceCounts, error) {
+	var result RebalanceCounts
+	if qm.inShutdown.Load() {
+		return result, ErrServiceShutdown
+	}
+
+	backends, err := qm.rebalanceBackends(ctx)
+	if err != nil {
+		return result, err
+	}
+
+	var names []string
+	if err := store.ForEachQueue(ctx, qm.conf.StorageConfig.Queues, func(queue types.QueueInfo) bool {
+		names = append(names, queue.Name)
+		return true
+	}); err != nil {
+		return result, err
+	}
+
+	for _, name := range names {
+		if err := qm.rebalanceQueue(ctx, name, backends, &result); err != nil {
+			return result, err
+		}
+	}
+	return result, nil
+}
+
+func (qm *QueuesManager) rebalanceBackends(ctx context.Context) ([]types.Backend, error) {
+	backends, err := qm.backends.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, backend := range backends {
+		if backend.Affinity > 0 && !qm.backends.Configured(backend.Name) {
+			return nil, reply.NewInvalidOption("rebalance is refused; storage backend '%s' has affinity %v "+
+				"and is missing from this instance's config file; add it back or save affinity 0 for it", backend.Name, backend.Affinity)
+		}
+	}
+	if !placement.CanPlace(backends) {
+		return nil, reply.NewInvalidOption("rebalance is refused; no storage backend can take partitions, " +
+			"at least one storage backend needs a saved affinity above 0, see '/v1/storage/backends.update'")
+	}
+	return backends, nil
+}
+
+func (qm *QueuesManager) rebalanceQueue(ctx context.Context, name string, backends []types.Backend,
+	result *RebalanceCounts) error {
+	for range maxRebalanceAttempts {
+		var queue types.QueueInfo
+		if err := qm.conf.StorageConfig.Queues.Get(ctx, name, &queue); err != nil {
+			if errors.Is(err, store.ErrQueueNotExist) {
+				return nil
+			}
+			return errors.With("queue", name).Errorf("Queues.Get(): %w", err)
+		}
+
+		rebalanced, err := placement.Rebalance(queue, backends)
+		if err != nil {
+			return errors.With("queue", name).Errorf("placement.Rebalance(): %w", err)
+		}
+		if !rebalanced.Changed {
+			return qm.adoptRecord(ctx, queue)
+		}
+
+		err = qm.conf.StorageConfig.Queues.SavePartitions(ctx, types.PartitionList{
+			UpdatedAt:     qm.conf.LogicalConfig.Clock.Now().UTC(),
+			PartitionInfo: rebalanced.Queue.PartitionInfo,
+			NextPartition: rebalanced.Queue.NextPartition,
+			Revision:      queue.Revision,
+			QueueName:     name,
+		})
+		if errors.Is(err, store.ErrQueueNotExist) {
+			return nil
+		}
+		if errors.Is(err, store.ErrQueueChanged) {
+			continue
+		}
+		if err != nil {
+			return errors.With("queue", name).Errorf("Queues.SavePartitions(): %w", err)
+		}
+
+		result.ChangedQueues++
+		result.CreatedPartitions += len(rebalanced.Queue.PartitionInfo) - len(queue.PartitionInfo)
+		result.DrainingPartitions += drainingCount(rebalanced.Queue) - drainingCount(queue)
+
+		var stored types.QueueInfo
+		if err := qm.conf.StorageConfig.Queues.Get(ctx, name, &stored); err != nil {
+			if errors.Is(err, store.ErrQueueNotExist) {
+				return nil
+			}
+			return errors.With("queue", name).Errorf("Queues.Get(): %w", err)
+		}
+		return qm.adoptRecord(ctx, stored)
+	}
+	return reply.NewRetryRequest("queue '%s' kept changing while it was being rebalanced; try again", name)
+}
+
+func drainingCount(queue types.QueueInfo) int {
+	var count int
+	for _, p := range queue.PartitionInfo {
+		if p.Draining {
+			count++
+		}
+	}
+	return count
 }
 
 func (qm *QueuesManager) LifeCycle(ctx context.Context, req *types.LifeCycleRequest) error {

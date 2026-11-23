@@ -150,6 +150,7 @@ type QueueInfo struct {
 	Reference           string
 	RequestedPartitions int
 	NextPartition       int
+	Revision            int
 	PartitionInfo       []PartitionInfo
 }
 
@@ -207,6 +208,21 @@ func (i *QueueInfo) Update(r QueueInfo) bool {
 		i.RequestedPartitions = r.RequestedPartitions
 	}
 	return true
+}
+
+type PartitionList struct {
+	QueueName     string
+	Revision      int
+	NextPartition int
+	PartitionInfo []PartitionInfo
+	UpdatedAt     clock.Time
+}
+
+func (i *QueueInfo) AdoptPartitions(r PartitionList) {
+	i.PartitionInfo = slices.Clone(r.PartitionInfo)
+	i.NextPartition = r.NextPartition
+	i.UpdatedAt = r.UpdatedAt
+	i.Revision++
 }
 
 type QueueUpdate struct {

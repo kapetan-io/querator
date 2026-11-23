@@ -98,6 +98,7 @@ to interact with a running Querator instance via its HTTP API.`,
 	root.AddCommand(UpdateCommand)
 	root.AddCommand(deleteCmd)
 	root.AddCommand(backendsCommand)
+	root.AddCommand(rebalanceCommand)
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)

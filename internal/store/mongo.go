@@ -268,6 +268,7 @@ type queueDoc struct {
 	Reference           string `bson:"reference"`
 	RequestedPartitions int    `bson:"requested_partitions"`
 	NextPartition       int    `bson:"next_partition"`
+	Revision            int    `bson:"revision"`
 	PartitionInfoJSON   []byte `bson:"partition_info"`
 	CreatedAt           int64  `bson:"created_at"`
 	UpdatedAt           int64  `bson:"updated_at"`
@@ -288,6 +289,7 @@ func queueToDoc(info types.QueueInfo) (bson.M, error) {
 		"reference":            info.Reference,
 		"requested_partitions": info.RequestedPartitions,
 		"next_partition":       info.NextPartition,
+		"revision":             info.Revision,
 		"partition_info":       partitionInfoJSON,
 		"created_at":           toMicros(info.CreatedAt),
 		"updated_at":           toMicros(info.UpdatedAt),
@@ -304,6 +306,7 @@ func (d *queueDoc) toInfo(info *types.QueueInfo) error {
 	info.Reference = d.Reference
 	info.RequestedPartitions = d.RequestedPartitions
 	info.NextPartition = d.NextPartition
+	info.Revision = d.Revision
 	info.CreatedAt = fromMicros(d.CreatedAt)
 	info.UpdatedAt = fromMicros(d.UpdatedAt)
 	if len(d.PartitionInfoJSON) > 0 {
@@ -387,25 +390,71 @@ func (q *MongoQueues) Update(ctx context.Context, info types.QueueInfo) error {
 		return err
 	}
 
-	partitionInfoJSON, err := json.Marshal(found.PartitionInfo)
+	result, err := q.collection(client).UpdateOne(ctx,
+		bson.M{"_id": found.Name, "revision": found.Revision},
+		bson.M{
+			"$set": bson.M{
+				"lease_timeout_ns":     found.LeaseTimeout.Nanoseconds(),
+				"expire_timeout_ns":    found.ExpireTimeout.Nanoseconds(),
+				"dead_queue":           found.DeadQueue,
+				"max_attempts":         found.MaxAttempts,
+				"reference":            found.Reference,
+				"requested_partitions": found.RequestedPartitions,
+				"updated_at":           toMicros(found.UpdatedAt),
+			},
+			"$inc": bson.M{"revision": 1},
+		})
+	if err != nil {
+		return errors.Errorf("update queue: %w", err)
+	}
+	if result.MatchedCount == 0 {
+		return ErrQueueChanged
+	}
+	return nil
+}
+
+func (q *MongoQueues) SavePartitions(ctx context.Context, list types.PartitionList) error {
+	if err := q.validateQueueName(types.QueueInfo{Name: list.QueueName}); err != nil {
+		return err
+	}
+
+	client, err := q.conf.getOrCreateClient(ctx)
+	if err != nil {
+		return err
+	}
+
+	var found types.QueueInfo
+	if err := q.Get(ctx, list.QueueName, &found); err != nil {
+		return err
+	}
+
+	if found.Revision != list.Revision {
+		return ErrQueueChanged
+	}
+	if err := q.validatePartitionChange(partitionChange{Stored: found, Proposed: list}); err != nil {
+		return err
+	}
+
+	partitionInfoJSON, err := json.Marshal(list.PartitionInfo)
 	if err != nil {
 		return errors.Errorf("marshal partition_info: %w", err)
 	}
 
-	_, err = q.collection(client).UpdateOne(ctx,
-		bson.M{"_id": found.Name},
-		bson.M{"$set": bson.M{
-			"lease_timeout_ns":     found.LeaseTimeout.Nanoseconds(),
-			"expire_timeout_ns":    found.ExpireTimeout.Nanoseconds(),
-			"dead_queue":           found.DeadQueue,
-			"max_attempts":         found.MaxAttempts,
-			"reference":            found.Reference,
-			"requested_partitions": found.RequestedPartitions,
-			"partition_info":       partitionInfoJSON,
-			"updated_at":           toMicros(found.UpdatedAt),
-		}})
+	result, err := q.collection(client).UpdateOne(ctx,
+		bson.M{"_id": list.QueueName, "revision": list.Revision},
+		bson.M{
+			"$set": bson.M{
+				"partition_info": partitionInfoJSON,
+				"next_partition": list.NextPartition,
+				"updated_at":     toMicros(list.UpdatedAt),
+			},
+			"$inc": bson.M{"revision": 1},
+		})
 	if err != nil {
-		return errors.Errorf("update queue: %w", err)
+		return errors.Errorf("save queue partitions: %w", err)
+	}
+	if result.MatchedCount == 0 {
+		return ErrQueueChanged
 	}
 	return nil
 }
@@ -1135,6 +1184,29 @@ func (p *MongoPartition) Add(ctx context.Context, items []*types.Item, now clock
 
 	if _, err := coll.InsertMany(ctx, docs, options.InsertMany().SetOrdered(false)); err != nil {
 		return errors.Errorf("failed to insert items: %w", err)
+	}
+	return nil
+}
+
+func (p *MongoPartition) FindSourceIDs(ctx context.Context, sourceIDs []types.ItemID, found *[]types.ItemID) error {
+	client, err := p.conf.getOrCreateClient(ctx)
+	if err != nil {
+		return err
+	}
+
+	if err := p.ensureCollection(ctx, client); err != nil {
+		return err
+	}
+
+	coll := p.collection(client)
+	for _, source := range sourceIDs {
+		exists, err := p.sourceIDExists(ctx, coll, string(source))
+		if err != nil {
+			return err
+		}
+		if exists {
+			*found = append(*found, source)
+		}
 	}
 	return nil
 }

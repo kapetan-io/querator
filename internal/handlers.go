@@ -24,13 +24,7 @@ func (l *Logical) handleColdRequests(state *QueueState, req *Request) {
 	case MethodQueueClear:
 		l.handleClear(state, req)
 	case MethodUpdateInfo:
-		info := req.Request.(types.QueueInfo)
-		l.conf.QueueInfo = info
-		for _, d := range state.Partitions {
-			d.Store.UpdateQueueInfo(info)
-			d.Info.Queue = info
-		}
-		state.load = l.loadOf(state)
+		l.adoptRecord(state, req.Request.(types.QueueInfo))
 		close(req.ReadyCh)
 	case MethodReload:
 		l.handleReload(state, req)

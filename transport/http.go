@@ -213,6 +213,9 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case RPCQueuesInfo:
 		h.QueuesInfo(ctx, w, r)
 		return
+	case RPCQueuesRebalance:
+		h.QueuesRebalance(ctx, w, r)
+		return
 	case RPCStorageItemsList:
 		h.StorageItemsList(ctx, w, r)
 		return
@@ -516,6 +519,21 @@ func (h *HTTPHandler) StorageItemsDelete(ctx context.Context, w http.ResponseWri
 		return
 	}
 	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
+}
+
+func (h *HTTPHandler) QueuesRebalance(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.QueuesRebalanceRequest
+	if err := duh.ReadRequest(r, &req, 64*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	var resp pb.QueuesRebalanceResponse
+	if err := h.service.QueuesRebalance(ctx, &req, &resp); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &resp)
 }
 
 func (h *HTTPHandler) StorageBackendsUpdate(ctx context.Context, w http.ResponseWriter, r *http.Request) {

@@ -186,6 +186,7 @@ func (p *PostgresQueues) ensureTable(_ context.Context, pool *pgxpool.Pool) erro
 			reference TEXT NOT NULL DEFAULT '',
 			requested_partitions INTEGER NOT NULL,
 			next_partition INTEGER NOT NULL DEFAULT 0,
+			revision BIGINT NOT NULL DEFAULT 0,
 			partition_info JSONB NOT NULL DEFAULT '[]'::jsonb,
 			created_at TIMESTAMPTZ NOT NULL,
 			updated_at TIMESTAMPTZ NOT NULL
@@ -217,7 +218,7 @@ func (p *PostgresQueues) Get(ctx context.Context, name string, queue *types.Queu
 	}
 
 	query := `SELECT name, namespace, lease_timeout_ns, expire_timeout_ns, dead_queue, max_attempts,
-	                 reference, requested_partitions, next_partition, partition_info, created_at, updated_at
+	                 reference, requested_partitions, next_partition, revision, partition_info, created_at, updated_at
 	          FROM queues WHERE name = $1`
 
 	var leaseNs, expireNs int64
@@ -232,6 +233,7 @@ func (p *PostgresQueues) Get(ctx context.Context, name string, queue *types.Queu
 		&queue.Reference,
 		&queue.RequestedPartitions,
 		&queue.NextPartition,
+		&queue.Revision,
 		&partitionInfoJSON,
 		&queue.CreatedAt,
 		&queue.UpdatedAt,
@@ -336,32 +338,75 @@ func (p *PostgresQueues) Update(ctx context.Context, info types.QueueInfo) error
 		return err
 	}
 
-	partitionInfoJSON, err := json.Marshal(found.PartitionInfo)
-	if err != nil {
-		return errors.Errorf("marshal partition_info: %w", err)
-	}
-
 	query := `UPDATE queues SET lease_timeout_ns = $1, expire_timeout_ns = $2, dead_queue = $3,
 	                           max_attempts = $4, reference = $5, requested_partitions = $6,
-	                           partition_info = $7, updated_at = $8
-	          WHERE name = $9`
+	                           updated_at = $7, revision = revision + 1
+	          WHERE name = $8 AND revision = $9`
 
-	_, err = pool.Exec(ctx, query,
+	tag, err := pool.Exec(ctx, query,
 		found.LeaseTimeout.Nanoseconds(),
 		found.ExpireTimeout.Nanoseconds(),
 		found.DeadQueue,
 		found.MaxAttempts,
 		found.Reference,
 		found.RequestedPartitions,
-		partitionInfoJSON,
 		timeToMicroseconds(found.UpdatedAt),
 		found.Name,
+		found.Revision,
 	)
 
 	if err != nil {
 		return errors.Errorf("update queue: %w", err)
 	}
+	if tag.RowsAffected() == 0 {
+		return ErrQueueChanged
+	}
 
+	return nil
+}
+
+func (p *PostgresQueues) SavePartitions(ctx context.Context, list types.PartitionList) error {
+	if err := p.validateQueueName(types.QueueInfo{Name: list.QueueName}); err != nil {
+		return err
+	}
+
+	pool, err := p.conf.getOrCreatePool(ctx)
+	if err != nil {
+		return err
+	}
+
+	var found types.QueueInfo
+	if err := p.Get(ctx, list.QueueName, &found); err != nil {
+		return err
+	}
+
+	if found.Revision != list.Revision {
+		return ErrQueueChanged
+	}
+	if err := p.validatePartitionChange(partitionChange{Stored: found, Proposed: list}); err != nil {
+		return err
+	}
+
+	partitionInfoJSON, err := json.Marshal(list.PartitionInfo)
+	if err != nil {
+		return errors.Errorf("marshal partition_info: %w", err)
+	}
+
+	tag, err := pool.Exec(ctx, `UPDATE queues SET partition_info = $1, next_partition = $2, updated_at = $3,
+	                                   revision = revision + 1
+	                            WHERE name = $4 AND revision = $5`,
+		partitionInfoJSON,
+		list.NextPartition,
+		timeToMicroseconds(list.UpdatedAt),
+		list.QueueName,
+		list.Revision,
+	)
+	if err != nil {
+		return errors.Errorf("save queue partitions: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrQueueChanged
+	}
 	return nil
 }
 
@@ -385,7 +430,7 @@ func (p *PostgresQueues) List(ctx context.Context, queues *[]types.QueueInfo, op
 	}
 
 	query := `SELECT name, namespace, lease_timeout_ns, expire_timeout_ns, dead_queue, max_attempts,
-	                 reference, requested_partitions, next_partition, partition_info, created_at, updated_at
+	                 reference, requested_partitions, next_partition, revision, partition_info, created_at, updated_at
 	          FROM queues WHERE name >= $1 AND ($3 = '' OR namespace = $3 OR ($3 = $4 AND namespace = ''))
 	          ORDER BY name LIMIT $2`
 
@@ -410,6 +455,7 @@ func (p *PostgresQueues) List(ctx context.Context, queues *[]types.QueueInfo, op
 			&info.Reference,
 			&info.RequestedPartitions,
 			&info.NextPartition,
+			&info.Revision,
 			&partitionInfoJSON,
 			&info.CreatedAt,
 			&info.UpdatedAt,
@@ -1362,6 +1408,40 @@ func (p *PostgresPartition) Add(ctx context.Context, items []*types.Item, now cl
 		return errors.Errorf("insert items: %w", err)
 	}
 	return nil
+}
+
+func (p *PostgresPartition) FindSourceIDs(ctx context.Context, sourceIDs []types.ItemID, found *[]types.ItemID) error {
+	pool, err := p.conf.getOrCreatePool(ctx)
+	if err != nil {
+		return err
+	}
+
+	if err := p.ensureTable(ctx, pool); err != nil {
+		return err
+	}
+
+	wanted := make([]string, 0, len(sourceIDs))
+	for _, source := range sourceIDs {
+		wanted = append(wanted, string(source))
+	}
+
+	rows, err := pool.Query(ctx, `SELECT source_id FROM `+p.tableName()+` WHERE source_id = ANY($1)`, wanted)
+	if err != nil {
+		return errors.Errorf("query source ids: %w", err)
+	}
+	defer rows.Close()
+
+	for ctx.Err() == nil && rows.Next() {
+		var source string
+		if err := rows.Scan(&source); err != nil {
+			return errors.Errorf("scan source id: %w", err)
+		}
+		*found = append(*found, types.ItemID(source))
+	}
+	if err := rows.Err(); err != nil {
+		return errors.Errorf("read source ids: %w", err)
+	}
+	return ctx.Err()
 }
 
 func (p *PostgresPartition) Delete(ctx context.Context, ids []types.ItemID) error {

@@ -632,6 +632,27 @@ func (b *BadgerPartition) Add(_ context.Context, items []*types.Item, now clock.
 	})
 }
 
+func (b *BadgerPartition) FindSourceIDs(_ context.Context, sourceIDs []types.ItemID, found *[]types.ItemID) error {
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	return db.View(func(txn *badger.Txn) error {
+		for _, source := range sourceIDs {
+			_, err := txn.Get([]byte("source:" + string(source)))
+			if errors.Is(err, badger.ErrKeyNotFound) {
+				continue
+			}
+			if err != nil {
+				return errors.Errorf("checking SourceID: %w", err)
+			}
+			*found = append(*found, source)
+		}
+		return nil
+	})
+}
+
 func (b *BadgerPartition) Delete(_ context.Context, ids []types.ItemID) error {
 	db, err := b.getDB()
 	if err != nil {
@@ -1326,7 +1347,7 @@ func (b *BadgerQueues) Update(_ context.Context, info types.QueueInfo) error {
 		return err
 	}
 
-	return db.Update(func(txn *badger.Txn) error {
+	return queueChangedOnConflict(db.Update(func(txn *badger.Txn) error {
 
 		kvItem, err := txn.Get([]byte(info.Name))
 		if err != nil {
@@ -1356,6 +1377,7 @@ func (b *BadgerQueues) Update(_ context.Context, info types.QueueInfo) error {
 		if err := b.validateUpdate(found); err != nil {
 			return err
 		}
+		found.Revision++
 
 		var buf bytes.Buffer
 		if err := gob.NewEncoder(&buf).Encode(found); err != nil {
@@ -1366,7 +1388,64 @@ func (b *BadgerQueues) Update(_ context.Context, info types.QueueInfo) error {
 			return errors.Errorf("during Put(): %w", err)
 		}
 		return nil
-	})
+	}))
+}
+
+func (b *BadgerQueues) SavePartitions(_ context.Context, list types.PartitionList) error {
+	db, err := b.getDB()
+	if err != nil {
+		return err
+	}
+
+	if err := b.validateQueueName(types.QueueInfo{Name: list.QueueName}); err != nil {
+		return err
+	}
+
+	return queueChangedOnConflict(db.Update(func(txn *badger.Txn) error {
+		kvItem, err := txn.Get([]byte(list.QueueName))
+		if err != nil {
+			if errors.Is(err, badger.ErrKeyNotFound) {
+				return ErrQueueNotExist
+			}
+			return errors.Errorf("during Get(): %w", err)
+		}
+
+		var v []byte
+		v, err = kvItem.ValueCopy(v)
+		if err != nil {
+			return errors.Errorf("during Get value(): %w", err)
+		}
+
+		var found types.QueueInfo
+		if err := gob.NewDecoder(bytes.NewReader(v)).Decode(&found); err != nil {
+			return errors.Errorf("during Decode(): %w", err)
+		}
+
+		if found.Revision != list.Revision {
+			return ErrQueueChanged
+		}
+		if err := b.validatePartitionChange(partitionChange{Stored: found, Proposed: list}); err != nil {
+			return err
+		}
+		found.AdoptPartitions(list)
+
+		var buf bytes.Buffer
+		if err := gob.NewEncoder(&buf).Encode(found); err != nil {
+			return errors.Errorf("during gob.Encode(): %w", err)
+		}
+
+		if err := txn.Set([]byte(list.QueueName), buf.Bytes()); err != nil {
+			return errors.Errorf("during Put(): %w", err)
+		}
+		return nil
+	}))
+}
+
+func queueChangedOnConflict(err error) error {
+	if errors.Is(err, badger.ErrConflict) {
+		return ErrQueueChanged
+	}
+	return err
 }
 
 func (b *BadgerQueues) List(ctx context.Context, queues *[]types.QueueInfo, opts types.ListOptions) error {

@@ -89,18 +89,74 @@ func (s QueuesValidation) validateQueueInfo(info types.QueueInfo) error {
 		return reply.NewInvalidOption("partitions is invalid; cannot be greater than %d", placement.MaxPartitions)
 	}
 
+	return s.validateAvailablePartitions(info.Name, info.PartitionInfo)
+}
+
+func (s QueuesValidation) validateAvailablePartitions(queueName string, partitions []types.PartitionInfo) error {
 	var available int
-	for _, p := range info.PartitionInfo {
+	for _, p := range partitions {
 		if !p.Draining {
 			available++
 		}
 	}
 	if available > placement.MaxPartitions {
 		return reply.NewInvalidOption("partitions is invalid; queue '%s' lists %d available partitions, "+
-			"cannot be greater than %d", info.Name, available, placement.MaxPartitions)
+			"cannot be greater than %d", queueName, available, placement.MaxPartitions)
 	}
 
 	return nil
+}
+
+type partitionChange struct {
+	Stored   types.QueueInfo
+	Proposed types.PartitionList
+}
+
+func (s QueuesValidation) validatePartitionChange(change partitionChange) error {
+	stored := make(map[int]types.PartitionInfo, len(change.Stored.PartitionInfo))
+	for _, p := range change.Stored.PartitionInfo {
+		stored[p.PartitionNum] = p
+	}
+
+	name := change.Proposed.QueueName
+	if change.Proposed.NextPartition < change.Stored.NextPartition {
+		return reply.NewInvalidOption("partitions is invalid; queue '%s' next partition number %d is below %d, "+
+			"a partition number cannot be reused", name, change.Proposed.NextPartition, change.Stored.NextPartition)
+	}
+
+	seen := make(map[int]struct{}, len(change.Proposed.PartitionInfo))
+	for _, p := range change.Proposed.PartitionInfo {
+		if _, ok := seen[p.PartitionNum]; ok {
+			return reply.NewInvalidOption("partitions is invalid; queue '%s' lists partition %d twice, "+
+				"a partition number cannot be reused", name, p.PartitionNum)
+		}
+		seen[p.PartitionNum] = struct{}{}
+
+		if p.PartitionNum >= change.Proposed.NextPartition {
+			return reply.NewInvalidOption("partitions is invalid; queue '%s' partition %d is not below the next "+
+				"partition number %d, a partition number cannot be reused", name, p.PartitionNum,
+				change.Proposed.NextPartition)
+		}
+
+		before, existed := stored[p.PartitionNum]
+		if !existed {
+			if p.PartitionNum < change.Stored.NextPartition {
+				return reply.NewInvalidOption("partitions is invalid; queue '%s' partition number %d was used "+
+					"before, a partition number cannot be reused", name, p.PartitionNum)
+			}
+			continue
+		}
+		if before.Draining && !p.Draining {
+			return reply.NewInvalidOption("partitions is invalid; queue '%s' partition %d is draining "+
+				"and cannot become available again", name, p.PartitionNum)
+		}
+		if before.StorageName != p.StorageName {
+			return reply.NewInvalidOption("partitions is invalid; queue '%s' partition %d is on storage backend "+
+				"'%s' and cannot change to '%s'", name, p.PartitionNum, before.StorageName, p.StorageName)
+		}
+	}
+
+	return s.validateAvailablePartitions(name, change.Proposed.PartitionInfo)
 }
 
 type timeoutChange struct {

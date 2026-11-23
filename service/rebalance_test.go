@@ -424,6 +424,16 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		assert.Equal(t, rebalanceCounts{ChangedQueues: 1, CreatedPartitions: 1, DrainingPartitions: 1},
 			moveOnlyPartition(t, ctx, c, conf.PartitionStorage[0].Name))
 
+		// The loaded queue still counts both leased items in the partition it held before the rebalance
+		var stats pb.QueueStatsResponse
+		require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats))
+		require.Len(t, stats.LogicalQueues, 1)
+		require.Len(t, stats.LogicalQueues[0].Partitions, 2)
+		assert.Equal(t, int32(2), stats.LogicalQueues[0].Partitions[0].Total)
+		assert.Equal(t, int32(2), stats.LogicalQueues[0].Partitions[0].TotalLeased)
+		assert.Equal(t, int32(0), stats.LogicalQueues[0].Partitions[1].Total)
+		assert.Equal(t, int32(0), stats.LogicalQueues[0].Partitions[1].TotalLeased)
+
 		require.NoError(t, c.QueueComplete(ctx, &pb.QueueCompleteRequest{
 			QueueName:      queueName,
 			Partition:      lease.Partition,
@@ -470,6 +480,21 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		defer second.Shutdown(t)
 		c, ctx = second.MustClient(), second.Context()
 
+		// Before the rebalance the queue's only partition cannot be read, so produce is refused
+		err := c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			QueueName:      queueName,
+			RequestTimeout: "2s",
+			Items:          []*pb.QueueProduceItem{{Reference: "before-move", Bytes: []byte("x")}},
+		})
+		var refused duh.Error
+		require.ErrorAs(t, err, &refused)
+		assert.Equal(t, duh.CodeRetryRequest, refused.Code())
+
+		drain := findBackend(t, listBackends(t, second), gone).Pending.Drain
+		require.Len(t, drain, 1)
+		assert.Equal(t, queueName, drain[0].QueueName)
+		assert.Equal(t, []int32{0}, drain[0].Partitions)
+
 		assert.Equal(t, rebalanceCounts{ChangedQueues: 1, CreatedPartitions: 1, DrainingPartitions: 1},
 			rebalance(t, ctx, c))
 		listed := listedPartitions(t, ctx, c, queueName)
@@ -484,7 +509,7 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 
 		// The item waits until the backend is restored, since the partition it left may hold older items
 		var lease pb.QueueLeaseResponse
-		err := c.QueueLease(ctx, &pb.QueueLeaseRequest{
+		err = c.QueueLease(ctx, &pb.QueueLeaseRequest{
 			ClientId:       random.String("client-", 10),
 			RequestTimeout: "1s",
 			QueueName:      queueName,

@@ -164,9 +164,7 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 	})
 
 	// Regression for ENG-56: QueueStats must report each partition's own
-	// number and in-memory state. Producing more items to partition 0 than
-	// partition 1 forces sortPartitionsByLoad (ADR-0019) to reorder the
-	// in-memory partition slice away from partition-number order.
+	// number and in-memory state when the partitions hold different loads.
 	t.Run("StatsPerPartitionInMemory", func(t *testing.T) {
 		var queueName = random.String("queue-", 10)
 
@@ -178,9 +176,8 @@ func testPartitions(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			RequestedPartitions: 2,
 		})
 
-		// First batch lands in partition 0, second batch in partition 1. The
-		// larger first batch makes partition 0 the heavier partition, so the
-		// load sort reorders state.Partitions away from partition-number order.
+		// First batch lands in partition 0, second batch in partition 1, so the
+		// two partitions hold different loads.
 		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
 			Items:          produceRandomItems(11),
 			QueueName:      queueName,
@@ -642,7 +639,7 @@ func TestPartitionSpread(t *testing.T) {
 			Expected:   map[string]int{"memory-0": 2, "memory-1": 1},
 		},
 		{
-			Name:       "LeftoversOneEach",
+			Name:       "FivePartitionsOnThreeEqualBackends",
 			Affinities: []float64{1, 1, 1},
 			Partitions: 5,
 			Expected:   map[string]int{"memory-0": 2, "memory-1": 2, "memory-2": 1},
@@ -651,7 +648,7 @@ func TestPartitionSpread(t *testing.T) {
 			Name:       "FractionalAffinity",
 			Affinities: []float64{1, 0.5, 0.3, 0.1},
 			Partitions: 10,
-			Expected:   map[string]int{"memory-0": 6, "memory-1": 3, "memory-2": 1},
+			Expected:   map[string]int{"memory-0": 5, "memory-1": 3, "memory-2": 2},
 		},
 		{
 			Name:       "ZeroAffinity",
@@ -666,13 +663,13 @@ func TestPartitionSpread(t *testing.T) {
 			Expected:   map[string]int{"memory-0": 3, "memory-1": 1},
 		},
 		{
-			Name:       "LeftoverToHighestAffinity",
+			Name:       "FractionalShareGoesByQueueName",
 			Affinities: []float64{1, 2},
 			Partitions: 4,
 			Expected:   map[string]int{"memory-0": 1, "memory-1": 3},
 		},
 		{
-			Name:       "LeftoverSkipsZeroAffinity",
+			Name:       "FractionalSharesSkipZeroAffinity",
 			Affinities: []float64{0, 1, 1, 1},
 			Partitions: 4,
 			Expected:   map[string]int{"memory-1": 2, "memory-2": 1, "memory-3": 1},
@@ -698,14 +695,14 @@ func TestPartitionSpread(t *testing.T) {
 			defer d.Shutdown(t)
 			c, ctx := d.MustClient(), d.Context()
 
-			queueName := random.String("queue-", 10)
+			// The queue name is part of the placement hash, so a fixed name gives a fixed spread
 			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
-				QueueName:           queueName,
+				QueueName:           "queue-spread",
 				LeaseTimeout:        "1m",
 				ExpireTimeout:       "10m",
 				RequestedPartitions: test.Partitions,
 			})
-			assert.Equal(t, test.Expected, partitionsPerBackend(t, ctx, c, queueName))
+			assert.Equal(t, test.Expected, partitionsPerBackend(t, ctx, c, "queue-spread"))
 		})
 	}
 }

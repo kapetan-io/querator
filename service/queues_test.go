@@ -15,6 +15,7 @@ import (
 	v1 "github.com/duh-rpc/duh-go/proto/v1"
 	"github.com/duh-rpc/duh-go/retry"
 	"github.com/kapetan-io/querator"
+	"github.com/kapetan-io/querator/internal/placement"
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
 	pb "github.com/kapetan-io/querator/proto"
@@ -148,6 +149,31 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			assert.Equal(t, int32(0), list.Items[0].Partitions[0].Partition)
 			assert.Equal(t, conf.PartitionStorage[0].Name, list.Items[0].Partitions[0].StorageName)
 			assert.Equal(t, "CreateTestRef", list.Items[0].Reference)
+		})
+
+		t.Run("PartitionState", func(t *testing.T) {
+			queueName := random.String("queue-", 10)
+			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+				QueueName:           queueName,
+				LeaseTimeout:        "1m",
+				ExpireTimeout:       "10m",
+				RequestedPartitions: 3,
+			}))
+
+			var info pb.QueueInfo
+			require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &info))
+			require.Len(t, info.Partitions, 3)
+			for _, p := range info.Partitions {
+				assert.Equal(t, "available", p.State)
+			}
+
+			var list pb.QueuesListResponse
+			require.NoError(t, c.QueuesList(ctx, &list, &querator.ListOptions{Pivot: queueName, Limit: 1}))
+			require.Len(t, list.Items, 1)
+			require.Len(t, list.Items[0].Partitions, 3)
+			for _, p := range list.Items[0].Partitions {
+				assert.Equal(t, "available", p.State)
+			}
 		})
 
 		now := clock.Now().UTC()
@@ -1038,10 +1064,9 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				ExpireTimeout:       10 * clock.Minute,
 				RequestedPartitions: 1,
 			}
-			placed, err := store.PlacePartitions(conf.PartitionStorage, info)
+			placed, err := placement.Create(info, conf.Backends())
 			require.NoError(t, err)
-			info.PartitionInfo = placed
-			require.NoError(t, conf.Queues.Add(context.Background(), info))
+			require.NoError(t, conf.Queues.Add(context.Background(), placed))
 		}
 
 		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
@@ -1139,10 +1164,9 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				ExpireTimeout:       10 * clock.Minute,
 				RequestedPartitions: 1,
 			}
-			placed, err := store.PlacePartitions(conf.PartitionStorage, info)
+			placed, err := placement.Create(info, conf.Backends())
 			require.NoError(t, err)
-			info.PartitionInfo = placed
-			require.NoError(t, conf.Queues.Add(context.Background(), info))
+			require.NoError(t, conf.Queues.Add(context.Background(), placed))
 		}
 
 		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
@@ -1225,10 +1249,9 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 				ExpireTimeout:       10 * clock.Minute,
 				RequestedPartitions: queue.partitions,
 			}
-			placed, err := store.PlacePartitions(conf.PartitionStorage, info)
+			placed, err := placement.Create(info, conf.Backends())
 			require.NoError(t, err)
-			info.PartitionInfo = placed
-			require.NoError(t, conf.Queues.Add(context.Background(), info))
+			require.NoError(t, conf.Queues.Add(context.Background(), placed))
 		}
 
 		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
@@ -1287,10 +1310,9 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			info.LeaseTimeout = clock.Minute
 			info.ExpireTimeout = 10 * clock.Minute
 			info.RequestedPartitions = 1
-			placed, err := store.PlacePartitions(conf.PartitionStorage, info)
+			placed, err := placement.Create(info, conf.Backends())
 			require.NoError(t, err)
-			info.PartitionInfo = placed
-			require.NoError(t, conf.Queues.Add(context.Background(), info))
+			require.NoError(t, conf.Queues.Add(context.Background(), placed))
 		}
 
 		counted := &countedQueues{Queues: conf.Queues}
@@ -1877,6 +1899,23 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					}
 				})
 			}
+
+			t.Run("PartitionsGreaterThanMax", func(t *testing.T) {
+				err := c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
+					QueueName:           queueName,
+					RequestedPartitions: 1_025,
+					Reference:           new("not-saved"),
+				})
+				var e duh.Error
+				require.True(t, errors.As(err, &e))
+				assert.Equal(t, "partitions is invalid; cannot be greater than 1024", e.Message())
+				assert.Equal(t, duh.CodeBadRequest, e.Code())
+
+				var info pb.QueueInfo
+				require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &info))
+				assert.Equal(t, int32(1), info.RequestedPartitions)
+				assert.Equal(t, "CreateTestRef", info.Reference)
+			})
 		})
 		t.Run("QueuesDelete", func(t *testing.T) {
 			for _, test := range []struct {

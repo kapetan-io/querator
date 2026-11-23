@@ -4,12 +4,12 @@ import (
 	"context"
 	"log/slog"
 	"maps"
-	"math"
 	"slices"
 	"sync"
 	"sync/atomic"
 
 	"github.com/kapetan-io/errors"
+	"github.com/kapetan-io/querator/internal/placement"
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/transport/reply"
@@ -47,22 +47,8 @@ func NewQueuesManager(conf QueuesManagerConfig) (*QueuesManager, error) {
 		return nil, errors.New("conf.Config.PartitionStorage cannot be empty")
 	}
 
-	var total float64
-	seen := make(map[string]struct{}, len(conf.StorageConfig.PartitionStorage))
-	for _, b := range conf.StorageConfig.PartitionStorage {
-		if _, ok := seen[b.Name]; ok {
-			return nil, errors.Errorf("duplicate partition storage name '%s'; every partition storage must have a unique name", b.Name)
-		}
-		seen[b.Name] = struct{}{}
-		if math.IsNaN(b.Affinity) || math.IsInf(b.Affinity, 0) {
-			return nil, errors.Errorf("partition storage '%s' affinity must be a finite number, got %v", b.Name, b.Affinity)
-		}
-		if b.Affinity > 0 {
-			total += b.Affinity
-		}
-	}
-	if math.IsInf(total, 0) {
-		return nil, errors.New("the sum of partition storage affinities is too large; lower the affinities")
+	if err := placement.CheckBackends(conf.StorageConfig.Backends()); err != nil {
+		return nil, err
 	}
 
 	qm := &QueuesManager{
@@ -86,7 +72,7 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Que
 		return q, reply.NewInvalidOption("invalid queue; '%s' already exists", info.Name)
 	}
 
-	if !store.CanPlacePartitions(qm.conf.StorageConfig.PartitionStorage) {
+	if !placement.CanPlace(qm.conf.StorageConfig.Backends()) {
 		return nil, reply.NewRequestFailed("no storage backend can take partitions; " +
 			"at least one partition storage needs an affinity above 0")
 	}
@@ -95,19 +81,22 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Que
 		return nil, err
 	}
 
-	placed, err := store.PlacePartitions(qm.conf.StorageConfig.PartitionStorage, info)
+	if info.RequestedPartitions > placement.MaxPartitions {
+		return nil, reply.NewInvalidOption("partitions is invalid; cannot be greater than %d", placement.MaxPartitions)
+	}
+	info, err := placement.Create(info, qm.conf.StorageConfig.Backends())
 	if err != nil {
 		return nil, err
 	}
-	info.PartitionInfo = placed
 	for _, p := range info.PartitionInfo {
 		qm.log.LogAttrs(ctx, LevelDebugAll, "Partition Assigned",
-			slog.String("queue", p.Queue.Name), slog.String("storage", p.StorageName),
-			slog.Bool("read-only", p.ReadOnly), slog.Int("partition", p.PartitionNum))
+			slog.String("queue", info.Name), slog.String("storage", p.StorageName),
+			slog.Int("partition", p.PartitionNum))
 	}
 
 	info.CreatedAt = qm.conf.LogicalConfig.Clock.Now().UTC()
 	info.UpdatedAt = qm.conf.LogicalConfig.Clock.Now().UTC()
+	info.LinkPartitions()
 	if err := qm.conf.StorageConfig.Queues.Add(ctx, info); err != nil {
 		return nil, errors.With("queue", info.Name).
 			Errorf("Queues.Add(): %w", err)
@@ -140,6 +129,7 @@ func (qm *QueuesManager) get(ctx context.Context, name string) (*Queue, error) {
 		return nil, err
 	}
 
+	queue.LinkPartitions()
 	var partitions []store.Partition
 	for _, info := range queue.PartitionInfo {
 

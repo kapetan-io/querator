@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
+	"github.com/kapetan-io/querator/transport/reply"
 	"github.com/kapetan-io/tiger/assert"
 	"log/slog"
 )
@@ -26,10 +27,7 @@ func (l *Logical) handleColdRequests(state *QueueState, req *Request) {
 			d.Store.UpdateQueueInfo(info)
 			d.Info.Queue = info
 		}
-		close(req.ReadyCh)
-	case MethodUpdatePartitions:
-		p := req.Request.([]store.Partition)
-		l.conf.StoragePartitions = p
+		state.load = l.loadOf(state)
 		close(req.ReadyCh)
 	case MethodReload:
 		l.handleReload(state, req)
@@ -38,29 +36,44 @@ func (l *Logical) handleColdRequests(state *QueueState, req *Request) {
 	}
 }
 
+func (l *Logical) storagePartition(number int) store.Partition {
+	for _, p := range l.conf.StoragePartitions {
+		if p.Info().PartitionNum == number {
+			return p
+		}
+	}
+	return nil
+}
+
 func (l *Logical) handleStorageRequests(req *Request) {
 	sr := req.Request.(StorageRequest)
+	partition := l.storagePartition(sr.Partition)
+	if partition == nil {
+		req.Err = reply.NewInvalidOption("partition is invalid; '%d' is not a valid partition", sr.Partition)
+		close(req.ReadyCh)
+		return
+	}
 
 	switch req.Method {
 	case MethodStorageItemsList:
 		switch sr.ListKind {
 		case types.ListItems:
-			if err := l.conf.StoragePartitions[sr.Partition].List(req.Context, sr.Items, sr.Options); err != nil {
+			if err := partition.List(req.Context, sr.Items, sr.Options); err != nil {
 				req.Err = err
 			}
 		case types.ListScheduled:
-			if err := l.conf.StoragePartitions[sr.Partition].ListScheduled(req.Context, sr.Items, sr.Options); err != nil {
+			if err := partition.ListScheduled(req.Context, sr.Items, sr.Options); err != nil {
 				req.Err = err
 			}
 		default:
 			assert.Unreachable(fmt.Sprintf("undefined list kind '%d'", sr.ListKind))
 		}
 	case MethodStorageItemsImport:
-		if err := l.conf.StoragePartitions[sr.Partition].Add(req.Context, *sr.Items, l.conf.Clock.Now().UTC()); err != nil {
+		if err := partition.Add(req.Context, *sr.Items, l.conf.Clock.Now().UTC()); err != nil {
 			req.Err = err
 		}
 	case MethodStorageItemsDelete:
-		if err := l.conf.StoragePartitions[sr.Partition].Delete(req.Context, sr.IDs); err != nil {
+		if err := partition.Delete(req.Context, sr.IDs); err != nil {
 			req.Err = err
 		}
 	default:
@@ -256,7 +269,7 @@ func rejectWithShutdown(r *Request) {
 		close(o.ReadyCh)
 	case MethodStorageItemsList, MethodStorageItemsImport, MethodStorageItemsDelete,
 		MethodQueueStats, MethodQueuePause, MethodQueueClear, MethodUpdateInfo,
-		MethodUpdatePartitions, MethodReload:
+		MethodReload:
 		r.Err = ErrQueueShutdown
 		close(r.ReadyCh)
 	default:

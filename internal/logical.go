@@ -33,7 +33,6 @@ const (
 	MethodQueuePause
 	MethodQueueClear
 	MethodUpdateInfo
-	MethodUpdatePartitions
 	MethodProduce
 	MethodLease
 	MethodComplete
@@ -417,14 +416,6 @@ func (l *Logical) UpdateInfo(ctx context.Context, info types.QueueInfo) error {
 	return l.queueRequest(ctx, &r)
 }
 
-func (l *Logical) UpdatePartitions(ctx context.Context, p []store.Partition) error {
-	r := Request{
-		Method:  MethodUpdatePartitions,
-		Request: p,
-	}
-	return l.queueRequest(ctx, &r)
-}
-
 func (l *Logical) StorageItemsList(ctx context.Context, req StorageRequest) error {
 
 	if l.inShutdown.Load() {
@@ -535,13 +526,12 @@ func (l *Logical) prepareQueueState(state *QueueState) {
 
 		state.Partitions[i] = partition
 	}
+	state.load = l.loadOf(state)
 
 	state.LifecycleTimer = l.conf.Clock.NewTimer(0)
 
 	l.runScheduled(state)
 	state.ScheduledTimer = l.conf.Clock.NewTimer(l.minNextScheduledRun(state))
-
-	sortPartitionsByLoad(state.Partitions)
 
 }
 
@@ -556,6 +546,7 @@ type QueueState struct {
 	ScheduledTimer    clock.Timer
 	Partitions        []*Partition
 	Paused            bool
+	load              queueLoad
 }
 
 func (q *QueueState) GetPartition(num int) *Partition {
@@ -665,7 +656,7 @@ func (l *Logical) handleRequest(state *QueueState, req *Request) {
 		}
 	case MethodStorageItemsList, MethodStorageItemsImport, MethodStorageItemsDelete,
 		MethodQueueStats, MethodQueuePause, MethodQueueClear, MethodUpdateInfo,
-		MethodUpdatePartitions, MethodReload:
+		MethodReload:
 		l.handleColdRequests(state, req)
 	default:
 		assert.Unreachable(fmt.Sprintf("undefined request method '%d'", req.Method))
@@ -730,7 +721,7 @@ func (l *Logical) isHotRequest(req *Request) bool {
 		return true
 	case MethodStorageItemsList, MethodStorageItemsImport, MethodStorageItemsDelete,
 		MethodQueueStats, MethodQueuePause, MethodQueueClear, MethodUpdateInfo,
-		MethodUpdatePartitions, MethodReload:
+		MethodReload:
 		return false
 	default:
 		assert.Unreachable(fmt.Sprintf("undefined request method '%d'", req.Method))

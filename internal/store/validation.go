@@ -5,6 +5,8 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/kapetan-io/querator/internal/placement"
+
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/transport/reply"
 )
@@ -13,7 +15,6 @@ var ErrEmptyQueueName = reply.NewInvalidOption("queue name is invalid; queue nam
 
 const maxReferenceLength = 2_000
 const maxQueueNameLength = 512
-const maxQueuePartitions = 1_024
 const maxInt16 = 65536
 
 type QueuesValidation struct{}
@@ -79,6 +80,21 @@ func (s QueuesValidation) validateQueueInfo(info types.QueueInfo) error {
 
 	if info.RequestedPartitions < 1 {
 		return reply.NewInvalidOption("partitions is invalid; cannot be less than 1")
+	}
+
+	if info.RequestedPartitions > placement.MaxPartitions {
+		return reply.NewInvalidOption("partitions is invalid; cannot be greater than %d", placement.MaxPartitions)
+	}
+
+	var available int
+	for _, p := range info.PartitionInfo {
+		if !p.Draining {
+			available++
+		}
+	}
+	if available > placement.MaxPartitions {
+		return reply.NewInvalidOption("partitions is invalid; queue '%s' lists %d available partitions, "+
+			"cannot be greater than %d", info.Name, available, placement.MaxPartitions)
 	}
 
 	return nil

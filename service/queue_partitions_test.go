@@ -64,11 +64,43 @@ func TestQueuePartitionLimit(t *testing.T) {
 		assert.Empty(t, list.Items)
 	})
 
-	// A config file that lists its partitions skips placement, which is how a queue with more
-	// partitions than the create limit exists in storage. Queue records go to Badger so they
-	// survive the restart below, while partitions stay in memory.
-	t.Run("StoredQueueAboveLimitKeepsWorking", func(t *testing.T) {
-		const count = 1_500
+	t.Run("ConfigFileListingAboveLimitFailsStart", func(t *testing.T) {
+		listed := func(count int) []daemon.Partition {
+			partitions := make([]daemon.Partition, count)
+			for i := range partitions {
+				partitions[i] = daemon.Partition{Partition: i, StorageName: "mem-00"}
+			}
+			return partitions
+		}
+		file := daemon.File{
+			PartitionStorage: []daemon.PartitionStorage{
+				{Name: "mem-00", Memory: &daemon.MemoryConfig{}, Affinity: 1},
+			},
+			QueueStorage: daemon.QueueStorage{Badger: &daemon.BadgerConfig{StorageDir: t.TempDir()}},
+			Queues: []daemon.Queue{{
+				Name:                "queue-listed",
+				LeaseTimeout:        time.Minute,
+				ExpireTimeout:       10 * time.Minute,
+				RequestedPartitions: 2,
+				Partitions:          listed(2),
+			}},
+		}
+
+		// The first start saves the queue, so the second start finds it in the queue store
+		first := &daemon.Config{}
+		require.NoError(t, daemon.ApplyConfigFile(context.Background(), first, file, io.Discard))
+		require.NoError(t, first.Service.StorageConfig.Queues.Close(context.Background()))
+
+		file.Queues[0].RequestedPartitions = 1_025
+		file.Queues[0].Partitions = listed(1_025)
+		second := &daemon.Config{}
+		err := daemon.ApplyConfigFile(context.Background(), second, file, io.Discard)
+		require.ErrorContains(t, err, "invalid queue 'queue-listed'; lists 1025 partitions, cannot be more than 1024")
+		require.NoError(t, second.Service.StorageConfig.Queues.Close(context.Background()))
+	})
+
+	t.Run("ConfigFileQueueAtLimitKeepsUpdateAfterRestart", func(t *testing.T) {
+		const count = 1_024
 		name := random.String("queue-", 10)
 		partitions := make([]daemon.Partition, count)
 		for i := range partitions {
@@ -119,7 +151,6 @@ func TestQueuePartitionLimit(t *testing.T) {
 			}))
 		}()
 
-		// The restart proves the queue reloads from storage with the update applied.
 		d := newDaemon(t, 10*clock.Second, conf.Service)
 		defer d.Shutdown(t)
 		c, ctx := d.MustClient(), d.Context()

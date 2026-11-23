@@ -250,8 +250,8 @@ collection or bucket in your database.
   partitions.
 * **Planned: a cluster of Querator instances.** A leader will hand queues and partitions out across instances and
   rebalance as instances come and go. Until then, one instance owns a queue.
-* **Planned: moving partitions without downtime.** Operators will be able to drain a partition and move its data
-  to another store while the queue keeps running. A partition can be marked read-only today.
+* **Planned: moving partitions without downtime.** Operators will be able to change a storage backend's affinity
+  and rebalance. New partitions take new items while consumers empty the old ones, and the queue keeps running.
 
 ### Embedded Querator
 Querator is a library that exposes all API functionality through `Service` method calls. Use the `daemon` package, or

@@ -85,6 +85,7 @@ message QueuesUpdateRequest {
   optional int32 maxAttempts = 8 [json_name = "max_attempts"];
 
   // The number of partitions the queue is requesting. Left out or '0', the current count is kept.
+  // Above 1024 is rejected and nothing is saved.
   int32 requestedPartitions = 9 [json_name = "requested_partitions"];
 
   // The fields below are accepted so a JSON body copied from '/queues.info' is not refused as

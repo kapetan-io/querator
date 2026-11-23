@@ -1,13 +1,13 @@
+// Package store keeps querator's durable state behind interfaces, so a queue runs unchanged on
+// any backend. InMemory, Badger, Postgres and MongoDB are the backends today.
 package store
 
 import (
-	"cmp"
 	"context"
 	"log/slog"
-	"math"
-	"slices"
 
 	"github.com/kapetan-io/errors"
+	"github.com/kapetan-io/querator/internal/placement"
 	"github.com/kapetan-io/querator/internal/types"
 	"github.com/kapetan-io/querator/transport/auth"
 	"github.com/kapetan-io/querator/transport/reply"
@@ -114,63 +114,6 @@ func Find(needle string, haystack []PartitionStorage) PartitionStorage {
 	return PartitionStorage{}
 }
 
-func CanPlacePartitions(backends []PartitionStorage) bool {
-	for _, b := range backends {
-		if b.Affinity > 0 {
-			return true
-		}
-	}
-	return false
-}
-
-func PlacePartitions(backends []PartitionStorage, info types.QueueInfo) ([]types.PartitionInfo, error) {
-	if info.RequestedPartitions > maxQueuePartitions {
-		return nil, reply.NewInvalidOption("partitions is invalid; cannot be greater than %d", maxQueuePartitions)
-	}
-	var placed []types.PartitionInfo
-	info.PartitionInfo = nil
-	for idx, count := range assignPartitions(backends, info.RequestedPartitions) {
-		for i := 0; i < min(count, maxQueuePartitions); i++ {
-			placed = append(placed, types.PartitionInfo{
-				StorageName:  backends[idx].Name,
-				PartitionNum: len(placed),
-				Queue:        info,
-			})
-		}
-	}
-	return placed, nil
-}
-
-func assignPartitions(backends []PartitionStorage, totalPartitions int) []int {
-	assignments := make([]int, len(backends))
-	var totalAffinity float64
-	var preferred []int
-	for i, b := range backends {
-		if b.Affinity > 0 {
-			totalAffinity += b.Affinity
-			preferred = append(preferred, i)
-		}
-	}
-	if len(preferred) == 0 {
-		return assignments
-	}
-
-	var assigned int
-	for _, i := range preferred {
-		assignments[i] = int(math.Floor((backends[i].Affinity / totalAffinity) * float64(totalPartitions)))
-		assigned += assignments[i]
-	}
-
-	slices.SortStableFunc(preferred, func(a, b int) int {
-		return cmp.Compare(backends[b].Affinity, backends[a].Affinity)
-	})
-	for i := 0; assigned < totalPartitions; i++ {
-		assignments[preferred[i%len(preferred)]]++
-		assigned++
-	}
-	return assignments
-}
-
 type Config struct {
 	Queues           Queues
 	Namespaces       Namespaces
@@ -179,6 +122,14 @@ type Config struct {
 	Roles            Roles
 	RoleBindings     RoleBindings
 	PartitionStorage []PartitionStorage
+}
+
+func (c Config) Backends() []placement.Backend {
+	backends := make([]placement.Backend, 0, len(c.PartitionStorage))
+	for _, storage := range c.PartitionStorage {
+		backends = append(backends, placement.Backend{Name: storage.Name, Affinity: storage.Affinity})
+	}
+	return backends
 }
 
 type PartitionStorage struct {

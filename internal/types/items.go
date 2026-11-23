@@ -6,6 +6,7 @@ import (
 	pb "github.com/kapetan-io/querator/proto"
 	"github.com/kapetan-io/tackle/clock"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"slices"
 	"strings"
 )
 
@@ -108,10 +109,22 @@ func (i *Item) FromProto(in *pb.StorageItem) *Item {
 type PartitionInfo struct {
 	Queue        QueueInfo
 	StorageName  string
-	ReadOnly     bool
 	PartitionNum int
+	Draining     bool
 
 	hashKey PartitionHash
+}
+
+const (
+	PartitionAvailable = "available"
+	PartitionDraining  = "draining"
+)
+
+func (p PartitionInfo) State() string {
+	if p.Draining {
+		return PartitionDraining
+	}
+	return PartitionAvailable
 }
 
 type PartitionHash string
@@ -121,7 +134,7 @@ func (p *PartitionInfo) HashKey() PartitionHash {
 		return p.hashKey
 	}
 
-	p.hashKey = PartitionHash(fmt.Sprintf("%s%d%s%t", p.Queue.Name, p.PartitionNum, p.StorageName, p.ReadOnly))
+	p.hashKey = PartitionHash(fmt.Sprintf("%s%d%s", p.Queue.Name, p.PartitionNum, p.StorageName))
 	return p.hashKey
 }
 
@@ -136,7 +149,17 @@ type QueueInfo struct {
 	MaxAttempts         int
 	Reference           string
 	RequestedPartitions int
+	NextPartition       int
 	PartitionInfo       []PartitionInfo
+}
+
+func (i *QueueInfo) LinkPartitions() {
+	owner := *i
+	owner.PartitionInfo = nil
+	i.PartitionInfo = slices.Clone(i.PartitionInfo)
+	for idx := range i.PartitionInfo {
+		i.PartitionInfo[idx].Queue = owner
+	}
 }
 
 func (i *QueueInfo) ToProto(in *pb.QueueInfo) *pb.QueueInfo {
@@ -155,6 +178,7 @@ func (i *QueueInfo) ToProto(in *pb.QueueInfo) *pb.QueueInfo {
 		in.Partitions = append(in.Partitions, &pb.PartitionInfo{
 			Partition:   int32(p.PartitionNum),
 			StorageName: p.StorageName,
+			State:       p.State(),
 		})
 	}
 	return in

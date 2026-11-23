@@ -6,6 +6,8 @@ Date: 2025-03-25
 
 Proposed
 
+Superseded in part by ADR 31
+
 ## Context
 
 The ability to manage partitions is a key part of enabling zero downtime updates and highly 
@@ -28,6 +30,8 @@ back-off. A partition is in this state while its failure count is not zero
 (`PartitionState.Failures != 0`). There is no separate state value.
 
 ### Draining
+> Superseded by [31. Partition placement and rebalance](0031-partition-placement-and-rebalance.md).
+
 If a partition is marked as "Draining" the partition refuses production of new items into the partition,
 but consumption and completion of items in the partition is allowed until all items in the partition
 are completely drained. Once drained, the partition can be decommissioned, migrated to another storage
@@ -44,6 +48,8 @@ only operation that would have used it, runs on the owning `Logical` request loo
 ## Partition Operations
 
 ### Migrating a Partition
+> Superseded by [31. Partition placement and rebalance](0031-partition-placement-and-rebalance.md).
+
 Migrate items in one partition to another partition. The source and destination partition may not exist
 on the same underlying storage system. This allows for deprecation of existing storage systems, or for
 extended maintenance cycles for underlying storage systems without impacting operation of the queue.

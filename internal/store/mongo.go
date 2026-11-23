@@ -267,6 +267,7 @@ type queueDoc struct {
 	MaxAttempts         int    `bson:"max_attempts"`
 	Reference           string `bson:"reference"`
 	RequestedPartitions int    `bson:"requested_partitions"`
+	NextPartition       int    `bson:"next_partition"`
 	PartitionInfoJSON   []byte `bson:"partition_info"`
 	CreatedAt           int64  `bson:"created_at"`
 	UpdatedAt           int64  `bson:"updated_at"`
@@ -286,6 +287,7 @@ func queueToDoc(info types.QueueInfo) (bson.M, error) {
 		"max_attempts":         info.MaxAttempts,
 		"reference":            info.Reference,
 		"requested_partitions": info.RequestedPartitions,
+		"next_partition":       info.NextPartition,
 		"partition_info":       partitionInfoJSON,
 		"created_at":           toMicros(info.CreatedAt),
 		"updated_at":           toMicros(info.UpdatedAt),
@@ -301,6 +303,7 @@ func (d *queueDoc) toInfo(info *types.QueueInfo) error {
 	info.MaxAttempts = d.MaxAttempts
 	info.Reference = d.Reference
 	info.RequestedPartitions = d.RequestedPartitions
+	info.NextPartition = d.NextPartition
 	info.CreatedAt = fromMicros(d.CreatedAt)
 	info.UpdatedAt = fromMicros(d.UpdatedAt)
 	if len(d.PartitionInfoJSON) > 0 {

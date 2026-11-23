@@ -916,8 +916,8 @@ components:
           type: integer
           description: >-
             The number of partitions this queue has requested. Left out or '0',
-            the current count is kept. `/queues.update` does not add or remove
-            partitions.
+            the current count is kept. Above 1024 is rejected and nothing is
+            saved. `/queues.update` does not add or remove partitions.
         created_at:
           type: string
           format: date-time
@@ -1426,6 +1426,16 @@ components:
             config file keeps the `storage-name` given there.
           examples:
             - badger-0
+        state:
+          type: string
+          enum:
+            - available
+            - draining
+          description: >-
+            A draining partition takes no new items and is removed once empty.
+            Whether a partition is failing is reported by `failures` in
+            `/queue.stats`, not here. Set by Querator; ignored by
+            `/queues.create` and `/queues.update`.
       required:
         - partition
         - storage_name

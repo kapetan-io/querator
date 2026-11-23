@@ -68,6 +68,12 @@ type Queues interface {
 
 	Delete(ctx context.Context, queueName string) error
 
+	AddBackend(ctx context.Context, backend types.Backend) error
+
+	UpdateBackend(ctx context.Context, backend types.Backend) error
+
+	ListBackends(ctx context.Context, backends *[]types.Backend) error
+
 	Close(ctx context.Context) error
 }
 
@@ -127,7 +133,7 @@ type Config struct {
 func (c Config) Backends() []placement.Backend {
 	backends := make([]placement.Backend, 0, len(c.PartitionStorage))
 	for _, storage := range c.PartitionStorage {
-		backends = append(backends, placement.Backend{Name: storage.Name, Affinity: storage.Affinity})
+		backends = append(backends, types.Backend{Name: storage.Name, Affinity: storage.Affinity})
 	}
 	return backends
 }

@@ -110,6 +110,10 @@ func (ms *MockServer) respondToRequest(w http.ResponseWriter, r *http.Request, r
 		ms.handleQueuesDelete(w, req)
 	case transport.RPCQueuesInfo:
 		ms.handleQueuesInfo(w, req)
+	case transport.RPCStorageBackendsUpdate:
+		ms.handleStorageBackendsUpdate(w, req)
+	case transport.RPCStorageBackendsList:
+		ms.handleStorageBackendsList(w, req)
 	default:
 		http.Error(w, "Not found", http.StatusNotFound)
 	}
@@ -192,4 +196,16 @@ func (ms *MockServer) writeProtoResponse(w http.ResponseWriter, msg interface{})
 	if _, err := w.Write(data); err != nil {
 		log.Printf("mock server: writing response: %v", err)
 	}
+}
+
+func (ms *MockServer) handleStorageBackendsUpdate(w http.ResponseWriter, _ CapturedRequest) {
+	ms.writeProtoResponse(w, &v1.Reply{Code: duh.CodeOK})
+}
+
+func (ms *MockServer) handleStorageBackendsList(w http.ResponseWriter, _ CapturedRequest) {
+	ms.writeProtoResponse(w, &proto.StorageBackendsListResponse{
+		Backends: []*proto.StorageBackend{
+			{Backend: "test-backend", Affinity: new(1.0), Configured: new(true), SafeToStop: new(false)},
+		},
+	})
 }

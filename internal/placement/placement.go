@@ -23,10 +23,7 @@ type Rebalanced struct {
 	Changed bool
 }
 
-type Backend struct {
-	Name     string
-	Affinity float64
-}
+type Backend = types.Backend
 
 func CanPlace(backends []Backend) bool {
 	for _, backend := range backends {

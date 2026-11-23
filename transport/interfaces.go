@@ -31,6 +31,11 @@ type StorageInspector interface {
 	StorageScheduledList(context.Context, *pb.StorageItemsListRequest, *pb.StorageItemsListResponse) error
 }
 
+type StorageBackendsAdmin interface {
+	StorageBackendsUpdate(context.Context, *pb.StorageBackendsUpdateRequest) error
+	StorageBackendsList(context.Context, *pb.StorageBackendsListRequest, *pb.StorageBackendsListResponse) error
+}
+
 type NamespaceAdmin interface {
 	NamespacesCreate(context.Context, *pb.NamespaceInfo) error
 	NamespacesUpdate(context.Context, *pb.NamespaceInfo) error
@@ -67,6 +72,7 @@ type Service interface {
 	QueueOps
 	QueueAdmin
 	StorageInspector
+	StorageBackendsAdmin
 	NamespaceAdmin
 	UsersAdmin
 	APIKeysAdmin

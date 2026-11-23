@@ -923,6 +923,9 @@ type partitionFault struct {
 	// statsHung makes each Stats call that has a deadline wait until the deadline passes and
 	// return its error without reaching the backend, the way a hung database does.
 	statsHung atomic.Bool
+	// statsFailing makes every Stats call fail without reaching the backend, the way a backend
+	// that is down does.
+	statsFailing atomic.Bool
 }
 
 // clearHold stops a Clear partway through. On the Clear's After-th check of its context it
@@ -1028,7 +1031,12 @@ func (f *partitionFault) takeStatsCancelNext() bool {
 	return false
 }
 
+var errStatsFailed = errors.New("injected stats failure")
+
 func (f faultyPartition) Stats(ctx context.Context, stats *types.PartitionStats, now clock.Time) error {
+	if f.fault.statsFailing.Load() {
+		return errStatsFailed
+	}
 	if _, ok := ctx.Deadline(); ok && f.fault.statsHung.Load() {
 		<-ctx.Done()
 		return ctx.Err()

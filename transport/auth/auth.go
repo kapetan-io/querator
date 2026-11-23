@@ -35,6 +35,9 @@ const (
 	RoleBindingDelete = "rolebinding.delete"
 	RoleBindingList   = "rolebinding.list"
 
+	BackendUpdate = "backend.update"
+	BackendList   = "backend.list"
+
 	SystemHealth  = "system.health"
 	SystemMetrics = "system.metrics"
 )
@@ -75,6 +78,8 @@ var allPermissions = []string{
 	RoleBindingCreate,
 	RoleBindingDelete,
 	RoleBindingList,
+	BackendUpdate,
+	BackendList,
 	SystemHealth,
 	SystemMetrics,
 }

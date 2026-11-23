@@ -123,6 +123,15 @@ to start when an affinity is negative, `.nan`, `.inf` or `-.inf`, or when the af
 more than a float64 can hold once multiplied by 1,024. `/queues.info` lists each partition with the `storage_name` of the
 backend which holds it.
 
+The config file's affinity only seeds a saved record. The first time Querator sees a backend it
+saves the backend's affinity in queue storage, and from then on placement uses the saved affinity.
+Editing the config file's affinity afterwards changes no saved affinity. `/v1/storage/backends.update` (or
+`querator backends update <name> --affinity <n>`) changes the saved affinity, and
+`/v1/storage/backends.list` shows every backend with its saved affinity and partitions. Saving an
+affinity moves no existing partition. A queue whose partition sits on a backend missing from the
+config file still loads; that partition fails every call and `/queue.stats` reports it in
+`failures`.
+
 ## Storage Directory Structure
 
 ### BadgerDB
@@ -132,6 +141,7 @@ When using BadgerDB, Querator creates a directory structure like this:
 ```
 /data/
 ├── queues/
+│   ├── ~backend-records/            # Saved storage backend affinities
 │   └── ~queue-storage-partition/    # Queue metadata
 │       ├── 000000.vlog
 │       ├── 000001.sst

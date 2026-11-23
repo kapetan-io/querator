@@ -28,6 +28,7 @@ type QueuesManagerConfig struct {
 }
 
 type QueuesManager struct {
+	backends   *StorageBackends
 	queues     map[string]*Queue
 	conf       QueuesManagerConfig
 	inShutdown atomic.Bool
@@ -52,9 +53,10 @@ func NewQueuesManager(conf QueuesManagerConfig) (*QueuesManager, error) {
 	}
 
 	qm := &QueuesManager{
-		log:    conf.Log.With("code.namespace", "QueuesManager"),
-		queues: make(map[string]*Queue),
-		conf:   conf,
+		backends: NewStorageBackends(conf.StorageConfig.Queues, conf.StorageConfig.PartitionStorage, conf.Log),
+		log:      conf.Log.With("code.namespace", "QueuesManager"),
+		queues:   make(map[string]*Queue),
+		conf:     conf,
 	}
 
 	return qm, nil
@@ -72,9 +74,13 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Que
 		return q, reply.NewInvalidOption("invalid queue; '%s' already exists", info.Name)
 	}
 
-	if !placement.CanPlace(qm.conf.StorageConfig.Backends()) {
+	backends, err := qm.backends.Placeable(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if !placement.CanPlace(backends) {
 		return nil, reply.NewRequestFailed("no storage backend can take partitions; " +
-			"at least one partition storage needs an affinity above 0")
+			"at least one storage backend needs a saved affinity above 0, see 'querator backends update'")
 	}
 
 	if err := qm.deadLetterRules().Check(ctx, info); err != nil {
@@ -84,7 +90,7 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Que
 	if info.RequestedPartitions > placement.MaxPartitions {
 		return nil, reply.NewInvalidOption("partitions is invalid; cannot be greater than %d", placement.MaxPartitions)
 	}
-	info, err := placement.Create(info, qm.conf.StorageConfig.Backends())
+	info, err = placement.Create(info, backends)
 	if err != nil {
 		return nil, err
 	}
@@ -103,6 +109,17 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Que
 	}
 
 	return qm.get(ctx, info.Name)
+}
+
+func (qm *QueuesManager) SaveFirstSeenBackends(ctx context.Context) error {
+	return qm.backends.SaveFirstSeen(ctx)
+}
+
+func (qm *QueuesManager) UpdateStorageBackend(ctx context.Context, update BackendUpdate) error {
+	if qm.inShutdown.Load() {
+		return ErrServiceShutdown
+	}
+	return qm.backends.Update(ctx, update)
 }
 
 func (qm *QueuesManager) Get(ctx context.Context, name string) (*Queue, error) {
@@ -132,14 +149,12 @@ func (qm *QueuesManager) get(ctx context.Context, name string) (*Queue, error) {
 	queue.LinkPartitions()
 	var partitions []store.Partition
 	for _, info := range queue.PartitionInfo {
-
 		b := store.Find(info.StorageName, qm.conf.StorageConfig.PartitionStorage)
 		if b.Name == "" {
-			return nil, errors.WithAttr(
-				slog.Int("partition", info.PartitionNum),
-				slog.String("storage-name", info.StorageName),
-				slog.String("queue", queue.Name),
-			).Error("queue partition references unknown storage name")
+			qm.log.Warn("partition is on a storage backend missing from the config; the partition is failing",
+				"queue", queue.Name, "partition", info.PartitionNum, "storage_name", info.StorageName)
+			partitions = append(partitions, store.NewUnconfiguredPartition(info))
+			continue
 		}
 		partitions = append(partitions, b.PartitionStore.Get(info))
 	}

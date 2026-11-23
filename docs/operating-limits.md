@@ -133,6 +133,26 @@ the queue moments later. During that window, PostgreSQL and MongoDB count it in 
 **Workaround**: Before comparing stats across backends, wait a few seconds past the items' enqueue time
 so they have moved into the queue.
 
+## Listing storage backends loads every queue
+
+`/v1/storage/backends.list` reads each partition's counts from the queue that owns it, and loads every
+queue that is not loaded yet. On a node with many queues, or with large BadgerDB partitions, the first
+list after a start takes as long as starting every queue. The unleased, leased and failures counts
+are the ones `/queue.stats` reports, so they are wrong in the same cases. A backend that hangs rather
+than failing makes each queue on it wait for its read timeout before the list replies.
+
+**Workaround**: Call it rarely on a node with many queues, and reload a queue with `/v1/queue.reload`
+when its counts look wrong.
+
+## A saved affinity is lost on restart with memory queue storage
+
+Querator saves a storage backend's affinity in queue storage. With the default memory queue storage
+nothing survives a restart, so after a restart the config file's affinity is the one in force again,
+and an affinity set with `/v1/storage/backends.update` is gone.
+
+**Workaround**: Use badger, mongo or postgres queue storage to keep a saved affinity, or set the
+affinity in the config file too.
+
 ## Changing queues holds up requests on a node with many queues
 
 Deleting a queue, or creating or updating one that names a dead-letter queue or has more than one

@@ -10,6 +10,7 @@ const (
 	KindRoleAlreadyExists        reply.Kind = "role.already_exists"
 	KindRoleBindingAlreadyExists reply.Kind = "role_binding.already_exists"
 	KindRoleBindingLimitReached  reply.Kind = "role_binding.limit_reached"
+	KindBackendAlreadyExists     reply.Kind = "backend.already_exists"
 )
 
 var (
@@ -20,6 +21,8 @@ var (
 	ErrRoleAlreadyExists        = reply.NewInvalidOptionKind(KindRoleAlreadyExists, "")
 	ErrRoleBindingAlreadyExists = reply.NewInvalidOptionKind(KindRoleBindingAlreadyExists, "")
 	ErrRoleBindingLimitReached  = reply.NewInvalidOptionKind(KindRoleBindingLimitReached, "")
+	ErrBackendAlreadyExists     = reply.NewInvalidOptionKind(KindBackendAlreadyExists, "")
+	ErrBackendNotExist          = reply.NewRequestFailed("storage backend does not exist")
 )
 
 func NewErrNamespaceNotExist(name string) *reply.ErrRequestFailed {

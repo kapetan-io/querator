@@ -56,6 +56,9 @@ const (
 	RPCStorageItemsImport = "/v1/storage/items.import"
 	RPCStorageItemsDelete = "/v1/storage/items.delete"
 
+	RPCStorageBackendsUpdate = "/v1/storage/backends.update"
+	RPCStorageBackendsList   = "/v1/storage/backends.list"
+
 	RPCStorageScheduledList     = "/v1/storage/scheduled.list"
 	RPCStorageScheduledQueueAdd = "/v1/storage/scheduled.add"
 	RPCStorageScheduledDelete   = "/v1/storage/scheduled.delete"
@@ -218,6 +221,12 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	case RPCStorageItemsDelete:
 		h.StorageItemsDelete(ctx, w, r)
+		return
+	case RPCStorageBackendsUpdate:
+		h.StorageBackendsUpdate(ctx, w, r)
+		return
+	case RPCStorageBackendsList:
+		h.StorageBackendsList(ctx, w, r)
 		return
 	case RPCStorageScheduledList:
 		h.StorageScheduledList(ctx, w, r)
@@ -507,6 +516,35 @@ func (h *HTTPHandler) StorageItemsDelete(ctx context.Context, w http.ResponseWri
 		return
 	}
 	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
+}
+
+func (h *HTTPHandler) StorageBackendsUpdate(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.StorageBackendsUpdateRequest
+	if err := duh.ReadRequest(r, &req, 64*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	if err := h.service.StorageBackendsUpdate(ctx, &req); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &v1.Reply{Code: duh.CodeOK})
+}
+
+func (h *HTTPHandler) StorageBackendsList(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req pb.StorageBackendsListRequest
+	if err := duh.ReadRequest(r, &req, 64*duh.Kilobyte); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+
+	var resp pb.StorageBackendsListResponse
+	if err := h.service.StorageBackendsList(ctx, &req, &resp); err != nil {
+		h.ReplyError(w, r, err)
+		return
+	}
+	duh.Reply(w, r, duh.CodeOK, &resp)
 }
 
 func (h *HTTPHandler) Health(ctx context.Context, w http.ResponseWriter, r *http.Request) {

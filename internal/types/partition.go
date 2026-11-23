@@ -8,6 +8,7 @@ type PartitionState struct {
 	Failures           int
 	UnLeased           int
 	NumLeased          int
+	Scheduled          int
 	MostRecentDeadline clock.Time
 }
 
@@ -15,4 +16,9 @@ func (s *PartitionState) LeasesExpired(expired int) {
 	given := min(expired, max(0, s.NumLeased))
 	s.NumLeased -= given
 	s.UnLeased += given
+}
+
+type PartitionCount struct {
+	Partition int
+	State     PartitionState
 }

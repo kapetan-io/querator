@@ -189,6 +189,15 @@ func (c *Client) StorageItemsDelete(ctx context.Context, req *pb.StorageItemsDel
 	return c.do(ctx, doArgs{Path: transport.RPCStorageItemsDelete, Request: req, Reply: &v1.Reply{}})
 }
 
+func (c *Client) StorageBackendsUpdate(ctx context.Context, req *pb.StorageBackendsUpdateRequest) error {
+	return c.do(ctx, doArgs{Path: transport.RPCStorageBackendsUpdate, Request: req, Reply: &v1.Reply{}})
+}
+
+func (c *Client) StorageBackendsList(ctx context.Context, res *pb.StorageBackendsListResponse) error {
+	return c.do(ctx, doArgs{Path: transport.RPCStorageBackendsList, Request: &pb.StorageBackendsListRequest{},
+		Reply: res})
+}
+
 func (c *Client) QueueStats(ctx context.Context, req *pb.QueueStatsRequest,
 	res *pb.QueueStatsResponse) error {
 	return c.do(ctx, doArgs{Path: transport.RPCQueueStats, Request: req, Reply: res})

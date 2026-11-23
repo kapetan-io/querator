@@ -304,6 +304,7 @@ func (l *Logical) enqueueScheduled(partition *Partition, now clock.Time) error {
 		pass.Scan.Pivot, pass.Scan.Last = pivot, last
 		return fmt.Errorf("enqueue scheduled items: %w", err)
 	}
+	partition.State.Scheduled = max(0, partition.State.Scheduled-len(pass.Scan.Actions))
 	return nil
 }
 
@@ -403,6 +404,7 @@ func (l *Logical) recoverPartition(partition *Partition, now clock.Time) bool {
 	partition.State.Failures = 0
 	partition.State.UnLeased = stats.Total - stats.NumLeased
 	partition.State.NumLeased = stats.NumLeased
+	partition.State.Scheduled = stats.Scheduled
 	l.log.Info("partition recovered",
 		"partition", partition.Info.PartitionNum,
 		"unleased", partition.State.UnLeased,

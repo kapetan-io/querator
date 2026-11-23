@@ -1,0 +1,172 @@
+package internal
+
+import (
+	"context"
+	"maps"
+	"slices"
+
+	"github.com/kapetan-io/querator/internal/placement"
+	"github.com/kapetan-io/querator/internal/store"
+	"github.com/kapetan-io/querator/internal/types"
+)
+
+type StorageBackendStatus struct {
+	Backend    types.Backend
+	Configured bool
+	SafeToStop bool
+	Partitions []BackendPartition
+	Rebalance  RebalancePlan
+}
+
+type BackendPartition struct {
+	Queue     string
+	Partition int
+	State     string
+	Readable  bool
+	Counts    types.PartitionState
+}
+
+type RebalancePlan struct {
+	Create []QueuePartitions
+	Drain  []QueuePartitions
+}
+
+type QueuePartitions struct {
+	Queue      string
+	Partitions []int
+}
+
+func (qm *QueuesManager) ListStorageBackends(ctx context.Context) ([]StorageBackendStatus, error) {
+	if qm.inShutdown.Load() {
+		return nil, ErrServiceShutdown
+	}
+
+	saved, err := qm.backends.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var queues []types.QueueInfo
+	if err := store.ForEachQueue(ctx, qm.conf.StorageConfig.Queues, func(queue types.QueueInfo) bool {
+		queues = append(queues, queue)
+		return true
+	}); err != nil {
+		return nil, err
+	}
+
+	statuses := make([]StorageBackendStatus, 0, len(saved))
+	index := make(map[string]int, len(saved))
+	for _, backend := range saved {
+		index[backend.Name] = len(statuses)
+		statuses = append(statuses, StorageBackendStatus{
+			Backend:    backend,
+			Configured: qm.backends.Configured(backend.Name),
+			Rebalance:  RebalancePlan{Create: []QueuePartitions{}, Drain: []QueuePartitions{}},
+		})
+	}
+
+	rebalancing := rebalanceBackends(statuses)
+	for _, queue := range queues {
+		counts := qm.partitionCounts(ctx, queue.Name)
+		for _, p := range queue.PartitionInfo {
+			i, ok := index[p.StorageName]
+			if !ok {
+				continue
+			}
+			partition := BackendPartition{Queue: queue.Name, Partition: p.PartitionNum, State: p.State()}
+			state, loaded := counts[p.PartitionNum]
+			switch {
+			case !loaded:
+				partition.Counts.Failures = 1
+			default:
+				partition.Counts = state
+				partition.Readable = state.Failures == 0
+			}
+			statuses[i].Partitions = append(statuses[i].Partitions, partition)
+		}
+		if rebalancing != nil {
+			addPending(statuses, index, queue, rebalancing)
+		}
+	}
+
+	for i := range statuses {
+		statuses[i].SafeToStop = statuses[i].Backend.Affinity == 0 && len(statuses[i].Partitions) == 0
+	}
+	return statuses, nil
+}
+
+func (qm *QueuesManager) partitionCounts(ctx context.Context, name string) map[int]types.PartitionState {
+	q, err := qm.Get(ctx, name)
+	if err != nil {
+		qm.log.Warn("cannot load queue for its partition counts", "queue", name, "error", err)
+		return nil
+	}
+	counts := make(map[int]types.PartitionState)
+	for _, l := range q.GetAll() {
+		var found []types.PartitionCount
+		if err := l.PartitionCounts(ctx, &found); err != nil {
+			qm.log.Warn("cannot read partition counts", "queue", name, "error", err)
+			continue
+		}
+		for _, c := range found {
+			counts[c.Partition] = c.State
+		}
+	}
+	return counts
+}
+
+func rebalanceBackends(statuses []StorageBackendStatus) []types.Backend {
+	backends := make([]types.Backend, 0, len(statuses))
+	for _, status := range statuses {
+		if status.Backend.Affinity > 0 && !status.Configured {
+			return nil
+		}
+		backends = append(backends, status.Backend)
+	}
+	if !placement.CanPlace(backends) {
+		return nil
+	}
+	return backends
+}
+
+func addPending(statuses []StorageBackendStatus, index map[string]int, queue types.QueueInfo,
+	backends []types.Backend) {
+	rebalanced, err := placement.Rebalance(queue, backends)
+	if err != nil || !rebalanced.Changed {
+		return
+	}
+
+	before := make(map[int]types.PartitionInfo, len(queue.PartitionInfo))
+	for _, p := range queue.PartitionInfo {
+		before[p.PartitionNum] = p
+	}
+
+	creates := make(map[string][]int)
+	drains := make(map[string][]int)
+	for _, p := range rebalanced.Queue.PartitionInfo {
+		old, existed := before[p.PartitionNum]
+		switch {
+		case !existed:
+			creates[p.StorageName] = append(creates[p.StorageName], p.PartitionNum)
+		case p.Draining && !old.Draining:
+			drains[p.StorageName] = append(drains[p.StorageName], p.PartitionNum)
+		}
+	}
+
+	for _, name := range slices.Sorted(maps.Keys(creates)) {
+		i, ok := index[name]
+		if !ok {
+			continue
+		}
+		plan := &statuses[i].Rebalance
+		plan.Create = append(plan.Create, QueuePartitions{Queue: queue.Name, Partitions: slices.Sorted(slices.Values(creates[name]))})
+	}
+	for _, name := range slices.Sorted(maps.Keys(drains)) {
+		i, ok := index[name]
+		if !ok {
+			continue
+		}
+		plan := &statuses[i].Rebalance
+		plan.Drain = append(plan.Drain, QueuePartitions{Queue: queue.Name, Partitions: slices.Sorted(slices.Values(drains[name]))})
+	}
+}

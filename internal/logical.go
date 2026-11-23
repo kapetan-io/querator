@@ -41,6 +41,7 @@ const (
 	MethodNotify
 	MethodNotifyScheduled
 	MethodProduceInternal
+	MethodPartitionCounts
 
 	DefaultMaxLeaseBatchSize        = 1_000
 	DefaultMaxProduceBatchSize      = 1_000
@@ -356,6 +357,17 @@ func (l *Logical) ProduceDeadLetter(ctx context.Context, req *types.ProduceReque
 	}
 }
 
+func (l *Logical) PartitionCounts(ctx context.Context, counts *[]types.PartitionCount) error {
+	if l.inShutdown.Load() {
+		return ErrQueueShutdown
+	}
+
+	return l.queueRequest(ctx, &Request{
+		Method:  MethodPartitionCounts,
+		Request: counts,
+	})
+}
+
 func (l *Logical) QueueStats(ctx context.Context, stats *types.LogicalStats) error {
 	if l.inShutdown.Load() {
 		return ErrQueueShutdown
@@ -522,6 +534,7 @@ func (l *Logical) prepareQueueState(state *QueueState) {
 			partition.State.Failures = 0
 			partition.State.UnLeased = stats.Total - stats.NumLeased
 			partition.State.NumLeased = stats.NumLeased
+			partition.State.Scheduled = stats.Scheduled
 		}
 
 		state.Partitions[i] = partition
@@ -656,7 +669,7 @@ func (l *Logical) handleRequest(state *QueueState, req *Request) {
 		}
 	case MethodStorageItemsList, MethodStorageItemsImport, MethodStorageItemsDelete,
 		MethodQueueStats, MethodQueuePause, MethodQueueClear, MethodUpdateInfo,
-		MethodReload:
+		MethodReload, MethodPartitionCounts:
 		l.handleColdRequests(state, req)
 	default:
 		assert.Unreachable(fmt.Sprintf("undefined request method '%d'", req.Method))
@@ -721,7 +734,7 @@ func (l *Logical) isHotRequest(req *Request) bool {
 		return true
 	case MethodStorageItemsList, MethodStorageItemsImport, MethodStorageItemsDelete,
 		MethodQueueStats, MethodQueuePause, MethodQueueClear, MethodUpdateInfo,
-		MethodReload:
+		MethodReload, MethodPartitionCounts:
 		return false
 	default:
 		assert.Unreachable(fmt.Sprintf("undefined request method '%d'", req.Method))

@@ -22,6 +22,9 @@ queue-storage:
 # Partition Storage defines where partitions are stored. Each backend's affinity is its share of a
 # queue's partitions, so 1.5 gets three times the partitions of 0.5. Fractions are accepted. A backend
 # with affinity 0 gets none of the partitions Querator places itself. A negative affinity fails start.
+# Querator saves each backend's affinity in queue storage the first time it sees the backend. After
+# that the saved value is the one in force, and changing it here does nothing. Change it with
+# `querator backends update <name> --affinity <n>` (`/v1/storage/backends.update`).
 partition-storage:
   - name: badger-01
     affinity: 1

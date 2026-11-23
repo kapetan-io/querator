@@ -66,3 +66,64 @@ message StorageItem {
   string kind = 14;
   bytes payload = 15;
 }
+
+message StorageBackendsUpdateRequest {
+  // The storage backend's name.
+  string backend = 1;
+  // How large a part of every queue's partitions the backend holds. Zero means none.
+  // Left out, the saved affinity is kept.
+  optional double affinity = 2;
+}
+
+message StorageBackendsListRequest {
+}
+
+message StorageBackendsListResponse {
+  // One entry per storage backend with a saved record.
+  repeated StorageBackend backends = 1;
+}
+
+message StorageBackend {
+  // The storage backend's name.
+  string backend = 1;
+  // The saved affinity.
+  optional double affinity = 2;
+  // False when the backend has a saved record and is not in this instance's config file.
+  optional bool configured = 3;
+  // True only when affinity is 0 and no partition of any queue is left on the backend.
+  optional bool safeToStop = 4 [json_name = "safe_to_stop"];
+  // Every partition on the backend.
+  repeated BackendPartition partitions = 5;
+  // What a rebalance would do to this backend right now.
+  PendingRebalance pending = 6;
+}
+
+message BackendPartition {
+  // The queue the partition belongs to.
+  string queueName = 1 [json_name = "queue_name"];
+  // The partition number.
+  optional int32 partition = 2;
+  // Either 'available' or 'draining'.
+  string state = 3;
+  // Items waiting to be leased. Left out when Querator cannot read the partition.
+  optional int32 unleased = 4;
+  // Items leased and not yet completed. Left out when Querator cannot read the partition.
+  optional int32 leased = 5;
+  // Items scheduled and not yet due. Left out when Querator cannot read the partition.
+  optional int32 scheduled = 6;
+  // The same meaning as `failures` in '/queue.stats'. Above 0 means the partition is failing.
+  // 1 when Querator could not load the queue or read its counts.
+  optional int32 failures = 7;
+}
+
+message PendingRebalance {
+  // Partitions a rebalance would create on this backend.
+  repeated QueuePartitions create = 1;
+  // Partitions on this backend a rebalance would mark draining.
+  repeated QueuePartitions drain = 2;
+}
+
+message QueuePartitions {
+  string queueName = 1 [json_name = "queue_name"];
+  repeated int32 partitions = 2;
+}

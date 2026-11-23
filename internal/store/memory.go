@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -574,9 +575,10 @@ func (m *MemoryPartition) findID(id []byte) (int, bool) {
 
 type MemoryQueues struct {
 	QueuesValidation
-	mu  sync.RWMutex
-	mem []types.QueueInfo
-	log *slog.Logger
+	mu       sync.RWMutex
+	mem      []types.QueueInfo
+	backends []types.Backend
+	log      *slog.Logger
 }
 
 var _ Queues = &MemoryQueues{}
@@ -693,11 +695,61 @@ func (s *MemoryQueues) Delete(_ context.Context, name string) error {
 	return nil
 }
 
+func (s *MemoryQueues) AddBackend(_ context.Context, backend types.Backend) error {
+	if err := s.validateBackend(backend); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.findBackend(backend.Name); ok {
+		return types.ErrBackendAlreadyExists
+	}
+	s.backends = append(s.backends, backend)
+	slices.SortFunc(s.backends, func(a, b types.Backend) int { return strings.Compare(a.Name, b.Name) })
+	return nil
+}
+
+func (s *MemoryQueues) UpdateBackend(_ context.Context, backend types.Backend) error {
+	if err := s.validateBackend(backend); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	idx, ok := s.findBackend(backend.Name)
+	if !ok {
+		return types.ErrBackendNotExist
+	}
+	s.backends[idx] = backend
+	return nil
+}
+
+func (s *MemoryQueues) ListBackends(_ context.Context, backends *[]types.Backend) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	*backends = append(*backends, s.backends...)
+	return nil
+}
+
+func (s *MemoryQueues) findBackend(name string) (int, bool) {
+	for i, backend := range s.backends {
+		if backend.Name == name {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
 func (s *MemoryQueues) Close(_ context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.mem = nil
+	s.backends = nil
 	return nil
 }
 

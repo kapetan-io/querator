@@ -53,6 +53,9 @@ type FlagParams struct {
 	ClearReference      bool
 	UnlimitedAttempts   bool
 
+	Affinity    float64
+	AffinitySet bool
+
 	Force bool
 }
 
@@ -94,6 +97,7 @@ to interact with a running Querator instance via its HTTP API.`,
 	root.AddCommand(listCommand)
 	root.AddCommand(UpdateCommand)
 	root.AddCommand(deleteCmd)
+	root.AddCommand(backendsCommand)
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)

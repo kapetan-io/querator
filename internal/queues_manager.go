@@ -81,7 +81,7 @@ func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Que
 	}
 	if !placement.CanPlace(backends) {
 		return nil, reply.NewRequestFailed("no storage backend can take partitions; " +
-			"at least one storage backend needs a saved affinity above 0, see 'querator backends update'")
+			"at least one storage backend needs a saved affinity above 0, see '/v1/storage/backends.update'")
 	}
 
 	if err := qm.deadLetterRules().Check(ctx, info); err != nil {
@@ -325,7 +325,7 @@ func (qm *QueuesManager) rebalanceBackends(ctx context.Context) ([]types.Backend
 	}
 	if !placement.CanPlace(backends) {
 		return nil, reply.NewInvalidOption("rebalance is refused; no storage backend can take partitions, " +
-			"at least one storage backend needs a saved affinity above 0, see 'querator backends update'")
+			"at least one storage backend needs a saved affinity above 0, see '/v1/storage/backends.update'")
 	}
 	return backends, nil
 }

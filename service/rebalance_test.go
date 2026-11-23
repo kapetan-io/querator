@@ -1049,7 +1049,7 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 				require.ErrorAs(t, err, &e)
 				assert.Equal(t, duh.CodeBadRequest, e.Code())
 				assert.Equal(t, "rebalance is refused; no storage backend can take partitions, at least one "+
-					"storage backend needs a saved affinity above 0, see 'querator backends update'", e.Message())
+					"storage backend needs a saved affinity above 0, see '/v1/storage/backends.update'", e.Message())
 				assert.Equal(t, before, listedPartitions(t, ctx, c, queueName))
 			})
 

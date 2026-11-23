@@ -108,6 +108,12 @@ queues:
 	var info pb.QueueInfo
 	require.NoError(t, d.MustClient().QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: "queue-1"}, &info))
 	assert.Len(t, info.Partitions, 2)
+
+	var list pb.StorageBackendsListResponse
+	require.NoError(t, d.MustClient().StorageBackendsList(ctx, &list))
+	require.Len(t, list.Backends, 1)
+	assert.Equal(t, "mem-00", list.Backends[0].Backend)
+	assert.Equal(t, 1.0, list.Backends[0].GetAffinity())
 }
 
 func TestStartWarnsWhenFileAffinityDiffersFromSaved(t *testing.T) {
@@ -146,4 +152,17 @@ queue-storage:
 	assert.Contains(t, second.String(), "file=2")
 	assert.Contains(t, second.String(), "saved=1")
 	assert.Contains(t, second.String(), "querator backends update mem-00 --affinity <n>")
+}
+
+func TestBackendNameTooLongRefusesStart(t *testing.T) {
+	file, err := daemon.ReadConfig(strings.NewReader(fmt.Sprintf(`
+partition-storage:
+  - name: %s
+    memory: {}
+    affinity: 1
+`, strings.Repeat("a", 513))))
+	require.NoError(t, err)
+	var conf daemon.Config
+	err = daemon.ApplyConfigFile(context.Background(), &conf, file, io.Discard)
+	require.ErrorContains(t, err, "partition storage name cannot be longer than 512 characters")
 }

@@ -95,6 +95,12 @@ queues:
 			var info pb.QueueInfo
 			require.NoError(t, d.MustClient().QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: "queue-1"}, &info))
 			assert.Len(t, info.Partitions, 2)
+
+			var list pb.StorageBackendsListResponse
+			require.NoError(t, d.MustClient().StorageBackendsList(ctx, &list))
+			require.Len(t, list.Backends, 1)
+			assert.Equal(t, "mem-00", list.Backends[0].Backend)
+			assert.Equal(t, 1.0, list.Backends[0].GetAffinity())
 		})
 	}
 }

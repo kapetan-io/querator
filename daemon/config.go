@@ -433,6 +433,9 @@ func setupPartitionStorage(file File, d *Config) error {
 		if name == "" {
 			return fmt.Errorf("%s must define exactly one backend (memory, badger, mongo, postgres)", section)
 		}
+		if len(ps.Name) > store.MaxBackendNameLength {
+			return fmt.Errorf("partition storage name cannot be longer than %d characters", store.MaxBackendNameLength)
+		}
 		if ps.affinityOmitted {
 			return fmt.Errorf("%s affinity is required", section)
 		}

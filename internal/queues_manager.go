@@ -22,10 +22,9 @@ const MsgServiceInShutdown = "service is shutting down"
 var ErrServiceShutdown = reply.NewRequestFailed(MsgServiceInShutdown)
 
 type QueuesManagerConfig struct {
-	StorageConfig         store.Config
-	LogicalConfig         LogicalConfig
-	Log                   *slog.Logger
-	RebalanceStrandsItems bool
+	StorageConfig store.Config
+	LogicalConfig LogicalConfig
+	Log           *slog.Logger
 }
 
 type QueuesManager struct {
@@ -308,11 +307,6 @@ func (qm *QueuesManager) Rebalance(ctx context.Context) (RebalanceCounts, error)
 }
 
 func (qm *QueuesManager) rebalanceBackends(ctx context.Context) ([]types.Backend, error) {
-	if qm.conf.RebalanceStrandsItems {
-		return nil, reply.NewInvalidOption("rebalance is refused; the queue store is InMemory and forgets " +
-			"draining partitions at restart, which would strand the items a storage backend keeps; set a queue-storage that outlives a restart")
-	}
-
 	backends, err := qm.backends.List(ctx)
 	if err != nil {
 		return nil, err

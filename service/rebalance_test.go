@@ -1082,34 +1082,6 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 					"missing from this instance's config file; add it back or save affinity 0 for it", e.Message())
 				assert.Equal(t, before, listedPartitions(t, ctx, c, queueName))
 			})
-
-			t.Run("QueueStoreForgetsDrainingPartitions", func(t *testing.T) {
-				conf := setup()
-				defer tearDown()
-				d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf, RebalanceStrandsItems: true})
-				defer d.Shutdown(t)
-				c, ctx := d.MustClient(), d.Context()
-
-				queueName := random.String("queue-", 10)
-				createQueueWithPartitions(t, ctx, c, queueName, 2)
-				setPartitionCount(t, ctx, c, queueName, 3)
-				before := listedPartitions(t, ctx, c, queueName)
-
-				err := c.QueuesRebalance(ctx, &pb.QueuesRebalanceRequest{}, &pb.QueuesRebalanceResponse{})
-				var e duh.Error
-				require.ErrorAs(t, err, &e)
-				assert.Equal(t, duh.CodeBadRequest, e.Code())
-				assert.Equal(t, "rebalance is refused; the queue store is InMemory and forgets draining "+
-					"partitions at restart, which would strand the items a storage backend keeps; set a "+
-					"queue-storage that outlives a restart", e.Message())
-				assert.Equal(t, before, listedPartitions(t, ctx, c, queueName))
-
-				// A refused rebalance would do nothing, so nothing is pending
-				for _, b := range listBackends(t, d).Backends {
-					assert.Empty(t, b.Pending.Create)
-					assert.Empty(t, b.Pending.Drain)
-				}
-			})
 		})
 	})
 }

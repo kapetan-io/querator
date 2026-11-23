@@ -54,7 +54,6 @@ type Config struct {
 	MaxRequestsPerQueue   int
 	MaxConcurrentRequests int
 	Clock                 *clock.Provider
-	RebalanceStrandsItems bool
 }
 
 type Service struct {
@@ -78,9 +77,8 @@ func New(ctx context.Context, conf Config) (*Service, error) {
 			ReadTimeout:          conf.ReadTimeout,
 			Clock:                conf.Clock,
 		},
-		RebalanceStrandsItems: conf.RebalanceStrandsItems,
-		StorageConfig:         conf.StorageConfig,
-		Log:                   conf.Log,
+		StorageConfig: conf.StorageConfig,
+		Log:           conf.Log,
 	})
 	if err != nil {
 		return nil, err

@@ -688,9 +688,8 @@ paths:
         and new partitions are created on the backends that hold too few.
         Calling it again finishes a rebalance that stopped part way. Refused
         with nothing changed when no storage backend has an affinity above 0,
-        when a storage backend with an affinity above 0 is missing from this
-        instance's config file, or when the queue store is InMemory and a
-        storage backend keeps items across restarts. The reply counts what
+        or when a storage backend with an affinity above 0 is missing from
+        this instance's config file. The reply counts what
         was saved and does not say a drain finished. Needs the
         `queue.rebalance` permission in the `_system` namespace.
       operationId: post-v1-queues.rebalance

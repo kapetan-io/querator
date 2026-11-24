@@ -40,6 +40,15 @@ func TestRebalanceCommand(t *testing.T) {
 	}))
 	require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{QueueName: "queue-1", RequestedPartitions: 2}))
 
+	// A draining partition that holds an item stays listed, so each partition gets one
+	for range 3 {
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			QueueName:      "queue-1",
+			RequestTimeout: "5s",
+			Items:          []*pb.QueueProduceItem{{Reference: "held", Bytes: []byte("x")}},
+		}))
+	}
+
 	type counts struct {
 		QueuesChanged      *int32 `json:"queues_changed"`
 		PartitionsCreated  *int32 `json:"partitions_created"`

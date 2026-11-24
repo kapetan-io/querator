@@ -62,6 +62,15 @@ queues:
 		assert.Equal(t, "available", p.State)
 	}
 
+	// A draining partition that holds an item stays listed, so each partition gets one
+	for range 4 {
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			QueueName:      "queue-1",
+			RequestTimeout: "5s",
+			Items:          []*pb.QueueProduceItem{{Reference: "held", Bytes: []byte("x")}},
+		}))
+	}
+
 	var resp pb.QueuesRebalanceResponse
 	require.NoError(t, c.QueuesRebalance(ctx, &pb.QueuesRebalanceRequest{}, &resp))
 	assert.Equal(t, int32(1), resp.GetQueuesChanged())

@@ -113,13 +113,14 @@ in the queue" while unleased items wait further on.
 
 ## Stats and reload on a large BadgerDB partition hold up the queue
 
-On BadgerDB, `/v1/queue.stats`, `/v1/queue.reload`, a queue's start-up and a failed partition's recovery
-scan every item in the partition, at about 75,000 items a second on a laptop. The queue answers none of
+On BadgerDB, `/v1/queue.stats`, `/v1/queue.reload`, a queue's start-up, a failed partition's recovery
+and the count Querator takes before removing a draining partition scan every item in the partition, at about 75,000 items a second on a laptop. The queue answers none of
 its other requests until the scan finishes, so produces, leases and completes on a queue with a 500,000
 item partition wait about 7 seconds behind each stats call. The scan runs past the read timeout
 (`ReadTimeout` in the embedded server's `service.Config`, 3 seconds by default) rather than failing the
 partition. A server shutdown waits for a scan in progress, or gives up at its own deadline while the scan
-runs on. ENG-867 is the design that removes the full scan.
+runs on. A draining partition is counted when its counts reach zero, and every 10 minutes while it drains. ENG-867
+is the design that removes the full scan.
 
 **Workaround**: Poll `/v1/queue.stats` rarely on queues with large BadgerDB partitions, and reload them
 only when their counts look wrong.
@@ -153,6 +154,26 @@ and an affinity set with `/v1/storage/backends.update` is gone.
 **Workaround**: Use badger, mongo or postgres queue storage to keep a saved affinity, or set the
 affinity in the config file too.
 
+## Only one Querator instance may serve a queue while its partitions drain
+
+Querator deletes a draining partition's storage once the partition is empty. A second instance serving
+the same queue from the same queue storage can still hold the queue record from before the rebalance,
+and produce into that partition after the first instance deleted it. Those items are lost.
+
+**Workaround**: Point one Querator instance at each queue storage, or stop the others until no
+partition is draining.
+
+## A failed queue delete leaves the queue partly deleted
+
+`/v1/queues.delete` deletes each partition's storage, one after another, before it removes the queue. When
+one partition's storage cannot be deleted, the call fails, the queue stays, and the partitions before it
+are already empty. Calling delete again deletes the rest. A queue with a partition on a storage backend
+missing from the config file is refused before anything is deleted, and cannot be deleted until the
+backend is back.
+
+**Workaround**: Call delete again once the storage backend is reachable. For a backend removed from the
+config file, add it back, restart, delete the queue, then remove the backend again.
+
 ## Changing queues holds up requests on a node with many queues
 
 Deleting a queue, or creating or updating one that names a dead-letter queue or has more than one
@@ -182,3 +203,16 @@ change a queue already in storage.
   `dead_queue`, as above.
 * A config file that still declares the broken setup refuses to start, and the error names the queue
   and the rule. Fix the config file's entries as the error says, then fix the stored queues as above.
+
+## A rebalance reads every queue and takes time in proportion to the queues it changes
+
+One `querator rebalance` call reads every queue's record and saves the queues it changes. It reads no
+items, so the items a queue holds do not change its time. Rebalancing a queue with 100,000 items took
+the same time as one with 1,000. When every queue changes, rebalancing 1,200 queues in one call, each
+gaining a partition, took about 20 seconds on PostgreSQL, 45 to 80 seconds on BadgerDB and 1 to 2
+minutes on MongoDB, which is 20ms to 100ms for each queue. When no queue changes, the same call took
+under a second on each backend. These are times measured on a busy development machine, not limits.
+The command stops waiting after 5 minutes.
+
+**Workaround**: When `querator rebalance` stops waiting, run it again until it replies. Each call walks
+every queue again, and a queue it already changed needs no save.

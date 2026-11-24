@@ -87,6 +87,7 @@ type LogicalConfig struct {
 	StoragePartitions    []store.Partition
 	OpenPartition        func(types.PartitionInfo) store.Partition
 	Manager              *QueuesManager
+	Queue                *Queue
 }
 
 type Logical struct {
@@ -575,6 +576,9 @@ func (l *Logical) adoptRecord(state *QueueState, info types.QueueInfo) {
 	for _, p := range state.Partitions {
 		p.Store.UpdateQueueInfo(info)
 		p.Info.Queue = info
+		if l.scheduleRemovalCheck(p, now) {
+			opened = true
+		}
 	}
 	state.load = l.loadOf(state)
 
@@ -740,12 +744,15 @@ func (l *Logical) handleHotRequests(state *QueueState, req *Request) *Request {
 	l.finalizeRequests(state)
 
 	lifecycleUpdated := false
+	now := l.conf.Clock.Now().UTC()
 	for _, p := range state.Partitions {
 		if p.State.NumLeased != 0 {
-			now := l.conf.Clock.Now().UTC()
 			if p.State.MostRecentDeadline.After(now) && p.Lifecycle.RunLifecycleBy(p.State.MostRecentDeadline) {
 				lifecycleUpdated = true
 			}
+		}
+		if l.scheduleRemovalCheck(p, now) {
+			lifecycleUpdated = true
 		}
 		p.Reset()
 	}

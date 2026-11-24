@@ -890,9 +890,10 @@ func waitForLifecycleRun(t *testing.T, ctx context.Context, c *querator.Client, 
 // ---------------------------------------------------------------------
 
 var (
-	errProduceWriteFailed = errors.New("injected produce write failure")
-	errLeaseWriteFailed   = errors.New("injected lease write failure")
-	errClearFailed        = errors.New("injected clear failure")
+	errProduceWriteFailed  = errors.New("injected produce write failure")
+	errLeaseWriteFailed    = errors.New("injected lease write failure")
+	errClearFailed         = errors.New("injected clear failure")
+	errDeleteStorageFailed = errors.New("injected delete storage failure")
 )
 
 // partitionFault makes partition storage refuse calls on demand. Each switch is set from the
@@ -904,7 +905,9 @@ type partitionFault struct {
 	failingLease   atomic.Bool
 	// failingClear holds the number of the one partition whose Clear fails, plus one. Zero fails none.
 	failingClear atomic.Int32
-	scanFailing  atomic.Pointer[string]
+	// failingDeleteStorage holds the number of the one partition whose DeleteStorage fails, plus one. Zero fails none.
+	failingDeleteStorage atomic.Int32
+	scanFailing          atomic.Pointer[string]
 	// scanFailingOnly narrows scanFailing to the one partition whose number it holds, plus one. Zero fails every partition.
 	scanFailingOnly atomic.Int32
 	holdClear       atomic.Pointer[clearHold]
@@ -926,6 +929,10 @@ type partitionFault struct {
 	// statsFailing makes every Stats call fail without reaching the backend, the way a backend
 	// that is down does.
 	statsFailing atomic.Bool
+	// itemReadsBelow, when above zero, makes itemReads count each Stats and List call that reaches a
+	// partition numbered below it, so a test can show a call never read the partitions that existed.
+	itemReadsBelow atomic.Int32
+	itemReads      atomic.Int32
 }
 
 // clearHold stops a Clear partway through. On the Clear's After-th check of its context it
@@ -1012,6 +1019,13 @@ func (f faultyPartition) Lease(ctx context.Context, batch types.LeaseBatch, opts
 	return f.Partition.Lease(ctx, batch, opts)
 }
 
+func (f faultyPartition) DeleteStorage(ctx context.Context) error {
+	if f.fault.failingDeleteStorage.Load() == int32(f.Info().PartitionNum)+1 {
+		return errDeleteStorageFailed
+	}
+	return f.Partition.DeleteStorage(ctx)
+}
+
 func (f faultyPartition) Clear(ctx context.Context, req types.ClearRequest) error {
 	if f.fault.failingClear.Load() == int32(f.Info().PartitionNum)+1 {
 		return errClearFailed
@@ -1042,7 +1056,19 @@ func (f *partitionFault) takeStatsCancelNext() bool {
 
 var errStatsFailed = errors.New("injected stats failure")
 
+func (f faultyPartition) countItemRead() {
+	if f.Info().PartitionNum < int(f.fault.itemReadsBelow.Load()) {
+		f.fault.itemReads.Add(1)
+	}
+}
+
+func (f faultyPartition) List(ctx context.Context, items *[]*types.Item, opts types.ListOptions) error {
+	f.countItemRead()
+	return f.Partition.List(ctx, items, opts)
+}
+
 func (f faultyPartition) Stats(ctx context.Context, stats *types.PartitionStats, now clock.Time) error {
+	f.countItemRead()
 	if f.fault.statsFailing.Load() {
 		return errStatsFailed
 	}

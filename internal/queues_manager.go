@@ -648,6 +648,14 @@ func (qm *QueuesManager) Delete(ctx context.Context, name string) error {
 		return errors.Errorf("Queues.Get(): %w", err)
 	}
 
+	for _, info := range queue.PartitionInfo {
+		if store.Find(info.StorageName, qm.conf.StorageConfig.PartitionStorage).Name == "" {
+			return reply.NewRequestFailed("cannot delete queue '%s'; its partition %d is on storage backend '%s', "+
+				"which is not in this server's config file; add '%s' back to the config file, restart, "+
+				"and delete the queue again", name, info.PartitionNum, info.StorageName, info.StorageName)
+		}
+	}
+
 	if q, ok := qm.queues[name]; ok {
 		for _, l := range q.GetAll() {
 			if err := l.Shutdown(ctx); err != nil {
@@ -668,8 +676,8 @@ func (qm *QueuesManager) Delete(ctx context.Context, name string) error {
 		if err != nil {
 			qm.log.Warn("while deleting a partition's storage; the queue is kept", "queue", name,
 				"partition", info.PartitionNum, "storage_name", info.StorageName, "error", err)
-			return reply.NewRequestFailed("cannot delete partition %d of queue '%s' on '%s'; the delete is partial "+
-				"and the queue is kept, call delete again: %s", info.PartitionNum, name, info.StorageName, err)
+			return reply.NewRequestFailed("queue '%s' is only partly deleted; deleting partition %d on '%s' "+
+				"failed: %s; call delete again to finish", name, info.PartitionNum, info.StorageName, err)
 		}
 	}
 

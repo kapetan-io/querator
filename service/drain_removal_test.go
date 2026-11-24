@@ -2,6 +2,7 @@ package service_test
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"sync"
 	"testing"
@@ -445,7 +446,7 @@ func testDrainRemoval(t *testing.T, setup NewStorageFunc, tearDown func(), lifet
 		assert.Equal(t, int32(10), queueTotal(t, ctx, c, kept+"1"))
 	})
 
-	t.Run("DeleteKeepsQueueWhenPartitionStorageCannotBeDeleted", func(t *testing.T) {
+	t.Run("DeleteRefusesQueueOnBackendMissingFromConfig", func(t *testing.T) {
 		// The InMemory queue store keeps no record of the queue across a restart
 		if lifetime == endsWithDaemon {
 			return
@@ -455,12 +456,18 @@ func testDrainRemoval(t *testing.T, setup NewStorageFunc, tearDown func(), lifet
 		main := stores.PartitionStorage[0].Name
 		first := newDaemon(t, 20*clock.Second, svc.Config{StorageConfig: stores})
 		c, ctx := first.MustClient(), first.Context()
-		setAffinity(t, ctx, c, main, 0)
 		queueName := random.String("queue-", 10)
-		createQueueWithPartitions(t, ctx, c, queueName, 1)
+		createQueueWithPartitions(t, ctx, c, queueName, 2)
+		placed := partitionsOn(t, ctx, c, queueName)
+		require.Len(t, placed[main], 1)
+		require.Len(t, placed[extraBackend], 1)
+		for range 4 {
+			produceOne(t, ctx, c, queueName, &pb.QueueProduceItem{Reference: "held", Bytes: []byte("x")})
+		}
+		held := itemsIn(t, ctx, c, queueName, placed[main][0])
+		require.NotZero(t, held)
 		first.Shutdown(t)
 
-		// Without the extra backend in the config, the partition's storage cannot be deleted
 		withoutExtra := stores
 		withoutExtra.PartitionStorage = stores.PartitionStorage[:1]
 		second := newDaemon(t, 20*clock.Second, svc.Config{StorageConfig: withoutExtra})
@@ -469,12 +476,16 @@ func testDrainRemoval(t *testing.T, setup NewStorageFunc, tearDown func(), lifet
 		var duhErr duh.Error
 		require.ErrorAs(t, err, &duhErr)
 		assert.Equal(t, duh.CodeRequestFailed, duhErr.Code())
-		assert.Contains(t, duhErr.Message(), "the delete is partial and the queue is kept, call delete again")
-		assert.Contains(t, duhErr.Message(), "storage backend is not in this instance's config file")
-		assert.Equal(t, []int32{0}, partitionsOn(t, ctx, c, queueName)[extraBackend])
+		assert.Equal(t, fmt.Sprintf("cannot delete queue '%s'; its partition %d is on storage backend '%s', "+
+			"which is not in this server's config file; add '%s' back to the config file, restart, "+
+			"and delete the queue again", queueName, placed[extraBackend][0], extraBackend, extraBackend),
+			duhErr.Message())
+
+		// The partition on the configured backend still holds its items
+		assert.Equal(t, held, itemsIn(t, ctx, c, queueName, placed[main][0]))
 		second.Shutdown(t)
 
-		// With the backend back, calling delete again finishes it
+		// With the backend back the delete succeeds
 		third := newDaemon(t, 20*clock.Second, svc.Config{StorageConfig: stores})
 		defer third.Shutdown(t)
 		c, ctx = third.MustClient(), third.Context()
@@ -602,4 +613,20 @@ func testDrainRemoval(t *testing.T, setup NewStorageFunc, tearDown func(), lifet
 		}, 3*removalWait, 20*clock.Millisecond)
 		assert.True(t, findBackend(t, listBackends(t, d), main).GetSafeToStop())
 	})
+}
+
+// itemsIn reads one partition's item count from queue.stats.
+func itemsIn(t *testing.T, ctx context.Context, c *querator.Client, queueName string, partition int32) int32 {
+	t.Helper()
+	var stats pb.QueueStatsResponse
+	require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats))
+	for _, logical := range stats.LogicalQueues {
+		for _, p := range logical.Partitions {
+			if p.Partition == partition {
+				return p.Total
+			}
+		}
+	}
+	require.FailNow(t, "partition not in queue.stats", "partition %d", partition)
+	return 0
 }

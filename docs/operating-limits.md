@@ -168,10 +168,11 @@ partition is draining.
 `/v1/queues.delete` deletes each partition's storage, one after another, before it removes the queue. When
 one partition's storage cannot be deleted, the call fails, the queue stays, and the partitions before it
 are already empty. Calling delete again deletes the rest. A queue with a partition on a storage backend
-missing from the config file cannot be deleted at all.
+missing from the config file is refused before anything is deleted, and cannot be deleted until the
+backend is back.
 
 **Workaround**: Call delete again once the storage backend is reachable. For a backend removed from the
-config file, add it back, delete the queue, then remove the backend again.
+config file, add it back, restart, delete the queue, then remove the backend again.
 
 ## Changing queues holds up requests on a node with many queues
 

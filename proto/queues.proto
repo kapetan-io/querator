@@ -58,7 +58,8 @@ message QueuesRebalanceResponse {
   // Every one-partition queue that has a draining partition on a storage backend missing from this
   // instance's config file, read from the saved queue records once the rebalance finishes. A queue
   // that names the backend's partition as its lowest-numbered draining partition has stopped leasing;
-  // any other queue stops leasing when it reaches that partition. Always present, empty when no queue qualifies.
+  // any other queue stops leasing when it reaches that partition. Sorted by namespace, then queue name, with
+  // no cap on its length. Always present, empty when no queue qualifies.
   repeated WaitingQueue waitingQueues = 4 [json_name = "waiting_queues"];
 }
 
@@ -69,6 +70,8 @@ message WaitingQueue {
   string backend = 2;
   // The draining partition's number. The lowest-numbered one when the queue has several on missing backends.
   optional int32 partition = 3;
+  // The namespace the queue belongs to, as '/queues.info' reports it.
+  string namespace = 4;
 }
 
 message QueuesInfoRequest {

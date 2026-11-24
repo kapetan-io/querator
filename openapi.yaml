@@ -724,6 +724,7 @@ paths:
                 partitions_draining: 1
                 waiting_queues:
                   - queue_name: orders
+                    namespace: _system
                     backend: disk-b
                     partition: 0
           headers: {}
@@ -1125,7 +1126,9 @@ components:
           type: array
           description: >-
             Every queue with one partition that has a draining partition on a storage backend
-            missing from this instance's config file. Empty when there is none.
+            missing from this instance's config file. Sorted by namespace, then queue name, with no cap
+            on its length. Which backends count as missing comes from the config file of the instance that
+            answers. Empty when there is none.
           items:
             $ref: '#/components/schemas/WaitingQueue'
       required:
@@ -1139,6 +1142,9 @@ components:
         queue_name:
           type: string
           description: The queue's name.
+        namespace:
+          type: string
+          description: The namespace the queue belongs to, as `queues.info` reports it.
         backend:
           type: string
           description: The storage backend missing from the config file that holds the draining partition.
@@ -1150,6 +1156,7 @@ components:
             missing backends.
       required:
         - queue_name
+        - namespace
         - backend
         - partition
     StorageBackendsUpdateRequest:

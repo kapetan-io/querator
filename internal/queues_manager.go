@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"cmp"
 	"context"
 	"log/slog"
 	"maps"
@@ -279,6 +280,7 @@ type RebalanceCounts struct {
 }
 
 type WaitingQueue struct {
+	Namespace string
 	QueueName string
 	Backend   string
 	Partition int
@@ -310,6 +312,9 @@ func (qm *QueuesManager) Rebalance(ctx context.Context) (RebalanceCounts, error)
 			return result, err
 		}
 	}
+	slices.SortFunc(result.WaitingQueues, func(a, b WaitingQueue) int {
+		return cmp.Or(cmp.Compare(a.Namespace, b.Namespace), cmp.Compare(a.QueueName, b.QueueName))
+	})
 	return result, nil
 }
 
@@ -396,7 +401,7 @@ func (qm *QueuesManager) adoptAndNoteWaiting(ctx context.Context, queue types.Qu
 			continue
 		}
 		if waiting == nil || partition.PartitionNum < waiting.Partition {
-			waiting = &WaitingQueue{QueueName: queue.Name, Backend: partition.StorageName, Partition: partition.PartitionNum}
+			waiting = &WaitingQueue{Namespace: queue.Namespace, QueueName: queue.Name, Backend: partition.StorageName, Partition: partition.PartitionNum}
 		}
 	}
 	if waiting != nil {

@@ -691,11 +691,11 @@ paths:
         or when a storage backend with an affinity above 0 is missing from
         this instance's config file. The reply counts what
         was saved and does not say a drain finished. A rebalance that stops
-        part way, because saving or adopting one queue's record failed, replies with an error whose
+        part way, because rebalancing one queue failed, replies with an error whose
         `details` holds `queues_changed`, `partitions_created` and
         `partitions_draining` for what was saved before it stopped, as
         strings, and `queue_name`, the queue that failed. A queue whose
-        record was saved before adopting it failed is counted and is also the
+        record was saved before a later step failed is counted and is also the
         named queue. The error keeps the code of the failure that stopped it.
         Needs the `queue.rebalance` permission in the `_system` namespace.
       operationId: post-v1-queues.rebalance

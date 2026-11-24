@@ -266,41 +266,34 @@ func (e *ErrForbidden) Message() string {
 var _ duh.Error = &ErrForbidden{}
 
 const (
-	detailQueuesChanged      = "queues_changed"
-	detailPartitionsCreated  = "partitions_created"
-	detailPartitionsDraining = "partitions_draining"
-	detailQueueName          = "queue_name"
+	DetailQueuesChanged      = "queues_changed"
+	DetailPartitionsCreated  = "partitions_created"
+	DetailPartitionsDraining = "partitions_draining"
+	DetailQueueName          = "queue_name"
 )
 
-type RebalanceCounts struct {
-	QueuesChanged      int
-	PartitionsCreated  int
-	PartitionsDraining int
-}
-
-func ParseRebalanceStopped(details map[string]string) (RebalanceCounts, string, bool) {
-	queueName := details[detailQueueName]
-	changed, changedErr := strconv.Atoi(details[detailQueuesChanged])
-	created, createdErr := strconv.Atoi(details[detailPartitionsCreated])
-	draining, drainingErr := strconv.Atoi(details[detailPartitionsDraining])
-	if queueName == "" || changedErr != nil || createdErr != nil || drainingErr != nil {
-		return RebalanceCounts{}, "", false
-	}
-	return RebalanceCounts{QueuesChanged: changed, PartitionsCreated: created, PartitionsDraining: draining}, queueName, true
-}
-
 type ErrRebalanceStopped struct {
-	queueName string
-	saved     RebalanceCounts
-	cause     error
+	cause              error
+	queueName          string
+	queuesChanged      int
+	partitionsCreated  int
+	partitionsDraining int
 }
 
-func NewRebalanceStopped(queueName string, saved RebalanceCounts, cause error) *ErrRebalanceStopped {
-	return &ErrRebalanceStopped{queueName: queueName, saved: saved, cause: cause}
+func NewRebalanceStopped(cause error, queueName string, queuesChanged, partitionsCreated,
+	partitionsDraining int) *ErrRebalanceStopped {
+	return &ErrRebalanceStopped{
+		cause:              cause,
+		queueName:          queueName,
+		queuesChanged:      queuesChanged,
+		partitionsCreated:  partitionsCreated,
+		partitionsDraining: partitionsDraining,
+	}
 }
 
 func (e *ErrRebalanceStopped) Error() string {
-	return fmt.Sprintf("rebalance stopped at queue '%s': %s", e.queueName, e.cause)
+	return fmt.Sprintf("rebalance stopped at queue '%s' after saving %d queues changed, %d partitions created, "+
+		"%d partitions draining: %s", e.queueName, e.queuesChanged, e.partitionsCreated, e.partitionsDraining, e.cause)
 }
 
 func (e *ErrRebalanceStopped) Unwrap() error {
@@ -331,10 +324,10 @@ func (e *ErrRebalanceStopped) ProtoMessage() proto.Message {
 
 func (e *ErrRebalanceStopped) Details() map[string]string {
 	return map[string]string{
-		detailQueuesChanged:      strconv.Itoa(e.saved.QueuesChanged),
-		detailPartitionsCreated:  strconv.Itoa(e.saved.PartitionsCreated),
-		detailPartitionsDraining: strconv.Itoa(e.saved.PartitionsDraining),
-		detailQueueName:          e.queueName,
+		DetailQueuesChanged:      strconv.Itoa(e.queuesChanged),
+		DetailPartitionsCreated:  strconv.Itoa(e.partitionsCreated),
+		DetailPartitionsDraining: strconv.Itoa(e.partitionsDraining),
+		DetailQueueName:          e.queueName,
 	}
 }
 

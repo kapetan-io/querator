@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/duh-rpc/duh-go"
@@ -61,11 +62,14 @@ func RunRebalance(flags FlagParams) error {
 
 func stoppedRebalanceReport(err error) (string, bool) {
 	var stopped duh.Error
-	if !errors.As(err, &stopped) {
+	if !errors.As(err, &stopped) || stopped.Details()[reply.DetailQueueName] == "" {
 		return "", false
 	}
-	saved, queueName, ok := reply.ParseRebalanceStopped(stopped.Details())
-	if !ok {
+	details := stopped.Details()
+	changed, changedErr := strconv.Atoi(details[reply.DetailQueuesChanged])
+	created, createdErr := strconv.Atoi(details[reply.DetailPartitionsCreated])
+	draining, drainingErr := strconv.Atoi(details[reply.DetailPartitionsDraining])
+	if changedErr != nil || createdErr != nil || drainingErr != nil {
 		return "", false
 	}
 	out, _ := json.MarshalIndent(struct {
@@ -74,10 +78,10 @@ func stoppedRebalanceReport(err error) (string, bool) {
 		PartitionsDraining int    `json:"partitions_draining"`
 		QueueName          string `json:"queue_name"`
 	}{
-		QueuesChanged:      saved.QueuesChanged,
-		PartitionsCreated:  saved.PartitionsCreated,
-		PartitionsDraining: saved.PartitionsDraining,
-		QueueName:          queueName,
+		QueuesChanged:      changed,
+		PartitionsCreated:  created,
+		PartitionsDraining: draining,
+		QueueName:          details[reply.DetailQueueName],
 	}, "", "  ")
 	return string(out), true
 }

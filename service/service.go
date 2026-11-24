@@ -611,9 +611,9 @@ func (s *Service) QueuesRebalance(ctx context.Context, _ *proto.QueuesRebalanceR
 	if err != nil {
 		return err
 	}
-	resp.QueuesChanged = new(int32(rebalanced.QueuesChanged))
-	resp.PartitionsCreated = new(int32(rebalanced.PartitionsCreated))
-	resp.PartitionsDraining = new(int32(rebalanced.PartitionsDraining))
+	resp.QueuesChanged = new(int32(rebalanced.ChangedQueues))
+	resp.PartitionsCreated = new(int32(rebalanced.CreatedPartitions))
+	resp.PartitionsDraining = new(int32(rebalanced.DrainingPartitions))
 	return nil
 }
 

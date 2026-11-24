@@ -221,7 +221,8 @@ var errSaveFailed = errors.New("queue record save failed by test")
 // queueStoreFault fails the save of one queue's partition list, as a queue store does when it
 // goes down part way through a rebalance.
 type queueStoreFault struct {
-	failing atomic.Pointer[string]
+	failing  atomic.Pointer[string]
+	changing atomic.Pointer[string]
 }
 
 func (f *queueStoreFault) Wrap(conf store.Config) store.Config {
@@ -237,6 +238,10 @@ func (f *queueStoreFault) AllowSaves() {
 	f.failing.Store(nil)
 }
 
+func (f *queueStoreFault) ChangeEverySaveOf(queueName string) {
+	f.changing.Store(&queueName)
+}
+
 type faultyQueues struct {
 	store.Queues
 	fault *queueStoreFault
@@ -246,19 +251,10 @@ func (f faultyQueues) SavePartitions(ctx context.Context, list types.PartitionLi
 	if failing := f.fault.failing.Load(); failing != nil && *failing == list.QueueName {
 		return errSaveFailed
 	}
-	return f.Queues.SavePartitions(ctx, list)
-}
-
-type alwaysChangedQueues struct {
-	store.Queues
-	queueName string
-}
-
-func (a alwaysChangedQueues) SavePartitions(ctx context.Context, list types.PartitionList) error {
-	if list.QueueName == a.queueName {
+	if changing := f.fault.changing.Load(); changing != nil && *changing == list.QueueName {
 		return store.ErrQueueChanged
 	}
-	return a.Queues.SavePartitions(ctx, list)
+	return f.Queues.SavePartitions(ctx, list)
 }
 
 func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime storageLifetime) {
@@ -957,6 +953,7 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		assert.Equal(t, secondQueue, e.Details()["queue_name"])
 		assert.NotContains(t, e.Error(), errSaveFailed.Error())
 		assert.Contains(t, logs.String(), errSaveFailed.Error())
+		assert.Contains(t, logs.String(), "after saving 1 queues changed, 1 partitions created, 0 partitions draining")
 	})
 
 	t.Run("RebalanceThatSavedAndTheQueueCouldNotAdoptCountsIt", func(t *testing.T) {
@@ -1009,11 +1006,12 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 	})
 
 	t.Run("StoppedRebalanceKeepsTheCodeOfItsCause", func(t *testing.T) {
-		conf := setup()
+		fault := &queueStoreFault{}
+		conf := fault.Wrap(setup())
 		defer tearDown()
 		suffix := random.String("", 10)
 		firstQueue, secondQueue := "queue-a-"+suffix, "queue-b-"+suffix
-		conf.Queues = alwaysChangedQueues{Queues: conf.Queues, queueName: secondQueue}
+		fault.ChangeEverySaveOf(secondQueue)
 		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
 		defer d.Shutdown(t)
 		c, ctx := d.MustClient(), d.Context()

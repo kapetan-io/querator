@@ -271,10 +271,16 @@ func (qm *QueuesManager) adoptRecord(ctx context.Context, stored types.QueueInfo
 	return nil
 }
 
+type RebalanceCounts struct {
+	ChangedQueues      int
+	CreatedPartitions  int
+	DrainingPartitions int
+}
+
 const maxRebalanceAttempts = 10
 
-func (qm *QueuesManager) Rebalance(ctx context.Context) (reply.RebalanceCounts, error) {
-	var result reply.RebalanceCounts
+func (qm *QueuesManager) Rebalance(ctx context.Context) (RebalanceCounts, error) {
+	var result RebalanceCounts
 	if qm.inShutdown.Load() {
 		return result, ErrServiceShutdown
 	}
@@ -294,7 +300,8 @@ func (qm *QueuesManager) Rebalance(ctx context.Context) (reply.RebalanceCounts, 
 
 	for _, name := range names {
 		if err := qm.rebalanceQueue(ctx, name, backends, &result); err != nil {
-			return result, reply.NewRebalanceStopped(name, result, err)
+			return result, reply.NewRebalanceStopped(err, name,
+				result.ChangedQueues, result.CreatedPartitions, result.DrainingPartitions)
 		}
 	}
 	return result, nil
@@ -319,7 +326,7 @@ func (qm *QueuesManager) rebalanceBackends(ctx context.Context) ([]types.Backend
 }
 
 func (qm *QueuesManager) rebalanceQueue(ctx context.Context, name string, backends []types.Backend,
-	result *reply.RebalanceCounts) error {
+	result *RebalanceCounts) error {
 	for range maxRebalanceAttempts {
 		var queue types.QueueInfo
 		if err := qm.conf.StorageConfig.Queues.Get(ctx, name, &queue); err != nil {
@@ -354,9 +361,9 @@ func (qm *QueuesManager) rebalanceQueue(ctx context.Context, name string, backen
 			return errors.With("queue", name).Errorf("Queues.SavePartitions(): %w", err)
 		}
 
-		result.QueuesChanged++
-		result.PartitionsCreated += len(rebalanced.Queue.PartitionInfo) - len(queue.PartitionInfo)
-		result.PartitionsDraining += drainingCount(rebalanced.Queue) - drainingCount(queue)
+		result.ChangedQueues++
+		result.CreatedPartitions += len(rebalanced.Queue.PartitionInfo) - len(queue.PartitionInfo)
+		result.DrainingPartitions += drainingCount(rebalanced.Queue) - drainingCount(queue)
 
 		var stored types.QueueInfo
 		if err := qm.conf.StorageConfig.Queues.Get(ctx, name, &stored); err != nil {

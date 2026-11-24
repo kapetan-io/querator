@@ -24,11 +24,13 @@ var rebalanceCommand = &cobra.Command{
 saved affinities call for. A changed count or affinity takes effect only here.
 A partition a backend should no longer hold becomes draining, and takes no new items while
 its remaining items are leased and completed. New partitions are created on the backends
-that hold too few. Run 'querator backends list' first to see what a rebalance would do.
+that hold too few. Run 'querator backends list' or 'querator info <queue-name>' first to see what a rebalance would do.
 If a rebalance stops part way, run it again to finish. Needs the queue.rebalance permission.
 Outputs JSON with the number of queues changed, partitions created and partitions this run
-marked draining. A rebalance that stops part way outputs the same counts for what it saved
-before it stopped, plus queue_name, the queue it stopped on, then exits non-zero.`,
+marked draining, and waiting_queues, the queues with one partition that wait on a draining
+partition whose storage backend is missing from the config file. A rebalance that stops part
+way outputs queues_changed, partitions_created and partitions_draining for what it saved before
+it stopped, plus queue_name, the queue it stopped on, then exits non-zero.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return RunRebalance(flags)

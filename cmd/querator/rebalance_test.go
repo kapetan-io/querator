@@ -55,6 +55,7 @@ func TestRebalanceCommand(t *testing.T) {
 		var printed counts
 		require.NoError(t, json.Unmarshal([]byte(out.Stdout), &printed))
 		assert.Equal(t, counts{QueuesChanged: new(int32(1)), PartitionsCreated: new(int32(0)), PartitionsDraining: new(int32(1))}, printed)
+		assert.Regexp(t, `"waiting_queues":\s+\[\]`, out.Stdout)
 
 		var info pb.QueueInfo
 		require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: "queue-1"}, &info))

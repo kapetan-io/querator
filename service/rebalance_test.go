@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"maps"
+	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -89,10 +92,16 @@ type rebalanceCounts struct {
 	DrainingPartitions int32
 }
 
-func rebalance(t *testing.T, ctx context.Context, c *querator.Client) rebalanceCounts {
+func rebalanceReply(t *testing.T, ctx context.Context, c *querator.Client) *pb.QueuesRebalanceResponse {
 	t.Helper()
 	var resp pb.QueuesRebalanceResponse
 	require.NoError(t, c.QueuesRebalance(ctx, &pb.QueuesRebalanceRequest{}, &resp))
+	return &resp
+}
+
+func rebalance(t *testing.T, ctx context.Context, c *querator.Client) rebalanceCounts {
+	t.Helper()
+	resp := rebalanceReply(t, ctx, c)
 	require.NotNil(t, resp.QueuesChanged)
 	require.NotNil(t, resp.PartitionsCreated)
 	require.NotNil(t, resp.PartitionsDraining)
@@ -101,6 +110,22 @@ func rebalance(t *testing.T, ctx context.Context, c *querator.Client) rebalanceC
 		CreatedPartitions:  resp.GetPartitionsCreated(),
 		DrainingPartitions: resp.GetPartitionsDraining(),
 	}
+}
+
+// rawRebalance posts queues.rebalance over HTTP and returns the reply body as a client sees it.
+func rawRebalance(t *testing.T, ctx context.Context, d *testDaemon) string {
+	t.Helper()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("http://%s/v1/queues.rebalance", d.d.Listener.Addr().String()), strings.NewReader("{}"))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, resp.Body.Close()) }()
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	return string(body)
 }
 
 // listedPartition is one partition as queues.info lists it.
@@ -513,6 +538,17 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		assert.Equal(t, []int32{0}, drainingOn(listed, gone))
 		assert.Equal(t, []int32{1}, availableOn(listed, main))
 
+		// The queue is named by the next rebalance too, which changes nothing
+		again := rebalanceReply(t, ctx, c)
+		assert.Zero(t, again.GetQueuesChanged()+again.GetPartitionsCreated()+again.GetPartitionsDraining())
+		require.Len(t, again.WaitingQueues, 1)
+		assert.Equal(t, queueName, again.WaitingQueues[0].QueueName)
+		assert.Equal(t, gone, again.WaitingQueues[0].Backend)
+		assert.Equal(t, int32(0), again.WaitingQueues[0].GetPartition())
+		var info pb.QueueInfo
+		require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &info))
+		assert.Equal(t, info.Namespace, again.WaitingQueues[0].Namespace)
+
 		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
 			QueueName:      queueName,
 			RequestTimeout: "5s",
@@ -532,6 +568,37 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		assert.Equal(t, querator.MsgRequestTimeout, e.Message())
 		assert.Equal(t, duh.CodeRetryRequest, e.Code())
 		assert.Empty(t, lease.Items)
+	})
+
+	t.Run("QueueWithSeveralPartitionsOnBackendGoneFromConfigIsNotNamed", func(t *testing.T) {
+		// The InMemory queue store keeps no record of the queue across a restart
+		if lifetime == endsWithDaemon {
+			return
+		}
+		const gone = "memory-gone"
+		conf := withExtraBackend(setup(), gone, 0, nil)
+		defer tearDown()
+		main := conf.PartitionStorage[0].Name
+		first := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+		c, ctx := first.MustClient(), first.Context()
+
+		queueName := random.String("queue-", 10)
+		setAffinity(t, ctx, c, gone, 1)
+		setAffinity(t, ctx, c, main, 0)
+		createQueueWithPartitions(t, ctx, c, queueName, 2)
+		setAffinity(t, ctx, c, main, 1)
+		setAffinity(t, ctx, c, gone, 0)
+		first.Shutdown(t)
+
+		conf.PartitionStorage = conf.PartitionStorage[:1]
+		second := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+		defer second.Shutdown(t)
+		ctx = second.Context()
+
+		// It keeps leasing from its other partitions, so no queue is named and the empty list is still on the wire
+		assert.JSONEq(t, `{"queues_changed":1,"partitions_created":2,"partitions_draining":2,"waiting_queues":[]}`,
+			rawRebalance(t, ctx, second))
+		assert.Empty(t, rebalanceReply(t, ctx, second.MustClient()).WaitingQueues)
 	})
 
 	t.Run("DrainingPartitionStaysDrainingAfterRestart", func(t *testing.T) {

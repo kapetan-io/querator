@@ -444,7 +444,12 @@ paths:
     post:
       summary: Get Info about a queue
       deprecated: false
-      description: ''
+      description: >-
+        Returns the queue's saved settings next to the partitions it is
+        running. `pending` lists the partitions a rebalance would create and
+        the ones it would mark draining, and is left out when a rebalance would change nothing.
+        `rebalance_refused` gives the reason when a rebalance would be refused.
+        `/queues.list` returns the same fields for each queue it lists.
       operationId: post-v1-queues.info
       tags:
         - Querator V1
@@ -690,7 +695,15 @@ paths:
         with nothing changed when no storage backend has an affinity above 0,
         or when a storage backend with an affinity above 0 is missing from
         this instance's config file. The reply counts what
-        was saved and does not say a drain finished. A rebalance that stops
+        was saved and does not say a drain finished. It also lists in
+        `waiting_queues` every queue with one partition that has a draining
+        partition on a storage backend missing from this instance's config
+        file, whether or not this call changed it. Such a queue leases
+        nothing once it reaches that partition, which is when the partitions
+        before it are empty, until the backend is back in the config file.
+        The list is empty when no queue is in that state. A queue with more
+        than one partition and a backend that is in the config file but down
+        are not listed. A rebalance that stops
         part way, because rebalancing one queue failed, replies with an error whose
         `details` holds `queues_changed`, `partitions_created` and
         `partitions_draining` for what was saved before it stopped, as
@@ -720,6 +733,11 @@ paths:
                 queues_changed: 1
                 partitions_created: 2
                 partitions_draining: 1
+                waiting_queues:
+                  - queue_name: orders
+                    namespace: _system
+                    backend: disk-b
+                    partition: 0
           headers: {}
         '500':
           description: The rebalance stopped part way.
@@ -1131,10 +1149,43 @@ components:
           type: integer
           format: int32
           description: How many partitions this call marked draining across every queue.
+        waiting_queues:
+          type: array
+          description: >-
+            Every queue with one partition that has a draining partition on a storage backend
+            missing from this instance's config file. Sorted by namespace, then queue name, with no cap
+            on its length. Which backends count as missing comes from the config file of the instance that
+            answers. Empty when there is none.
+          items:
+            $ref: '#/components/schemas/WaitingQueue'
       required:
         - queues_changed
         - partitions_created
         - partitions_draining
+        - waiting_queues
+    WaitingQueue:
+      type: object
+      properties:
+        queue_name:
+          type: string
+          description: The queue's name.
+        namespace:
+          type: string
+          description: The namespace the queue belongs to, as `queues.info` reports it.
+        backend:
+          type: string
+          description: The storage backend missing from the config file that holds the draining partition.
+        partition:
+          type: integer
+          format: int32
+          description: >-
+            The draining partition's number. The lowest-numbered one when the queue has several on
+            missing backends.
+      required:
+        - queue_name
+        - namespace
+        - backend
+        - partition
     StorageBackendsUpdateRequest:
       type: object
       properties:
@@ -1688,6 +1739,17 @@ components:
             `/queues.update`.
           items:
             $ref: '#/components/schemas/PartitionInfo'
+        pending:
+          $ref: '#/components/schemas/QueuePendingRebalance'
+        rebalance_refused:
+          type: string
+          description: >-
+            Why a rebalance would be refused. A backend with affinity above 0
+            missing from the config file, and no backend able to take
+            partitions, use the words `/queues.rebalance` uses. Left out when a
+            rebalance would not be refused. While set, `pending` is left out,
+            so it does not say whether this queue's settings differ. Set by
+            Querator; ignored by `/queues.create` and `/queues.update`.
       required:
         - queue_name
         - requested_partitions
@@ -1698,6 +1760,29 @@ components:
         - reference
         - lease_timeout
         - expire_timeout
+    QueuePendingRebalance:
+      type: object
+      description: >-
+        What a rebalance would change for this queue, worked out on each
+        `/queues.info` and `/queues.list` from the queue's requested partition
+        count and the storage backends' saved affinities. Left out of the
+        queue when a rebalance would change nothing. Set by
+        Querator; ignored by `/queues.create` and `/queues.update`.
+      properties:
+        create:
+          type: array
+          description: >-
+            Partitions a rebalance would create, with the storage backend each
+            would go on.
+          items:
+            $ref: '#/components/schemas/PartitionInfo'
+        drain:
+          type: array
+          description: >-
+            Partitions a rebalance would mark draining, with the storage backend
+            which holds each.
+          items:
+            $ref: '#/components/schemas/PartitionInfo'
     PartitionInfo:
       type: object
       properties:

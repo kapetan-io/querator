@@ -112,6 +112,13 @@ type partitionChange struct {
 	Proposed types.PartitionList
 }
 
+func (c partitionChange) Stale() bool {
+	if c.Stored.Revision != c.Proposed.Revision {
+		return true
+	}
+	return c.Proposed.CompareCreationID && c.Stored.CreationID != c.Proposed.CreationID
+}
+
 func (s QueuesValidation) validatePartitionChange(change partitionChange) error {
 	stored := make(map[int]types.PartitionInfo, len(change.Stored.PartitionInfo))
 	for _, p := range change.Stored.PartitionInfo {

@@ -1312,6 +1312,7 @@ func (b *BadgerQueues) Add(_ context.Context, info types.QueueInfo) error {
 		return err
 	}
 	info.Namespace = systemIfEmpty(info.Namespace)
+	info.CreationID = ksuid.New().String()
 
 	db, err := b.getDB()
 	if err != nil {
@@ -1421,10 +1422,11 @@ func (b *BadgerQueues) SavePartitions(_ context.Context, list types.PartitionLis
 			return errors.Errorf("during Decode(): %w", err)
 		}
 
-		if found.Revision != list.Revision {
+		change := partitionChange{Stored: found, Proposed: list}
+		if change.Stale() {
 			return ErrQueueChanged
 		}
-		if err := b.validatePartitionChange(partitionChange{Stored: found, Proposed: list}); err != nil {
+		if err := b.validatePartitionChange(change); err != nil {
 			return err
 		}
 		found.AdoptPartitions(list)

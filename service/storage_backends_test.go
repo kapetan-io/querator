@@ -8,6 +8,7 @@ import (
 	"github.com/duh-rpc/duh-go"
 	"github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/internal/store"
+	"github.com/kapetan-io/querator/internal/types"
 	pb "github.com/kapetan-io/querator/proto"
 	svc "github.com/kapetan-io/querator/service"
 	"github.com/kapetan-io/querator/transport/auth"
@@ -416,6 +417,48 @@ func testStorageBackends(t *testing.T, setup NewStorageFunc, tearDown func(), li
 		var settled pb.QueueInfo
 		require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &settled))
 		assert.Nil(t, settled.Pending)
+	})
+
+	t.Run("QueuePendingReadsSavedRecordWhenQueueHasNotAdoptedIt", func(t *testing.T) {
+		conf := setup()
+		defer tearDown()
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
+
+		queueName := random.String("queue-", 10)
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			QueueName:           queueName,
+			LeaseTimeout:        "1m0s",
+			ExpireTimeout:       "24h0m0s",
+			RequestedPartitions: 1,
+		})
+
+		var saved types.QueueInfo
+		require.NoError(t, conf.Queues.Get(ctx, queueName, &saved))
+		saved.RequestedPartitions = 3
+		require.NoError(t, conf.Queues.Update(ctx, saved))
+
+		var list pb.QueuesListResponse
+		require.NoError(t, c.QueuesList(ctx, &list, nil))
+		var listed *pb.QueueInfo
+		for _, item := range list.Items {
+			if item.QueueName == queueName {
+				listed = item
+			}
+		}
+		require.NotNil(t, listed)
+		require.NotNil(t, listed.Pending)
+		assert.Len(t, listed.Pending.Create, 2)
+
+		var info pb.QueueInfo
+		require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &info))
+		require.NotNil(t, info.Pending)
+		assert.True(t, proto.Equal(listed.Pending, info.Pending))
+
+		var rebalanced pb.QueuesRebalanceResponse
+		require.NoError(t, c.QueuesRebalance(ctx, &pb.QueuesRebalanceRequest{}, &rebalanced))
+		assert.Equal(t, int32(2), rebalanced.GetPartitionsCreated())
 	})
 
 	t.Run("QueuePendingShowsRebalanceAfterRequestedPartitionsChange", func(t *testing.T) {

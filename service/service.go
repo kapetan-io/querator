@@ -458,11 +458,11 @@ func (s *Service) QueuesInfo(ctx context.Context, req *proto.QueuesInfoRequest, 
 	}
 
 	info := queue.Info()
-	pending, err := s.queues.PendingRebalances(ctx, []types.QueueInfo{info})
+	pending, err := s.queues.PendingRebalance(ctx, req.QueueName)
 	if err != nil {
 		return err
 	}
-	*resp = *queueInfoWithPending(info, pending[0])
+	*resp = *queueInfoWithPending(info, pending)
 	return nil
 }
 

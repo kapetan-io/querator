@@ -925,9 +925,10 @@ type QueueInfo struct {
 	// affinities. Absent when a rebalance would change nothing for this queue.
 	// Set by Querator; ignored on create and update.
 	Pending *QueuePendingRebalance `protobuf:"bytes,12,opt,name=pending,proto3" json:"pending,omitempty"`
-	// Why a rebalance would be refused, worded as '/queues.rebalance' words the same refusal.
-	// Left out when a rebalance would not be refused. While set, `pending` is absent, since no
-	// rebalance would run. Set by Querator; ignored on create and update.
+	// Why a rebalance would be refused. A backend with affinity above 0 missing from the config file,
+	// and no backend able to take partitions, use the words '/queues.rebalance' uses. Left out when a
+	// rebalance would not be refused. While set, `pending` is absent, so it does not say whether this
+	// queue's settings differ. Set by Querator; ignored on create and update.
 	RebalanceRefused string `protobuf:"bytes,13,opt,name=rebalanceRefused,json=rebalance_refused,proto3" json:"rebalanceRefused,omitempty"`
 }
 

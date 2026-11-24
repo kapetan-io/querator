@@ -4,14 +4,37 @@ import (
 	"context"
 	"slices"
 
+	"github.com/kapetan-io/errors"
 	"github.com/kapetan-io/querator/internal/placement"
+	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
+	"github.com/kapetan-io/querator/transport/reply"
 )
 
 type QueuePendingRebalance struct {
 	Create  []types.PartitionInfo
 	Drain   []types.PartitionInfo
 	Refused string
+}
+
+func (qm *QueuesManager) PendingRebalance(ctx context.Context, name string) (QueuePendingRebalance, error) {
+	if qm.inShutdown.Load() {
+		return QueuePendingRebalance{}, ErrServiceShutdown
+	}
+
+	var saved types.QueueInfo
+	if err := qm.conf.StorageConfig.Queues.Get(ctx, name, &saved); err != nil {
+		if errors.Is(err, store.ErrQueueNotExist) {
+			return QueuePendingRebalance{}, reply.NewInvalidOption("queue does not exist; no such queue named '%s'", name)
+		}
+		return QueuePendingRebalance{}, errors.With("queue", name).Errorf("Queues.Get(): %w", err)
+	}
+
+	pending, err := qm.PendingRebalances(ctx, []types.QueueInfo{saved})
+	if err != nil {
+		return QueuePendingRebalance{}, err
+	}
+	return pending[0], nil
 }
 
 func (qm *QueuesManager) PendingRebalances(ctx context.Context, queues []types.QueueInfo) ([]QueuePendingRebalance, error) {

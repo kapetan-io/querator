@@ -1671,10 +1671,12 @@ components:
         rebalance_refused:
           type: string
           description: >-
-            Why a rebalance would be refused, worded as `/queues.rebalance`
-            words the same refusal. Left out when a rebalance would not be
-            refused. While set, `pending` is left out. Set by Querator; ignored
-            by `/queues.create` and `/queues.update`.
+            Why a rebalance would be refused. A backend with affinity above 0
+            missing from the config file, and no backend able to take
+            partitions, use the words `/queues.rebalance` uses. Left out when a
+            rebalance would not be refused. While set, `pending` is left out,
+            so it does not say whether this queue's settings differ. Set by
+            Querator; ignored by `/queues.create` and `/queues.update`.
       required:
         - queue_name
         - requested_partitions

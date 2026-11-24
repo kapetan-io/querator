@@ -151,6 +151,7 @@ type QueueInfo struct {
 	RequestedPartitions int
 	NextPartition       int
 	Revision            int
+	CreationID          string
 	PartitionInfo       []PartitionInfo
 }
 
@@ -213,6 +214,7 @@ func (i *QueueInfo) Update(r QueueInfo) bool {
 type PartitionList struct {
 	QueueName     string
 	Revision      int
+	CreationID    string
 	NextPartition int
 	PartitionInfo []PartitionInfo
 	UpdatedAt     clock.Time

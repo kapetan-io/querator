@@ -215,12 +215,66 @@ func moveOnlyPartition(t *testing.T, ctx context.Context, c *querator.Client, fi
 	return rebalance(t, ctx, c)
 }
 
+// recreateQueue deletes the queue and creates it again with count partitions. It runs inside a
+// queue store call, off the test goroutine, so it returns the first error instead of failing the
+// test.
+func recreateQueue(ctx context.Context, c *querator.Client, queueName string, count int32) error {
+	if err := c.QueuesDelete(ctx, &pb.QueuesDeleteRequest{QueueName: queueName}); err != nil {
+		return err
+	}
+	return c.QueuesCreate(ctx, &pb.QueueInfo{
+		QueueName:           queueName,
+		LeaseTimeout:        "1m0s",
+		ExpireTimeout:       "24h0m0s",
+		RequestedPartitions: count,
+	})
+}
+
+// producedPerPartition produces count items one at a time and returns how many items each
+// partition holds. Produce goes to the available partition holding the fewest items, so each
+// available partition of an empty queue gets one item when count matches their number.
+func producedPerPartition(t *testing.T, ctx context.Context, c *querator.Client, queueName string,
+	count int) map[int32]int32 {
+	t.Helper()
+	for range count {
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			QueueName:      queueName,
+			RequestTimeout: "5s",
+			Items:          produceRandomItems(1),
+		}))
+	}
+	var stats pb.QueueStatsResponse
+	require.NoError(t, c.QueueStats(ctx, &pb.QueueStatsRequest{QueueName: queueName}, &stats))
+	totals := make(map[int32]int32)
+	for _, logical := range stats.LogicalQueues {
+		for _, p := range logical.Partitions {
+			totals[p.Partition] = p.Total
+		}
+	}
+	return totals
+}
+
 var errSaveFailed = errors.New("queue record save failed by test")
 
-// queueStoreFault fails the save of one queue's partition list, as a queue store does when it
-// goes down part way through a rebalance.
+// queueStoreFault changes what the queue store does for one queue. It can fail every save of the
+// queue's partition list, as a queue store does when it cannot write. It can also run one step
+// once, just before the next save of that list reaches the queue store, or just after the next
+// successful read of the queue's record. A failed save does not run the step.
 type queueStoreFault struct {
-	failing atomic.Pointer[string]
+	failing    atomic.Pointer[string]
+	beforeSave atomic.Pointer[storeStep]
+	afterGet   atomic.Pointer[storeStep]
+}
+
+type storeStep struct {
+	queueName string
+	run       func()
+}
+
+func runOnce(next *atomic.Pointer[storeStep], queueName string) {
+	if step := next.Load(); step != nil && step.queueName == queueName && next.CompareAndSwap(step, nil) {
+		step.run()
+	}
 }
 
 func (f *queueStoreFault) Wrap(conf store.Config) store.Config {
@@ -236,6 +290,14 @@ func (f *queueStoreFault) AllowSaves() {
 	f.failing.Store(nil)
 }
 
+func (f *queueStoreFault) BeforeNextSaveOf(queueName string, run func()) {
+	f.beforeSave.Store(&storeStep{queueName: queueName, run: run})
+}
+
+func (f *queueStoreFault) AfterNextGetOf(queueName string, run func()) {
+	f.afterGet.Store(&storeStep{queueName: queueName, run: run})
+}
+
 type faultyQueues struct {
 	store.Queues
 	fault *queueStoreFault
@@ -245,7 +307,16 @@ func (f faultyQueues) SavePartitions(ctx context.Context, list types.PartitionLi
 	if failing := f.fault.failing.Load(); failing != nil && *failing == list.QueueName {
 		return errSaveFailed
 	}
+	runOnce(&f.fault.beforeSave, list.QueueName)
 	return f.Queues.SavePartitions(ctx, list)
+}
+
+func (f faultyQueues) Get(ctx context.Context, name string, queue *types.QueueInfo) error {
+	if err := f.Queues.Get(ctx, name, queue); err != nil {
+		return err
+	}
+	runOnce(&f.fault.afterGet, name)
+	return nil
 }
 
 func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime storageLifetime) {
@@ -911,6 +982,108 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		assert.Equal(t, rebalanceCounts{ChangedQueues: 1, CreatedPartitions: 1}, rebalance(t, ctx, c))
 		assert.Equal(t, []int32{0, 1, 2}, availableOn(listedPartitions(t, ctx, c, firstQueue), name))
 		assert.Equal(t, []int32{0, 1, 2}, availableOn(listedPartitions(t, ctx, c, secondQueue), name))
+	})
+
+	t.Run("ReCreatedQueueKeepsItsPartitions", func(t *testing.T) {
+		t.Run("ListOnlyAddsPartitions", func(t *testing.T) {
+			fault := &queueStoreFault{}
+			conf := withExtraBackend(fault.Wrap(setup()), extraBackend, 1, nil)
+			defer tearDown()
+			d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+			defer d.Shutdown(t)
+			c, ctx := d.MustClient(), d.Context()
+
+			// The queue is never updated, so its record stays at the first revision, the same
+			// revision the re-created queue's record starts at
+			queueName := random.String("queue-", 10)
+			createQueueWithPartitions(t, ctx, c, queueName, 2)
+			listed := listedPartitions(t, ctx, c, queueName)
+			require.Len(t, listed, 2)
+			kept, emptied := listed[0].StorageName, listed[1].StorageName
+			setAffinity(t, ctx, c, emptied, 0)
+
+			// The rebalance works out partition 1 draining on the emptied backend and partition 2 on
+			// the kept backend. The re-created queue has only partition 0 on the kept backend, so
+			// that list adds partitions 1 and 2 to it and moves nothing.
+			var recreateErr error
+			fault.BeforeNextSaveOf(queueName, func() {
+				recreateErr = recreateQueue(ctx, c, queueName, 1)
+			})
+			assert.Equal(t, rebalanceCounts{}, rebalance(t, ctx, c))
+			require.NoError(t, recreateErr)
+
+			assert.Equal(t, []listedPartition{
+				{Partition: 0, StorageName: kept, State: "available"},
+			}, listedPartitions(t, ctx, c, queueName))
+			assert.Equal(t, map[int32]int32{0: 1}, producedPerPartition(t, ctx, c, queueName, 1))
+		})
+
+		t.Run("ListMovesAPartition", func(t *testing.T) {
+			fault := &queueStoreFault{}
+			conf := withExtraBackend(fault.Wrap(setup()), extraBackend, 1, nil)
+			defer tearDown()
+			d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+			defer d.Shutdown(t)
+			c, ctx := d.MustClient(), d.Context()
+
+			// The queue is never updated, so its record stays at the first revision, the same
+			// revision the re-created queue's record starts at
+			queueName := random.String("queue-", 10)
+			createQueueWithPartitions(t, ctx, c, queueName, 2)
+			listed := listedPartitions(t, ctx, c, queueName)
+			require.Len(t, listed, 2)
+			kept, emptied := listed[0].StorageName, listed[1].StorageName
+			setAffinity(t, ctx, c, emptied, 0)
+
+			// The rebalance works out partition 1 draining on the emptied backend and partition 2 on
+			// the kept backend. The re-created queue has partition 1 on the kept backend, so that
+			// list moves it.
+			var recreateErr error
+			fault.BeforeNextSaveOf(queueName, func() {
+				recreateErr = recreateQueue(ctx, c, queueName, 2)
+			})
+			assert.Equal(t, rebalanceCounts{}, rebalance(t, ctx, c))
+			require.NoError(t, recreateErr)
+
+			assert.Equal(t, []listedPartition{
+				{Partition: 0, StorageName: kept, State: "available"},
+				{Partition: 1, StorageName: kept, State: "available"},
+			}, listedPartitions(t, ctx, c, queueName))
+			assert.Equal(t, map[int32]int32{0: 1, 1: 1}, producedPerPartition(t, ctx, c, queueName, 2))
+		})
+	})
+
+	t.Run("LoadedReCreatedQueueIgnoresTheDeletedQueuesRecord", func(t *testing.T) {
+		fault := &queueStoreFault{}
+		conf := withExtraBackend(fault.Wrap(setup()), extraBackend, 1, nil)
+		defer tearDown()
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
+
+		// The deleted queue needs no rebalance. The update puts its record above the revision the
+		// re-created queue's record starts at.
+		queueName := random.String("queue-", 10)
+		createQueueWithPartitions(t, ctx, c, queueName, 2)
+		require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
+			QueueName: queueName,
+			Reference: new("updated"),
+		}))
+
+		// The rebalance finds the deleted queue's record needs no change and hands it to the
+		// loaded queue of that name
+		var recreateErr error
+		fault.AfterNextGetOf(queueName, func() {
+			recreateErr = recreateQueue(ctx, c, queueName, 1)
+		})
+		assert.Equal(t, rebalanceCounts{}, rebalance(t, ctx, c))
+		require.NoError(t, recreateErr)
+
+		listed := listedPartitions(t, ctx, c, queueName)
+		require.Len(t, listed, 1)
+		assert.Equal(t, int32(0), listed[0].Partition)
+		assert.Equal(t, "available", listed[0].State)
+		assert.Equal(t, map[int32]int32{0: 1}, producedPerPartition(t, ctx, c, queueName, 1))
 	})
 
 	t.Run("DrainingPartitionTakesNoProduceAndIsLeasedFirst", func(t *testing.T) {

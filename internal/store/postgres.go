@@ -187,6 +187,7 @@ func (p *PostgresQueues) ensureTable(_ context.Context, pool *pgxpool.Pool) erro
 			requested_partitions INTEGER NOT NULL,
 			next_partition INTEGER NOT NULL DEFAULT 0,
 			revision BIGINT NOT NULL DEFAULT 0,
+			creation_id TEXT NOT NULL DEFAULT '',
 			partition_info JSONB NOT NULL DEFAULT '[]'::jsonb,
 			created_at TIMESTAMPTZ NOT NULL,
 			updated_at TIMESTAMPTZ NOT NULL
@@ -218,7 +219,8 @@ func (p *PostgresQueues) Get(ctx context.Context, name string, queue *types.Queu
 	}
 
 	query := `SELECT name, namespace, lease_timeout_ns, expire_timeout_ns, dead_queue, max_attempts,
-	                 reference, requested_partitions, next_partition, revision, partition_info, created_at, updated_at
+	                 reference, requested_partitions, next_partition, revision, creation_id, partition_info,
+	                 created_at, updated_at
 	          FROM queues WHERE name = $1`
 
 	var leaseNs, expireNs int64
@@ -234,6 +236,7 @@ func (p *PostgresQueues) Get(ctx context.Context, name string, queue *types.Queu
 		&queue.RequestedPartitions,
 		&queue.NextPartition,
 		&queue.Revision,
+		&queue.CreationID,
 		&partitionInfoJSON,
 		&queue.CreatedAt,
 		&queue.UpdatedAt,
@@ -264,6 +267,7 @@ func (p *PostgresQueues) Add(ctx context.Context, info types.QueueInfo) error {
 		return err
 	}
 	info.Namespace = systemIfEmpty(info.Namespace)
+	info.CreationID = ksuid.New().String()
 
 	pool, err := p.conf.getOrCreatePool(ctx)
 	if err != nil {
@@ -281,8 +285,8 @@ func (p *PostgresQueues) Add(ctx context.Context, info types.QueueInfo) error {
 
 	query := `INSERT INTO queues (name, namespace, lease_timeout_ns, expire_timeout_ns, dead_queue, max_attempts,
 	                              reference, requested_partitions, next_partition, partition_info,
-	                              created_at, updated_at)
-	          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`
+	                              created_at, updated_at, creation_id)
+	          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`
 
 	_, err = pool.Exec(ctx, query,
 		info.Name,
@@ -297,6 +301,7 @@ func (p *PostgresQueues) Add(ctx context.Context, info types.QueueInfo) error {
 		partitionInfoJSON,
 		timeToMicroseconds(info.CreatedAt),
 		timeToMicroseconds(info.UpdatedAt),
+		info.CreationID,
 	)
 
 	if err != nil {
@@ -380,10 +385,11 @@ func (p *PostgresQueues) SavePartitions(ctx context.Context, list types.Partitio
 		return err
 	}
 
-	if found.Revision != list.Revision {
+	change := partitionChange{Stored: found, Proposed: list}
+	if change.Stale() {
 		return ErrQueueChanged
 	}
-	if err := p.validatePartitionChange(partitionChange{Stored: found, Proposed: list}); err != nil {
+	if err := p.validatePartitionChange(change); err != nil {
 		return err
 	}
 
@@ -394,12 +400,13 @@ func (p *PostgresQueues) SavePartitions(ctx context.Context, list types.Partitio
 
 	tag, err := pool.Exec(ctx, `UPDATE queues SET partition_info = $1, next_partition = $2, updated_at = $3,
 	                                   revision = revision + 1
-	                            WHERE name = $4 AND revision = $5`,
+	                            WHERE name = $4 AND revision = $5 AND ($6 = '' OR creation_id = $6)`,
 		partitionInfoJSON,
 		list.NextPartition,
 		timeToMicroseconds(list.UpdatedAt),
 		list.QueueName,
 		list.Revision,
+		list.CreationID,
 	)
 	if err != nil {
 		return errors.Errorf("save queue partitions: %w", err)
@@ -430,7 +437,8 @@ func (p *PostgresQueues) List(ctx context.Context, queues *[]types.QueueInfo, op
 	}
 
 	query := `SELECT name, namespace, lease_timeout_ns, expire_timeout_ns, dead_queue, max_attempts,
-	                 reference, requested_partitions, next_partition, revision, partition_info, created_at, updated_at
+	                 reference, requested_partitions, next_partition, revision, creation_id, partition_info,
+	                 created_at, updated_at
 	          FROM queues WHERE name >= $1 AND ($3 = '' OR namespace = $3 OR ($3 = $4 AND namespace = ''))
 	          ORDER BY name LIMIT $2`
 
@@ -456,6 +464,7 @@ func (p *PostgresQueues) List(ctx context.Context, queues *[]types.QueueInfo, op
 			&info.RequestedPartitions,
 			&info.NextPartition,
 			&info.Revision,
+			&info.CreationID,
 			&partitionInfoJSON,
 			&info.CreatedAt,
 			&info.UpdatedAt,

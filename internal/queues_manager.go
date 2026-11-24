@@ -254,7 +254,14 @@ func (qm *QueuesManager) adoptRecord(ctx context.Context, stored types.QueueInfo
 	}
 	qm.mutex.Unlock()
 
-	if !ok || q.Info().Revision >= stored.Revision {
+	if !ok {
+		return nil
+	}
+	held := q.Info()
+	if held.CreationID != stored.CreationID {
+		return nil
+	}
+	if held.Revision >= stored.Revision {
 		return nil
 	}
 
@@ -348,6 +355,7 @@ func (qm *QueuesManager) rebalanceQueue(ctx context.Context, name string, backen
 			PartitionInfo: rebalanced.Queue.PartitionInfo,
 			NextPartition: rebalanced.Queue.NextPartition,
 			Revision:      queue.Revision,
+			CreationID:    queue.CreationID,
 			QueueName:     name,
 		})
 		if errors.Is(err, store.ErrQueueNotExist) {

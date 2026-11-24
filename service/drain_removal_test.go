@@ -296,6 +296,43 @@ func testDrainRemoval(t *testing.T, setup NewStorageFunc, tearDown func(), lifet
 		assert.Equal(t, int32(1), queueTotal(t, ctx, c, dlqName))
 	})
 
+	t.Run("ExpiredItemLeavesDrainingPartitionToBeRemoved", func(t *testing.T) {
+		now := clock.NewProvider()
+		now.Freeze(clock.Now())
+		defer now.UnFreeze()
+
+		stores := withExtraBackend(setup(), extraBackend, 0, nil)
+		defer tearDown()
+		d := newDaemon(t, 60*clock.Second, svc.Config{StorageConfig: stores, Clock: now})
+		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
+		main := stores.PartitionStorage[0].Name
+
+		queueName := random.String("queue-", 10)
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			QueueName:           queueName,
+			LeaseTimeout:        "1m0s",
+			ExpireTimeout:       "1h0m0s",
+			RequestedPartitions: 1,
+		})
+		produceInOrder(t, ctx, c, queueName, 1)
+		require.Len(t, leaseUpTo(t, ctx, c, queueName, 1), 1)
+		moveOnlyPartition(t, ctx, c, main)
+		require.Equal(t, []int32{0}, drainingOn(listedPartitions(t, ctx, c, queueName), main))
+
+		// The lease expires and a lifecycle pass counts the item still in the partition
+		now.Advance(clock.Minute + clock.Second)
+		clock.Sleep(requestSettle)
+		require.Equal(t, []int32{0}, drainingOn(listedPartitions(t, ctx, c, queueName), main))
+
+		// The lifecycle deletes the expired item, which leaves the partition empty
+		now.Advance(clock.Hour)
+		require.Eventually(t, func() bool {
+			now.Advance(clock.Minute)
+			return len(partitionsOn(t, ctx, c, queueName)[main]) == 0
+		}, removalWait, 20*clock.Millisecond)
+	})
+
 	t.Run("InterruptedRemovalFinishesAfterRestart", func(t *testing.T) {
 		// The InMemory queue store keeps no record of the queue across a restart
 		if lifetime == endsWithDaemon {
@@ -432,7 +469,7 @@ func testDrainRemoval(t *testing.T, setup NewStorageFunc, tearDown func(), lifet
 		var duhErr duh.Error
 		require.ErrorAs(t, err, &duhErr)
 		assert.Equal(t, duh.CodeRequestFailed, duhErr.Code())
-		assert.Contains(t, duhErr.Message(), "the queue is kept, call delete again")
+		assert.Contains(t, duhErr.Message(), "the delete is partial and the queue is kept, call delete again")
 		assert.Contains(t, duhErr.Message(), "storage backend is not in this instance's config file")
 		assert.Equal(t, []int32{0}, partitionsOn(t, ctx, c, queueName)[extraBackend])
 		second.Shutdown(t)

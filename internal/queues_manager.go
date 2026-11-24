@@ -668,8 +668,8 @@ func (qm *QueuesManager) Delete(ctx context.Context, name string) error {
 		if err != nil {
 			qm.log.Warn("while deleting a partition's storage; the queue is kept", "queue", name,
 				"partition", info.PartitionNum, "storage_name", info.StorageName, "error", err)
-			return reply.NewRequestFailed("cannot delete partition %d of queue '%s' on '%s'; the queue is kept, "+
-				"call delete again: %s", info.PartitionNum, name, info.StorageName, err)
+			return reply.NewRequestFailed("cannot delete partition %d of queue '%s' on '%s'; the delete is partial "+
+				"and the queue is kept, call delete again: %s", info.PartitionNum, name, info.StorageName, err)
 		}
 	}
 

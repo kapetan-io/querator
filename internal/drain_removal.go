@@ -9,6 +9,8 @@ import (
 	"github.com/kapetan-io/tackle/clock"
 )
 
+const removalRecountInterval = 10 * clock.Minute
+
 func (p *Partition) CountedEmpty() bool {
 	return p.State.UnLeased == 0 && p.State.NumLeased == 0 && p.State.Scheduled == 0
 }
@@ -30,6 +32,10 @@ func (l *Logical) removeIfEmpty(state *QueueState, p *Partition, now clock.Time)
 	if !p.RemovalAllowed() {
 		return
 	}
+	if !p.CountedEmpty() && p.Lifecycle.RemovalFailures == 0 && now.Before(p.Lifecycle.NextRemovalCount) {
+		return
+	}
+	p.Lifecycle.NextRemovalCount = now.Add(removalRecountInterval)
 
 	ctx, cancel := context.WithTimeout(context.Background(), l.conf.ReadTimeout)
 	var stats types.PartitionStats

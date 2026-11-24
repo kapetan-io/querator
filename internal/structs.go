@@ -22,6 +22,7 @@ type PartitionLifecycleState struct {
 	UnfinishedRuns    int
 	ScheduledFailures int
 	RemovalFailures   int
+	NextRemovalCount  clock.Time
 	UnansweredMove    *types.LifeCycleRequest
 }
 

@@ -113,13 +113,14 @@ in the queue" while unleased items wait further on.
 
 ## Stats and reload on a large BadgerDB partition hold up the queue
 
-On BadgerDB, `/v1/queue.stats`, `/v1/queue.reload`, a queue's start-up and a failed partition's recovery
-scan every item in the partition, at about 75,000 items a second on a laptop. The queue answers none of
+On BadgerDB, `/v1/queue.stats`, `/v1/queue.reload`, a queue's start-up, a failed partition's recovery
+and the count Querator takes before removing a draining partition scan every item in the partition, at about 75,000 items a second on a laptop. The queue answers none of
 its other requests until the scan finishes, so produces, leases and completes on a queue with a 500,000
 item partition wait about 7 seconds behind each stats call. The scan runs past the read timeout
 (`ReadTimeout` in the embedded server's `service.Config`, 3 seconds by default) rather than failing the
 partition. A server shutdown waits for a scan in progress, or gives up at its own deadline while the scan
-runs on. ENG-867 is the design that removes the full scan.
+runs on. A draining partition is counted when its counts reach zero, and every 10 minutes while it drains. ENG-867
+is the design that removes the full scan.
 
 **Workaround**: Poll `/v1/queue.stats` rarely on queues with large BadgerDB partitions, and reload them
 only when their counts look wrong.
@@ -152,6 +153,25 @@ and an affinity set with `/v1/storage/backends.update` is gone.
 
 **Workaround**: Use badger, mongo or postgres queue storage to keep a saved affinity, or set the
 affinity in the config file too.
+
+## Only one Querator instance may serve a queue while its partitions drain
+
+Querator deletes a draining partition's storage once the partition is empty. A second instance serving
+the same queue from the same queue storage can still hold the queue record from before the rebalance,
+and produce into that partition after the first instance deleted it. Those items are lost.
+
+**Workaround**: Point one Querator instance at each queue storage, or stop the others until no
+partition is draining.
+
+## A failed queue delete leaves the queue partly deleted
+
+`/v1/queues.delete` deletes each partition's storage, one after another, before it removes the queue. When
+one partition's storage cannot be deleted, the call fails, the queue stays, and the partitions before it
+are already empty. Calling delete again deletes the rest. A queue with a partition on a storage backend
+missing from the config file cannot be deleted at all.
+
+**Workaround**: Call delete again once the storage backend is reachable. For a backend removed from the
+config file, add it back, delete the queue, then remove the backend again.
 
 ## Changing queues holds up requests on a node with many queues
 

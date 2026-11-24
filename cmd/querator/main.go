@@ -95,6 +95,7 @@ to interact with a running Querator instance via its HTTP API.`,
 
 	root.AddCommand(createCommand)
 	root.AddCommand(listCommand)
+	root.AddCommand(infoCommand)
 	root.AddCommand(UpdateCommand)
 	root.AddCommand(deleteCmd)
 	root.AddCommand(backendsCommand)

@@ -108,6 +108,7 @@ last user closes. The `max-pool-size` setting caps connections per client.
 ```yaml
 partition-storage:
   - name: mongo-01
+    affinity: 1
     mongo:
       connection-string: "mongodb://user:pass@localhost:27017"
       database: querator

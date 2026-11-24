@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"cmp"
 	"context"
 	"log/slog"
 	"maps"
@@ -331,6 +332,14 @@ type RebalanceCounts struct {
 	ChangedQueues      int
 	CreatedPartitions  int
 	DrainingPartitions int
+	WaitingQueues      []WaitingQueue
+}
+
+type WaitingQueue struct {
+	Namespace string
+	QueueName string
+	Backend   string
+	Partition int
 }
 
 const maxRebalanceAttempts = 10
@@ -359,6 +368,9 @@ func (qm *QueuesManager) Rebalance(ctx context.Context) (RebalanceCounts, error)
 			return result, err
 		}
 	}
+	slices.SortFunc(result.WaitingQueues, func(a, b WaitingQueue) int {
+		return cmp.Or(cmp.Compare(a.Namespace, b.Namespace), cmp.Compare(a.QueueName, b.QueueName))
+	})
 	return result, nil
 }
 
@@ -367,17 +379,24 @@ func (qm *QueuesManager) rebalanceBackends(ctx context.Context) ([]types.Backend
 	if err != nil {
 		return nil, err
 	}
+	if err := refuseRebalance(backends, qm.backends.Configured); err != nil {
+		return nil, err
+	}
+	return backends, nil
+}
+
+func refuseRebalance(backends []types.Backend, configured func(string) bool) error {
 	for _, backend := range backends {
-		if backend.Affinity > 0 && !qm.backends.Configured(backend.Name) {
-			return nil, reply.NewInvalidOption("rebalance is refused; storage backend '%s' has affinity %v "+
+		if backend.Affinity > 0 && !configured(backend.Name) {
+			return reply.NewInvalidOption("rebalance is refused; storage backend '%s' has affinity %v "+
 				"and is missing from this instance's config file; add it back or save affinity 0 for it", backend.Name, backend.Affinity)
 		}
 	}
 	if !placement.CanPlace(backends) {
-		return nil, reply.NewInvalidOption("rebalance is refused; no storage backend can take partitions, " +
+		return reply.NewInvalidOption("rebalance is refused; no storage backend can take partitions, " +
 			"at least one storage backend needs a saved affinity above 0, see '/v1/storage/backends.update'")
 	}
-	return backends, nil
+	return nil
 }
 
 func (qm *QueuesManager) rebalanceQueue(ctx context.Context, name string, backends []types.Backend,
@@ -396,7 +415,7 @@ func (qm *QueuesManager) rebalanceQueue(ctx context.Context, name string, backen
 			return errors.With("queue", name).Errorf("placement.Rebalance(): %w", err)
 		}
 		if !rebalanced.Changed {
-			return qm.adoptRebalancedRecord(ctx, queue)
+			return qm.adoptAndNoteWaiting(ctx, queue, result)
 		}
 
 		err = qm.conf.StorageConfig.Queues.SavePartitions(ctx, types.PartitionList{
@@ -427,7 +446,7 @@ func (qm *QueuesManager) rebalanceQueue(ctx context.Context, name string, backen
 			}
 			return errors.With("queue", name).Errorf("Queues.Get(): %w", err)
 		}
-		return qm.adoptRebalancedRecord(ctx, stored)
+		return qm.adoptAndNoteWaiting(ctx, stored, result)
 	}
 	return reply.NewRetryRequest("queue '%s' kept changing while it was being rebalanced; try again", name)
 }
@@ -464,6 +483,28 @@ func (qm *QueuesManager) RemovePartition(ctx context.Context, name string, parti
 		return queue, nil
 	}
 	return types.QueueInfo{}, errors.With("queue", name).Errorf("queue record kept changing while partition %d was removed", partition)
+}
+
+func (qm *QueuesManager) adoptAndNoteWaiting(ctx context.Context, queue types.QueueInfo, result *RebalanceCounts) error {
+	if err := qm.adoptRebalancedRecord(ctx, queue); err != nil {
+		return err
+	}
+	if queue.RequestedPartitions != 1 {
+		return nil
+	}
+	var waiting *WaitingQueue
+	for _, partition := range queue.PartitionInfo {
+		if !partition.Draining || qm.backends.Configured(partition.StorageName) {
+			continue
+		}
+		if waiting == nil || partition.PartitionNum < waiting.Partition {
+			waiting = &WaitingQueue{Namespace: queue.Namespace, QueueName: queue.Name, Backend: partition.StorageName, Partition: partition.PartitionNum}
+		}
+	}
+	if waiting != nil {
+		result.WaitingQueues = append(result.WaitingQueues, *waiting)
+	}
+	return nil
 }
 
 func drainingCount(queue types.QueueInfo) int {

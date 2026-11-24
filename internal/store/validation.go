@@ -17,7 +17,7 @@ var ErrEmptyQueueName = reply.NewInvalidOption("queue name is invalid; queue nam
 const maxReferenceLength = 2_000
 const maxQueueNameLength = 512
 
-const maxBackendNameLength = 512
+const MaxBackendNameLength = 512
 const maxInt16 = 65536
 
 type QueuesValidation struct{}
@@ -255,8 +255,8 @@ func (s QueuesValidation) validateBackend(backend types.Backend) error {
 		return reply.NewInvalidOption("backend is invalid; backend name cannot be empty")
 	}
 
-	if len(backend.Name) > maxBackendNameLength {
-		return reply.NewInvalidOption("backend is invalid; cannot be greater than '%d' characters", maxBackendNameLength)
+	if len(backend.Name) > MaxBackendNameLength {
+		return reply.NewInvalidOption("backend is invalid; cannot be greater than '%d' characters", MaxBackendNameLength)
 	}
 
 	if math.IsNaN(backend.Affinity) || math.IsInf(backend.Affinity, 0) {

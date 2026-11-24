@@ -127,6 +127,14 @@ func (p PartitionInfo) State() string {
 	return PartitionAvailable
 }
 
+func (p PartitionInfo) ToProto() *pb.PartitionInfo {
+	return &pb.PartitionInfo{
+		Partition:   int32(p.PartitionNum),
+		StorageName: p.StorageName,
+		State:       p.State(),
+	}
+}
+
 type PartitionHash string
 
 func (p *PartitionInfo) HashKey() PartitionHash {
@@ -176,11 +184,7 @@ func (i *QueueInfo) ToProto(in *pb.QueueInfo) *pb.QueueInfo {
 	in.QueueName = i.Name
 	in.Partitions = make([]*pb.PartitionInfo, 0, len(i.PartitionInfo))
 	for _, p := range i.PartitionInfo {
-		in.Partitions = append(in.Partitions, &pb.PartitionInfo{
-			Partition:   int32(p.PartitionNum),
-			StorageName: p.StorageName,
-			State:       p.State(),
-		})
+		in.Partitions = append(in.Partitions, p.ToProto())
 	}
 	return in
 }

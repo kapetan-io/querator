@@ -614,6 +614,15 @@ func (s *Service) QueuesRebalance(ctx context.Context, _ *proto.QueuesRebalanceR
 	resp.QueuesChanged = new(int32(rebalanced.ChangedQueues))
 	resp.PartitionsCreated = new(int32(rebalanced.CreatedPartitions))
 	resp.PartitionsDraining = new(int32(rebalanced.DrainingPartitions))
+	resp.WaitingQueues = make([]*proto.WaitingQueue, 0, len(rebalanced.WaitingQueues))
+	for _, waiting := range rebalanced.WaitingQueues {
+		resp.WaitingQueues = append(resp.WaitingQueues, &proto.WaitingQueue{
+			Namespace: waiting.Namespace,
+			QueueName: waiting.QueueName,
+			Backend:   waiting.Backend,
+			Partition: new(int32(waiting.Partition)),
+		})
+	}
 	return nil
 }
 

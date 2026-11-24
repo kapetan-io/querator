@@ -21,7 +21,8 @@ its remaining items are leased and completed. New partitions are created on the 
 that hold too few. Run 'querator backends list' first to see what a rebalance would do.
 If a rebalance stops part way, run it again to finish. Needs the queue.rebalance permission.
 Outputs JSON with the number of queues changed, partitions created and partitions this run
-marked draining.`,
+marked draining, and waiting_queues, the queues with one partition that wait on a draining
+partition whose storage backend is missing from the config file.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return RunRebalance(flags)

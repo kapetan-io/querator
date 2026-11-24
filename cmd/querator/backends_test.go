@@ -41,7 +41,6 @@ func TestBackendsCommand(t *testing.T) {
 		require.Len(t, list.Backends, 1)
 		assert.Equal(t, "mem-0", list.Backends[0].Backend)
 		assert.Equal(t, 0.0, list.Backends[0].GetAffinity())
-		assert.True(t, list.Backends[0].GetSafeToStop())
 
 		var raw struct {
 			Backends []struct {

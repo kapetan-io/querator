@@ -1166,11 +1166,6 @@ components:
             entry with no `affinity` can be true: a backend in the config file
             whose record was refused at start has no saved record and still
             holds partitions.
-        safe_to_stop:
-          type: boolean
-          description: >-
-            True only when affinity is 0 and no partition of any queue is left
-            on the backend. A partition Querator cannot read counts as left.
         partitions:
           type: array
           description: Every partition on the backend.
@@ -1181,7 +1176,6 @@ components:
       required:
         - backend
         - configured
-        - safe_to_stop
         - partitions
         - pending
     BackendPartition:

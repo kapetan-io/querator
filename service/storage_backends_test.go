@@ -121,7 +121,6 @@ func testStorageBackends(t *testing.T, setup NewStorageFunc, tearDown func(), li
 		backend := findBackend(t, listBackends(t, d), name)
 		assert.Equal(t, 1.0, backend.GetAffinity())
 		assert.True(t, backend.GetConfigured())
-		assert.False(t, backend.GetSafeToStop())
 		assert.Empty(t, backend.Partitions)
 		require.NotNil(t, backend.Pending)
 		assert.Empty(t, backend.Pending.Create)
@@ -154,7 +153,6 @@ func testStorageBackends(t *testing.T, setup NewStorageFunc, tearDown func(), li
 			unleased += p.GetUnleased()
 		}
 		assert.Equal(t, int32(3), unleased)
-		assert.False(t, backend.GetSafeToStop())
 	})
 
 	t.Run("ScheduledCountDropsWhenScheduledItemIsDeleted", func(t *testing.T) {
@@ -387,7 +385,6 @@ func testStorageBackends(t *testing.T, setup NewStorageFunc, tearDown func(), li
 
 		extra := findBackend(t, listBackends(t, d), "memory-extra")
 		assert.Empty(t, extra.Partitions)
-		assert.False(t, extra.GetSafeToStop())
 
 		require.NoError(t, c.StorageBackendsUpdate(ctx, &pb.StorageBackendsUpdateRequest{
 			Backend:  "memory-extra",
@@ -412,7 +409,6 @@ func testStorageBackends(t *testing.T, setup NewStorageFunc, tearDown func(), li
 		extra = findBackend(t, listBackends(t, d), "memory-extra")
 		assert.Equal(t, 0.0, extra.GetAffinity())
 		assert.Empty(t, extra.Partitions)
-		assert.True(t, extra.GetSafeToStop())
 	})
 
 	t.Run("ListRepliesWhileBackendIsDown", func(t *testing.T) {
@@ -447,12 +443,17 @@ func testStorageBackends(t *testing.T, setup NewStorageFunc, tearDown func(), li
 		assert.Equal(t, int32(0), up.Partitions[0].GetFailures())
 		assert.NotNil(t, up.Partitions[0].Unleased)
 
-		// A backend at affinity 0 that still holds a partition is not safe to stop.
 		require.NoError(t, c.StorageBackendsUpdate(ctx, &pb.StorageBackendsUpdateRequest{
 			Backend:  "memory-down",
 			Affinity: new(0.0),
 		}))
-		assert.False(t, findBackend(t, listBackends(t, d), "memory-down").GetSafeToStop())
+		down = findBackend(t, listBackends(t, d), "memory-down")
+		assert.Equal(t, 0.0, down.GetAffinity())
+		require.Len(t, down.Partitions, 1)
+		assert.Greater(t, down.Partitions[0].GetFailures(), int32(0))
+		assert.Nil(t, down.Partitions[0].Unleased)
+		assert.Nil(t, down.Partitions[0].Leased)
+		assert.Nil(t, down.Partitions[0].Scheduled)
 	})
 
 	t.Run("ListShowsPartitionOnBackendWithNoRecord", func(t *testing.T) {
@@ -474,7 +475,6 @@ func testStorageBackends(t *testing.T, setup NewStorageFunc, tearDown func(), li
 		assert.False(t, gone.GetConfigured())
 		require.Len(t, gone.Partitions, 1)
 		assert.Equal(t, queueName, gone.Partitions[0].QueueName)
-		assert.False(t, gone.GetSafeToStop())
 		assert.Nil(t, gone.Affinity)
 		assert.Equal(t, int32(1), gone.Partitions[0].GetFailures())
 		assert.Nil(t, gone.Partitions[0].Unleased)
@@ -499,7 +499,6 @@ func testStorageBackends(t *testing.T, setup NewStorageFunc, tearDown func(), li
 		require.Len(t, gone.Partitions, 1)
 		assert.Equal(t, "draining", gone.Partitions[0].State)
 		assert.Nil(t, gone.Affinity)
-		assert.False(t, gone.GetSafeToStop())
 		assert.Empty(t, gone.Pending.Drain)
 		recorded = findBackend(t, listBackends(t, d), conf.PartitionStorage[0].Name)
 		require.Len(t, recorded.Partitions, 1)
@@ -657,7 +656,6 @@ func testStorageBackends(t *testing.T, setup NewStorageFunc, tearDown func(), li
 			require.Len(t, gone.Partitions, 1)
 			assert.Empty(t, gone.Pending.Create)
 			assert.Empty(t, gone.Pending.Drain)
-			assert.False(t, gone.GetSafeToStop())
 		})
 
 		t.Run("PartitionOnBackendMissingFromConfigLoads", func(t *testing.T) {

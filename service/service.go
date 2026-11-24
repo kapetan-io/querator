@@ -644,7 +644,6 @@ func (s *Service) StorageBackendsList(ctx context.Context, _ *proto.StorageBacke
 		backend := &proto.StorageBackend{
 			Backend:    status.Backend.Name,
 			Configured: new(status.Configured),
-			SafeToStop: new(status.SafeToStop),
 			Pending:    &proto.PendingRebalance{},
 		}
 		if status.Recorded {

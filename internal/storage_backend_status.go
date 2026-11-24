@@ -14,7 +14,6 @@ type StorageBackendStatus struct {
 	Backend    types.Backend
 	Recorded   bool
 	Configured bool
-	SafeToStop bool
 	Partitions []BackendPartition
 	Rebalance  RebalancePlan
 }
@@ -97,9 +96,6 @@ func (qm *QueuesManager) ListStorageBackends(ctx context.Context) ([]StorageBack
 		}
 	}
 
-	for i := range statuses {
-		statuses[i].SafeToStop = statuses[i].Backend.Affinity == 0 && len(statuses[i].Partitions) == 0
-	}
 	return statuses, nil
 }
 

@@ -261,7 +261,8 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		}
 		conf := setup()
 		defer tearDown()
-		d := newDaemon(t, 10*clock.Minute, svc.Config{StorageConfig: conf})
+		d := newDaemon(t, 30*clock.Second+clock.Duration(queueCount)*500*clock.Millisecond,
+			svc.Config{StorageConfig: conf})
 		defer d.Shutdown(t)
 		c, ctx := d.MustClient(), d.Context()
 		name := conf.PartitionStorage[0].Name
@@ -290,7 +291,9 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 			require.Equal(t, []int32{0, 1}, availableOn(listed, name), queueName)
 			require.Empty(t, drainingOn(listed, name), queueName)
 		}
+		start = clock.Now()
 		assert.Equal(t, rebalanceCounts{}, rebalance(t, ctx, c))
+		t.Logf("rebalance of %d queues with none changed took %s", queueCount, clock.Since(start))
 	})
 
 	t.Run("ItemCountDoesNotSlowRebalance", func(t *testing.T) {
@@ -299,9 +302,10 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 			largeItems = 100_000
 			rounds     = 4
 		)
-		conf := setup()
+		var fault partitionFault
+		conf := fault.Wrap(setup())
 		defer tearDown()
-		d := newDaemon(t, 10*clock.Minute, svc.Config{StorageConfig: conf})
+		d := newDaemon(t, 2*clock.Minute, svc.Config{StorageConfig: conf})
 		defer d.Shutdown(t)
 		c, ctx := d.MustClient(), d.Context()
 
@@ -324,9 +328,12 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		for round := range rounds {
 			for _, queueName := range []string{small, large} {
 				setPartitionCount(t, ctx, c, queueName, int32(round+2))
+				fault.itemReads.Store(0)
+				fault.itemReadsBelow.Store(int32(round + 1))
 				start := clock.Now()
 				assert.Equal(t, rebalanceCounts{ChangedQueues: 1, CreatedPartitions: 1}, rebalance(t, ctx, c))
 				elapsed := clock.Since(start)
+				assert.Zero(t, fault.itemReads.Load())
 				if best, ok := fastest[queueName]; !ok || elapsed < best {
 					fastest[queueName] = elapsed
 				}

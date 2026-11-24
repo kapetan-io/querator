@@ -183,13 +183,15 @@ change a queue already in storage.
 * A config file that still declares the broken setup refuses to start, and the error names the queue
   and the rule. Fix the config file's entries as the error says, then fix the stored queues as above.
 
-## A rebalance takes time in proportion to the queues it changes
+## A rebalance reads every queue and takes time in proportion to the queues it changes
 
-One `querator rebalance` call takes time in proportion to the number of queues it changes, and not to
-the items they hold. Rebalancing a queue with 100,000 items took the same time as one with 1,000.
-Rebalancing 1,200 queues in one call, each gaining a partition, took about 20 seconds on PostgreSQL,
-about a minute on BadgerDB and about 2 minutes on MongoDB, which is 20ms to 100ms for each queue. These
-are times measured on a busy development machine, not limits. The command stops waiting after 5 minutes.
+One `querator rebalance` call reads every queue's record and saves the queues it changes. It reads no
+items, so the items a queue holds do not change its time. Rebalancing a queue with 100,000 items took
+the same time as one with 1,000. When every queue changes, rebalancing 1,200 queues in one call, each
+gaining a partition, took about 20 seconds on PostgreSQL, 45 to 80 seconds on BadgerDB and 1 to 2
+minutes on MongoDB, which is 20ms to 100ms for each queue. When no queue changes, the same call took
+under a second on each backend. These are times measured on a busy development machine, not limits.
+The command stops waiting after 5 minutes.
 
-**Workaround**: When `querator rebalance` stops waiting, run it again. A rebalance that stopped part way
-finishes on the next call.
+**Workaround**: When `querator rebalance` stops waiting, run it again until it replies. Each call walks
+every queue again, and a queue it already changed needs no save.

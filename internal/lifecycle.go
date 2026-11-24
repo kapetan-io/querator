@@ -171,6 +171,7 @@ func (l *Logical) runLifecycle(state *QueueState) {
 	}
 	partition.Lifecycle.NextLifecycleRun = next
 	pass.End()
+	l.removeIfEmpty(state, partition, now)
 }
 
 func (l *Logical) awaitMoveAnswer(req *types.ProduceRequest) {

@@ -21,6 +21,7 @@ type PartitionLifecycleState struct {
 	Failures          int
 	UnfinishedRuns    int
 	ScheduledFailures int
+	RemovalFailures   int
 	UnansweredMove    *types.LifeCycleRequest
 }
 

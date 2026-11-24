@@ -134,7 +134,7 @@ func (p *PartitionInfo) HashKey() PartitionHash {
 		return p.hashKey
 	}
 
-	p.hashKey = PartitionHash(fmt.Sprintf("%s%d%s", p.Queue.Name, p.PartitionNum, p.StorageName))
+	p.hashKey = PartitionHash(fmt.Sprintf("%s %d %s", p.Queue.Name, p.PartitionNum, p.StorageName))
 	return p.hashKey
 }
 

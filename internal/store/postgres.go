@@ -1861,6 +1861,19 @@ func (p *PostgresPartition) UpdateQueueInfo(info types.QueueInfo) {
 	p.info.Queue = info
 }
 
+func (p *PostgresPartition) DeleteStorage(ctx context.Context) error {
+	pool, err := p.conf.getOrCreatePool(ctx)
+	if err != nil {
+		return err
+	}
+	if _, err := pool.Exec(ctx, `DROP TABLE IF EXISTS `+p.tableName()); err != nil {
+		return errors.Errorf("drop table %s: %w", p.tableName(), err)
+	}
+	p.tableOnce = sync.Once{}
+	p.tableErr = nil
+	return nil
+}
+
 func (p *PostgresPartition) Close(ctx context.Context) error {
 	p.conf.Close()
 	return nil

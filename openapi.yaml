@@ -770,6 +770,29 @@ paths:
                   queue_name: orders
                   failed_step: save_record
           headers: {}
+        '400':
+          description: >-
+            The rebalance stopped part way because the queue's partitions
+            cannot be placed on the storage backends. A rebalance refused
+            before it starts also replies 400, with no details.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Reply'
+              example:
+                code: 400
+                code_text: Bad Request
+                message: >-
+                  rebalance stopped; partitions of queue 'orders' cannot be
+                  placed, the sum of partition storage affinities is too
+                  large; lower the affinities
+                details:
+                  queues_changed: '0'
+                  partitions_created: '0'
+                  partitions_draining: '0'
+                  queue_name: orders
+                  failed_step: place_partitions
+          headers: {}
       security: []
   /v1/storage/backends.update:
     post:

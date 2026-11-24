@@ -444,7 +444,12 @@ paths:
     post:
       summary: Get Info about a queue
       deprecated: false
-      description: ''
+      description: >-
+        Returns the queue's saved settings next to the partitions it is
+        running. `pending` lists the partitions a rebalance would create and
+        the ones it would mark draining, and is left out when a rebalance would change nothing.
+        `rebalance_refused` gives the reason when a rebalance would be refused.
+        `/queues.list` returns the same fields for each queue it lists.
       operationId: post-v1-queues.info
       tags:
         - Querator V1
@@ -1707,6 +1712,17 @@ components:
             `/queues.update`.
           items:
             $ref: '#/components/schemas/PartitionInfo'
+        pending:
+          $ref: '#/components/schemas/QueuePendingRebalance'
+        rebalance_refused:
+          type: string
+          description: >-
+            Why a rebalance would be refused. A backend with affinity above 0
+            missing from the config file, and no backend able to take
+            partitions, use the words `/queues.rebalance` uses. Left out when a
+            rebalance would not be refused. While set, `pending` is left out,
+            so it does not say whether this queue's settings differ. Set by
+            Querator; ignored by `/queues.create` and `/queues.update`.
       required:
         - queue_name
         - requested_partitions
@@ -1717,6 +1733,29 @@ components:
         - reference
         - lease_timeout
         - expire_timeout
+    QueuePendingRebalance:
+      type: object
+      description: >-
+        What a rebalance would change for this queue, worked out on each
+        `/queues.info` and `/queues.list` from the queue's requested partition
+        count and the storage backends' saved affinities. Left out of the
+        queue when a rebalance would change nothing. Set by
+        Querator; ignored by `/queues.create` and `/queues.update`.
+      properties:
+        create:
+          type: array
+          description: >-
+            Partitions a rebalance would create, with the storage backend each
+            would go on.
+          items:
+            $ref: '#/components/schemas/PartitionInfo'
+        drain:
+          type: array
+          description: >-
+            Partitions a rebalance would mark draining, with the storage backend
+            which holds each.
+          items:
+            $ref: '#/components/schemas/PartitionInfo'
     PartitionInfo:
       type: object
       properties:

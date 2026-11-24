@@ -116,6 +116,8 @@ type PartitionStorage struct {
 	Badger   *BadgerConfig   `yaml:"badger"`
 	Mongo    *MongoConfig    `yaml:"mongo"`
 	Postgres *PostgresConfig `yaml:"postgres"`
+
+	affinityOmitted bool
 }
 
 type MemoryConfig struct{}
@@ -283,6 +285,7 @@ func keepEmptyQueueStorageKeys(node *yaml.Node, storage *QueueStorage) {
 }
 
 func keepEmptyPartitionStorageKeys(node *yaml.Node, storage *PartitionStorage) {
+	storage.affinityOmitted = mappingValue(node, "affinity") == nil
 	if mappingValue(node, "memory") != nil && storage.Memory == nil {
 		storage.Memory = &MemoryConfig{}
 	}
@@ -430,6 +433,12 @@ func setupPartitionStorage(file File, d *Config) error {
 		if name == "" {
 			return fmt.Errorf("%s must define exactly one backend (memory, badger, mongo, postgres)", section)
 		}
+		if len(ps.Name) > store.MaxBackendNameLength {
+			return fmt.Errorf("partition storage name cannot be longer than %d characters", store.MaxBackendNameLength)
+		}
+		if ps.affinityOmitted {
+			return fmt.Errorf("%s affinity is required", section)
+		}
 		if math.IsNaN(ps.Affinity) || math.IsInf(ps.Affinity, 0) {
 			return fmt.Errorf("%s affinity must be a finite number, got %v", section, ps.Affinity)
 		}
@@ -550,13 +559,14 @@ func setupQueueStorage(ctx context.Context, file File, conf *Config) error {
 		}
 		if len(queue.Partitions) == 0 && placeable == nil {
 			var err error
-			if placeable, err = backends.Placeable(ctx); err != nil {
+			if placeable, err = backends.PlaceableUnsaved(ctx); err != nil {
 				return fmt.Errorf("invalid queue '%s'; %w", queue.Name, err)
 			}
 		}
 		if len(queue.Partitions) == 0 && !placement.CanPlace(placeable) {
 			return fmt.Errorf("invalid queue '%s'; no storage backend can take partitions, "+
-				"at least one storage backend needs a saved affinity above 0, see 'querator backends update'",
+				"at least one storage backend needs an affinity above 0; a backend Querator has already saved keeps its saved "+
+				"affinity, which 'querator backends update' changes while the daemon runs",
 				queue.Name)
 		}
 		for _, p := range queue.Partitions {

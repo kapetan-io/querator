@@ -50,7 +50,23 @@ func (b *StorageBackends) saveFirstSeen(ctx context.Context) error {
 		}
 	}
 	b.saved = true
+	b.warnChangedAffinity(ctx)
 	return nil
+}
+
+func (b *StorageBackends) warnChangedAffinity(ctx context.Context) {
+	var saved []types.Backend
+	if err := b.queues.ListBackends(ctx, &saved); err != nil {
+		return
+	}
+	for _, backend := range saved {
+		file := store.Find(backend.Name, b.configured)
+		if file.Name != "" && file.Affinity != backend.Affinity {
+			b.log.Warn("config file affinity differs from the saved affinity; the saved affinity is in force, "+
+				"run 'querator backends update "+backend.Name+" --affinity <n>' to change it",
+				"backend", backend.Name, "file", file.Affinity, "saved", backend.Affinity)
+		}
+	}
 }
 
 func (b *StorageBackends) List(ctx context.Context) ([]types.Backend, error) {
@@ -82,6 +98,25 @@ func (b *StorageBackends) Placeable(ctx context.Context) ([]types.Backend, error
 	return slices.DeleteFunc(saved, func(backend types.Backend) bool {
 		return !b.Configured(backend.Name)
 	}), nil
+}
+
+func (b *StorageBackends) PlaceableUnsaved(ctx context.Context) ([]types.Backend, error) {
+	defer b.mutex.Unlock()
+	b.mutex.Lock()
+	var saved []types.Backend
+	if err := b.queues.ListBackends(ctx, &saved); err != nil {
+		return nil, errors.Errorf("Queues.ListBackends(): %w", err)
+	}
+	placeable := make([]types.Backend, 0, len(b.configured))
+	for _, backend := range b.configured {
+		found := slices.IndexFunc(saved, func(s types.Backend) bool { return s.Name == backend.Name })
+		if found >= 0 {
+			placeable = append(placeable, saved[found])
+			continue
+		}
+		placeable = append(placeable, types.Backend{Name: backend.Name, Affinity: backend.Affinity})
+	}
+	return placeable, nil
 }
 
 type BackendUpdate struct {

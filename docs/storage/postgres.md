@@ -217,6 +217,7 @@ The `max-conns` setting controls the maximum number of connections per storage b
 ```yaml
 partition-storage:
   - name: postgres-01
+    affinity: 1
     postgres:
       connection-string: "postgres://user:pass@localhost:5432/querator"
       max-conns: 50  # Maximum 50 connections to this database
@@ -253,6 +254,7 @@ Configure Querator with the managed service endpoint:
 ```yaml
 partition-storage:
   - name: postgres-prod
+    affinity: 1
     postgres:
       connection-string: "postgres://user:pass@managed-postgres.cloud:5432/querator?sslmode=require"
 ```

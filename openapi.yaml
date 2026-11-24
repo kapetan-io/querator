@@ -690,8 +690,14 @@ paths:
         with nothing changed when no storage backend has an affinity above 0,
         or when a storage backend with an affinity above 0 is missing from
         this instance's config file. The reply counts what
-        was saved and does not say a drain finished. Needs the
-        `queue.rebalance` permission in the `_system` namespace.
+        was saved and does not say a drain finished. A rebalance that stops
+        part way, because saving or adopting one queue's record failed, replies with an error whose
+        `details` holds `queues_changed`, `partitions_created` and
+        `partitions_draining` for what was saved before it stopped, as
+        strings, and `queue_name`, the queue that failed. A queue whose
+        record was saved before adopting it failed is counted and is also the
+        named queue. The error keeps the code of the failure that stopped it.
+        Needs the `queue.rebalance` permission in the `_system` namespace.
       operationId: post-v1-queues.rebalance
       tags:
         - Querator V1
@@ -714,6 +720,22 @@ paths:
                 queues_changed: 1
                 partitions_created: 2
                 partitions_draining: 1
+          headers: {}
+        '500':
+          description: The rebalance stopped part way.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Reply'
+              example:
+                code: 500
+                code_text: Internal Service Error
+                message: Internal Error
+                details:
+                  queues_changed: '1'
+                  partitions_created: '1'
+                  partitions_draining: '0'
+                  queue_name: orders
           headers: {}
       security: []
   /v1/storage/backends.update:
@@ -1391,6 +1413,11 @@ components:
         message:
           type: string
           description: Additional details about the response
+        details:
+          type: object
+          additionalProperties:
+            type: string
+          description: Values the call adds to an error reply
       required:
         - code
     QueueProduceItem:

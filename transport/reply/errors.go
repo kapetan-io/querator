@@ -2,6 +2,7 @@ package reply
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/duh-rpc/duh-go"
 	v1 "github.com/duh-rpc/duh-go/proto/v1"
@@ -263,3 +264,86 @@ func (e *ErrForbidden) Message() string {
 }
 
 var _ duh.Error = &ErrForbidden{}
+
+const (
+	detailQueuesChanged      = "queues_changed"
+	detailPartitionsCreated  = "partitions_created"
+	detailPartitionsDraining = "partitions_draining"
+	detailQueueName          = "queue_name"
+)
+
+type RebalanceCounts struct {
+	QueuesChanged      int
+	PartitionsCreated  int
+	PartitionsDraining int
+}
+
+func ParseRebalanceStopped(details map[string]string) (RebalanceCounts, string, bool) {
+	queueName := details[detailQueueName]
+	changed, changedErr := strconv.Atoi(details[detailQueuesChanged])
+	created, createdErr := strconv.Atoi(details[detailPartitionsCreated])
+	draining, drainingErr := strconv.Atoi(details[detailPartitionsDraining])
+	if queueName == "" || changedErr != nil || createdErr != nil || drainingErr != nil {
+		return RebalanceCounts{}, "", false
+	}
+	return RebalanceCounts{QueuesChanged: changed, PartitionsCreated: created, PartitionsDraining: draining}, queueName, true
+}
+
+type ErrRebalanceStopped struct {
+	queueName string
+	saved     RebalanceCounts
+	cause     error
+}
+
+func NewRebalanceStopped(queueName string, saved RebalanceCounts, cause error) *ErrRebalanceStopped {
+	return &ErrRebalanceStopped{queueName: queueName, saved: saved, cause: cause}
+}
+
+func (e *ErrRebalanceStopped) Error() string {
+	return fmt.Sprintf("rebalance stopped at queue '%s': %s", e.queueName, e.cause)
+}
+
+func (e *ErrRebalanceStopped) Unwrap() error {
+	return e.cause
+}
+
+func (e *ErrRebalanceStopped) Is(target error) bool {
+	var err *ErrRebalanceStopped
+	return errors.As(target, &err)
+}
+
+func (e *ErrRebalanceStopped) Code() int {
+	var cause duh.Error
+	if errors.As(e.cause, &cause) {
+		return cause.Code()
+	}
+	return duh.CodeInternalError
+}
+
+func (e *ErrRebalanceStopped) ProtoMessage() proto.Message {
+	return &v1.Reply{
+		Message:  e.Message(),
+		CodeText: duh.CodeText(e.Code()),
+		Code:     int32(e.Code()),
+		Details:  e.Details(),
+	}
+}
+
+func (e *ErrRebalanceStopped) Details() map[string]string {
+	return map[string]string{
+		detailQueuesChanged:      strconv.Itoa(e.saved.QueuesChanged),
+		detailPartitionsCreated:  strconv.Itoa(e.saved.PartitionsCreated),
+		detailPartitionsDraining: strconv.Itoa(e.saved.PartitionsDraining),
+		detailQueueName:          e.queueName,
+	}
+}
+
+func (e *ErrRebalanceStopped) Message() string {
+	var cause duh.Error
+	if errors.As(e.cause, &cause) && cause.Code() != duh.CodeInternalError {
+		return cause.Message()
+	}
+	return "Internal Error"
+}
+
+var _ duh.Error = &ErrRebalanceStopped{}

@@ -595,11 +595,18 @@ func (h *HTTPHandler) Collect(ch chan<- prometheus.Metric) {
 
 func (h *HTTPHandler) ReplyError(w http.ResponseWriter, r *http.Request, err error) {
 	var re duh.Error
-	if errors.As(err, &re) {
-		duh.Reply(w, r, re.Code(), re.ProtoMessage())
+	if !errors.As(err, &re) {
+		h.logInternalError(r, err)
+		duh.ReplyWithCode(w, r, duh.CodeInternalError, nil, "Internal Error")
 		return
 	}
+	if re.Code() == duh.CodeInternalError {
+		h.logInternalError(r, err)
+	}
+	duh.Reply(w, r, re.Code(), re.ProtoMessage())
+}
 
+func (h *HTTPHandler) logInternalError(r *http.Request, err error) {
 	safe := make(http.Header, len(r.Header))
 	for _, k := range slices.Sorted(maps.Keys(r.Header)) {
 		if strings.EqualFold(k, "Authorization") || strings.EqualFold(k, "Cookie") {
@@ -616,7 +623,6 @@ func (h *HTTPHandler) ReplyError(w http.ResponseWriter, r *http.Request, err err
 		"http.request.headers", safe,
 		"http.request.useragent", r.Header.Get("user-agent"),
 	)
-	duh.ReplyWithCode(w, r, duh.CodeInternalError, nil, "Internal Error")
 }
 
 func (h *HTTPHandler) NamespacesCreate(ctx context.Context, w http.ResponseWriter, r *http.Request) {

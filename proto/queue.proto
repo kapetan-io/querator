@@ -230,7 +230,7 @@ message QueueInfo {
   int32 maxAttempts = 8 [json_name = "max_attempts"];
 
   // The number of partitions the queue is requesting. This might be different than the
-  // actual partitions if the requested partition count was recently changed via rebalance request.
+  // actual partitions until a rebalance runs. `pending` shows what a rebalance would change.
   // Creating a queue with more than 1024 partitions is rejected.
   int32 requestedPartitions = 9 [json_name = "requested_partitions"];
 
@@ -241,6 +241,26 @@ message QueueInfo {
   // The namespace this queue belongs to. Used for multi-tenant isolation.
   // If empty, the queue belongs to the default namespace.
   string namespace = 11;
+
+  // What a rebalance would change for this queue, worked out on each '/queues.info' and
+  // '/queues.list' from the queue's requested partition count and the storage backends' saved
+  // affinities. Absent when a rebalance would change nothing for this queue.
+  // Set by Querator; ignored on create and update.
+  QueuePendingRebalance pending = 12;
+
+  // Why a rebalance would be refused. A backend with affinity above 0 missing from the config file,
+  // and no backend able to take partitions, use the words '/queues.rebalance' uses. Left out when a
+  // rebalance would not be refused. While set, `pending` is absent, so it does not say whether this
+  // queue's settings differ. Set by Querator; ignored on create and update.
+  string rebalanceRefused = 13 [json_name = "rebalance_refused"];
+}
+
+// The partitions a rebalance would add to a queue, and the ones it would mark draining.
+message QueuePendingRebalance {
+  // Partitions a rebalance would create, with the storage backend each would go on.
+  repeated PartitionInfo create = 1;
+  // Partitions a rebalance would mark draining, with the storage backend which holds each.
+  repeated PartitionInfo drain = 2;
 }
 
 message PartitionInfo {

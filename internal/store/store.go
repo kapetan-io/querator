@@ -113,6 +113,8 @@ type Partition interface {
 
 	UpdateQueueInfo(info types.QueueInfo)
 
+	DeleteStorage(ctx context.Context) error
+
 	Close(ctx context.Context) error
 }
 

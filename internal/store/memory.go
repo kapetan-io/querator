@@ -29,6 +29,7 @@ type MemoryPartition struct {
 	mu         sync.RWMutex
 	log        *slog.Logger
 	uid        ksuid.KSUID
+	forget     func()
 }
 
 func (m *MemoryPartition) Produce(_ context.Context, batch types.ProduceBatch, now clock.Time) error {
@@ -564,6 +565,15 @@ func (m *MemoryPartition) Stats(_ context.Context, stats *types.PartitionStats, 
 	return nil
 }
 
+func (m *MemoryPartition) DeleteStorage(_ context.Context) error {
+	m.mu.Lock()
+	m.mem = nil
+	m.bySourceID = make(map[string]struct{})
+	m.mu.Unlock()
+	m.forget()
+	return nil
+}
+
 func (m *MemoryPartition) Close(_ context.Context) error {
 	defer m.mu.Unlock()
 	m.mu.Lock()
@@ -633,6 +643,7 @@ func (s *MemoryQueues) Add(_ context.Context, info types.QueueInfo) error {
 		return reply.NewInvalidOptionKind(types.KindQueueAlreadyExists, "invalid queue; '%s' already exists", info.Name)
 	}
 
+	info.CreationID = ksuid.New().String()
 	s.mem = append(s.mem, info)
 	return nil
 }
@@ -680,10 +691,11 @@ func (s *MemoryQueues) SavePartitions(_ context.Context, list types.PartitionLis
 	}
 
 	found := s.mem[idx]
-	if found.Revision != list.Revision {
+	change := partitionChange{Stored: found, Proposed: list}
+	if change.Stale() {
 		return ErrQueueChanged
 	}
-	if err := s.validatePartitionChange(partitionChange{Stored: found, Proposed: list}); err != nil {
+	if err := s.validatePartitionChange(change); err != nil {
 		return err
 	}
 	found.AdoptPartitions(list)
@@ -828,9 +840,18 @@ func NewMemoryPartitionStore(conf Config, log *slog.Logger) *MemoryPartitionStor
 func (m MemoryPartitionStore) Get(info types.PartitionInfo) Partition {
 	defer m.mutex.Unlock()
 	m.mutex.Lock()
-	p, ok := m.partitions[info.HashKey()]
+	key := info.HashKey()
+	p, ok := m.partitions[key]
 	if !ok {
-		m.partitions[info.HashKey()] = &MemoryPartition{
+		var created *MemoryPartition
+		created = &MemoryPartition{
+			forget: func() {
+				defer m.mutex.Unlock()
+				m.mutex.Lock()
+				if m.partitions[key] == created {
+					delete(m.partitions, key)
+				}
+			},
 			log:        m.log.With("queue", info.Queue.Name, "partition", info.PartitionNum),
 			mem:        make([]types.Item, 0, 1_000),
 			bySourceID: make(map[string]struct{}),
@@ -838,7 +859,8 @@ func (m MemoryPartitionStore) Get(info types.PartitionInfo) Partition {
 			conf:       m.conf,
 			info:       info,
 		}
-		return m.partitions[info.HashKey()]
+		m.partitions[key] = created
+		return created
 	}
 	return p
 }

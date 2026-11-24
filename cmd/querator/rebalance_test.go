@@ -34,6 +34,15 @@ func TestRebalanceCommand(t *testing.T) {
 	}))
 	require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{QueueName: "queue-1", RequestedPartitions: 2}))
 
+	// A draining partition that holds an item stays listed, so each partition gets one
+	for range 3 {
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			QueueName:      "queue-1",
+			RequestTimeout: "5s",
+			Items:          []*pb.QueueProduceItem{{Reference: "held", Bytes: []byte("x")}},
+		}))
+	}
+
 	type counts struct {
 		QueuesChanged      *int32 `json:"queues_changed"`
 		PartitionsCreated  *int32 `json:"partitions_created"`
@@ -49,6 +58,7 @@ func TestRebalanceCommand(t *testing.T) {
 		var printed counts
 		require.NoError(t, json.Unmarshal([]byte(out.Stdout), &printed))
 		assert.Equal(t, counts{QueuesChanged: new(int32(1)), PartitionsCreated: new(int32(0)), PartitionsDraining: new(int32(1))}, printed)
+		assert.Regexp(t, `"waiting_queues":\s+\[\]`, out.Stdout)
 
 		var info pb.QueueInfo
 		require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: "queue-1"}, &info))

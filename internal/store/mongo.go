@@ -269,6 +269,7 @@ type queueDoc struct {
 	RequestedPartitions int    `bson:"requested_partitions"`
 	NextPartition       int    `bson:"next_partition"`
 	Revision            int    `bson:"revision"`
+	CreationID          string `bson:"creation_id"`
 	PartitionInfoJSON   []byte `bson:"partition_info"`
 	CreatedAt           int64  `bson:"created_at"`
 	UpdatedAt           int64  `bson:"updated_at"`
@@ -290,6 +291,7 @@ func queueToDoc(info types.QueueInfo) (bson.M, error) {
 		"requested_partitions": info.RequestedPartitions,
 		"next_partition":       info.NextPartition,
 		"revision":             info.Revision,
+		"creation_id":          info.CreationID,
 		"partition_info":       partitionInfoJSON,
 		"created_at":           toMicros(info.CreatedAt),
 		"updated_at":           toMicros(info.UpdatedAt),
@@ -307,6 +309,7 @@ func (d *queueDoc) toInfo(info *types.QueueInfo) error {
 	info.RequestedPartitions = d.RequestedPartitions
 	info.NextPartition = d.NextPartition
 	info.Revision = d.Revision
+	info.CreationID = d.CreationID
 	info.CreatedAt = fromMicros(d.CreatedAt)
 	info.UpdatedAt = fromMicros(d.UpdatedAt)
 	if len(d.PartitionInfoJSON) > 0 {
@@ -344,6 +347,7 @@ func (q *MongoQueues) Add(ctx context.Context, info types.QueueInfo) error {
 		return err
 	}
 	info.Namespace = systemIfEmpty(info.Namespace)
+	info.CreationID = ksuid.New().String()
 
 	client, err := q.conf.getOrCreateClient(ctx)
 	if err != nil {
@@ -428,10 +432,11 @@ func (q *MongoQueues) SavePartitions(ctx context.Context, list types.PartitionLi
 		return err
 	}
 
-	if found.Revision != list.Revision {
+	change := partitionChange{Stored: found, Proposed: list}
+	if change.Stale() {
 		return ErrQueueChanged
 	}
-	if err := q.validatePartitionChange(partitionChange{Stored: found, Proposed: list}); err != nil {
+	if err := q.validatePartitionChange(change); err != nil {
 		return err
 	}
 
@@ -440,8 +445,14 @@ func (q *MongoQueues) SavePartitions(ctx context.Context, list types.PartitionLi
 		return errors.Errorf("marshal partition_info: %w", err)
 	}
 
-	result, err := q.collection(client).UpdateOne(ctx,
-		bson.M{"_id": list.QueueName, "revision": list.Revision},
+	filter := bson.M{"_id": list.QueueName, "revision": list.Revision}
+	if list.CompareCreationID && list.CreationID == "" {
+		filter["creation_id"] = bson.M{"$in": bson.A{"", nil}}
+	}
+	if list.CompareCreationID && list.CreationID != "" {
+		filter["creation_id"] = list.CreationID
+	}
+	result, err := q.collection(client).UpdateOne(ctx, filter,
 		bson.M{
 			"$set": bson.M{
 				"partition_info": partitionInfoJSON,
@@ -1546,6 +1557,18 @@ func (p *MongoPartition) UpdateQueueInfo(info types.QueueInfo) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.info.Queue = info
+}
+
+func (p *MongoPartition) DeleteStorage(ctx context.Context) error {
+	client, err := p.conf.getOrCreateClient(ctx)
+	if err != nil {
+		return err
+	}
+	if err := p.collection(client).Drop(ctx); err != nil {
+		return errors.Errorf("drop collection %s: %w", p.collectionName(), err)
+	}
+	p.resetCollectionGuard()
+	return nil
 }
 
 func (p *MongoPartition) Close(_ context.Context) error {

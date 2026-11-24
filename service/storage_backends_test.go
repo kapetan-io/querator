@@ -18,6 +18,7 @@ import (
 	"github.com/kapetan-io/tackle/random"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -357,6 +358,296 @@ func testStorageBackends(t *testing.T, setup NewStorageFunc, tearDown func(), li
 		assert.Equal(t, queueName, main.Pending.Create[0].QueueName)
 		assert.Equal(t, []int32{2}, main.Pending.Create[0].Partitions)
 	})
+
+	t.Run("QueuePendingShowsRebalanceAfterAffinityChange", func(t *testing.T) {
+		conf := withExtraBackend(setup(), "memory-extra", 1, nil)
+		defer tearDown()
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
+		name := conf.PartitionStorage[0].Name
+
+		queueName := random.String("queue-", 10)
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			QueueName:           queueName,
+			LeaseTimeout:        "1m0s",
+			ExpireTimeout:       "24h0m0s",
+			RequestedPartitions: 2,
+		})
+		var info pb.QueueInfo
+		require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &info))
+		assert.Nil(t, info.Pending)
+		assert.Empty(t, info.RebalanceRefused)
+		var onExtra int32 = -1
+		for _, p := range info.Partitions {
+			if p.StorageName == "memory-extra" {
+				onExtra = p.Partition
+			}
+		}
+		require.NotEqual(t, int32(-1), onExtra)
+
+		require.NoError(t, c.StorageBackendsUpdate(ctx, &pb.StorageBackendsUpdateRequest{
+			Backend:  "memory-extra",
+			Affinity: new(0.0),
+		}))
+
+		want := &pb.QueuePendingRebalance{
+			Create: []*pb.PartitionInfo{{Partition: 2, StorageName: name, State: "available"}},
+			Drain:  []*pb.PartitionInfo{{Partition: onExtra, StorageName: "memory-extra", State: "draining"}},
+		}
+		var after pb.QueueInfo
+		require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &after))
+		require.NotNil(t, after.Pending)
+		assert.True(t, proto.Equal(want, after.Pending))
+		assert.Empty(t, after.RebalanceRefused)
+		assert.Len(t, after.Partitions, 2)
+
+		var list pb.QueuesListResponse
+		require.NoError(t, c.QueuesList(ctx, &list, nil))
+		var listed *pb.QueueInfo
+		for _, item := range list.Items {
+			if item.QueueName == queueName {
+				listed = item
+			}
+		}
+		require.NotNil(t, listed)
+		assert.True(t, proto.Equal(want, listed.Pending))
+
+		require.NoError(t, c.QueuesRebalance(ctx, &pb.QueuesRebalanceRequest{}, &pb.QueuesRebalanceResponse{}))
+		var settled pb.QueueInfo
+		require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &settled))
+		assert.Nil(t, settled.Pending)
+	})
+
+	t.Run("QueuePendingReadsSavedRecordWhenQueueHasNotAdoptedIt", func(t *testing.T) {
+		conf := setup()
+		defer tearDown()
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
+
+		queueName := random.String("queue-", 10)
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			QueueName:           queueName,
+			LeaseTimeout:        "1m0s",
+			ExpireTimeout:       "24h0m0s",
+			RequestedPartitions: 1,
+		})
+
+		var saved types.QueueInfo
+		require.NoError(t, conf.Queues.Get(ctx, queueName, &saved))
+		saved.RequestedPartitions = 3
+		require.NoError(t, conf.Queues.Update(ctx, saved))
+
+		var list pb.QueuesListResponse
+		require.NoError(t, c.QueuesList(ctx, &list, nil))
+		var listed *pb.QueueInfo
+		for _, item := range list.Items {
+			if item.QueueName == queueName {
+				listed = item
+			}
+		}
+		require.NotNil(t, listed)
+		require.NotNil(t, listed.Pending)
+		assert.Len(t, listed.Pending.Create, 2)
+
+		var info pb.QueueInfo
+		require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &info))
+		require.NotNil(t, info.Pending)
+		assert.True(t, proto.Equal(listed.Pending, info.Pending))
+
+		var rebalanced pb.QueuesRebalanceResponse
+		require.NoError(t, c.QueuesRebalance(ctx, &pb.QueuesRebalanceRequest{}, &rebalanced))
+		assert.Equal(t, int32(2), rebalanced.GetPartitionsCreated())
+	})
+
+	t.Run("QueuePendingShowsRebalanceAfterRequestedPartitionsChange", func(t *testing.T) {
+		conf := setup()
+		defer tearDown()
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
+		name := conf.PartitionStorage[0].Name
+
+		queueName := random.String("queue-", 10)
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			QueueName:           queueName,
+			LeaseTimeout:        "1m0s",
+			ExpireTimeout:       "24h0m0s",
+			RequestedPartitions: 1,
+		})
+		require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{QueueName: queueName, RequestedPartitions: 3}))
+
+		var info pb.QueueInfo
+		require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &info))
+		assert.Equal(t, int32(3), info.RequestedPartitions)
+		assert.Len(t, info.Partitions, 1)
+		require.NotNil(t, info.Pending)
+		assert.Empty(t, info.Pending.Drain)
+		assert.True(t, proto.Equal(&pb.QueuePendingRebalance{Create: []*pb.PartitionInfo{
+			{Partition: 1, StorageName: name, State: "available"},
+			{Partition: 2, StorageName: name, State: "available"},
+		}}, info.Pending))
+	})
+
+	t.Run("QueuePendingReportsRefusedRebalance", func(t *testing.T) {
+		conf := setup()
+		defer tearDown()
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
+
+		queueName := random.String("queue-", 10)
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			QueueName:           queueName,
+			LeaseTimeout:        "1m0s",
+			ExpireTimeout:       "24h0m0s",
+			RequestedPartitions: 1,
+		})
+		require.NoError(t, c.StorageBackendsUpdate(ctx, &pb.StorageBackendsUpdateRequest{
+			Backend:  conf.PartitionStorage[0].Name,
+			Affinity: new(0.0),
+		}))
+
+		err := c.QueuesRebalance(ctx, &pb.QueuesRebalanceRequest{}, &pb.QueuesRebalanceResponse{})
+		var de duh.Error
+		require.True(t, errors.As(err, &de))
+
+		var info pb.QueueInfo
+		require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &info))
+		assert.Nil(t, info.Pending)
+		assert.Equal(t, de.Message(), info.RebalanceRefused)
+		assert.Contains(t, info.RebalanceRefused, "rebalance is refused")
+	})
+
+	t.Run("QueuesListShowsPendingOnlyOnQueuesThatDiffer", func(t *testing.T) {
+		conf := setup()
+		defer tearDown()
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
+
+		changed := random.String("queue-", 10)
+		agreeing := random.String("queue-", 10)
+		for _, name := range []string{changed, agreeing} {
+			createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+				QueueName:           name,
+				LeaseTimeout:        "1m0s",
+				ExpireTimeout:       "24h0m0s",
+				RequestedPartitions: 1,
+			})
+		}
+		require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{QueueName: changed, RequestedPartitions: 2}))
+
+		var list pb.QueuesListResponse
+		require.NoError(t, c.QueuesList(ctx, &list, nil))
+		listed := map[string]*pb.QueueInfo{}
+		for _, item := range list.Items {
+			listed[item.QueueName] = item
+		}
+		require.Contains(t, listed, changed)
+		require.Contains(t, listed, agreeing)
+		require.NotNil(t, listed[changed].Pending)
+		require.Len(t, listed[changed].Pending.Create, 1)
+		assert.Equal(t, int32(1), listed[changed].Pending.Create[0].Partition)
+		assert.Nil(t, listed[agreeing].Pending)
+		assert.Empty(t, listed[agreeing].RebalanceRefused)
+	})
+
+	t.Run("QueuePendingIgnoresPartitionsAlreadyDraining", func(t *testing.T) {
+		conf := withExtraBackend(setup(), "memory-extra", 1, nil)
+		defer tearDown()
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
+
+		queueName := random.String("queue-", 10)
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			QueueName:           queueName,
+			LeaseTimeout:        "1m0s",
+			ExpireTimeout:       "24h0m0s",
+			RequestedPartitions: 2,
+		})
+		// A draining partition that holds an item stays listed, so each partition gets one
+		for range 2 {
+			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+				QueueName:      queueName,
+				RequestTimeout: "5s",
+				Items:          []*pb.QueueProduceItem{{Reference: "held", Bytes: []byte("x")}},
+			}))
+		}
+		require.NoError(t, c.StorageBackendsUpdate(ctx, &pb.StorageBackendsUpdateRequest{
+			Backend:  "memory-extra",
+			Affinity: new(0.0),
+		}))
+		require.NoError(t, c.QueuesRebalance(ctx, &pb.QueuesRebalanceRequest{}, &pb.QueuesRebalanceResponse{}))
+
+		var settled pb.QueueInfo
+		require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &settled))
+		var draining int
+		for _, p := range settled.Partitions {
+			if p.State == "draining" {
+				draining++
+				assert.Equal(t, "memory-extra", p.StorageName)
+			}
+		}
+		require.Equal(t, 1, draining)
+		assert.Nil(t, settled.Pending)
+		assert.Empty(t, settled.RebalanceRefused)
+
+		require.NoError(t, c.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{QueueName: queueName, RequestedPartitions: 3}))
+		var grown pb.QueueInfo
+		require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &grown))
+		require.NotNil(t, grown.Pending)
+		assert.Empty(t, grown.Pending.Drain)
+		require.Len(t, grown.Pending.Create, 1)
+		assert.Equal(t, conf.PartitionStorage[0].Name, grown.Pending.Create[0].StorageName)
+	})
+
+	// Only storage that outlives the daemon can show what a restart finds.
+	if lifetime == outlivesDaemon {
+		t.Run("QueuePendingReportsBackendMissingFromConfig", func(t *testing.T) {
+			conf := withExtraBackend(setup(), "memory-removed", 1, nil)
+			defer tearDown()
+			first := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+			queueName := random.String("queue-", 10)
+			createQueueAndWait(t, first.Context(), first.MustClient(), &pb.QueueInfo{
+				QueueName:           queueName,
+				LeaseTimeout:        "1m0s",
+				ExpireTimeout:       "24h0m0s",
+				RequestedPartitions: 2,
+			})
+			first.Shutdown(t)
+
+			conf.PartitionStorage = conf.PartitionStorage[:1]
+			second := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+			defer second.Shutdown(t)
+			c, ctx := second.MustClient(), second.Context()
+
+			err := c.QueuesRebalance(ctx, &pb.QueuesRebalanceRequest{}, &pb.QueuesRebalanceResponse{})
+			var de duh.Error
+			require.True(t, errors.As(err, &de))
+			require.Contains(t, de.Message(), "memory-removed")
+			require.Contains(t, de.Message(), "missing from this instance's config file")
+
+			var info pb.QueueInfo
+			require.NoError(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &info))
+			assert.Nil(t, info.Pending)
+			assert.Equal(t, de.Message(), info.RebalanceRefused)
+
+			var list pb.QueuesListResponse
+			require.NoError(t, c.QueuesList(ctx, &list, nil))
+			var found bool
+			for _, item := range list.Items {
+				if item.QueueName == queueName {
+					found = true
+					assert.Nil(t, item.Pending)
+					assert.Equal(t, de.Message(), item.RebalanceRefused)
+				}
+			}
+			assert.True(t, found)
+		})
+	}
 
 	t.Run("UpdateWithoutAffinityKeepsSavedAffinity", func(t *testing.T) {
 		conf := setup()
@@ -768,5 +1059,47 @@ func TestStorageBackendsPermissions(t *testing.T) {
 		var list pb.StorageBackendsListResponse
 		require.NoError(t, granted.StorageBackendsList(ctx, &list))
 		assert.Equal(t, 2.0, findBackend(t, &list, "memory-0").GetAffinity())
+	})
+}
+
+func TestQueuePendingPermissions(t *testing.T) {
+	d := newDaemonWithAuth(t, func() store.Config { return setupMemoryStorage(store.Config{}) })
+	defer d.Shutdown(t)
+	ctx := d.Context()
+	admin := newClientWithAPIKey(t, d, d.AdminKey)
+
+	tenant := random.String("tenant-", 10)
+	require.NoError(t, admin.NamespacesCreate(ctx, &pb.NamespaceInfo{Name: tenant}))
+	queueName := random.String("queue-", 10)
+	require.NoError(t, admin.QueuesCreate(ctx, &pb.QueueInfo{
+		Namespace:           tenant,
+		QueueName:           queueName,
+		LeaseTimeout:        LeaseTimeout,
+		ExpireTimeout:       ExpireTimeout,
+		RequestedPartitions: 1,
+	}))
+	require.NoError(t, admin.QueuesUpdate(ctx, &pb.QueuesUpdateRequest{
+		Namespace: tenant, QueueName: queueName, RequestedPartitions: 2,
+	}))
+
+	t.Run("QueueStatsAloneReadsPending", func(t *testing.T) {
+		stats := newClientWithAPIKey(t, d, CreateUserWithNamespacePermissions(t, ctx, admin, tenant,
+			[]string{auth.QueueStats}))
+		var info pb.QueueInfo
+		require.NoError(t, stats.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &info))
+		assert.Equal(t, tenant, info.Namespace)
+		require.NotNil(t, info.Pending)
+		require.Len(t, info.Pending.Create, 1)
+	})
+
+	t.Run("QueueListAloneCannotReadInfo", func(t *testing.T) {
+		lister := newClientWithAPIKey(t, d, CreateUserWithNamespacePermissions(t, ctx, admin, tenant,
+			[]string{auth.QueueList}))
+		var info pb.QueueInfo
+		err := lister.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &info)
+		var duhErr duh.Error
+		require.ErrorAs(t, err, &duhErr)
+		assert.Equal(t, duh.CodeForbidden, duhErr.Code())
+		assert.Nil(t, info.Pending)
 	})
 }

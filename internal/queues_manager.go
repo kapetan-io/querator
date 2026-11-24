@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"cmp"
 	"context"
 	"log/slog"
 	"maps"
@@ -28,12 +29,15 @@ type QueuesManagerConfig struct {
 }
 
 type QueuesManager struct {
-	backends   *StorageBackends
-	queues     map[string]*Queue
-	conf       QueuesManagerConfig
-	inShutdown atomic.Bool
-	mutex      sync.RWMutex
-	log        *slog.Logger
+	backends      *StorageBackends
+	queues        map[string]*Queue
+	conf          QueuesManagerConfig
+	inShutdown    atomic.Bool
+	mutex         sync.RWMutex
+	log           *slog.Logger
+	untilShutdown context.Context
+	beginShutdown context.CancelFunc
+	loading       sync.WaitGroup
 }
 
 func NewQueuesManager(conf QueuesManagerConfig) (*QueuesManager, error) {
@@ -58,8 +62,50 @@ func NewQueuesManager(conf QueuesManagerConfig) (*QueuesManager, error) {
 		queues:   make(map[string]*Queue),
 		conf:     conf,
 	}
+	qm.untilShutdown, qm.beginShutdown = context.WithCancel(context.Background())
 
 	return qm, nil
+}
+
+func (qm *QueuesManager) StartLoadingDrainingQueues() {
+	qm.loading.Go(func() {
+		for attempt := 0; ; attempt++ {
+			var retry <-chan clock.Time
+			if err := qm.loadDrainingQueues(qm.untilShutdown); err != nil && qm.untilShutdown.Err() == nil {
+				retryIn := lifecycleBackOff.Next(min(attempt, lifecycleBackOffAttemptLimit))
+				qm.log.Error("cannot load the queues that hold draining partitions; retrying...",
+					"retry", retryIn, "error", err)
+				retry = qm.conf.LogicalConfig.Clock.After(retryIn)
+			}
+			select {
+			case <-retry:
+			case <-qm.untilShutdown.Done():
+				return
+			}
+		}
+	})
+}
+
+func (qm *QueuesManager) loadDrainingQueues(ctx context.Context) error {
+	var names []string
+	if err := store.ForEachQueue(ctx, qm.conf.StorageConfig.Queues, func(queue types.QueueInfo) bool {
+		if drainingCount(queue) != 0 {
+			names = append(names, queue.Name)
+		}
+		return true
+	}); err != nil {
+		return err
+	}
+	for _, name := range names {
+		loading, cancel := context.WithTimeout(ctx, qm.conf.LogicalConfig.ReadTimeout)
+		_, err := qm.Get(loading, name)
+		cancel()
+		var invalid *reply.ErrInvalidOption
+		if err != nil && !errors.As(err, &invalid) {
+			return err
+		}
+	}
+	return nil
 }
 
 func (qm *QueuesManager) Create(ctx context.Context, info types.QueueInfo) (*Queue, error) {
@@ -157,6 +203,7 @@ func (qm *QueuesManager) get(ctx context.Context, name string) (*Queue, error) {
 		return qm.queues[queue.Name], nil
 	}
 
+	q = NewQueue(queue)
 	l, err := SpawnLogicalQueue(LogicalConfig{
 		MaxProduceBatchSize:  qm.conf.LogicalConfig.MaxProduceBatchSize,
 		MaxLeaseBatchSize:    qm.conf.LogicalConfig.MaxLeaseBatchSize,
@@ -170,11 +217,12 @@ func (qm *QueuesManager) get(ctx context.Context, name string) (*Queue, error) {
 		OpenPartition:        qm.openPartition,
 		QueueInfo:            queue,
 		Manager:              qm,
+		Queue:                q,
 	})
 	if err != nil {
 		return nil, errors.Wrap(err)
 	}
-	qm.queues[queue.Name] = NewQueue(queue).AddLogical(l)
+	qm.queues[queue.Name] = q.AddLogical(l)
 	return qm.queues[queue.Name], nil
 }
 
@@ -254,7 +302,14 @@ func (qm *QueuesManager) adoptRecord(ctx context.Context, stored types.QueueInfo
 	}
 	qm.mutex.Unlock()
 
-	if !ok || q.Info().Revision >= stored.Revision {
+	if !ok {
+		return nil
+	}
+	held := q.Info()
+	if held.CreationID != stored.CreationID {
+		return nil
+	}
+	if held.Revision >= stored.Revision {
 		return nil
 	}
 
@@ -271,10 +326,27 @@ func (qm *QueuesManager) adoptRecord(ctx context.Context, stored types.QueueInfo
 	return nil
 }
 
+func (qm *QueuesManager) adoptRebalancedRecord(ctx context.Context, stored types.QueueInfo) error {
+	if drainingCount(stored) != 0 {
+		if _, err := qm.Get(ctx, stored.Name); err != nil {
+			return errors.With("queue", stored.Name).Errorf("while loading a queue with draining partitions: %w", err)
+		}
+	}
+	return qm.adoptRecord(ctx, stored)
+}
+
 type RebalanceCounts struct {
 	ChangedQueues      int
 	CreatedPartitions  int
 	DrainingPartitions int
+	WaitingQueues      []WaitingQueue
+}
+
+type WaitingQueue struct {
+	Namespace string
+	QueueName string
+	Backend   string
+	Partition int
 }
 
 const maxRebalanceAttempts = 10
@@ -303,6 +375,9 @@ func (qm *QueuesManager) Rebalance(ctx context.Context) (RebalanceCounts, error)
 			return result, err
 		}
 	}
+	slices.SortFunc(result.WaitingQueues, func(a, b WaitingQueue) int {
+		return cmp.Or(cmp.Compare(a.Namespace, b.Namespace), cmp.Compare(a.QueueName, b.QueueName))
+	})
 	return result, nil
 }
 
@@ -311,17 +386,24 @@ func (qm *QueuesManager) rebalanceBackends(ctx context.Context) ([]types.Backend
 	if err != nil {
 		return nil, err
 	}
+	if err := refuseRebalance(backends, qm.backends.Configured); err != nil {
+		return nil, err
+	}
+	return backends, nil
+}
+
+func refuseRebalance(backends []types.Backend, configured func(string) bool) error {
 	for _, backend := range backends {
-		if backend.Affinity > 0 && !qm.backends.Configured(backend.Name) {
-			return nil, reply.NewInvalidOption("rebalance is refused; storage backend '%s' has affinity %v "+
+		if backend.Affinity > 0 && !configured(backend.Name) {
+			return reply.NewInvalidOption("rebalance is refused; storage backend '%s' has affinity %v "+
 				"and is missing from this instance's config file; add it back or save affinity 0 for it", backend.Name, backend.Affinity)
 		}
 	}
 	if !placement.CanPlace(backends) {
-		return nil, reply.NewInvalidOption("rebalance is refused; no storage backend can take partitions, " +
+		return reply.NewInvalidOption("rebalance is refused; no storage backend can take partitions, " +
 			"at least one storage backend needs a saved affinity above 0, see '/v1/storage/backends.update'")
 	}
-	return backends, nil
+	return nil
 }
 
 func (qm *QueuesManager) rebalanceQueue(ctx context.Context, name string, backends []types.Backend,
@@ -340,15 +422,17 @@ func (qm *QueuesManager) rebalanceQueue(ctx context.Context, name string, backen
 			return errors.With("queue", name).Errorf("placement.Rebalance(): %w", err)
 		}
 		if !rebalanced.Changed {
-			return qm.adoptRecord(ctx, queue)
+			return qm.adoptAndNoteWaiting(ctx, queue, result)
 		}
 
 		err = qm.conf.StorageConfig.Queues.SavePartitions(ctx, types.PartitionList{
-			UpdatedAt:     qm.conf.LogicalConfig.Clock.Now().UTC(),
-			PartitionInfo: rebalanced.Queue.PartitionInfo,
-			NextPartition: rebalanced.Queue.NextPartition,
-			Revision:      queue.Revision,
-			QueueName:     name,
+			UpdatedAt:         qm.conf.LogicalConfig.Clock.Now().UTC(),
+			PartitionInfo:     rebalanced.Queue.PartitionInfo,
+			NextPartition:     rebalanced.Queue.NextPartition,
+			Revision:          queue.Revision,
+			CreationID:        queue.CreationID,
+			CompareCreationID: true,
+			QueueName:         name,
 		})
 		if errors.Is(err, store.ErrQueueNotExist) {
 			return nil
@@ -371,9 +455,65 @@ func (qm *QueuesManager) rebalanceQueue(ctx context.Context, name string, backen
 			}
 			return errors.With("queue", name).Errorf("Queues.Get(): %w", err)
 		}
-		return qm.adoptRecord(ctx, stored)
+		return qm.adoptAndNoteWaiting(ctx, stored, result)
 	}
 	return reply.NewRetryRequest("queue '%s' kept changing while it was being rebalanced; try again", name)
+}
+
+func (qm *QueuesManager) RemovePartition(ctx context.Context, name string, partition int) (types.QueueInfo, error) {
+	for range maxRebalanceAttempts {
+		var queue types.QueueInfo
+		if err := qm.conf.StorageConfig.Queues.Get(ctx, name, &queue); err != nil {
+			return queue, errors.With("queue", name).Errorf("Queues.Get(): %w", err)
+		}
+		kept := slices.DeleteFunc(slices.Clone(queue.PartitionInfo), func(p types.PartitionInfo) bool {
+			return p.PartitionNum == partition
+		})
+		if len(kept) != len(queue.PartitionInfo) {
+			err := qm.conf.StorageConfig.Queues.SavePartitions(ctx, types.PartitionList{
+				UpdatedAt:     qm.conf.LogicalConfig.Clock.Now().UTC(),
+				NextPartition: queue.NextPartition,
+				Revision:      queue.Revision,
+				PartitionInfo: kept,
+				QueueName:     name,
+			})
+			if errors.Is(err, store.ErrQueueChanged) {
+				continue
+			}
+			if err != nil {
+				return queue, errors.With("queue", name).Errorf("Queues.SavePartitions(): %w", err)
+			}
+			var stored types.QueueInfo
+			if err := qm.conf.StorageConfig.Queues.Get(ctx, name, &stored); err != nil {
+				return stored, errors.With("queue", name).Errorf("Queues.Get(): %w", err)
+			}
+			return stored, nil
+		}
+		return queue, nil
+	}
+	return types.QueueInfo{}, errors.With("queue", name).Errorf("queue record kept changing while partition %d was removed", partition)
+}
+
+func (qm *QueuesManager) adoptAndNoteWaiting(ctx context.Context, queue types.QueueInfo, result *RebalanceCounts) error {
+	if err := qm.adoptRebalancedRecord(ctx, queue); err != nil {
+		return err
+	}
+	if queue.RequestedPartitions != 1 {
+		return nil
+	}
+	var waiting *WaitingQueue
+	for _, partition := range queue.PartitionInfo {
+		if !partition.Draining || qm.backends.Configured(partition.StorageName) {
+			continue
+		}
+		if waiting == nil || partition.PartitionNum < waiting.Partition {
+			waiting = &WaitingQueue{Namespace: queue.Namespace, QueueName: queue.Name, Backend: partition.StorageName, Partition: partition.PartitionNum}
+		}
+	}
+	if waiting != nil {
+		result.WaitingQueues = append(result.WaitingQueues, *waiting)
+	}
+	return nil
 }
 
 func drainingCount(queue types.QueueInfo) int {
@@ -550,22 +690,50 @@ func (qm *QueuesManager) Delete(ctx context.Context, name string) error {
 			"clear or change dead_queue on '%s' first", name, source, source)
 	}
 
-	if err := qm.conf.StorageConfig.Queues.Delete(ctx, name); err != nil {
-		return errors.Errorf("Queues.Delete(): %w", err)
+	var queue types.QueueInfo
+	if err := qm.conf.StorageConfig.Queues.Get(ctx, name, &queue); err != nil {
+		if errors.Is(err, store.ErrQueueNotExist) {
+			return nil
+		}
+		return errors.Errorf("Queues.Get(): %w", err)
 	}
 
-	q, ok := qm.queues[name]
-	if !ok {
-		return nil
-	}
-
-	for _, l := range q.GetAll() {
-		if err := l.Shutdown(ctx); err != nil {
-			return errors.Errorf("LogicalQueue.Shutdown(): %w", err)
+	for _, info := range queue.PartitionInfo {
+		if store.Find(info.StorageName, qm.conf.StorageConfig.PartitionStorage).Name == "" {
+			return reply.NewRequestFailed("cannot delete queue '%s'; its partition %d is on storage backend '%s', "+
+				"which is not available; please retry once '%s' is available",
+				name, info.PartitionNum, info.StorageName, info.StorageName)
 		}
 	}
 
-	delete(qm.queues, name)
+	if q, ok := qm.queues[name]; ok {
+		for _, l := range q.GetAll() {
+			if err := l.Shutdown(ctx); err != nil {
+				return errors.Errorf("LogicalQueue.Shutdown(): %w", err)
+			}
+		}
+		delete(qm.queues, name)
+	}
+
+	queue.LinkPartitions()
+	for _, info := range queue.PartitionInfo {
+		partition := qm.openPartition(info)
+		err := partition.DeleteStorage(ctx)
+		if closeErr := partition.Close(ctx); closeErr != nil {
+			qm.log.Warn("while closing a deleted partition", "queue", name,
+				"partition", info.PartitionNum, "error", closeErr)
+		}
+		if err != nil {
+			qm.log.Warn("while deleting a partition's storage; the queue is kept", "queue", name,
+				"partition", info.PartitionNum, "storage_name", info.StorageName, "error", err)
+			return reply.NewRequestFailed("queue '%s' is only partly deleted; deleting partition %d on '%s' "+
+				"failed: %s; please retry to finish deleting the queue", name, info.PartitionNum, info.StorageName, err)
+		}
+	}
+
+	if err := qm.conf.StorageConfig.Queues.Delete(ctx, name); err != nil {
+		return errors.Errorf("Queues.Delete(): %w", err)
+	}
 	return nil
 }
 
@@ -575,6 +743,8 @@ func (qm *QueuesManager) Shutdown(ctx context.Context) error {
 	}
 
 	qm.inShutdown.Store(true)
+	qm.beginShutdown()
+	qm.loading.Wait()
 	qm.mutex.Lock()
 	queues := make([]*Queue, 0, len(qm.queues))
 	for _, name := range slices.Sorted(maps.Keys(qm.queues)) {

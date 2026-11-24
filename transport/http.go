@@ -34,6 +34,8 @@ import (
 	"github.com/kapetan-io/querator/transport/reply"
 	"github.com/kapetan-io/tackle/set"
 	"github.com/prometheus/client_golang/prometheus"
+	"google.golang.org/protobuf/encoding/protojson"
+	gproto "google.golang.org/protobuf/proto"
 )
 
 const (
@@ -533,7 +535,26 @@ func (h *HTTPHandler) QueuesRebalance(ctx context.Context, w http.ResponseWriter
 		h.ReplyError(w, r, err)
 		return
 	}
-	duh.Reply(w, r, duh.CodeOK, &resp)
+	replyJSONWithEmptyLists(w, r, &resp)
+}
+
+// replyJSONWithEmptyLists keeps an empty list in a JSON reply, which duh.Reply drops. Other content types go
+// through duh.Reply.
+func replyJSONWithEmptyLists(w http.ResponseWriter, r *http.Request, resp gproto.Message) {
+	switch strings.ToLower(strings.TrimSpace(duh.TrimSuffix(r.Header.Get("Accept"), ";,"))) {
+	case "", "*/*", "application/*", duh.ContentTypeJSON:
+		b, err := protojson.MarshalOptions{EmitUnpopulated: true}.Marshal(resp)
+		if err != nil {
+			duh.ReplyWithCode(w, r, duh.CodeInternalError, nil, err.Error())
+			return
+		}
+		w.Header().Set("Content-Type", duh.ContentTypeJSON)
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.WriteHeader(duh.CodeOK)
+		_, _ = w.Write(b)
+	default:
+		duh.Reply(w, r, duh.CodeOK, resp)
+	}
 }
 
 func (h *HTTPHandler) StorageBackendsUpdate(ctx context.Context, w http.ResponseWriter, r *http.Request) {

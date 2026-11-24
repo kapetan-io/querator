@@ -127,6 +127,14 @@ func (p PartitionInfo) State() string {
 	return PartitionAvailable
 }
 
+func (p PartitionInfo) ToProto() *pb.PartitionInfo {
+	return &pb.PartitionInfo{
+		Partition:   int32(p.PartitionNum),
+		StorageName: p.StorageName,
+		State:       p.State(),
+	}
+}
+
 type PartitionHash string
 
 func (p *PartitionInfo) HashKey() PartitionHash {
@@ -134,7 +142,7 @@ func (p *PartitionInfo) HashKey() PartitionHash {
 		return p.hashKey
 	}
 
-	p.hashKey = PartitionHash(fmt.Sprintf("%s%d%s", p.Queue.Name, p.PartitionNum, p.StorageName))
+	p.hashKey = PartitionHash(fmt.Sprintf("%s %d %s", p.Queue.Name, p.PartitionNum, p.StorageName))
 	return p.hashKey
 }
 
@@ -151,6 +159,7 @@ type QueueInfo struct {
 	RequestedPartitions int
 	NextPartition       int
 	Revision            int
+	CreationID          string
 	PartitionInfo       []PartitionInfo
 }
 
@@ -176,11 +185,7 @@ func (i *QueueInfo) ToProto(in *pb.QueueInfo) *pb.QueueInfo {
 	in.QueueName = i.Name
 	in.Partitions = make([]*pb.PartitionInfo, 0, len(i.PartitionInfo))
 	for _, p := range i.PartitionInfo {
-		in.Partitions = append(in.Partitions, &pb.PartitionInfo{
-			Partition:   int32(p.PartitionNum),
-			StorageName: p.StorageName,
-			State:       p.State(),
-		})
+		in.Partitions = append(in.Partitions, p.ToProto())
 	}
 	return in
 }
@@ -211,11 +216,13 @@ func (i *QueueInfo) Update(r QueueInfo) bool {
 }
 
 type PartitionList struct {
-	QueueName     string
-	Revision      int
-	NextPartition int
-	PartitionInfo []PartitionInfo
-	UpdatedAt     clock.Time
+	QueueName         string
+	Revision          int
+	CreationID        string
+	CompareCreationID bool
+	NextPartition     int
+	PartitionInfo     []PartitionInfo
+	UpdatedAt         clock.Time
 }
 
 func (i *QueueInfo) AdoptPartitions(r PartitionList) {

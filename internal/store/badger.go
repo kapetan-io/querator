@@ -6,6 +6,7 @@ import (
 	"encoding/gob"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -1180,6 +1181,25 @@ func countPartition(ctx context.Context, txn *badger.Txn, stats *types.Partition
 	return pivot, nil
 }
 
+func (b *BadgerPartition) DeleteStorage(_ context.Context) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.db != nil {
+		if err := b.db.Close(); err != nil {
+			return errors.Errorf("while closing db '%s': %w", b.dir(), err)
+		}
+		b.db = nil
+	}
+	if err := os.RemoveAll(b.dir()); err != nil {
+		return errors.Errorf("while deleting db '%s': %w", b.dir(), err)
+	}
+	return nil
+}
+
+func (b *BadgerPartition) dir() string {
+	return filepath.Join(b.conf.StorageDir, fmt.Sprintf("%s-%06d-%s", b.info.Queue.Name, b.info.PartitionNum, bucketName))
+}
+
 func (b *BadgerPartition) Close(_ context.Context) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -1206,7 +1226,7 @@ func (b *BadgerPartition) getDB() (*badger.DB, error) {
 		return b.db, nil
 	}
 
-	dir := filepath.Join(b.conf.StorageDir, fmt.Sprintf("%s-%06d-%s", b.info.Queue.Name, b.info.PartitionNum, bucketName))
+	dir := b.dir()
 
 	opts := badger.DefaultOptions(dir)
 	opts.Logger = newBadgerLogger(b.conf.Log)
@@ -1312,6 +1332,7 @@ func (b *BadgerQueues) Add(_ context.Context, info types.QueueInfo) error {
 		return err
 	}
 	info.Namespace = systemIfEmpty(info.Namespace)
+	info.CreationID = ksuid.New().String()
 
 	db, err := b.getDB()
 	if err != nil {
@@ -1421,10 +1442,11 @@ func (b *BadgerQueues) SavePartitions(_ context.Context, list types.PartitionLis
 			return errors.Errorf("during Decode(): %w", err)
 		}
 
-		if found.Revision != list.Revision {
+		change := partitionChange{Stored: found, Proposed: list}
+		if change.Stale() {
 			return ErrQueueChanged
 		}
-		if err := b.validatePartitionChange(partitionChange{Stored: found, Proposed: list}); err != nil {
+		if err := b.validatePartitionChange(change); err != nil {
 			return err
 		}
 		found.AdoptPartitions(list)

@@ -2125,6 +2125,26 @@ func testQueues(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			})
 		}
 
+		// A rebalance claims which creation of the queue it read, including a record saved before
+		// queue records had a creation ID. A list claiming any other creation was worked out for a
+		// queue of the same name that was deleted, so it is refused as changed.
+		t.Run("RefusesListFromAnotherCreation", func(t *testing.T) {
+			require.NotEmpty(t, stored.CreationID)
+			for _, read := range []string{"", random.String("creation-", 10)} {
+				err := conf.Queues.SavePartitions(ctx, proposal(func(list *types.PartitionList) {
+					list.PartitionInfo = append(list.PartitionInfo, types.PartitionInfo{PartitionNum: 3, StorageName: "backend-a"})
+					list.NextPartition = 4
+					list.CompareCreationID = true
+					list.CreationID = read
+				}))
+				require.ErrorIs(t, err, store.ErrQueueChanged)
+
+				var after types.QueueInfo
+				require.NoError(t, conf.Queues.Get(ctx, name, &after))
+				assert.Equal(t, stored, after)
+			}
+		})
+
 		t.Run("SavesNewAndDrainingPartitions", func(t *testing.T) {
 			require.NoError(t, conf.Queues.SavePartitions(ctx, proposal(func(list *types.PartitionList) {
 				list.PartitionInfo[0].Draining = true

@@ -633,6 +633,7 @@ func (s *MemoryQueues) Add(_ context.Context, info types.QueueInfo) error {
 		return reply.NewInvalidOptionKind(types.KindQueueAlreadyExists, "invalid queue; '%s' already exists", info.Name)
 	}
 
+	info.CreationID = ksuid.New().String()
 	s.mem = append(s.mem, info)
 	return nil
 }
@@ -680,10 +681,11 @@ func (s *MemoryQueues) SavePartitions(_ context.Context, list types.PartitionLis
 	}
 
 	found := s.mem[idx]
-	if found.Revision != list.Revision {
+	change := partitionChange{Stored: found, Proposed: list}
+	if change.Stale() {
 		return ErrQueueChanged
 	}
-	if err := s.validatePartitionChange(partitionChange{Stored: found, Proposed: list}); err != nil {
+	if err := s.validatePartitionChange(change); err != nil {
 		return err
 	}
 	found.AdoptPartitions(list)

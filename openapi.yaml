@@ -1232,8 +1232,9 @@ components:
     BackendPartition:
       type: object
       description: >-
-        One partition on a storage backend. The three counts are left out when
-        Querator cannot read the partition.
+        One partition on a storage backend. The three counts are left out only
+        when Querator cannot read the partition. An empty partition shows each
+        count as 0.
       properties:
         queue_name:
           type: string

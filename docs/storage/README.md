@@ -129,7 +129,10 @@ Editing the config file's affinity afterwards changes no saved affinity, and sta
 when the file and the saved value differ. A start that is refused saves nothing. `/v1/storage/backends.update` (or
 `querator backends update <name> --affinity <n>`) changes the saved affinity, and
 `/v1/storage/backends.list` shows every backend with its saved affinity and partitions.
-A backend can be stopped once its `affinity` is 0, it lists no `partitions` and its `pending` is empty.
+A draining partition is empty when its `unleased`, `leased` and `scheduled` counts and its `failures` are all 0.
+Those zeros are sent, not left out. Querator then removes it and it leaves the list. A partition Querator cannot read
+shows `failures` above 0 and no counts, so it is never taken for empty. A backend can be stopped once its `affinity`
+is 0, it lists no `partitions` and its `pending` is empty.
 A backend that holds a partition but has no saved record, such as one a queue saved before backend
 records existed placed a partition on, is listed too, with no `affinity`.
 Its `pending` shows the drain a rebalance would do to its partitions. Saving an

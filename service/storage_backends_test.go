@@ -2,8 +2,13 @@ package service_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"math"
+	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -110,6 +115,21 @@ func listBackends(t *testing.T, td *testDaemon) *pb.StorageBackendsListResponse 
 	return &list
 }
 
+func rawBackendsList(t *testing.T, ctx context.Context, td *testDaemon) string {
+	t.Helper()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("http://%s/v1/storage/backends.list", td.d.Listener.Addr().String()), strings.NewReader("{}"))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, resp.Body.Close()) }()
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	return string(body)
+}
+
 func testStorageBackends(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime storageLifetime) {
 	t.Run("ListsConfiguredBackendWithItsPartitions", func(t *testing.T) {
 		conf := setup()
@@ -154,6 +174,41 @@ func testStorageBackends(t *testing.T, setup NewStorageFunc, tearDown func(), li
 			unleased += p.GetUnleased()
 		}
 		assert.Equal(t, int32(3), unleased)
+	})
+
+	t.Run("ListSendsZeroCountsOverHttp", func(t *testing.T) {
+		conf := setup()
+		defer tearDown()
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
+		queueName := random.String("queue-", 10)
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			QueueName:           queueName,
+			LeaseTimeout:        "1m0s",
+			ExpireTimeout:       "24h0m0s",
+			RequestedPartitions: 2,
+		})
+
+		var raw struct {
+			Backends []struct {
+				Backend    string `json:"backend"`
+				Partitions []map[string]any
+			} `json:"backends"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(rawBackendsList(t, ctx, d)), &raw))
+		var found int
+		for _, backend := range raw.Backends {
+			for _, partition := range backend.Partitions {
+				found++
+				assert.Contains(t, partition, "partition")
+				for _, key := range []string{"unleased", "leased", "scheduled", "failures"} {
+					assert.Contains(t, partition, key)
+					assert.Equal(t, float64(0), partition[key], key)
+				}
+			}
+		}
+		assert.Equal(t, 2, found)
 	})
 
 	t.Run("ScheduledCountDropsWhenScheduledItemIsDeleted", func(t *testing.T) {

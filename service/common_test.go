@@ -890,9 +890,10 @@ func waitForLifecycleRun(t *testing.T, ctx context.Context, c *querator.Client, 
 // ---------------------------------------------------------------------
 
 var (
-	errProduceWriteFailed = errors.New("injected produce write failure")
-	errLeaseWriteFailed   = errors.New("injected lease write failure")
-	errClearFailed        = errors.New("injected clear failure")
+	errProduceWriteFailed  = errors.New("injected produce write failure")
+	errLeaseWriteFailed    = errors.New("injected lease write failure")
+	errClearFailed         = errors.New("injected clear failure")
+	errDeleteStorageFailed = errors.New("injected delete storage failure")
 )
 
 // partitionFault makes partition storage refuse calls on demand. Each switch is set from the
@@ -904,7 +905,9 @@ type partitionFault struct {
 	failingLease   atomic.Bool
 	// failingClear holds the number of the one partition whose Clear fails, plus one. Zero fails none.
 	failingClear atomic.Int32
-	scanFailing  atomic.Pointer[string]
+	// failingDeleteStorage holds the number of the one partition whose DeleteStorage fails, plus one. Zero fails none.
+	failingDeleteStorage atomic.Int32
+	scanFailing          atomic.Pointer[string]
 	// scanFailingOnly narrows scanFailing to the one partition whose number it holds, plus one. Zero fails every partition.
 	scanFailingOnly atomic.Int32
 	holdClear       atomic.Pointer[clearHold]
@@ -1010,6 +1013,13 @@ func (f faultyPartition) Lease(ctx context.Context, batch types.LeaseBatch, opts
 		return errLeaseWriteFailed
 	}
 	return f.Partition.Lease(ctx, batch, opts)
+}
+
+func (f faultyPartition) DeleteStorage(ctx context.Context) error {
+	if f.fault.failingDeleteStorage.Load() == int32(f.Info().PartitionNum)+1 {
+		return errDeleteStorageFailed
+	}
+	return f.Partition.DeleteStorage(ctx)
 }
 
 func (f faultyPartition) Clear(ctx context.Context, req types.ClearRequest) error {

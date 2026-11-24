@@ -494,6 +494,43 @@ func testDrainRemoval(t *testing.T, setup NewStorageFunc, tearDown func(), lifet
 		require.Error(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &info))
 	})
 
+	t.Run("DeletePartlyDoneWhenPartitionStorageFails", func(t *testing.T) {
+		fault := &partitionFault{}
+		defer tearDown()
+		d := newDaemon(t, 20*clock.Second, svc.Config{StorageConfig: fault.Wrap(setup())})
+		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
+		queueName := random.String("queue-", 10)
+		createQueueWithPartitions(t, ctx, c, queueName, 2)
+		for range 4 {
+			produceOne(t, ctx, c, queueName, &pb.QueueProduceItem{Reference: "held", Bytes: []byte("x")})
+		}
+		require.NotZero(t, itemsIn(t, ctx, c, queueName, 0))
+		held := itemsIn(t, ctx, c, queueName, 1)
+		require.NotZero(t, held)
+
+		fault.failingDeleteStorage.Store(1 + 1)
+		err := c.QueuesDelete(ctx, &pb.QueuesDeleteRequest{QueueName: queueName})
+		var duhErr duh.Error
+		require.ErrorAs(t, err, &duhErr)
+		assert.Equal(t, duh.CodeRequestFailed, duhErr.Code())
+		assert.Equal(t, fmt.Sprintf("queue '%s' is only partly deleted; deleting partition 1 on '%s' failed: %s; "+
+			"call delete again to finish", queueName, setup().PartitionStorage[0].Name, errDeleteStorageFailed),
+			duhErr.Message())
+
+		// The queue is kept, partition 0 is already empty and partition 1 still holds its items.
+		// The InMemory store drops a partition's items once delete closes the queue.
+		assert.Zero(t, itemsIn(t, ctx, c, queueName, 0))
+		if lifetime != endsWithDaemon {
+			assert.Equal(t, held, itemsIn(t, ctx, c, queueName, 1))
+		}
+
+		fault.failingDeleteStorage.Store(0)
+		require.NoError(t, c.QueuesDelete(ctx, &pb.QueuesDeleteRequest{QueueName: queueName}))
+		var info pb.QueueInfo
+		require.Error(t, c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: queueName}, &info))
+	})
+
 	t.Run("LifecycleRunKeepsDrainingPartitionWithLeasedOrScheduledItem", func(t *testing.T) {
 		conf := withExtraBackend(setup(), extraBackend, 0, nil)
 		defer tearDown()

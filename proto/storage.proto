@@ -79,16 +79,17 @@ message StorageBackendsListRequest {
 }
 
 message StorageBackendsListResponse {
-  // One entry per storage backend with a saved record.
+  // One entry per storage backend with a saved record, and one per storage backend that holds
+  // a partition and has no saved record (an entry with no affinity).
   repeated StorageBackend backends = 1;
 }
 
 message StorageBackend {
   // The storage backend's name.
   string backend = 1;
-  // The saved affinity.
+  // The saved affinity. Left out when the backend has no saved record.
   optional double affinity = 2;
-  // False when the backend has a saved record and is not in this instance's config file.
+  // False when the backend is not in this instance's config file.
   optional bool configured = 3;
   // True only when affinity is 0 and no partition of any queue is left on the backend.
   optional bool safeToStop = 4 [json_name = "safe_to_stop"];

@@ -1,13 +1,16 @@
 package service_test
 
 import (
+	"context"
 	"errors"
 	"math"
 	"testing"
+	"time"
 
 	"github.com/duh-rpc/duh-go"
 	"github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/internal/store"
+	"github.com/kapetan-io/querator/internal/types"
 	pb "github.com/kapetan-io/querator/proto"
 	svc "github.com/kapetan-io/querator/service"
 	"github.com/kapetan-io/querator/transport/auth"
@@ -450,6 +453,57 @@ func testStorageBackends(t *testing.T, setup NewStorageFunc, tearDown func(), li
 			Affinity: new(0.0),
 		}))
 		assert.False(t, findBackend(t, listBackends(t, d), "memory-down").GetSafeToStop())
+	})
+
+	t.Run("ListShowsPartitionOnBackendWithNoRecord", func(t *testing.T) {
+		conf := setup()
+		defer tearDown()
+		queueName := random.String("queue-", 10)
+		require.NoError(t, conf.Queues.Add(context.Background(), types.QueueInfo{
+			Name:                queueName,
+			LeaseTimeout:        time.Minute,
+			ExpireTimeout:       24 * time.Hour,
+			RequestedPartitions: 1,
+			NextPartition:       1,
+			PartitionInfo:       []types.PartitionInfo{{StorageName: "gone", PartitionNum: 0}},
+		}))
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+		defer d.Shutdown(t)
+
+		gone := findBackend(t, listBackends(t, d), "gone")
+		assert.False(t, gone.GetConfigured())
+		require.Len(t, gone.Partitions, 1)
+		assert.Equal(t, queueName, gone.Partitions[0].QueueName)
+		assert.False(t, gone.GetSafeToStop())
+		assert.Nil(t, gone.Affinity)
+		assert.Equal(t, int32(1), gone.Partitions[0].GetFailures())
+		assert.Nil(t, gone.Partitions[0].Unleased)
+
+		// A rebalance would drain the partition and create its replacement on the recorded backend
+		require.NotNil(t, gone.Pending)
+		assert.Empty(t, gone.Pending.Create)
+		require.Len(t, gone.Pending.Drain, 1)
+		assert.Equal(t, queueName, gone.Pending.Drain[0].QueueName)
+		assert.Equal(t, []int32{0}, gone.Pending.Drain[0].Partitions)
+		main := findBackend(t, listBackends(t, d), conf.PartitionStorage[0].Name)
+		assert.NotNil(t, main.Affinity)
+		require.Len(t, main.Pending.Create, 1)
+		assert.Equal(t, queueName, main.Pending.Create[0].QueueName)
+		assert.Equal(t, []int32{1}, main.Pending.Create[0].Partitions)
+
+		var resp pb.QueuesRebalanceResponse
+		require.NoError(t, d.MustClient().QueuesRebalance(d.Context(), &pb.QueuesRebalanceRequest{}, &resp))
+		assert.Equal(t, int32(1), resp.GetPartitionsDraining())
+		assert.Equal(t, int32(1), resp.GetPartitionsCreated())
+		gone = findBackend(t, listBackends(t, d), "gone")
+		require.Len(t, gone.Partitions, 1)
+		assert.Equal(t, "draining", gone.Partitions[0].State)
+		assert.Nil(t, gone.Affinity)
+		assert.False(t, gone.GetSafeToStop())
+		assert.Empty(t, gone.Pending.Drain)
+		main = findBackend(t, listBackends(t, d), conf.PartitionStorage[0].Name)
+		require.Len(t, main.Partitions, 1)
+		assert.Equal(t, int32(1), main.Partitions[0].GetPartition())
 	})
 
 	t.Run("Errors", func(t *testing.T) {

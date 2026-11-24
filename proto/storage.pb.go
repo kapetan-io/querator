@@ -588,7 +588,8 @@ type StorageBackendsListResponse struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	// One entry per storage backend with a saved record.
+	// One entry per storage backend with a saved record, and one per storage backend that holds
+	// a partition and has no saved record (an entry with no affinity).
 	Backends []*StorageBackend `protobuf:"bytes,1,rep,name=backends,proto3" json:"backends,omitempty"`
 }
 
@@ -638,9 +639,9 @@ type StorageBackend struct {
 
 	// The storage backend's name.
 	Backend string `protobuf:"bytes,1,opt,name=backend,proto3" json:"backend,omitempty"`
-	// The saved affinity.
+	// The saved affinity. Left out when the backend has no saved record.
 	Affinity *float64 `protobuf:"fixed64,2,opt,name=affinity,proto3,oneof" json:"affinity,omitempty"`
-	// False when the backend has a saved record and is not in this instance's config file.
+	// False when the backend is not in this instance's config file.
 	Configured *bool `protobuf:"varint,3,opt,name=configured,proto3,oneof" json:"configured,omitempty"`
 	// True only when affinity is 0 and no partition of any queue is left on the backend.
 	SafeToStop *bool `protobuf:"varint,4,opt,name=safeToStop,json=safe_to_stop,proto3,oneof" json:"safeToStop,omitempty"`

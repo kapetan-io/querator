@@ -128,7 +128,10 @@ saves the backend's affinity in queue storage, and from then on placement uses t
 Editing the config file's affinity afterwards changes no saved affinity, and startup logs a warning
 when the file and the saved value differ. A start that is refused saves nothing. `/v1/storage/backends.update` (or
 `querator backends update <name> --affinity <n>`) changes the saved affinity, and
-`/v1/storage/backends.list` shows every backend with its saved affinity and partitions. Saving an
+`/v1/storage/backends.list` shows every backend with its saved affinity and partitions.
+A backend that holds a partition but has no saved record, such as one a queue saved before backend
+records existed placed a partition on, is listed too, with no `affinity`.
+Its `pending` shows the drain a rebalance would do to its partitions. Saving an
 affinity moves no existing partition. A queue whose partition sits on a backend missing from the
 config file still loads; that partition fails every call and `/queue.stats` reports it in
 `failures`.

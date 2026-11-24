@@ -757,7 +757,8 @@ paths:
       summary: List storage backends with their partitions
       deprecated: false
       description: >-
-        Lists every storage backend with a saved record. Replies even when a
+        Lists every storage backend with a saved record, and every backend
+        that holds a partition but has no saved record. Replies even when a
         storage backend is down. Takes no filter and does not page. Needs the
         `backend.list` permission in the `_system` namespace.
       operationId: post-v1-storage-backends.list
@@ -1136,7 +1137,10 @@ components:
       properties:
         backends:
           type: array
-          description: One entry per storage backend with a saved record.
+          description: >-
+            One entry per storage backend with a saved record, and one per
+            storage backend that holds a partition and has no saved record
+            (an entry with no `affinity`).
           items:
             $ref: '#/components/schemas/StorageBackend'
       required:
@@ -1150,12 +1154,14 @@ components:
         affinity:
           type: number
           format: double
-          description: The saved affinity.
+          description: >-
+            The saved affinity. Left out when the backend has no saved record,
+            such as a backend a queue saved before backend records existed
+            placed a partition on.
         configured:
           type: boolean
           description: >-
-            False when the backend has a saved record and is not in this
-            instance's config file.
+            False when the backend is not in this instance's config file.
         safe_to_stop:
           type: boolean
           description: >-
@@ -1170,7 +1176,6 @@ components:
           $ref: '#/components/schemas/PendingRebalance'
       required:
         - backend
-        - affinity
         - configured
         - safe_to_stop
         - partitions

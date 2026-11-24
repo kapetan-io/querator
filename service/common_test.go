@@ -926,6 +926,10 @@ type partitionFault struct {
 	// statsFailing makes every Stats call fail without reaching the backend, the way a backend
 	// that is down does.
 	statsFailing atomic.Bool
+	// itemReadsBelow, when above zero, makes itemReads count each Stats and List call that reaches a
+	// partition numbered below it, so a test can show a call never read the partitions that existed.
+	itemReadsBelow atomic.Int32
+	itemReads      atomic.Int32
 }
 
 // clearHold stops a Clear partway through. On the Clear's After-th check of its context it
@@ -1042,7 +1046,19 @@ func (f *partitionFault) takeStatsCancelNext() bool {
 
 var errStatsFailed = errors.New("injected stats failure")
 
+func (f faultyPartition) countItemRead() {
+	if f.Info().PartitionNum < int(f.fault.itemReadsBelow.Load()) {
+		f.fault.itemReads.Add(1)
+	}
+}
+
+func (f faultyPartition) List(ctx context.Context, items *[]*types.Item, opts types.ListOptions) error {
+	f.countItemRead()
+	return f.Partition.List(ctx, items, opts)
+}
+
 func (f faultyPartition) Stats(ctx context.Context, stats *types.PartitionStats, now clock.Time) error {
+	f.countItemRead()
 	if f.fault.statsFailing.Load() {
 		return errStatsFailed
 	}

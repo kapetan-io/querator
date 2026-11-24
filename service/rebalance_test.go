@@ -7,7 +7,9 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -345,6 +347,103 @@ func (f faultyQueues) Get(ctx context.Context, name string, queue *types.QueueIn
 }
 
 func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime storageLifetime) {
+	t.Run("ManyQueues", func(t *testing.T) {
+		// 1200 queues cross the 1,000 queue list page but take minutes to create, so CI runs 5
+		queueCount := 5
+		if env := os.Getenv("QUERATOR_REBALANCE_QUEUES"); env != "" {
+			var err error
+			queueCount, err = strconv.Atoi(env)
+			require.NoError(t, err)
+		}
+		conf := setup()
+		defer tearDown()
+		d := newDaemon(t, 30*clock.Second+clock.Duration(queueCount)*500*clock.Millisecond,
+			svc.Config{StorageConfig: conf})
+		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
+		name := conf.PartitionStorage[0].Name
+
+		prefix := random.String("many-", 6)
+		queueNames := make([]string, 0, queueCount)
+		for i := range queueCount {
+			queueName := fmt.Sprintf("%s-%04d", prefix, i)
+			require.NoError(t, c.QueuesCreate(ctx, &pb.QueueInfo{
+				QueueName:           queueName,
+				LeaseTimeout:        "1m0s",
+				ExpireTimeout:       "24h0m0s",
+				RequestedPartitions: 1,
+			}))
+			setPartitionCount(t, ctx, c, queueName, 2)
+			queueNames = append(queueNames, queueName)
+		}
+
+		start := clock.Now()
+		counts := rebalance(t, ctx, c)
+		t.Logf("rebalance of %d queues took %s", queueCount, clock.Since(start))
+
+		assert.Equal(t, rebalanceCounts{ChangedQueues: int32(queueCount), CreatedPartitions: int32(queueCount)}, counts)
+		for _, queueName := range queueNames {
+			listed := listedPartitions(t, ctx, c, queueName)
+			require.Equal(t, []int32{0, 1}, availableOn(listed, name), queueName)
+			require.Empty(t, drainingOn(listed, name), queueName)
+		}
+		start = clock.Now()
+		assert.Equal(t, rebalanceCounts{}, rebalance(t, ctx, c))
+		t.Logf("rebalance of %d queues with none changed took %s", queueCount, clock.Since(start))
+	})
+
+	t.Run("ItemCountDoesNotSlowRebalance", func(t *testing.T) {
+		const (
+			smallItems = 1_000
+			largeItems = 100_000
+			rounds     = 4
+		)
+		var fault partitionFault
+		conf := fault.Wrap(setup())
+		defer tearDown()
+		d := newDaemon(t, 2*clock.Minute, svc.Config{StorageConfig: conf})
+		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
+
+		fill := func(items int) string {
+			queueName := random.String("items-", 10)
+			createQueueWithPartitions(t, ctx, c, queueName, 1)
+			for range items / 1_000 {
+				require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+					Items:          produceRandomItems(1_000),
+					QueueName:      queueName,
+					RequestTimeout: "1m",
+				}))
+			}
+			return queueName
+		}
+		small, large := fill(smallItems), fill(largeItems)
+
+		// Each round grows one queue by a partition, so the call changes exactly that queue
+		fastest := map[string]clock.Duration{}
+		for round := range rounds {
+			for _, queueName := range []string{small, large} {
+				setPartitionCount(t, ctx, c, queueName, int32(round+2))
+				fault.itemReads.Store(0)
+				fault.itemReadsBelow.Store(int32(round + 1))
+				start := clock.Now()
+				assert.Equal(t, rebalanceCounts{ChangedQueues: 1, CreatedPartitions: 1}, rebalance(t, ctx, c))
+				elapsed := clock.Since(start)
+				assert.Zero(t, fault.itemReads.Load())
+				if best, ok := fastest[queueName]; !ok || elapsed < best {
+					fastest[queueName] = elapsed
+				}
+			}
+		}
+		t.Logf("rebalance with %d items took %s, with %d items took %s",
+			smallItems, fastest[small], largeItems, fastest[large])
+
+		// A rebalance that read the items would take as long as a stats call scanning them
+		assert.Less(t, fastest[large], fastest[small]+250*clock.Millisecond)
+		assert.Equal(t, int32(smallItems), queueTotal(t, ctx, c, small))
+		assert.Equal(t, int32(largeItems), queueTotal(t, ctx, c, large))
+	})
+
 	t.Run("CountChangeWaitsForRebalance", func(t *testing.T) {
 		conf := setup()
 		defer tearDown()

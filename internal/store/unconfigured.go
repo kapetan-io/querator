@@ -89,6 +89,10 @@ func (p *UnconfiguredPartition) UpdateQueueInfo(info types.QueueInfo) {
 	p.info.Queue = info
 }
 
+func (p *UnconfiguredPartition) DeleteStorage(context.Context) error {
+	return p.err()
+}
+
 func (p *UnconfiguredPartition) Close(context.Context) error {
 	return nil
 }

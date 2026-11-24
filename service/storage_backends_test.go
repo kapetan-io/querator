@@ -568,6 +568,14 @@ func testStorageBackends(t *testing.T, setup NewStorageFunc, tearDown func(), li
 			ExpireTimeout:       "24h0m0s",
 			RequestedPartitions: 2,
 		})
+		// A draining partition that holds an item stays listed, so each partition gets one
+		for range 2 {
+			require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+				QueueName:      queueName,
+				RequestTimeout: "5s",
+				Items:          []*pb.QueueProduceItem{{Reference: "held", Bytes: []byte("x")}},
+			}))
+		}
 		require.NoError(t, c.StorageBackendsUpdate(ctx, &pb.StorageBackendsUpdateRequest{
 			Backend:  "memory-extra",
 			Affinity: new(0.0),

@@ -1559,6 +1559,18 @@ func (p *MongoPartition) UpdateQueueInfo(info types.QueueInfo) {
 	p.info.Queue = info
 }
 
+func (p *MongoPartition) DeleteStorage(ctx context.Context) error {
+	client, err := p.conf.getOrCreateClient(ctx)
+	if err != nil {
+		return err
+	}
+	if err := p.collection(client).Drop(ctx); err != nil {
+		return errors.Errorf("drop collection %s: %w", p.collectionName(), err)
+	}
+	p.resetCollectionGuard()
+	return nil
+}
+
 func (p *MongoPartition) Close(_ context.Context) error {
 	p.conf.Close()
 	return nil

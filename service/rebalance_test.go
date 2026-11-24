@@ -27,6 +27,7 @@ import (
 	"github.com/kapetan-io/tackle/random"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestRebalance(t *testing.T) {
@@ -465,6 +466,7 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		assert.Empty(t, drainingOn(listed, name))
 
 		// Lowering the count marks the surplus draining and keeps it listed
+		scheduleOneIn(t, ctx, c, queueName, 1, 2, 3)
 		setPartitionCount(t, ctx, c, queueName, 1)
 		assert.Equal(t, []int32{0, 1, 2, 3}, availableOn(listedPartitions(t, ctx, c, queueName), name))
 		assert.Equal(t, rebalanceCounts{ChangedQueues: 1, DrainingPartitions: 3}, rebalance(t, ctx, c))
@@ -506,6 +508,7 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		onMain := availableOn(before, name)
 		require.Len(t, onExtra, 1)
 		require.Len(t, onMain, 1)
+		scheduleOneIn(t, ctx, c, queueName, onExtra...)
 
 		setAffinity(t, ctx, c, extraBackend, 0)
 		assert.Equal(t, before, listedPartitions(t, ctx, c, queueName))
@@ -542,6 +545,7 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		assert.Equal(t, int32(4), queueTotal(t, ctx, c, queueName))
 
 		// Raising the affinity again creates a new partition, and the draining one stays draining
+		produceOne(t, ctx, c, queueName, &pb.QueueProduceItem{Reference: "held", Bytes: []byte("x")})
 		setAffinity(t, ctx, c, extraBackend, 1)
 		assert.Equal(t, rebalanceCounts{ChangedQueues: 1, CreatedPartitions: 1, DrainingPartitions: 1},
 			rebalance(t, ctx, c))
@@ -565,6 +569,7 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		before := listedPartitions(t, ctx, c, queueName)
 		onMain := availableOn(before, name)
 		require.Len(t, onMain, 2)
+		holdOneIn(t, ctx, c, queueName, availableOn(before, extraBackend)...)
 
 		// The remaining backend already holds the two partitions the lower count calls for
 		setPartitionCount(t, ctx, c, queueName, 2)
@@ -590,6 +595,7 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		listed := listedPartitions(t, ctx, c, queueName)
 		require.Len(t, availableOn(listed, name), 2)
 		require.Len(t, availableOn(listed, extraBackend), 6)
+		holdOneIn(t, ctx, c, queueName, 0, 1, 2, 3, 4, 5, 6, 7)
 
 		setPartitionCount(t, ctx, c, queueName, 4)
 		assert.Equal(t, rebalanceCounts{ChangedQueues: 1, DrainingPartitions: 4}, rebalance(t, ctx, c))
@@ -951,6 +957,7 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 
 		queueName := random.String("queue-", 10)
 		createQueueWithPartitions(t, ctx, c, queueName, 4)
+		holdOneIn(t, ctx, c, queueName, availableOn(listedPartitions(t, ctx, c, queueName), extraBackend)...)
 		setAffinity(t, ctx, c, extraBackend, 0)
 
 		var replies [2]pb.QueuesRebalanceResponse
@@ -1691,4 +1698,47 @@ func TestRebalancePermission(t *testing.T) {
 		assert.Equal(t, rebalanceCounts{ChangedQueues: 1, CreatedPartitions: 1}, rebalance(t, ctx, granted))
 		assert.Len(t, listedPartitions(t, ctx, admin, queueName), 2)
 	})
+}
+
+// holdOneIn puts one item into each named partition, so a partition that becomes draining
+// holds work and stays listed.
+func holdOneIn(t *testing.T, ctx context.Context, c *querator.Client, queueName string, partitions ...int32) {
+	t.Helper()
+	for _, partition := range partitions {
+		require.NoError(t, c.StorageItemsImport(ctx, &pb.StorageItemsImportRequest{
+			QueueName: queueName,
+			Partition: partition,
+			Items: []*pb.StorageItem{{
+				ExpireDeadline: timestamppb.New(clock.Now().UTC().Add(24 * clock.Hour)),
+				Reference:      "held",
+			}},
+		}, &pb.StorageItemsImportResponse{}))
+	}
+}
+
+// scheduleOneIn holds one item in each named partition as a retry scheduled an hour out, which
+// keeps the partition listed while draining and leaves the queue's Total unchanged. The queue
+// must hold no unleased items, so each produce goes to a different available partition.
+func scheduleOneIn(t *testing.T, ctx context.Context, c *querator.Client, queueName string, partitions ...int32) {
+	t.Helper()
+	listed := listedPartitions(t, ctx, c, queueName)
+	for range listed {
+		produceOne(t, ctx, c, queueName, &pb.QueueProduceItem{Reference: "held", Bytes: []byte("x")})
+	}
+	for range listed {
+		lease := leaseBatch(t, ctx, c, queueName, 1)
+		require.Len(t, lease.Items, 1)
+		if !slices.Contains(partitions, lease.Partition) {
+			completeLeased(t, ctx, c, lease)
+			continue
+		}
+		require.NoError(t, c.QueueRetry(ctx, &pb.QueueRetryRequest{
+			QueueName: queueName,
+			Partition: lease.Partition,
+			Items: []*pb.QueueRetryItem{{
+				Id:      lease.Items[0].Id,
+				RetryAt: timestamppb.New(clock.Now().UTC().Add(clock.Hour)),
+			}},
+		}))
+	}
 }

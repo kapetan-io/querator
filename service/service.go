@@ -99,6 +99,7 @@ func New(ctx context.Context, conf Config) (*Service, error) {
 		conf.Log.Error("cannot save storage backend records; will retry on the next queue create "+
 			"or storage backend request", "error", err)
 	}
+	qm.StartLoadingDrainingQueues()
 
 	return s, nil
 }

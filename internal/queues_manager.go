@@ -316,16 +316,16 @@ func (f rebalanceFailure) Unwrap() error {
 	return f.err
 }
 
-func readFailure(err error) error {
-	return rebalanceFailure{step: stepReadRecord, err: err,
+func readFailure(err error) *rebalanceFailure {
+	return &rebalanceFailure{step: stepReadRecord, err: err,
 		reason: "the queue store failed to read the queue's record; see the server log"}
 }
 
-func adoptFailure(err error) error {
+func adoptFailure(err error) *rebalanceFailure {
 	if err == nil {
 		return nil
 	}
-	return rebalanceFailure{step: stepAdoptRecord, err: err,
+	return &rebalanceFailure{step: stepAdoptRecord, err: err,
 		reason: "the running queue did not take its saved record; see the server log"}
 }
 
@@ -349,10 +349,8 @@ func (qm *QueuesManager) Rebalance(ctx context.Context) (RebalanceCounts, error)
 	}
 
 	for _, name := range names {
-		if err := qm.rebalanceQueue(ctx, name, backends, &result); err != nil {
-			var failed rebalanceFailure
-			errors.As(err, &failed)
-			return result, reply.NewRebalanceStopped(err, name, failed.step, failed.reason,
+		if failed := qm.rebalanceQueue(ctx, name, backends, &result); failed != nil {
+			return result, reply.NewRebalanceStopped(failed, name, failed.step, failed.reason,
 				result.ChangedQueues, result.CreatedPartitions, result.DrainingPartitions)
 		}
 	}
@@ -388,7 +386,7 @@ func refuseRebalance(backends []types.Backend, configured func(string) bool) err
 }
 
 func (qm *QueuesManager) rebalanceQueue(ctx context.Context, name string, backends []types.Backend,
-	result *RebalanceCounts) error {
+	result *RebalanceCounts) *rebalanceFailure {
 	for range maxRebalanceAttempts {
 		var queue types.QueueInfo
 		if err := qm.conf.StorageConfig.Queues.Get(ctx, name, &queue); err != nil {
@@ -400,8 +398,8 @@ func (qm *QueuesManager) rebalanceQueue(ctx context.Context, name string, backen
 
 		rebalanced, err := placement.Rebalance(queue, backends)
 		if err != nil {
-			return rebalanceFailure{step: stepPlacePartitions, reason: err.Error(),
-				err: errors.With("queue", name).Errorf("placement.Rebalance(): %w", err)}
+			return &rebalanceFailure{step: stepPlacePartitions, err: errors.With("queue", name).Errorf("placement.Rebalance(): %w", err),
+				reason: "the queue's partitions could not be placed on the storage backends; see the server log"}
 		}
 		if !rebalanced.Changed {
 			return adoptFailure(qm.adoptAndNoteWaiting(ctx, queue, result))
@@ -423,7 +421,7 @@ func (qm *QueuesManager) rebalanceQueue(ctx context.Context, name string, backen
 			continue
 		}
 		if err != nil {
-			return rebalanceFailure{step: stepSaveRecord, err: errors.With("queue", name).Errorf("Queues.SavePartitions(): %w", err),
+			return &rebalanceFailure{step: stepSaveRecord, err: errors.With("queue", name).Errorf("Queues.SavePartitions(): %w", err),
 				reason: "the queue store failed to save the queue's record; see the server log"}
 		}
 
@@ -440,7 +438,7 @@ func (qm *QueuesManager) rebalanceQueue(ctx context.Context, name string, backen
 		}
 		return adoptFailure(qm.adoptAndNoteWaiting(ctx, stored, result))
 	}
-	return rebalanceFailure{step: stepSaveRecord, reason: "the queue's record kept changing while it was being rebalanced",
+	return &rebalanceFailure{step: stepSaveRecord, reason: "the queue's record kept changing while it was being rebalanced",
 		err: reply.NewRetryRequest("queue '%s' kept changing while it was being rebalanced; try again", name)}
 }
 

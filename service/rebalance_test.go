@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"maps"
+	"math"
 	"net/http"
 	"slices"
 	"strings"
@@ -1184,6 +1185,32 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		assert.Equal(t, secondQueue, e.Details()["queue_name"])
 		assert.Equal(t, "save_record", e.Details()["failed_step"])
 		assert.Equal(t, "the queue's record kept changing while it was being rebalanced", e.Details()["reason"])
+	})
+
+	t.Run("StoppedRebalanceNamesAFailedPlacement", func(t *testing.T) {
+		conf := setup()
+		defer tearDown()
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
+		name := conf.PartitionStorage[0].Name
+
+		queueName := random.String("queue-", 10)
+		createQueueWithPartitions(t, ctx, c, queueName, 2)
+		setAffinity(t, ctx, c, name, 1)
+
+		// backends.update and the config file refuse an affinity whose sum overflows placement, so the
+		// test saves one straight to the queue store to reach the placement step
+		require.NoError(t, conf.Queues.UpdateBackend(ctx, types.Backend{Name: name, Affinity: math.MaxFloat64}))
+
+		var e duh.Error
+		require.ErrorAs(t, c.QueuesRebalance(ctx, &pb.QueuesRebalanceRequest{}, &pb.QueuesRebalanceResponse{}), &e)
+		assert.Equal(t, duh.CodeInternalError, e.Code())
+		assert.Equal(t, "0", e.Details()["queues_changed"])
+		assert.Equal(t, queueName, e.Details()["queue_name"])
+		assert.Equal(t, "place_partitions", e.Details()["failed_step"])
+		assert.Equal(t, "the queue's partitions could not be placed on the storage backends; see the server log",
+			e.Details()["reason"])
 	})
 
 	t.Run("StoppedRebalanceNamesAFailedRead", func(t *testing.T) {

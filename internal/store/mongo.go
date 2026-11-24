@@ -446,7 +446,10 @@ func (q *MongoQueues) SavePartitions(ctx context.Context, list types.PartitionLi
 	}
 
 	filter := bson.M{"_id": list.QueueName, "revision": list.Revision}
-	if list.CreationID != "" {
+	if list.CompareCreationID && list.CreationID == "" {
+		filter["creation_id"] = bson.M{"$in": bson.A{"", nil}}
+	}
+	if list.CompareCreationID && list.CreationID != "" {
 		filter["creation_id"] = list.CreationID
 	}
 	result, err := q.collection(client).UpdateOne(ctx, filter,

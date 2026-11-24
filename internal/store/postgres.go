@@ -400,13 +400,14 @@ func (p *PostgresQueues) SavePartitions(ctx context.Context, list types.Partitio
 
 	tag, err := pool.Exec(ctx, `UPDATE queues SET partition_info = $1, next_partition = $2, updated_at = $3,
 	                                   revision = revision + 1
-	                            WHERE name = $4 AND revision = $5 AND ($6 = '' OR creation_id = $6)`,
+	                            WHERE name = $4 AND revision = $5 AND (NOT $7 OR creation_id = $6)`,
 		partitionInfoJSON,
 		list.NextPartition,
 		timeToMicroseconds(list.UpdatedAt),
 		list.QueueName,
 		list.Revision,
 		list.CreationID,
+		list.CompareCreationID,
 	)
 	if err != nil {
 		return errors.Errorf("save queue partitions: %w", err)

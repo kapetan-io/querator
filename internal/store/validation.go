@@ -116,7 +116,7 @@ func (c partitionChange) Stale() bool {
 	if c.Stored.Revision != c.Proposed.Revision {
 		return true
 	}
-	return c.Proposed.CreationID != "" && c.Stored.CreationID != c.Proposed.CreationID
+	return c.Proposed.CompareCreationID && c.Stored.CreationID != c.Proposed.CreationID
 }
 
 func (s QueuesValidation) validatePartitionChange(change partitionChange) error {

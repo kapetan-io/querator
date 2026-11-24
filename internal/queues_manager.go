@@ -351,12 +351,13 @@ func (qm *QueuesManager) rebalanceQueue(ctx context.Context, name string, backen
 		}
 
 		err = qm.conf.StorageConfig.Queues.SavePartitions(ctx, types.PartitionList{
-			UpdatedAt:     qm.conf.LogicalConfig.Clock.Now().UTC(),
-			PartitionInfo: rebalanced.Queue.PartitionInfo,
-			NextPartition: rebalanced.Queue.NextPartition,
-			Revision:      queue.Revision,
-			CreationID:    queue.CreationID,
-			QueueName:     name,
+			UpdatedAt:         qm.conf.LogicalConfig.Clock.Now().UTC(),
+			PartitionInfo:     rebalanced.Queue.PartitionInfo,
+			NextPartition:     rebalanced.Queue.NextPartition,
+			Revision:          queue.Revision,
+			CreationID:        queue.CreationID,
+			CompareCreationID: true,
+			QueueName:         name,
 		})
 		if errors.Is(err, store.ErrQueueNotExist) {
 			return nil

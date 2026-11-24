@@ -1166,7 +1166,7 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		err := c.QueuesRebalance(ctx, &pb.QueuesRebalanceRequest{}, &pb.QueuesRebalanceResponse{})
 		var e duh.Error
 		require.ErrorAs(t, err, &e)
-		assert.Equal(t, duh.CodeInternalError, e.Code())
+		assert.Equal(t, duh.CodeRetryRequest, e.Code())
 
 		// The queue whose save failed lists what it listed before
 		assert.Equal(t, []int32{0, 1, 2}, availableOn(listedPartitions(t, ctx, c, firstQueue), name))
@@ -1201,14 +1201,14 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		err := c.QueuesRebalance(ctx, &pb.QueuesRebalanceRequest{}, &pb.QueuesRebalanceResponse{})
 		var e duh.Error
 		require.ErrorAs(t, err, &e)
-		assert.Equal(t, duh.CodeInternalError, e.Code())
-		assert.Equal(t, "Internal Error", e.Message())
+		assert.Equal(t, duh.CodeRetryRequest, e.Code())
+		assert.Equal(t, fmt.Sprintf("rebalance stopped; the queue store failed to save the record of queue '%s', "+
+			"call queues.rebalance again", secondQueue), e.Message())
 		assert.Equal(t, "1", e.Details()["queues_changed"])
 		assert.Equal(t, "1", e.Details()["partitions_created"])
 		assert.Equal(t, "0", e.Details()["partitions_draining"])
 		assert.Equal(t, secondQueue, e.Details()["queue_name"])
 		assert.Equal(t, "save_record", e.Details()["failed_step"])
-		assert.Equal(t, "the queue store failed to save the queue's record; see the server log", e.Details()["reason"])
 		assert.NotContains(t, e.Error(), errSaveFailed.Error())
 		assert.Contains(t, logs.String(), errSaveFailed.Error())
 		assert.Contains(t, logs.String(), "after saving 1 queues changed, 1 partitions created, 0 partitions draining")
@@ -1262,10 +1262,12 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		assert.Equal(t, "1", e.Details()["partitions_draining"])
 		assert.Equal(t, queueName, e.Details()["queue_name"])
 		assert.Equal(t, "adopt_record", e.Details()["failed_step"])
-		assert.Equal(t, "the running queue did not take its saved record; see the server log", e.Details()["reason"])
+		assert.Equal(t, duh.CodeRetryRequest, e.Code())
+		assert.Equal(t, fmt.Sprintf("rebalance stopped; queue '%s' did not take its saved record in time, "+
+			"call queues.rebalance again", queueName), e.Message())
 	})
 
-	t.Run("StoppedRebalanceKeepsTheCodeOfItsCause", func(t *testing.T) {
+	t.Run("QueueThatKeepsChangingStopsTheRebalance", func(t *testing.T) {
 		fault := &queueStoreFault{}
 		conf := fault.Wrap(setup())
 		defer tearDown()
@@ -1284,13 +1286,13 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		var e duh.Error
 		require.ErrorAs(t, c.QueuesRebalance(ctx, &pb.QueuesRebalanceRequest{}, &pb.QueuesRebalanceResponse{}), &e)
 		assert.Equal(t, duh.CodeRetryRequest, e.Code())
-		assert.Equal(t, fmt.Sprintf("queue '%s' kept changing while it was being rebalanced; try again", secondQueue), e.Message())
+		assert.Equal(t, fmt.Sprintf("rebalance stopped; queue '%s' kept changing while it was being rebalanced, "+
+			"call queues.rebalance again", secondQueue), e.Message())
 		assert.Equal(t, "1", e.Details()["queues_changed"])
 		assert.Equal(t, "1", e.Details()["partitions_created"])
 		assert.Equal(t, "0", e.Details()["partitions_draining"])
 		assert.Equal(t, secondQueue, e.Details()["queue_name"])
 		assert.Equal(t, "save_record", e.Details()["failed_step"])
-		assert.Equal(t, "the queue's record kept changing while it was being rebalanced", e.Details()["reason"])
 	})
 
 	t.Run("StoppedRebalanceNamesAFailedPlacement", func(t *testing.T) {
@@ -1311,12 +1313,12 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 
 		var e duh.Error
 		require.ErrorAs(t, c.QueuesRebalance(ctx, &pb.QueuesRebalanceRequest{}, &pb.QueuesRebalanceResponse{}), &e)
-		assert.Equal(t, duh.CodeInternalError, e.Code())
+		assert.Equal(t, duh.CodeBadRequest, e.Code())
+		assert.Equal(t, fmt.Sprintf("rebalance stopped; partitions of queue '%s' cannot be placed, "+
+			"the sum of partition storage affinities is too large; lower the affinities", queueName), e.Message())
 		assert.Equal(t, "0", e.Details()["queues_changed"])
 		assert.Equal(t, queueName, e.Details()["queue_name"])
 		assert.Equal(t, "place_partitions", e.Details()["failed_step"])
-		assert.Equal(t, "the queue's partitions could not be placed on the storage backends; see the server log",
-			e.Details()["reason"])
 	})
 
 	t.Run("StoppedRebalanceNamesAFailedRead", func(t *testing.T) {
@@ -1341,13 +1343,14 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		fault.FailReadsOf(secondQueue)
 		var e duh.Error
 		require.ErrorAs(t, c.QueuesRebalance(ctx, &pb.QueuesRebalanceRequest{}, &pb.QueuesRebalanceResponse{}), &e)
-		assert.Equal(t, duh.CodeInternalError, e.Code())
+		assert.Equal(t, duh.CodeRetryRequest, e.Code())
+		assert.Equal(t, fmt.Sprintf("rebalance stopped; the queue store failed to read the record of queue '%s', "+
+			"call queues.rebalance again", secondQueue), e.Message())
 		assert.Equal(t, "1", e.Details()["queues_changed"])
 		assert.Equal(t, "1", e.Details()["partitions_created"])
 		assert.Equal(t, "0", e.Details()["partitions_draining"])
 		assert.Equal(t, secondQueue, e.Details()["queue_name"])
 		assert.Equal(t, "read_record", e.Details()["failed_step"])
-		assert.Equal(t, "the queue store failed to read the queue's record; see the server log", e.Details()["reason"])
 		assert.NotContains(t, e.Error(), errReadFailed.Error())
 		assert.Contains(t, logs.String(), errReadFailed.Error())
 		assert.Contains(t, logs.String(), "in step 'read_record'")
@@ -1538,7 +1541,7 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		err := c.QueuesRebalance(ctx, &pb.QueuesRebalanceRequest{}, &pb.QueuesRebalanceResponse{})
 		var e duh.Error
 		require.ErrorAs(t, err, &e)
-		assert.Equal(t, duh.CodeInternalError, e.Code())
+		assert.Equal(t, duh.CodeRetryRequest, e.Code())
 
 		// Neither the draining mark nor the replacement partition shows
 		assert.Equal(t, before, listedPartitions(t, ctx, c, queueName))

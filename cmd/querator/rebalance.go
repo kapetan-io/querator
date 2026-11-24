@@ -30,8 +30,8 @@ Outputs JSON with the number of queues changed, partitions created and partition
 marked draining, and waiting_queues, the queues with one partition that wait on a draining
 partition whose storage backend is missing from the config file. A rebalance that stops part
 way outputs queues_changed, partitions_created and partitions_draining for what it saved before
-it stopped, plus queue_name, the queue it stopped on, failed_step, the step that failed, and
-reason, why it failed, then exits non-zero.`,
+it stopped, plus queue_name, the queue it stopped on, and failed_step, the step that failed.
+The error it then prints says why it stopped and what to do, and the command exits non-zero.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return RunRebalance(flags)
@@ -81,14 +81,12 @@ func stoppedRebalanceReport(err error) (string, bool) {
 		PartitionsDraining int    `json:"partitions_draining"`
 		QueueName          string `json:"queue_name"`
 		FailedStep         string `json:"failed_step"`
-		Reason             string `json:"reason"`
 	}{
 		QueuesChanged:      changed,
 		PartitionsCreated:  created,
 		PartitionsDraining: draining,
 		QueueName:          details[reply.DetailQueueName],
 		FailedStep:         details[reply.DetailFailedStep],
-		Reason:             details[reply.DetailReason],
 	}, "", "  ")
 	return string(out), true
 }

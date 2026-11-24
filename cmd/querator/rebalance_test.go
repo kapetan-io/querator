@@ -145,7 +145,6 @@ func TestStoppedRebalanceCommand(t *testing.T) {
 		PartitionsDraining *int32 `json:"partitions_draining"`
 		QueueName          string `json:"queue_name"`
 		FailedStep         string `json:"failed_step"`
-		Reason             string `json:"reason"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(out.Stdout), &printed))
 	assert.Equal(t, new(int32(1)), printed.QueuesChanged)
@@ -153,6 +152,7 @@ func TestStoppedRebalanceCommand(t *testing.T) {
 	assert.Equal(t, new(int32(0)), printed.PartitionsDraining)
 	assert.Equal(t, "queue-b", printed.QueueName)
 	assert.Equal(t, "save_record", printed.FailedStep)
-	assert.Equal(t, "the queue store failed to save the queue's record; see the server log", printed.Reason)
+	require.ErrorContains(t, err, "rebalance stopped; the queue store failed to save the record of queue 'queue-b', "+
+		"call queues.rebalance again")
 	assert.NotContains(t, err.Error(), "queue record save failed by test")
 }

@@ -271,26 +271,27 @@ const (
 	DetailPartitionsDraining = "partitions_draining"
 	DetailQueueName          = "queue_name"
 	DetailFailedStep         = "failed_step"
-	DetailReason             = "reason"
 )
 
 type ErrRebalanceStopped struct {
 	cause              error
+	code               int
+	message            string
 	queueName          string
 	failedStep         string
-	reason             string
 	queuesChanged      int
 	partitionsCreated  int
 	partitionsDraining int
 }
 
-func NewRebalanceStopped(cause error, queueName, failedStep, reason string, queuesChanged, partitionsCreated,
-	partitionsDraining int) *ErrRebalanceStopped {
+func NewRebalanceStopped(cause error, code int, message, queueName, failedStep string, queuesChanged,
+	partitionsCreated, partitionsDraining int) *ErrRebalanceStopped {
 	return &ErrRebalanceStopped{
 		cause:              cause,
+		code:               code,
+		message:            message,
 		queueName:          queueName,
 		failedStep:         failedStep,
-		reason:             reason,
 		queuesChanged:      queuesChanged,
 		partitionsCreated:  partitionsCreated,
 		partitionsDraining: partitionsDraining,
@@ -313,18 +314,14 @@ func (e *ErrRebalanceStopped) Is(target error) bool {
 }
 
 func (e *ErrRebalanceStopped) Code() int {
-	var cause duh.Error
-	if errors.As(e.cause, &cause) {
-		return cause.Code()
-	}
-	return duh.CodeInternalError
+	return e.code
 }
 
 func (e *ErrRebalanceStopped) ProtoMessage() proto.Message {
 	return &v1.Reply{
-		Message:  e.Message(),
-		CodeText: duh.CodeText(e.Code()),
-		Code:     int32(e.Code()),
+		Message:  e.message,
+		CodeText: duh.CodeText(e.code),
+		Code:     int32(e.code),
 		Details:  e.Details(),
 	}
 }
@@ -336,16 +333,11 @@ func (e *ErrRebalanceStopped) Details() map[string]string {
 		DetailPartitionsDraining: strconv.Itoa(e.partitionsDraining),
 		DetailQueueName:          e.queueName,
 		DetailFailedStep:         e.failedStep,
-		DetailReason:             e.reason,
 	}
 }
 
 func (e *ErrRebalanceStopped) Message() string {
-	var cause duh.Error
-	if errors.As(e.cause, &cause) && cause.Code() != duh.CodeInternalError {
-		return cause.Message()
-	}
-	return "Internal Error"
+	return e.message
 }
 
 var _ duh.Error = &ErrRebalanceStopped{}

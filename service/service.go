@@ -633,6 +633,9 @@ func (s *Service) QueuesRebalance(ctx context.Context, _ *proto.QueuesRebalanceR
 	}
 
 	rebalanced, err := s.queues.Rebalance(ctx)
+	if errors.Is(err, &reply.ErrRebalanceStopped{}) {
+		s.conf.Log.Error(err.Error(), "location", "Service.QueuesRebalance")
+	}
 	if err != nil {
 		return err
 	}

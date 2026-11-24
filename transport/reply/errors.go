@@ -270,21 +270,27 @@ const (
 	DetailPartitionsCreated  = "partitions_created"
 	DetailPartitionsDraining = "partitions_draining"
 	DetailQueueName          = "queue_name"
+	DetailFailedStep         = "failed_step"
+	DetailReason             = "reason"
 )
 
 type ErrRebalanceStopped struct {
 	cause              error
 	queueName          string
+	failedStep         string
+	reason             string
 	queuesChanged      int
 	partitionsCreated  int
 	partitionsDraining int
 }
 
-func NewRebalanceStopped(cause error, queueName string, queuesChanged, partitionsCreated,
+func NewRebalanceStopped(cause error, queueName, failedStep, reason string, queuesChanged, partitionsCreated,
 	partitionsDraining int) *ErrRebalanceStopped {
 	return &ErrRebalanceStopped{
 		cause:              cause,
 		queueName:          queueName,
+		failedStep:         failedStep,
+		reason:             reason,
 		queuesChanged:      queuesChanged,
 		partitionsCreated:  partitionsCreated,
 		partitionsDraining: partitionsDraining,
@@ -292,8 +298,9 @@ func NewRebalanceStopped(cause error, queueName string, queuesChanged, partition
 }
 
 func (e *ErrRebalanceStopped) Error() string {
-	return fmt.Sprintf("rebalance stopped at queue '%s' after saving %d queues changed, %d partitions created, "+
-		"%d partitions draining: %s", e.queueName, e.queuesChanged, e.partitionsCreated, e.partitionsDraining, e.cause)
+	return fmt.Sprintf("rebalance stopped at queue '%s' in step '%s' after saving %d queues changed, "+
+		"%d partitions created, %d partitions draining: %s", e.queueName, e.failedStep, e.queuesChanged,
+		e.partitionsCreated, e.partitionsDraining, e.cause)
 }
 
 func (e *ErrRebalanceStopped) Unwrap() error {
@@ -328,6 +335,8 @@ func (e *ErrRebalanceStopped) Details() map[string]string {
 		DetailPartitionsCreated:  strconv.Itoa(e.partitionsCreated),
 		DetailPartitionsDraining: strconv.Itoa(e.partitionsDraining),
 		DetailQueueName:          e.queueName,
+		DetailFailedStep:         e.failedStep,
+		DetailReason:             e.reason,
 	}
 }
 

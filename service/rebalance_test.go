@@ -282,6 +282,8 @@ func producedPerPartition(t *testing.T, ctx context.Context, c *querator.Client,
 
 var errSaveFailed = errors.New("queue record save failed by test")
 
+var errReadFailed = errors.New("queue record read failed by test")
+
 // queueStoreFault changes what the queue store does for one queue. It can fail every save of the
 // queue's partition list, as a queue store does when it cannot write, or report that the record
 // changed on every save. It can also run one step
@@ -290,6 +292,7 @@ var errSaveFailed = errors.New("queue record save failed by test")
 type queueStoreFault struct {
 	failing    atomic.Pointer[string]
 	changing   atomic.Pointer[string]
+	reading    atomic.Pointer[string]
 	beforeSave atomic.Pointer[storeStep]
 	afterGet   atomic.Pointer[storeStep]
 }
@@ -316,6 +319,10 @@ func (f *queueStoreFault) FailSavesOf(queueName string) {
 
 func (f *queueStoreFault) AllowSaves() {
 	f.failing.Store(nil)
+}
+
+func (f *queueStoreFault) FailReadsOf(queueName string) {
+	f.reading.Store(&queueName)
 }
 
 func (f *queueStoreFault) ChangeEverySaveOf(queueName string) {
@@ -347,6 +354,9 @@ func (f faultyQueues) SavePartitions(ctx context.Context, list types.PartitionLi
 }
 
 func (f faultyQueues) Get(ctx context.Context, name string, queue *types.QueueInfo) error {
+	if reading := f.fault.reading.Load(); reading != nil && *reading == name {
+		return errReadFailed
+	}
 	if err := f.Queues.Get(ctx, name, queue); err != nil {
 		return err
 	}
@@ -1090,6 +1100,8 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		assert.Equal(t, "1", e.Details()["partitions_created"])
 		assert.Equal(t, "0", e.Details()["partitions_draining"])
 		assert.Equal(t, secondQueue, e.Details()["queue_name"])
+		assert.Equal(t, "save_record", e.Details()["failed_step"])
+		assert.Equal(t, "the queue store failed to save the queue's record; see the server log", e.Details()["reason"])
 		assert.NotContains(t, e.Error(), errSaveFailed.Error())
 		assert.Contains(t, logs.String(), errSaveFailed.Error())
 		assert.Contains(t, logs.String(), "after saving 1 queues changed, 1 partitions created, 0 partitions draining")
@@ -1142,6 +1154,8 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		assert.Equal(t, "1", e.Details()["partitions_created"])
 		assert.Equal(t, "1", e.Details()["partitions_draining"])
 		assert.Equal(t, queueName, e.Details()["queue_name"])
+		assert.Equal(t, "adopt_record", e.Details()["failed_step"])
+		assert.Equal(t, "the running queue did not take its saved record; see the server log", e.Details()["reason"])
 	})
 
 	t.Run("StoppedRebalanceKeepsTheCodeOfItsCause", func(t *testing.T) {
@@ -1168,6 +1182,42 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		assert.Equal(t, "1", e.Details()["partitions_created"])
 		assert.Equal(t, "0", e.Details()["partitions_draining"])
 		assert.Equal(t, secondQueue, e.Details()["queue_name"])
+		assert.Equal(t, "save_record", e.Details()["failed_step"])
+		assert.Equal(t, "the queue's record kept changing while it was being rebalanced", e.Details()["reason"])
+	})
+
+	t.Run("StoppedRebalanceNamesAFailedRead", func(t *testing.T) {
+		fault := &queueStoreFault{}
+		conf := fault.Wrap(setup())
+		defer tearDown()
+		var logs syncBuffer
+		d := newDaemon(t, 10*clock.Second, svc.Config{
+			StorageConfig: conf,
+			Log:           slog.New(slog.NewTextHandler(&logs, nil)),
+		})
+		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
+
+		suffix := random.String("", 10)
+		firstQueue, secondQueue := "queue-a-"+suffix, "queue-b-"+suffix
+		createQueueWithPartitions(t, ctx, c, firstQueue, 2)
+		createQueueWithPartitions(t, ctx, c, secondQueue, 2)
+		setPartitionCount(t, ctx, c, firstQueue, 3)
+		setPartitionCount(t, ctx, c, secondQueue, 3)
+
+		fault.FailReadsOf(secondQueue)
+		var e duh.Error
+		require.ErrorAs(t, c.QueuesRebalance(ctx, &pb.QueuesRebalanceRequest{}, &pb.QueuesRebalanceResponse{}), &e)
+		assert.Equal(t, duh.CodeInternalError, e.Code())
+		assert.Equal(t, "1", e.Details()["queues_changed"])
+		assert.Equal(t, "1", e.Details()["partitions_created"])
+		assert.Equal(t, "0", e.Details()["partitions_draining"])
+		assert.Equal(t, secondQueue, e.Details()["queue_name"])
+		assert.Equal(t, "read_record", e.Details()["failed_step"])
+		assert.Equal(t, "the queue store failed to read the queue's record; see the server log", e.Details()["reason"])
+		assert.NotContains(t, e.Error(), errReadFailed.Error())
+		assert.Contains(t, logs.String(), errReadFailed.Error())
+		assert.Contains(t, logs.String(), "in step 'read_record'")
 	})
 
 	t.Run("ReCreatedQueueKeepsItsPartitions", func(t *testing.T) {

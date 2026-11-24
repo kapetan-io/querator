@@ -707,9 +707,17 @@ paths:
         part way, because rebalancing one queue failed, replies with an error whose
         `details` holds `queues_changed`, `partitions_created` and
         `partitions_draining` for what was saved before it stopped, as
-        strings, and `queue_name`, the queue that failed. A queue whose
-        record was saved before a later step failed is counted and is also the
-        named queue. The error keeps the code of the failure that stopped it.
+        strings, `queue_name`, the queue that failed, `failed_step`, the step
+        that failed, and `reason`, a sentence saying why. `failed_step` is
+        `read_record` or `save_record` when the queue store failed to read or
+        save the queue's record, `place_partitions` when the queue's
+        partitions can't be placed on the storage backends, and
+        `adopt_record` when the running queue did not take its saved record.
+        A rebalance writes only the queue's record, so no partition or
+        storage backend is written during it. The store's own error text goes
+        to the server log, not the reply. A queue whose record was saved
+        before a later step failed is counted and is also the named queue.
+        The error keeps the code of the failure that stopped it.
         Needs the `queue.rebalance` permission in the `_system` namespace.
       operationId: post-v1-queues.rebalance
       tags:
@@ -754,6 +762,10 @@ paths:
                   partitions_created: '1'
                   partitions_draining: '0'
                   queue_name: orders
+                  failed_step: save_record
+                  reason: >-
+                    the queue store failed to save the queue's record; see
+                    the server log
           headers: {}
       security: []
   /v1/storage/backends.update:

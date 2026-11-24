@@ -295,6 +295,40 @@ type WaitingQueue struct {
 
 const maxRebalanceAttempts = 10
 
+const (
+	stepReadRecord      = "read_record"
+	stepPlacePartitions = "place_partitions"
+	stepSaveRecord      = "save_record"
+	stepAdoptRecord     = "adopt_record"
+)
+
+type rebalanceFailure struct {
+	step   string
+	reason string
+	err    error
+}
+
+func (f rebalanceFailure) Error() string {
+	return f.err.Error()
+}
+
+func (f rebalanceFailure) Unwrap() error {
+	return f.err
+}
+
+func readFailure(err error) error {
+	return rebalanceFailure{step: stepReadRecord, err: err,
+		reason: "the queue store failed to read the queue's record; see the server log"}
+}
+
+func adoptFailure(err error) error {
+	if err == nil {
+		return nil
+	}
+	return rebalanceFailure{step: stepAdoptRecord, err: err,
+		reason: "the running queue did not take its saved record; see the server log"}
+}
+
 func (qm *QueuesManager) Rebalance(ctx context.Context) (RebalanceCounts, error) {
 	var result RebalanceCounts
 	if qm.inShutdown.Load() {
@@ -316,7 +350,9 @@ func (qm *QueuesManager) Rebalance(ctx context.Context) (RebalanceCounts, error)
 
 	for _, name := range names {
 		if err := qm.rebalanceQueue(ctx, name, backends, &result); err != nil {
-			return result, reply.NewRebalanceStopped(err, name,
+			var failed rebalanceFailure
+			errors.As(err, &failed)
+			return result, reply.NewRebalanceStopped(err, name, failed.step, failed.reason,
 				result.ChangedQueues, result.CreatedPartitions, result.DrainingPartitions)
 		}
 	}
@@ -359,15 +395,16 @@ func (qm *QueuesManager) rebalanceQueue(ctx context.Context, name string, backen
 			if errors.Is(err, store.ErrQueueNotExist) {
 				return nil
 			}
-			return errors.With("queue", name).Errorf("Queues.Get(): %w", err)
+			return readFailure(errors.With("queue", name).Errorf("Queues.Get(): %w", err))
 		}
 
 		rebalanced, err := placement.Rebalance(queue, backends)
 		if err != nil {
-			return errors.With("queue", name).Errorf("placement.Rebalance(): %w", err)
+			return rebalanceFailure{step: stepPlacePartitions, reason: err.Error(),
+				err: errors.With("queue", name).Errorf("placement.Rebalance(): %w", err)}
 		}
 		if !rebalanced.Changed {
-			return qm.adoptAndNoteWaiting(ctx, queue, result)
+			return adoptFailure(qm.adoptAndNoteWaiting(ctx, queue, result))
 		}
 
 		err = qm.conf.StorageConfig.Queues.SavePartitions(ctx, types.PartitionList{
@@ -386,7 +423,8 @@ func (qm *QueuesManager) rebalanceQueue(ctx context.Context, name string, backen
 			continue
 		}
 		if err != nil {
-			return errors.With("queue", name).Errorf("Queues.SavePartitions(): %w", err)
+			return rebalanceFailure{step: stepSaveRecord, err: errors.With("queue", name).Errorf("Queues.SavePartitions(): %w", err),
+				reason: "the queue store failed to save the queue's record; see the server log"}
 		}
 
 		result.ChangedQueues++
@@ -398,11 +436,12 @@ func (qm *QueuesManager) rebalanceQueue(ctx context.Context, name string, backen
 			if errors.Is(err, store.ErrQueueNotExist) {
 				return nil
 			}
-			return errors.With("queue", name).Errorf("Queues.Get(): %w", err)
+			return readFailure(errors.With("queue", name).Errorf("Queues.Get(): %w", err))
 		}
-		return qm.adoptAndNoteWaiting(ctx, stored, result)
+		return adoptFailure(qm.adoptAndNoteWaiting(ctx, stored, result))
 	}
-	return reply.NewRetryRequest("queue '%s' kept changing while it was being rebalanced; try again", name)
+	return rebalanceFailure{step: stepSaveRecord, reason: "the queue's record kept changing while it was being rebalanced",
+		err: reply.NewRetryRequest("queue '%s' kept changing while it was being rebalanced; try again", name)}
 }
 
 func (qm *QueuesManager) adoptAndNoteWaiting(ctx context.Context, queue types.QueueInfo, result *RebalanceCounts) error {

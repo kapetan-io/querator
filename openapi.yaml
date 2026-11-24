@@ -1162,10 +1162,10 @@ components:
         configured:
           type: boolean
           description: >-
-            False when the backend is not in this instance's config file. An
-            entry with no `affinity` can be true: a backend in the config file
-            whose record was refused at start has no saved record and still
-            holds partitions.
+            False when this instance has no such storage backend, so every call
+            on a partition it holds fails. An entry with no `affinity` can be
+            true: a backend whose record was refused at start has no saved
+            record and still holds partitions.
         partitions:
           type: array
           description: Every partition on the backend.

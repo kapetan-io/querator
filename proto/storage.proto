@@ -89,7 +89,7 @@ message StorageBackend {
   string backend = 1;
   // The saved affinity. Left out when the backend has no saved record.
   optional double affinity = 2;
-  // False when the backend is not in this instance's config file.
+  // False when this instance has no such storage backend, so every call on a partition it holds fails.
   optional bool configured = 3;
   reserved 4;
   reserved "safeToStop";

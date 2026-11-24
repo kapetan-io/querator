@@ -641,7 +641,7 @@ type StorageBackend struct {
 	Backend string `protobuf:"bytes,1,opt,name=backend,proto3" json:"backend,omitempty"`
 	// The saved affinity. Left out when the backend has no saved record.
 	Affinity *float64 `protobuf:"fixed64,2,opt,name=affinity,proto3,oneof" json:"affinity,omitempty"`
-	// False when the backend is not in this instance's config file.
+	// False when this instance has no such storage backend, so every call on a partition it holds fails.
 	Configured *bool `protobuf:"varint,3,opt,name=configured,proto3,oneof" json:"configured,omitempty"`
 	// Every partition on the backend.
 	Partitions []*BackendPartition `protobuf:"bytes,5,rep,name=partitions,proto3" json:"partitions,omitempty"`

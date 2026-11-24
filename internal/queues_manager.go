@@ -692,8 +692,8 @@ func (qm *QueuesManager) Delete(ctx context.Context, name string) error {
 	for _, info := range queue.PartitionInfo {
 		if store.Find(info.StorageName, qm.conf.StorageConfig.PartitionStorage).Name == "" {
 			return reply.NewRequestFailed("cannot delete queue '%s'; its partition %d is on storage backend '%s', "+
-				"which is not in this server's config file; add '%s' back to the config file, restart, "+
-				"and delete the queue again", name, info.PartitionNum, info.StorageName, info.StorageName)
+				"which is not available; please retry once '%s' is available",
+				name, info.PartitionNum, info.StorageName, info.StorageName)
 		}
 	}
 
@@ -718,7 +718,7 @@ func (qm *QueuesManager) Delete(ctx context.Context, name string) error {
 			qm.log.Warn("while deleting a partition's storage; the queue is kept", "queue", name,
 				"partition", info.PartitionNum, "storage_name", info.StorageName, "error", err)
 			return reply.NewRequestFailed("queue '%s' is only partly deleted; deleting partition %d on '%s' "+
-				"failed: %s; call delete again to finish", name, info.PartitionNum, info.StorageName, err)
+				"failed: %s; please retry to finish deleting the queue", name, info.PartitionNum, info.StorageName, err)
 		}
 	}
 

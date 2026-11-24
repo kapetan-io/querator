@@ -477,8 +477,7 @@ func testDrainRemoval(t *testing.T, setup NewStorageFunc, tearDown func(), lifet
 		require.ErrorAs(t, err, &duhErr)
 		assert.Equal(t, duh.CodeRequestFailed, duhErr.Code())
 		assert.Equal(t, fmt.Sprintf("cannot delete queue '%s'; its partition %d is on storage backend '%s', "+
-			"which is not in this server's config file; add '%s' back to the config file, restart, "+
-			"and delete the queue again", queueName, placed[extraBackend][0], extraBackend, extraBackend),
+			"which is not available; please retry once '%s' is available", queueName, placed[extraBackend][0], extraBackend, extraBackend),
 			duhErr.Message())
 
 		// The partition on the configured backend still holds its items
@@ -515,7 +514,7 @@ func testDrainRemoval(t *testing.T, setup NewStorageFunc, tearDown func(), lifet
 		require.ErrorAs(t, err, &duhErr)
 		assert.Equal(t, duh.CodeRequestFailed, duhErr.Code())
 		assert.Equal(t, fmt.Sprintf("queue '%s' is only partly deleted; deleting partition 1 on '%s' failed: %s; "+
-			"call delete again to finish", queueName, setup().PartitionStorage[0].Name, errDeleteStorageFailed),
+			"please retry to finish deleting the queue", queueName, setup().PartitionStorage[0].Name, errDeleteStorageFailed),
 			duhErr.Message())
 
 		// The queue is kept, partition 0 is already empty and partition 1 still holds its items.

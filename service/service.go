@@ -376,10 +376,30 @@ func (s *Service) QueuesList(ctx context.Context, req *proto.QueuesListRequest,
 		return err
 	}
 
-	for _, item := range items {
-		resp.Items = append(resp.Items, item.ToProto(new(proto.QueueInfo)))
+	pending, err := s.queues.PendingRebalances(ctx, items)
+	if err != nil {
+		return err
+	}
+	for i, item := range items {
+		resp.Items = append(resp.Items, queueInfoWithPending(item, pending[i]))
 	}
 	return nil
+}
+
+func queueInfoWithPending(info types.QueueInfo, rebalance internal.QueuePendingRebalance) *proto.QueueInfo {
+	out := info.ToProto(new(proto.QueueInfo))
+	out.RebalanceRefused = rebalance.Refused
+	if len(rebalance.Create) == 0 && len(rebalance.Drain) == 0 {
+		return out
+	}
+	out.Pending = &proto.QueuePendingRebalance{}
+	for _, p := range rebalance.Create {
+		out.Pending.Create = append(out.Pending.Create, p.ToProto())
+	}
+	for _, p := range rebalance.Drain {
+		out.Pending.Drain = append(out.Pending.Drain, p.ToProto())
+	}
+	return out
 }
 
 func (s *Service) QueuesUpdate(ctx context.Context, req *proto.QueuesUpdateRequest) error {
@@ -438,7 +458,11 @@ func (s *Service) QueuesInfo(ctx context.Context, req *proto.QueuesInfoRequest, 
 	}
 
 	info := queue.Info()
-	*resp = *info.ToProto(resp)
+	pending, err := s.queues.PendingRebalances(ctx, []types.QueueInfo{info})
+	if err != nil {
+		return err
+	}
+	*resp = *queueInfoWithPending(info, pending[0])
 	return nil
 }
 

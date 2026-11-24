@@ -5,7 +5,6 @@ import (
 	"maps"
 	"slices"
 
-	"github.com/kapetan-io/querator/internal/placement"
 	"github.com/kapetan-io/querator/internal/store"
 	"github.com/kapetan-io/querator/internal/types"
 )
@@ -117,13 +116,12 @@ func (qm *QueuesManager) partitionCounts(ctx context.Context, name string) map[i
 
 func rebalanceBackends(statuses []StorageBackendStatus) []types.Backend {
 	backends := make([]types.Backend, 0, len(statuses))
+	configured := make(map[string]bool, len(statuses))
 	for _, status := range statuses {
-		if status.Backend.Affinity > 0 && !status.Configured {
-			return nil
-		}
 		backends = append(backends, status.Backend)
+		configured[status.Backend.Name] = status.Configured
 	}
-	if !placement.CanPlace(backends) {
+	if refuseRebalance(backends, func(name string) bool { return configured[name] }) != nil {
 		return nil
 	}
 	return backends
@@ -131,26 +129,15 @@ func rebalanceBackends(statuses []StorageBackendStatus) []types.Backend {
 
 func addPending(statuses []StorageBackendStatus, index map[string]int, queue types.QueueInfo,
 	backends []types.Backend) {
-	rebalanced, err := placement.Rebalance(queue, backends)
-	if err != nil || !rebalanced.Changed {
-		return
-	}
-
-	before := make(map[int]types.PartitionInfo, len(queue.PartitionInfo))
-	for _, p := range queue.PartitionInfo {
-		before[p.PartitionNum] = p
-	}
+	pending := pendingRebalance(queue, backends)
 
 	creates := make(map[string][]int)
 	drains := make(map[string][]int)
-	for _, p := range rebalanced.Queue.PartitionInfo {
-		old, existed := before[p.PartitionNum]
-		switch {
-		case !existed:
-			creates[p.StorageName] = append(creates[p.StorageName], p.PartitionNum)
-		case p.Draining && !old.Draining:
-			drains[p.StorageName] = append(drains[p.StorageName], p.PartitionNum)
-		}
+	for _, p := range pending.Create {
+		creates[p.StorageName] = append(creates[p.StorageName], p.PartitionNum)
+	}
+	for _, p := range pending.Drain {
+		drains[p.StorageName] = append(drains[p.StorageName], p.PartitionNum)
 	}
 
 	for _, name := range slices.Sorted(maps.Keys(creates)) {
@@ -159,7 +146,7 @@ func addPending(statuses []StorageBackendStatus, index map[string]int, queue typ
 			continue
 		}
 		plan := &statuses[i].Rebalance
-		plan.Create = append(plan.Create, QueuePartitions{Queue: queue.Name, Partitions: slices.Sorted(slices.Values(creates[name]))})
+		plan.Create = append(plan.Create, QueuePartitions{Queue: queue.Name, Partitions: creates[name]})
 	}
 	for _, name := range slices.Sorted(maps.Keys(drains)) {
 		i, ok := index[name]
@@ -167,6 +154,6 @@ func addPending(statuses []StorageBackendStatus, index map[string]int, queue typ
 			continue
 		}
 		plan := &statuses[i].Rebalance
-		plan.Drain = append(plan.Drain, QueuePartitions{Queue: queue.Name, Partitions: slices.Sorted(slices.Values(drains[name]))})
+		plan.Drain = append(plan.Drain, QueuePartitions{Queue: queue.Name, Partitions: drains[name]})
 	}
 }

@@ -311,17 +311,24 @@ func (qm *QueuesManager) rebalanceBackends(ctx context.Context) ([]types.Backend
 	if err != nil {
 		return nil, err
 	}
+	if err := refuseRebalance(backends, qm.backends.Configured); err != nil {
+		return nil, err
+	}
+	return backends, nil
+}
+
+func refuseRebalance(backends []types.Backend, configured func(string) bool) error {
 	for _, backend := range backends {
-		if backend.Affinity > 0 && !qm.backends.Configured(backend.Name) {
-			return nil, reply.NewInvalidOption("rebalance is refused; storage backend '%s' has affinity %v "+
+		if backend.Affinity > 0 && !configured(backend.Name) {
+			return reply.NewInvalidOption("rebalance is refused; storage backend '%s' has affinity %v "+
 				"and is missing from this instance's config file; add it back or save affinity 0 for it", backend.Name, backend.Affinity)
 		}
 	}
 	if !placement.CanPlace(backends) {
-		return nil, reply.NewInvalidOption("rebalance is refused; no storage backend can take partitions, " +
+		return reply.NewInvalidOption("rebalance is refused; no storage backend can take partitions, " +
 			"at least one storage backend needs a saved affinity above 0, see '/v1/storage/backends.update'")
 	}
-	return backends, nil
+	return nil
 }
 
 func (qm *QueuesManager) rebalanceQueue(ctx context.Context, name string, backends []types.Backend,

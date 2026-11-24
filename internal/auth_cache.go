@@ -17,34 +17,41 @@ import (
 )
 
 const (
-	DefaultCacheTTL        = 5 * time.Minute
-	DefaultCleanupInterval = time.Minute
+	DefaultCacheTTL                = 5 * time.Minute
+	DefaultNegativeCacheTTL        = 30 * time.Second
+	DefaultCleanupInterval         = time.Minute
+	DefaultMaxNegativeCacheEntries = 1024
 
 	lastUsedBufferSize = 64
 )
 
 type AuthCacheConfig struct {
-	CleanupInterval time.Duration
-	APIKeys         store.APIKeys
-	Users           store.Users
-	Log             *slog.Logger
-	TTL             time.Duration
+	CleanupInterval    time.Duration
+	APIKeys            store.APIKeys
+	Users              store.Users
+	Log                *slog.Logger
+	TTL                time.Duration
+	NegativeTTL        time.Duration
+	MaxNegativeEntries int
 }
 
 type AuthCache struct {
-	cleanupInterval time.Duration
-	byKeyHash       map[string]authCacheEntry
-	byUserID        map[string]map[string]struct{}
-	lastUsedCh      lastUsedUpdates
-	users           store.Users
-	apiKeys         store.APIKeys
-	log             *slog.Logger
-	stop            stopSignal
-	sf              singleflight.Group
-	mu              sync.RWMutex
-	wg              sync.WaitGroup
-	once            sync.Once
-	ttl             time.Duration
+	cleanupInterval    time.Duration
+	byKeyHash          map[string]authCacheEntry
+	byUserID           map[string]map[string]struct{}
+	lastUsedCh         lastUsedUpdates
+	users              store.Users
+	apiKeys            store.APIKeys
+	log                *slog.Logger
+	stop               stopSignal
+	sf                 singleflight.Group
+	mu                 sync.RWMutex
+	wg                 sync.WaitGroup
+	once               sync.Once
+	ttl                time.Duration
+	negativeTTL        time.Duration
+	maxNegativeEntries int
+	negativeEntries    int
 }
 
 type lastUsedUpdate struct {
@@ -56,23 +63,28 @@ type authCacheEntry struct {
 	keyExpiresAt *time.Time
 	expiresAt    time.Time
 	principal    auth.Principal
+	notFound     bool
 }
 
 func NewAuthCache(conf AuthCacheConfig) *AuthCache {
 	set.Default(&conf.Log, slog.Default())
 	set.Default(&conf.TTL, DefaultCacheTTL)
 	set.Default(&conf.CleanupInterval, DefaultCleanupInterval)
+	set.Default(&conf.NegativeTTL, DefaultNegativeCacheTTL)
+	set.Default(&conf.MaxNegativeEntries, DefaultMaxNegativeCacheEntries)
 
 	c := &AuthCache{
-		cleanupInterval: conf.CleanupInterval,
-		byKeyHash:       make(map[string]authCacheEntry),
-		byUserID:        make(map[string]map[string]struct{}),
-		lastUsedCh:      make(lastUsedUpdates, lastUsedBufferSize),
-		stop:            make(stopSignal),
-		apiKeys:         conf.APIKeys,
-		users:           conf.Users,
-		log:             conf.Log,
-		ttl:             conf.TTL,
+		cleanupInterval:    conf.CleanupInterval,
+		byKeyHash:          make(map[string]authCacheEntry),
+		byUserID:           make(map[string]map[string]struct{}),
+		lastUsedCh:         make(lastUsedUpdates, lastUsedBufferSize),
+		stop:               make(stopSignal),
+		apiKeys:            conf.APIKeys,
+		users:              conf.Users,
+		log:                conf.Log,
+		ttl:                conf.TTL,
+		negativeTTL:        conf.NegativeTTL,
+		maxNegativeEntries: conf.MaxNegativeEntries,
 	}
 
 	c.wg.Go(c.cleanupLoop)
@@ -102,6 +114,9 @@ func (c *AuthCache) Authenticate(ctx context.Context, key string) (auth.Principa
 			c.mu.Unlock()
 			return auth.Principal{}, types.ErrAPIKeyExpired
 		}
+		if entry.notFound {
+			return auth.Principal{}, types.ErrAPIKeyNotExist
+		}
 		return entry.principal, nil
 	}
 
@@ -116,6 +131,16 @@ func (c *AuthCache) Authenticate(ctx context.Context, key string) (auth.Principa
 					"error", err)
 				return nil, types.ErrAPIKeyInvalid
 			}
+			c.Invalidate(keyHash)
+			c.mu.Lock()
+			if c.negativeEntries < c.maxNegativeEntries {
+				c.byKeyHash[keyHash] = authCacheEntry{
+					expiresAt: clock.Now().UTC().Add(c.negativeTTL),
+					notFound:  true,
+				}
+				c.negativeEntries++
+			}
+			c.mu.Unlock()
 			return nil, err
 		}
 
@@ -136,6 +161,7 @@ func (c *AuthCache) Authenticate(ctx context.Context, key string) (auth.Principa
 			Username:       user.Username,
 		}
 
+		c.Invalidate(keyHash)
 		c.mu.Lock()
 		c.byKeyHash[keyHash] = authCacheEntry{
 			keyExpiresAt: apiKey.ExpiresAt,
@@ -165,6 +191,9 @@ func (c *AuthCache) Invalidate(keyHash string) {
 	c.mu.Lock()
 	if entry, ok := c.byKeyHash[keyHash]; ok {
 		delete(c.byKeyHash, keyHash)
+		if entry.notFound {
+			c.negativeEntries--
+		}
 		if hashes, ok := c.byUserID[entry.principal.UserID]; ok {
 			delete(hashes, keyHash)
 			if len(hashes) == 0 {
@@ -211,6 +240,9 @@ func (c *AuthCache) cleanup() {
 	maps.DeleteFunc(c.byKeyHash, func(hash string, entry authCacheEntry) bool {
 		if !now.After(entry.expiresAt) {
 			return false
+		}
+		if entry.notFound {
+			c.negativeEntries--
 		}
 		if hashes, ok := c.byUserID[entry.principal.UserID]; ok {
 			delete(hashes, hash)

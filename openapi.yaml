@@ -1138,9 +1138,10 @@ components:
         backends:
           type: array
           description: >-
-            One entry per storage backend with a saved record, and one per
-            storage backend that holds a partition and has no saved record
-            (an entry with no `affinity`).
+            One entry per storage backend with a saved record, in the order
+            the store returns them, then one per storage backend that holds a
+            partition and has no saved record (an entry with no `affinity`),
+            sorted by name.
           items:
             $ref: '#/components/schemas/StorageBackend'
       required:
@@ -1161,7 +1162,10 @@ components:
         configured:
           type: boolean
           description: >-
-            False when the backend is not in this instance's config file.
+            False when the backend is not in this instance's config file. An
+            entry with no `affinity` can be true: a backend in the config file
+            whose record was refused at start has no saved record and still
+            holds partitions.
         safe_to_stop:
           type: boolean
           description: >-

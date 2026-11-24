@@ -485,11 +485,11 @@ func testStorageBackends(t *testing.T, setup NewStorageFunc, tearDown func(), li
 		require.Len(t, gone.Pending.Drain, 1)
 		assert.Equal(t, queueName, gone.Pending.Drain[0].QueueName)
 		assert.Equal(t, []int32{0}, gone.Pending.Drain[0].Partitions)
-		main := findBackend(t, listBackends(t, d), conf.PartitionStorage[0].Name)
-		assert.NotNil(t, main.Affinity)
-		require.Len(t, main.Pending.Create, 1)
-		assert.Equal(t, queueName, main.Pending.Create[0].QueueName)
-		assert.Equal(t, []int32{1}, main.Pending.Create[0].Partitions)
+		recorded := findBackend(t, listBackends(t, d), conf.PartitionStorage[0].Name)
+		assert.NotNil(t, recorded.Affinity)
+		require.Len(t, recorded.Pending.Create, 1)
+		assert.Equal(t, queueName, recorded.Pending.Create[0].QueueName)
+		assert.Equal(t, []int32{1}, recorded.Pending.Create[0].Partitions)
 
 		var resp pb.QueuesRebalanceResponse
 		require.NoError(t, d.MustClient().QueuesRebalance(d.Context(), &pb.QueuesRebalanceRequest{}, &resp))
@@ -501,9 +501,34 @@ func testStorageBackends(t *testing.T, setup NewStorageFunc, tearDown func(), li
 		assert.Nil(t, gone.Affinity)
 		assert.False(t, gone.GetSafeToStop())
 		assert.Empty(t, gone.Pending.Drain)
-		main = findBackend(t, listBackends(t, d), conf.PartitionStorage[0].Name)
-		require.Len(t, main.Partitions, 1)
-		assert.Equal(t, int32(1), main.Partitions[0].GetPartition())
+		recorded = findBackend(t, listBackends(t, d), conf.PartitionStorage[0].Name)
+		require.Len(t, recorded.Partitions, 1)
+		assert.Equal(t, int32(1), recorded.Partitions[0].GetPartition())
+	})
+
+	t.Run("ListOrdersUnrecordedBackendsByNameAfterRecordedOnes", func(t *testing.T) {
+		conf := setup()
+		defer tearDown()
+		queueName := random.String("queue-", 10)
+		require.NoError(t, conf.Queues.Add(context.Background(), types.QueueInfo{
+			Name:                queueName,
+			LeaseTimeout:        time.Minute,
+			ExpireTimeout:       24 * time.Hour,
+			RequestedPartitions: 2,
+			NextPartition:       2,
+			PartitionInfo: []types.PartitionInfo{
+				{StorageName: "gone-b", PartitionNum: 0},
+				{StorageName: "gone-a", PartitionNum: 1},
+			},
+		}))
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+		defer d.Shutdown(t)
+
+		var names []string
+		for _, b := range listBackends(t, d).Backends {
+			names = append(names, b.Backend)
+		}
+		assert.Equal(t, []string{conf.PartitionStorage[0].Name, "gone-a", "gone-b"}, names)
 	})
 
 	t.Run("Errors", func(t *testing.T) {
@@ -605,6 +630,34 @@ func testStorageBackends(t *testing.T, setup NewStorageFunc, tearDown func(), li
 			second := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
 			defer second.Shutdown(t)
 			assert.Equal(t, 1.0, findBackend(t, listBackends(t, second), name).GetAffinity())
+		})
+
+		t.Run("RefusedRebalancePlanLeavesUnrecordedEntryWithoutPending", func(t *testing.T) {
+			conf := withExtraBackend(setup(), "memory-removed", 1, nil)
+			defer tearDown()
+			queueName := random.String("queue-", 10)
+			require.NoError(t, conf.Queues.Add(context.Background(), types.QueueInfo{
+				Name:                queueName,
+				LeaseTimeout:        time.Minute,
+				ExpireTimeout:       24 * time.Hour,
+				RequestedPartitions: 1,
+				NextPartition:       1,
+				PartitionInfo:       []types.PartitionInfo{{StorageName: "gone", PartitionNum: 0}},
+			}))
+			first := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+			first.Shutdown(t)
+
+			// A recorded backend with affinity above 0 that the config no longer names makes
+			// the rebalance refuse, so the list has no plan to show for any backend
+			conf.PartitionStorage = conf.PartitionStorage[:1]
+			second := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+			defer second.Shutdown(t)
+
+			gone := findBackend(t, listBackends(t, second), "gone")
+			require.Len(t, gone.Partitions, 1)
+			assert.Empty(t, gone.Pending.Create)
+			assert.Empty(t, gone.Pending.Drain)
+			assert.False(t, gone.GetSafeToStop())
 		})
 
 		t.Run("PartitionOnBackendMissingFromConfigLoads", func(t *testing.T) {

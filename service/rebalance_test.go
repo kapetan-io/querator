@@ -252,9 +252,12 @@ func (f faultyQueues) SavePartitions(ctx context.Context, list types.PartitionLi
 
 func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime storageLifetime) {
 	t.Run("ManyQueues", func(t *testing.T) {
-		queueCount, _ := strconv.Atoi(os.Getenv("QUERATOR_REBALANCE_QUEUES"))
-		if queueCount == 0 {
-			t.Skip("set QUERATOR_REBALANCE_QUEUES to the number of queues to rebalance, 1200 crosses a list page")
+		// 1200 queues cross the 1,000 queue list page but take minutes to create, so CI runs 5
+		queueCount := 5
+		if env := os.Getenv("QUERATOR_REBALANCE_QUEUES"); env != "" {
+			var err error
+			queueCount, err = strconv.Atoi(env)
+			require.NoError(t, err)
 		}
 		conf := setup()
 		defer tearDown()

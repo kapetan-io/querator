@@ -671,6 +671,6 @@ func assertRetirable(t *testing.T, backend *pb.StorageBackend) {
 	t.Helper()
 	assert.Equal(t, 0.0, backend.GetAffinity())
 	assert.Empty(t, backend.Partitions)
-	assert.Empty(t, backend.Pending.Create)
-	assert.Empty(t, backend.Pending.Drain)
+	assert.Empty(t, backend.GetPending().GetCreate())
+	assert.Empty(t, backend.GetPending().GetDrain())
 }

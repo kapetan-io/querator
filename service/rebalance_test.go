@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
+	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -100,6 +103,22 @@ func rebalance(t *testing.T, ctx context.Context, c *querator.Client) rebalanceC
 		CreatedPartitions:  resp.GetPartitionsCreated(),
 		DrainingPartitions: resp.GetPartitionsDraining(),
 	}
+}
+
+// rawRebalance posts queues.rebalance over HTTP and returns the reply body as a client sees it.
+func rawRebalance(t *testing.T, ctx context.Context, d *testDaemon) string {
+	t.Helper()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("http://%s/v1/queues.rebalance", d.d.Listener.Addr().String()), strings.NewReader("{}"))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, resp.Body.Close()) }()
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	return string(body)
 }
 
 // listedPartition is one partition as queues.info lists it.
@@ -498,10 +517,16 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		assert.Equal(t, queueName, drain[0].QueueName)
 		assert.Equal(t, []int32{0}, drain[0].Partitions)
 
-		assert.Equal(t, rebalanceCounts{ChangedQueues: 1, CreatedPartitions: 1, DrainingPartitions: 1},
-			rebalance(t, ctx, c))
+		assert.JSONEq(t, fmt.Sprintf(`{"queues_changed":1,"partitions_created":1,"partitions_draining":1,`+
+			`"waiting_queues":[{"queue_name":%q,"backend":%q,"partition":0}]}`, queueName, gone),
+			rawRebalance(t, ctx, second))
 		listed := listedPartitions(t, ctx, c, queueName)
 		assert.Equal(t, []int32{0}, drainingOn(listed, gone))
+
+		// A queue an earlier rebalance already changed is still named, and the counts are zero
+		assert.JSONEq(t, fmt.Sprintf(`{"queues_changed":0,"partitions_created":0,"partitions_draining":0,`+
+			`"waiting_queues":[{"queue_name":%q,"backend":%q,"partition":0}]}`, queueName, gone),
+			rawRebalance(t, ctx, second))
 		assert.Equal(t, []int32{1}, availableOn(listed, main))
 
 		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
@@ -523,6 +548,36 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		assert.Equal(t, querator.MsgRequestTimeout, e.Message())
 		assert.Equal(t, duh.CodeRetryRequest, e.Code())
 		assert.Empty(t, lease.Items)
+	})
+
+	t.Run("QueueWithSeveralPartitionsOnBackendGoneFromConfigIsNotNamed", func(t *testing.T) {
+		// The InMemory queue store keeps no record of the queue across a restart
+		if lifetime == endsWithDaemon {
+			return
+		}
+		const gone = "memory-gone"
+		conf := withExtraBackend(setup(), gone, 0, nil)
+		defer tearDown()
+		main := conf.PartitionStorage[0].Name
+		first := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+		c, ctx := first.MustClient(), first.Context()
+
+		queueName := random.String("queue-", 10)
+		setAffinity(t, ctx, c, gone, 1)
+		setAffinity(t, ctx, c, main, 0)
+		createQueueWithPartitions(t, ctx, c, queueName, 2)
+		setAffinity(t, ctx, c, main, 1)
+		setAffinity(t, ctx, c, gone, 0)
+		first.Shutdown(t)
+
+		conf.PartitionStorage = conf.PartitionStorage[:1]
+		second := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+		defer second.Shutdown(t)
+		ctx = second.Context()
+
+		// It keeps leasing from its other partitions, so the empty list is still in the reply
+		assert.JSONEq(t, `{"queues_changed":1,"partitions_created":2,"partitions_draining":2,"waiting_queues":[]}`,
+			rawRebalance(t, ctx, second))
 	})
 
 	t.Run("DrainingPartitionStaysDrainingAfterRestart", func(t *testing.T) {

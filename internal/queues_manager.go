@@ -275,6 +275,13 @@ type RebalanceCounts struct {
 	ChangedQueues      int
 	CreatedPartitions  int
 	DrainingPartitions int
+	WaitingQueues      []WaitingQueue
+}
+
+type WaitingQueue struct {
+	QueueName string
+	Backend   string
+	Partition int
 }
 
 const maxRebalanceAttempts = 10
@@ -340,7 +347,7 @@ func (qm *QueuesManager) rebalanceQueue(ctx context.Context, name string, backen
 			return errors.With("queue", name).Errorf("placement.Rebalance(): %w", err)
 		}
 		if !rebalanced.Changed {
-			return qm.adoptRecord(ctx, queue)
+			return qm.adoptAndNoteWaiting(ctx, queue, result)
 		}
 
 		err = qm.conf.StorageConfig.Queues.SavePartitions(ctx, types.PartitionList{
@@ -371,9 +378,31 @@ func (qm *QueuesManager) rebalanceQueue(ctx context.Context, name string, backen
 			}
 			return errors.With("queue", name).Errorf("Queues.Get(): %w", err)
 		}
-		return qm.adoptRecord(ctx, stored)
+		return qm.adoptAndNoteWaiting(ctx, stored, result)
 	}
 	return reply.NewRetryRequest("queue '%s' kept changing while it was being rebalanced; try again", name)
+}
+
+func (qm *QueuesManager) adoptAndNoteWaiting(ctx context.Context, queue types.QueueInfo, result *RebalanceCounts) error {
+	if err := qm.adoptRecord(ctx, queue); err != nil {
+		return err
+	}
+	if queue.RequestedPartitions != 1 {
+		return nil
+	}
+	var waiting *WaitingQueue
+	for _, partition := range queue.PartitionInfo {
+		if !partition.Draining || qm.backends.Configured(partition.StorageName) {
+			continue
+		}
+		if waiting == nil || partition.PartitionNum < waiting.Partition {
+			waiting = &WaitingQueue{QueueName: queue.Name, Backend: partition.StorageName, Partition: partition.PartitionNum}
+		}
+	}
+	if waiting != nil {
+		result.WaitingQueues = append(result.WaitingQueues, *waiting)
+	}
+	return nil
 }
 
 func drainingCount(queue types.QueueInfo) int {

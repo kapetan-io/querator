@@ -72,6 +72,8 @@ tags:
       
       **Storage Operations:**
       - `storage/items.*` - Direct storage inspection and manipulation
+      - `storage/scheduled.*` - List scheduled items
+      - `storage/backends.*` - List storage backends and change their affinity
       - Low-level operations for debugging and data migration
 paths:
   /v1/queue.produce:
@@ -338,7 +340,7 @@ paths:
                   summary: Success
                   value:
                     items:
-                      - name: queue-1
+                      - queue_name: queue-1
                         created_at: '2024-01-01 12:00:00.0000'
                         updated_at: '2024-01-01 12:00:00.0000'
                         dead_queue: queue-1-dead
@@ -347,7 +349,7 @@ paths:
                         expire_timeout: 24h
                         max_attempts: 10
                         requested_partitions: 5
-                      - name: queue-2
+                      - queue_name: queue-2
                         created_at: '2024-01-01 12:00:00.0000'
                         updated_at: '2024-01-01 12:00:00.0000'
                         dead_queue: queue-2-dead
@@ -472,7 +474,7 @@ paths:
                 '1':
                   summary: Success
                   value:
-                    name: queue-name
+                    queue_name: queue-name
                     created_at: '2024-01-01 12:00:00.0000'
                     updated_at: '2024-01-01 12:00:00.0000'
                     dead_queue: queue-name-dead
@@ -609,7 +611,7 @@ paths:
                     code: 200
           headers: {}
       security: []
-  /v1/storage.items-list:
+  /v1/storage/items.list:
     post:
       summary: List Items in a Partition
       deprecated: false
@@ -632,7 +634,7 @@ paths:
                 $ref: '#/components/schemas/StorageItemsListResponse'
           headers: {}
       security: []
-  /v1/storage.items-import:
+  /v1/storage/items.import:
     post:
       summary: Import Items to a Partition
       deprecated: false
@@ -655,7 +657,7 @@ paths:
                 $ref: '#/components/schemas/StorageItemsImportResponse'
           headers: {}
       security: []
-  /v1/storage.items-delete:
+  /v1/storage/items.delete:
     post:
       summary: Delete items from a partition
       deprecated: false
@@ -680,6 +682,33 @@ paths:
                   summary: Success
                   value:
                     code: 200
+          headers: {}
+      security: []
+  /v1/storage/scheduled.list:
+    post:
+      summary: List scheduled items in a partition
+      deprecated: false
+      description: >-
+        Lists the scheduled items of a queue partition, which
+        `/storage/items.list` does not show. Takes the same request and
+        sends the same reply as `/storage/items.list`.
+      operationId: post-v1-storage-scheduled.list
+      tags:
+        - Querator V1
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StorageItemsListRequest'
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorageItemsListResponse'
           headers: {}
       security: []
   /v1/queues.rebalance:
@@ -964,9 +993,6 @@ components:
             knowledge of those items.
       required:
         - queue_name
-        - scheduled
-        - queue
-        - destructive
     QueuesListRequest:
       type: object
       properties:
@@ -1712,6 +1738,11 @@ components:
             `/queues.update`.
           items:
             $ref: '#/components/schemas/PartitionInfo'
+        namespace:
+          type: string
+          description: >-
+            The namespace this queue belongs to. Used for multi-tenant
+            isolation. When empty, the queue belongs to the default namespace.
         pending:
           $ref: '#/components/schemas/QueuePendingRebalance'
         rebalance_refused:
@@ -1791,6 +1822,8 @@ components:
       type: object
       properties:
         id:
+          type: string
+        source_id:
           type: string
         is_leased:
           type: boolean

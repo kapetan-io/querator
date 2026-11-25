@@ -72,7 +72,7 @@ tags:
       
       **Storage Operations:**
       - `storage/items.*` - Direct storage inspection and manipulation
-      - `storage/scheduled.*` - List scheduled items
+      - `storage/scheduled.list` - List scheduled items
       - `storage/backends.*` - List storage backends and change their affinity
       - Low-level operations for debugging and data migration
 paths:
@@ -1742,7 +1742,7 @@ components:
           type: string
           description: >-
             The namespace this queue belongs to. Used for multi-tenant
-            isolation. When empty, the queue belongs to the default namespace.
+            isolation. A queue created with no namespace goes in `_system`.
         pending:
           $ref: '#/components/schemas/QueuePendingRebalance'
         rebalance_refused:
@@ -1825,6 +1825,10 @@ components:
           type: string
         source_id:
           type: string
+          description: >-
+            The ID the item had in its source queue. Set when an item moves to
+            a dead letter queue, or carried in when an item is imported with
+            one. Empty otherwise.
         is_leased:
           type: boolean
         lease_deadline:

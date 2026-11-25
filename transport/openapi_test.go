@@ -35,6 +35,7 @@ func TestOpenAPIPathsAreServed(t *testing.T) {
 				defer func() { _ = recover() }()
 				handler.ServeHTTP(rec, req)
 			}()
+			assert.NotEqual(t, http.StatusNotImplemented, rec.Code)
 			assert.NotContains(t, rec.Body.String(), "no such method")
 		})
 	}

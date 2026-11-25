@@ -21,10 +21,16 @@ import (
 type slowAPIKeys struct {
 	store.APIKeys
 	getByHashDelay time.Duration
+	getByHashErr   error
 	updateLastUsed atomic.Int64
+	getByHashCalls atomic.Int64
 }
 
 func (s *slowAPIKeys) GetByHash(ctx context.Context, hash string, key *types.APIKey) error {
+	s.getByHashCalls.Add(1)
+	if s.getByHashErr != nil {
+		return s.getByHashErr
+	}
 	time.Sleep(s.getByHashDelay)
 	return s.APIKeys.GetByHash(ctx, hash, key)
 }
@@ -178,4 +184,108 @@ func TestAuthCacheMissUpdateLastUsedFanOut(t *testing.T) {
 	// Singleflight collapses all concurrent misses into one storage fetch,
 	// so UpdateLastUsed must be called exactly once regardless of goroutine count.
 	assert.Equal(t, int64(1), slow.updateLastUsed.Load())
+}
+
+func TestSameInvalidAPICallToDB(t *testing.T) {
+	memKeys := store.NewMemoryAPIKeys(nil)
+	users := store.NewMemoryUsers(nil)
+
+	generated, err := auth.GenerateAPIKey("live")
+	require.NoError(t, err)
+
+	invalidKeys := &slowAPIKeys{APIKeys: memKeys}
+	cache := internal.NewAuthCache(internal.AuthCacheConfig{
+		APIKeys:         invalidKeys,
+		Users:           users,
+		TTL:             time.Minute,
+		CleanupInterval: time.Hour,
+	})
+	defer cache.Close()
+
+	for range 2 {
+		_, err := cache.Authenticate(context.Background(), generated.Key)
+		require.ErrorIs(t, err, types.ErrAPIKeyNotExist)
+
+	}
+
+	assert.Equal(t, int64(1), invalidKeys.getByHashCalls.Load())
+}
+
+func TestAuthCacheDoesNotCacheStorageErrors(t *testing.T) {
+	memKeys := store.NewMemoryAPIKeys(nil)
+	users := store.NewMemoryUsers(nil)
+
+	generated, err := auth.GenerateAPIKey("live")
+	require.NoError(t, err)
+
+	// Simulate a temporary storage failure to prove it isn't cached.
+	slow := &slowAPIKeys{APIKeys: memKeys, getByHashErr: context.DeadlineExceeded}
+	cache := internal.NewAuthCache(internal.AuthCacheConfig{
+		APIKeys:         slow,
+		Users:           users,
+		CleanupInterval: time.Hour,
+	})
+	defer cache.Close()
+
+	for range 2 {
+		_, err := cache.Authenticate(context.Background(), generated.Key)
+		require.ErrorIs(t, err, types.ErrAPIKeyInvalid)
+	}
+
+	assert.Equal(t, int64(2), slow.getByHashCalls.Load())
+}
+
+func TestAuthCacheLimitsMissingKeyEntries(t *testing.T) {
+	memKeys := store.NewMemoryAPIKeys(nil)
+	users := store.NewMemoryUsers(nil)
+
+	first, err := auth.GenerateAPIKey("live")
+	require.NoError(t, err)
+	second, err := auth.GenerateAPIKey("live")
+	require.NoError(t, err)
+
+	slow := &slowAPIKeys{APIKeys: memKeys}
+	cache := internal.NewAuthCache(internal.AuthCacheConfig{
+		APIKeys:            slow,
+		Users:              users,
+		MaxNegativeEntries: 1,
+	})
+	defer cache.Close()
+
+	for _, key := range []string{first.Key, first.Key, second.Key, second.Key} {
+		_, err := cache.Authenticate(context.Background(), key)
+		require.ErrorIs(t, err, types.ErrAPIKeyNotExist)
+	}
+
+	assert.Equal(t, int64(3), slow.getByHashCalls.Load())
+}
+
+func TestAuthCacheExpiresMissingKeyEntries(t *testing.T) {
+	memKeys := store.NewMemoryAPIKeys(nil)
+	users := store.NewMemoryUsers(nil)
+
+	generated, err := auth.GenerateAPIKey("live")
+	require.NoError(t, err)
+
+	slow := &slowAPIKeys{APIKeys: memKeys}
+	cache := internal.NewAuthCache(internal.AuthCacheConfig{
+		APIKeys:            slow,
+		Users:              users,
+		NegativeTTL:        time.Second,
+		MaxNegativeEntries: 1,
+		CleanupInterval:    time.Hour,
+	})
+	defer cache.Close()
+
+	for range 2 {
+		_, err := cache.Authenticate(context.Background(), generated.Key)
+		require.ErrorIs(t, err, types.ErrAPIKeyNotExist)
+	}
+	time.Sleep(1100 * time.Millisecond)
+	for range 2 {
+		_, err := cache.Authenticate(context.Background(), generated.Key)
+		require.ErrorIs(t, err, types.ErrAPIKeyNotExist)
+	}
+
+	assert.Equal(t, int64(2), slow.getByHashCalls.Load())
 }

@@ -835,7 +835,8 @@ paths:
       summary: List storage backends with their partitions
       deprecated: false
       description: >-
-        Lists every storage backend with a saved record. Replies even when a
+        Lists every storage backend with a saved record, and every backend
+        that holds a partition but has no saved record. Replies even when a
         storage backend is down. Takes no filter and does not page. Needs the
         `backend.list` permission in the `_system` namespace.
       operationId: post-v1-storage-backends.list
@@ -1247,7 +1248,11 @@ components:
       properties:
         backends:
           type: array
-          description: One entry per storage backend with a saved record.
+          description: >-
+            One entry per storage backend with a saved record, in the order
+            the store returns them, then one per storage backend that holds a
+            partition and has no saved record (an entry with no `affinity`),
+            sorted by name.
           items:
             $ref: '#/components/schemas/StorageBackend'
       required:
@@ -1261,17 +1266,17 @@ components:
         affinity:
           type: number
           format: double
-          description: The saved affinity.
+          description: >-
+            The saved affinity. Left out when the backend has no saved record,
+            such as a backend a queue saved before backend records existed
+            placed a partition on.
         configured:
           type: boolean
           description: >-
-            False when the backend has a saved record and is not in this
-            instance's config file.
-        safe_to_stop:
-          type: boolean
-          description: >-
-            True only when affinity is 0 and no partition of any queue is left
-            on the backend. A partition Querator cannot read counts as left.
+            False when this instance has no such storage backend, so every call
+            on a partition it holds fails. An entry with no `affinity` can be
+            true: a backend whose record was refused at start has no saved
+            record and still holds partitions.
         partitions:
           type: array
           description: Every partition on the backend.
@@ -1281,16 +1286,15 @@ components:
           $ref: '#/components/schemas/PendingRebalance'
       required:
         - backend
-        - affinity
         - configured
-        - safe_to_stop
         - partitions
         - pending
     BackendPartition:
       type: object
       description: >-
-        One partition on a storage backend. The three counts are left out when
-        Querator cannot read the partition.
+        One partition on a storage backend. The three counts are left out only
+        when Querator cannot read the partition. An empty partition shows each
+        count as 0.
       properties:
         queue_name:
           type: string

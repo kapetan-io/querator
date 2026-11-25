@@ -680,10 +680,11 @@ func (s *Service) StorageBackendsList(ctx context.Context, _ *proto.StorageBacke
 	for _, status := range statuses {
 		backend := &proto.StorageBackend{
 			Backend:    status.Backend.Name,
-			Affinity:   new(status.Backend.Affinity),
 			Configured: new(status.Configured),
-			SafeToStop: new(status.SafeToStop),
 			Pending:    &proto.PendingRebalance{},
+		}
+		if status.Recorded {
+			backend.Affinity = new(status.Backend.Affinity)
 		}
 		for _, p := range status.Partitions {
 			partition := &proto.BackendPartition{

@@ -166,7 +166,7 @@ _Avoid_: Metadata store
 - A **Queue** consists of one or more **Partitions**
 - A **Logical Queue** manages a subset of **Partitions** within a **Queue**
 - A **Partition** is backed by exactly one **Storage Backend**
-- A **Storage Backend** has one **Affinity**
+- A **Storage Backend** with a saved record has one **Affinity**
 - A **Queue** has one **Share** per **Storage Backend**
 - A **Draining** **Partition** never becomes available again
 - An **Item** lives in exactly one **Partition** for its entire lifecycle

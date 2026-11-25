@@ -179,7 +179,7 @@ func testDrainRemoval(t *testing.T, setup NewStorageFunc, tearDown func(), lifet
 		assert.Equal(t, rebalanceCounts{ChangedQueues: 1, CreatedPartitions: 2, DrainingPartitions: 2},
 			moveOnlyPartition(t, ctx, c, main))
 		assert.Equal(t, []int32{0, 1}, drainingOn(listedPartitions(t, ctx, c, queueName), main))
-		assert.False(t, findBackend(t, listBackends(t, d), main).GetSafeToStop())
+		assert.NotEmpty(t, findBackend(t, listBackends(t, d), main).Partitions)
 
 		// Consumers empty the draining partitions, and Querator removes them with no call
 		for range 2 {
@@ -194,7 +194,7 @@ func testDrainRemoval(t *testing.T, setup NewStorageFunc, tearDown func(), lifet
 		assert.Empty(t, drainingOn(listed, main))
 		assert.Empty(t, availableOn(listed, main))
 		assert.Equal(t, []int32{2, 3}, availableOn(listed, extraBackend))
-		assert.True(t, findBackend(t, listBackends(t, d), main).GetSafeToStop())
+		assertRetirable(t, findBackend(t, listBackends(t, d), main))
 		assert.Equal(t, rebalanceCounts{}, rebalance(t, ctx, c))
 	})
 
@@ -232,7 +232,7 @@ func testDrainRemoval(t *testing.T, setup NewStorageFunc, tearDown func(), lifet
 		clock.Sleep(requestSettle)
 		assert.Equal(t, []int32{0}, drainingOn(listedPartitions(t, ctx, c, leasedName), main))
 		assert.Equal(t, []int32{0}, drainingOn(listedPartitions(t, ctx, c, scheduledName), main))
-		assert.False(t, findBackend(t, listBackends(t, d), main).GetSafeToStop())
+		assert.NotEmpty(t, findBackend(t, listBackends(t, d), main).Partitions)
 
 		// Completing the leased item empties its partition
 		completeLeased(t, ctx, c, leased)
@@ -381,7 +381,7 @@ func testDrainRemoval(t *testing.T, setup NewStorageFunc, tearDown func(), lifet
 
 		listed := listedPartitions(t, ctx, c, usedName)
 		assert.Equal(t, []listedPartition{{Partition: 1, StorageName: extraBackend, State: "available"}}, listed)
-		assert.True(t, findBackend(t, listBackends(t, second), main).GetSafeToStop())
+		assertRetirable(t, findBackend(t, listBackends(t, second), main))
 	})
 
 	t.Run("RecreatedQueueHoldsNoItemsOfTheDeletedQueue", func(t *testing.T) {
@@ -576,7 +576,7 @@ func testDrainRemoval(t *testing.T, setup NewStorageFunc, tearDown func(), lifet
 			assert.Equal(t, []int32{0}, drainingOn(listedPartitions(t, ctx, c, name), main))
 			assert.Equal(t, []int32{0}, partitionsOn(t, ctx, c, name)[main])
 		}
-		assert.False(t, findBackend(t, listBackends(t, d), main).GetSafeToStop())
+		assert.NotEmpty(t, findBackend(t, listBackends(t, d), main).Partitions)
 	})
 
 	t.Run("EmptiedDrainingPartitionIsRemovedAfterRestart", func(t *testing.T) {
@@ -617,7 +617,7 @@ func testDrainRemoval(t *testing.T, setup NewStorageFunc, tearDown func(), lifet
 			return len(partitionsOn(t, ctx, c, idleName)[main]) == 0
 		}, removalWait, 20*clock.Millisecond)
 		assert.Equal(t, []int32{1}, partitionsOn(t, ctx, c, idleName)[extraBackend])
-		assert.True(t, findBackend(t, listBackends(t, second), main).GetSafeToStop())
+		assertRetirable(t, findBackend(t, listBackends(t, second), main))
 	})
 	t.Run("RemovalFinishesOnceTheRecordCanBeSaved", func(t *testing.T) {
 		fault := &removalSaveFault{}
@@ -647,7 +647,7 @@ func testDrainRemoval(t *testing.T, setup NewStorageFunc, tearDown func(), lifet
 			return len(partitionsOn(t, ctx, c, queueName)[main]) == 0 &&
 				len(drainingOn(listedPartitions(t, ctx, c, queueName), main)) == 0
 		}, 3*removalWait, 20*clock.Millisecond)
-		assert.True(t, findBackend(t, listBackends(t, d), main).GetSafeToStop())
+		assertRetirable(t, findBackend(t, listBackends(t, d), main))
 	})
 }
 
@@ -665,4 +665,12 @@ func itemsIn(t *testing.T, ctx context.Context, c *querator.Client, queueName st
 	}
 	require.FailNow(t, "partition not in queue.stats", "partition %d", partition)
 	return 0
+}
+
+func assertRetirable(t *testing.T, backend *pb.StorageBackend) {
+	t.Helper()
+	assert.Equal(t, 0.0, backend.GetAffinity())
+	assert.Empty(t, backend.Partitions)
+	assert.Empty(t, backend.GetPending().GetCreate())
+	assert.Empty(t, backend.GetPending().GetDrain())
 }

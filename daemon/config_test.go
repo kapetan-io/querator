@@ -1249,7 +1249,7 @@ queues:
 	}
 }
 
-func TestConfigFileValidationFailureSavesNoEarlierQueues(t *testing.T) {
+func TestConfigFileDoesNotPersistQueuesOnValidationFailure(t *testing.T) {
 	ctx := context.Background()
 
 	for _, tc := range []struct {

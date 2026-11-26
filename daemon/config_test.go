@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"math"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1244,5 +1246,260 @@ queues:
 			assert.Contains(t, err.Error(), "bad-queue")
 			assert.Contains(t, err.Error(), tc.Message)
 		})
+	}
+}
+
+func TestConfigFileDoesNotPersistQueuesOnValidationFailure(t *testing.T) {
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name    string
+		invalid daemon.Queue
+		wantErr string
+	}{
+		{
+			name: "NegativeLeaseTimeout",
+			invalid: daemon.Queue{
+				Name: "bad-queue", RequestedPartitions: 1,
+				LeaseTimeout: -time.Minute, ExpireTimeout: time.Hour,
+			},
+			wantErr: "lease timeout is invalid; cannot be negative",
+		},
+		{
+			name: "NegativeExpireTimeout",
+			invalid: daemon.Queue{
+				Name: "bad-queue", RequestedPartitions: 1,
+				LeaseTimeout: time.Minute, ExpireTimeout: -time.Hour,
+			},
+			wantErr: "expire timeout is invalid; cannot be negative",
+		},
+		{
+			name: "ZeroLeaseTimeout",
+			invalid: daemon.Queue{
+				Name: "bad-queue", RequestedPartitions: 1,
+				LeaseTimeout: 0, ExpireTimeout: time.Hour,
+			},
+			wantErr: "lease timeout is invalid; cannot be empty",
+		},
+		{
+			name: "ZeroExpireTimeout",
+			invalid: daemon.Queue{
+				Name: "bad-queue", RequestedPartitions: 1,
+				LeaseTimeout: time.Minute, ExpireTimeout: 0,
+			},
+			wantErr: "expire timeout is invalid; cannot be empty",
+		},
+		{
+			name: "LeaseTimeoutGreaterThanExpireTimeout",
+			invalid: daemon.Queue{
+				Name: "bad-queue", RequestedPartitions: 1,
+				LeaseTimeout: 2 * time.Hour, ExpireTimeout: time.Hour,
+			},
+			wantErr: "lease timeout is too long",
+		},
+		{
+			name: "ZeroRequestedPartitions",
+			invalid: daemon.Queue{
+				Name: "bad-queue", RequestedPartitions: 0,
+				LeaseTimeout: time.Minute, ExpireTimeout: time.Hour,
+			},
+			wantErr: "partitions is invalid; cannot be less than 1",
+		},
+		{
+			name: "TooManyRequestedPartitions",
+			invalid: daemon.Queue{
+				Name: "bad-queue", RequestedPartitions: 1025,
+				LeaseTimeout: time.Minute, ExpireTimeout: time.Hour,
+			},
+			wantErr: "partitions is invalid; cannot be greater than 1024",
+		},
+		{
+			name: "UndefinedPartitionStorage",
+			invalid: daemon.Queue{
+				Name: "bad-queue", RequestedPartitions: 1,
+				LeaseTimeout: time.Minute, ExpireTimeout: time.Hour,
+				Partitions: []daemon.Partition{{Partition: 0, StorageName: "missing"}},
+			},
+			wantErr: "references 'missing' which is undefined",
+		},
+		{
+			name: "NegativeMaxAttempts",
+			invalid: daemon.Queue{
+				Name: "bad-queue", RequestedPartitions: 1,
+				LeaseTimeout: time.Minute, ExpireTimeout: time.Hour, MaxAttempts: -1,
+			},
+			wantErr: "max attempts is invalid; cannot be negative number",
+		},
+		{
+			name: "InvalidQueueNameWhitespace",
+			invalid: daemon.Queue{
+				Name: "bad queue", RequestedPartitions: 1,
+				LeaseTimeout: time.Minute, ExpireTimeout: time.Hour,
+			},
+			wantErr: "cannot contain whitespace",
+		},
+		{
+			name: "InvalidQueueNameTilde",
+			invalid: daemon.Queue{
+				Name: "bad~queue", RequestedPartitions: 1,
+				LeaseTimeout: time.Minute, ExpireTimeout: time.Hour,
+			},
+			wantErr: "cannot contain '~' character",
+		},
+		{
+			name: "EmptyQueueName",
+			invalid: daemon.Queue{
+				Name: "", RequestedPartitions: 1,
+				LeaseTimeout: time.Minute, ExpireTimeout: time.Hour,
+			},
+			wantErr: "queue name cannot be empty",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			conf := daemon.Config{InMemoryListener: true}
+			err := daemon.ApplyConfigFile(ctx, &conf, daemon.File{
+				PartitionStorage: []daemon.PartitionStorage{{
+					Name: "mem-00", Memory: &daemon.MemoryConfig{}, Affinity: 1,
+				}},
+				QueueStorage: daemon.QueueStorage{Badger: &daemon.BadgerConfig{StorageDir: dir}},
+				Queues: []daemon.Queue{
+					{
+						Name: "good-queue", RequestedPartitions: 1,
+						LeaseTimeout: time.Minute, ExpireTimeout: time.Hour,
+					},
+					tc.invalid,
+				},
+			}, io.Discard)
+			require.Error(t, err)
+			if tc.invalid.Name != "" {
+				require.ErrorContains(t, err, tc.invalid.Name)
+			} else {
+				require.ErrorContains(t, err, "invalid queue ''")
+			}
+			require.ErrorContains(t, err, tc.wantErr)
+			require.NotNil(t, conf.Service.StorageConfig.Queues)
+			require.NoError(t, conf.Service.StorageConfig.Queues.Close(ctx))
+
+			// Reopen the same durable store rather than checking only the in-memory
+			// state held by the failed ApplyConfigFile call.
+			reopened := daemon.Config{InMemoryListener: true}
+			require.NoError(t, daemon.ApplyConfigFile(ctx, &reopened, daemon.File{
+				QueueStorage: daemon.QueueStorage{Badger: &daemon.BadgerConfig{StorageDir: dir}},
+			}, io.Discard))
+			var stored types.QueueInfo
+			assert.ErrorIs(t, reopened.Service.StorageConfig.Queues.Get(ctx, "good-queue", &stored), store.ErrQueueNotExist)
+			require.NoError(t, reopened.Service.StorageConfig.Queues.Close(ctx))
+		})
+	}
+}
+
+func TestConfigFileValidationFailurePreservesStoredQueues(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	config := func() daemon.File {
+		return daemon.File{
+			PartitionStorage: []daemon.PartitionStorage{{
+				Name: "mem-00", Memory: &daemon.MemoryConfig{}, Affinity: 1,
+			}},
+			QueueStorage: daemon.QueueStorage{Badger: &daemon.BadgerConfig{StorageDir: dir}},
+		}
+	}
+
+	// Create the stored queue through the public API before applying the failing config.
+	seedConf := daemon.Config{InMemoryListener: true}
+	require.NoError(t, daemon.ApplyConfigFile(ctx, &seedConf, config(), io.Discard))
+	seedDaemon, err := daemon.NewDaemon(ctx, seedConf)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if seedDaemon != nil {
+			assert.NoError(t, seedDaemon.Shutdown(ctx))
+		}
+	})
+	seedClient := seedDaemon.MustClient()
+	require.NoError(t, seedClient.QueuesCreate(ctx, &pb.QueueInfo{
+		QueueName:           "existing",
+		LeaseTimeout:        "1m",
+		ExpireTimeout:       "1h",
+		MaxAttempts:         3,
+		Reference:           "before",
+		RequestedPartitions: 1,
+	}))
+	var before pb.QueueInfo
+	require.NoError(t, seedClient.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: "existing"}, &before))
+	require.NoError(t, seedDaemon.Shutdown(ctx))
+	seedDaemon = nil
+
+	// The existing declaration must be ignored. The valid new queue must not be saved
+	// because the later declaration is invalid.
+	conf := daemon.Config{InMemoryListener: true}
+	file := config()
+	file.Queues = []daemon.Queue{
+		{
+			Name: "existing", RequestedPartitions: 1, MaxAttempts: 9, Reference: "after",
+			LeaseTimeout: 5 * time.Minute, ExpireTimeout: 2 * time.Hour,
+		},
+		{
+			Name: "new-queue", RequestedPartitions: 1,
+			LeaseTimeout: time.Minute, ExpireTimeout: time.Hour,
+		},
+		{
+			Name: "bad-queue", RequestedPartitions: 1,
+			LeaseTimeout: -time.Minute, ExpireTimeout: time.Hour,
+		},
+	}
+	err = daemon.ApplyConfigFile(ctx, &conf, file, io.Discard)
+	require.ErrorContains(t, err, "invalid queue 'bad-queue'")
+	require.ErrorContains(t, err, "lease timeout is invalid")
+	require.NotNil(t, conf.Service.StorageConfig.Queues)
+	require.NoError(t, conf.Service.StorageConfig.Queues.Close(ctx))
+
+	// Reopen the same durable store through a daemon and verify it using public APIs.
+	reopenedConf := daemon.Config{InMemoryListener: true}
+	require.NoError(t, daemon.ApplyConfigFile(ctx, &reopenedConf, config(), io.Discard))
+	reopenedDaemon, err := daemon.NewDaemon(ctx, reopenedConf)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, reopenedDaemon.Shutdown(ctx)) }()
+	reopenedClient := reopenedDaemon.MustClient()
+
+	var after pb.QueueInfo
+	require.NoError(t, reopenedClient.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: "existing"}, &after))
+	assert.Equal(t, before.CreatedAt, after.CreatedAt)
+	assert.Equal(t, before.UpdatedAt, after.UpdatedAt)
+	assert.Equal(t, before.LeaseTimeout, after.LeaseTimeout)
+	assert.Equal(t, before.ExpireTimeout, after.ExpireTimeout)
+	assert.Equal(t, before.MaxAttempts, after.MaxAttempts)
+	assert.Equal(t, before.Reference, after.Reference)
+	assert.Equal(t, before.RequestedPartitions, after.RequestedPartitions)
+
+	var list pb.QueuesListResponse
+	require.NoError(t, reopenedClient.QueuesList(ctx, &list, &querator.ListOptions{}))
+	require.Len(t, list.Items, 1)
+	assert.Equal(t, "existing", list.Items[0].QueueName)
+}
+
+func TestConfigFilePreparesAndPersistsAllValidQueues(t *testing.T) {
+	ctx := context.Background()
+	conf := daemon.Config{InMemoryListener: true}
+	require.NoError(t, daemon.ApplyConfigFile(ctx, &conf, daemon.File{
+		PartitionStorage: []daemon.PartitionStorage{{
+			Name: "mem-00", Memory: &daemon.MemoryConfig{}, Affinity: 1,
+		}},
+		QueueStorage: daemon.QueueStorage{Memory: &daemon.MemoryConfig{}},
+		Queues: []daemon.Queue{
+			{Name: "q1", RequestedPartitions: 2, LeaseTimeout: time.Minute, ExpireTimeout: time.Hour},
+			// The first declaration wins, matching the previous sequential Add behavior.
+			{Name: "q1", RequestedPartitions: 5, LeaseTimeout: time.Minute, ExpireTimeout: time.Hour},
+			{Name: "q2", RequestedPartitions: 3, LeaseTimeout: time.Minute, ExpireTimeout: time.Hour},
+		},
+	}, io.Discard))
+	defer func() { require.NoError(t, conf.Service.StorageConfig.Queues.Close(ctx)) }()
+
+	wantPartitions := map[string]int{"q1": 2, "q2": 3}
+	for _, name := range slices.Sorted(maps.Keys(wantPartitions)) {
+		var got types.QueueInfo
+		require.NoError(t, conf.Service.StorageConfig.Queues.Get(ctx, name, &got))
+		assert.Len(t, got.PartitionInfo, wantPartitions[name])
 	}
 }

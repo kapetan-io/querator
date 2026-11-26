@@ -551,51 +551,96 @@ func setupQueueStorage(ctx context.Context, file File, conf *Config) error {
 
 	backends := internal.NewStorageBackends(conf.Service.StorageConfig.Queues,
 		conf.Service.StorageConfig.PartitionStorage, conf.Service.Log)
+	prepared, err := prepareQueues(ctx, file.Queues, conf.Service.StorageConfig.Queues,
+		backends, conf.Service.StorageConfig.PartitionStorage)
+	if err != nil {
+		return err
+	}
+
+	return persistQueues(ctx, conf.Service.StorageConfig.Queues, prepared)
+}
+
+func prepareQueues(
+	ctx context.Context,
+	declared []Queue,
+	queues store.Queues,
+	backends *internal.StorageBackends,
+	partitionStorage []store.PartitionStorage,
+) ([]types.QueueInfo, error) {
+	prepared := make([]types.QueueInfo, 0, len(declared))
+	seen := make(map[string]struct{}, len(declared))
 	var placeable []types.Backend
-	for _, queue := range file.Queues {
-		var stored types.QueueInfo
-		if err := conf.Service.StorageConfig.Queues.Get(ctx, queue.Name, &stored); err == nil {
+
+	for _, queue := range declared {
+		if _, ok := seen[queue.Name]; ok {
 			continue
 		}
+		seen[queue.Name] = struct{}{}
+
+		if err := store.ValidateQueueName(queue.Name); err != nil {
+			return nil, fmt.Errorf("invalid queue '%s'; %w", queue.Name, err)
+		}
+
+		var stored types.QueueInfo
+		err := queues.Get(ctx, queue.Name, &stored)
+		switch {
+		case err == nil:
+			continue
+		case errors.Is(err, store.ErrQueueNotExist):
+		default:
+			return nil, fmt.Errorf("while checking existing queue '%s'; %w", queue.Name, err)
+		}
+
 		if len(queue.Partitions) == 0 && placeable == nil {
-			var err error
-			if placeable, err = backends.PlaceableUnsaved(ctx); err != nil {
-				return fmt.Errorf("invalid queue '%s'; %w", queue.Name, err)
+			placeable, err = backends.PlaceableUnsaved(ctx)
+			if err != nil {
+				return nil, fmt.Errorf("invalid queue '%s'; %w", queue.Name, err)
 			}
 		}
 		if len(queue.Partitions) == 0 && !placement.CanPlace(placeable) {
-			return fmt.Errorf("invalid queue '%s'; no storage backend can take partitions, "+
+			return nil, fmt.Errorf("invalid queue '%s'; no storage backend can take partitions, "+
 				"at least one storage backend needs an affinity above 0; a backend Querator has already saved keeps its saved "+
-				"affinity, which 'querator backends update' changes while the daemon runs",
-				queue.Name)
+				"affinity, which 'querator backends update' changes while the daemon runs", queue.Name)
 		}
-		for _, p := range queue.Partitions {
-			found := store.Find(p.StorageName, conf.Service.StorageConfig.PartitionStorage)
+
+		for _, partition := range queue.Partitions {
+			found := store.Find(partition.StorageName, partitionStorage)
 			if found.Name == "" {
-				return fmt.Errorf("invalid partition storage; queue '%s' references '%s' which is undefined",
-					queue.Name, p.StorageName)
+				return nil, fmt.Errorf("invalid partition storage; queue '%s' references '%s' which is undefined",
+					queue.Name, partition.StorageName)
 			}
 		}
 
 		info := queue.ToQueueInfo()
 		if len(queue.Partitions) == 0 {
 			if info.RequestedPartitions > placement.MaxPartitions {
-				return fmt.Errorf("invalid queue '%s'; partitions is invalid; cannot be greater than %d",
+				return nil, fmt.Errorf("invalid queue '%s'; partitions is invalid; cannot be greater than %d",
 					queue.Name, placement.MaxPartitions)
 			}
 			placed, err := placement.Create(info, placeable)
 			if err != nil {
-				return fmt.Errorf("invalid queue '%s'; %w", queue.Name, err)
+				return nil, fmt.Errorf("invalid queue '%s'; %w", queue.Name, err)
 			}
 			info = placed
 		}
 		info.LinkPartitions()
 
-		if err := conf.Service.StorageConfig.Queues.Add(ctx, info); err != nil {
+		if err := store.ValidateQueueAdd(info); err != nil {
+			return nil, fmt.Errorf("invalid queue '%s'; %w", queue.Name, err)
+		}
+		prepared = append(prepared, info)
+	}
+
+	return prepared, nil
+}
+
+func persistQueues(ctx context.Context, queues store.Queues, prepared []types.QueueInfo) error {
+	for _, info := range prepared {
+		if err := queues.Add(ctx, info); err != nil {
 			if errors.Is(err, types.ErrQueueAlreadyExists) {
 				continue
 			}
-			return fmt.Errorf("invalid queue '%s'; %w", queue.Name, err)
+			return fmt.Errorf("invalid queue '%s'; %w", info.Name, err)
 		}
 	}
 	return nil

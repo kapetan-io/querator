@@ -183,6 +183,14 @@ func (s QueuesValidation) validateTimeoutChange(change timeoutChange) error {
 	return nil
 }
 
+func ValidateQueueName(name string) error {
+	return (QueuesValidation{}).validateQueueName(types.QueueInfo{Name: name})
+}
+
+func ValidateQueueAdd(info types.QueueInfo) error {
+	return (QueuesValidation{}).validateAdd(info)
+}
+
 func (s QueuesValidation) validateAdd(info types.QueueInfo) error {
 	if err := s.validateQueueInfo(info); err != nil {
 		return err

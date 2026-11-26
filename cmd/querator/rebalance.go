@@ -2,11 +2,17 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"strconv"
 	"time"
+
+	"github.com/duh-rpc/duh-go"
 
 	"github.com/kapetan-io/querator"
 	"github.com/kapetan-io/querator/proto"
+	"github.com/kapetan-io/querator/transport/reply"
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/encoding/protojson"
 )
@@ -22,7 +28,10 @@ that hold too few. Run 'querator backends list' or 'querator info <queue-name>' 
 If a rebalance stops part way, run it again to finish. Needs the queue.rebalance permission.
 Outputs JSON with the number of queues changed, partitions created and partitions this run
 marked draining, and waiting_queues, the queues with one partition that wait on a draining
-partition whose storage backend is missing from the config file.`,
+partition whose storage backend is missing from the config file. A rebalance that stops part
+way outputs queues_changed, partitions_created and partitions_draining for what it saved before
+it stopped, plus queue_name, the queue it stopped on, and failed_step, the step that failed.
+The error it then prints says why it stopped and what to do, and the command exits non-zero.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return RunRebalance(flags)
@@ -40,6 +49,9 @@ func RunRebalance(flags FlagParams) error {
 
 	var resp proto.QueuesRebalanceResponse
 	if err := client.QueuesRebalance(ctx, &proto.QueuesRebalanceRequest{}, &resp); err != nil {
+		if report, ok := stoppedRebalanceReport(err); ok {
+			fmt.Println(report)
+		}
 		return fmt.Errorf("failed to rebalance queues: %w", err)
 	}
 
@@ -49,4 +61,32 @@ func RunRebalance(flags FlagParams) error {
 	}
 	fmt.Println(string(out))
 	return nil
+}
+
+func stoppedRebalanceReport(err error) (string, bool) {
+	var stopped duh.Error
+	if !errors.As(err, &stopped) || stopped.Details()[reply.DetailQueueName] == "" {
+		return "", false
+	}
+	details := stopped.Details()
+	changed, changedErr := strconv.Atoi(details[reply.DetailQueuesChanged])
+	created, createdErr := strconv.Atoi(details[reply.DetailPartitionsCreated])
+	draining, drainingErr := strconv.Atoi(details[reply.DetailPartitionsDraining])
+	if changedErr != nil || createdErr != nil || drainingErr != nil {
+		return "", false
+	}
+	out, _ := json.MarshalIndent(struct {
+		QueuesChanged      int    `json:"queues_changed"`
+		PartitionsCreated  int    `json:"partitions_created"`
+		PartitionsDraining int    `json:"partitions_draining"`
+		QueueName          string `json:"queue_name"`
+		FailedStep         string `json:"failed_step"`
+	}{
+		QueuesChanged:      changed,
+		PartitionsCreated:  created,
+		PartitionsDraining: draining,
+		QueueName:          details[reply.DetailQueueName],
+		FailedStep:         details[reply.DetailFailedStep],
+	}, "", "  ")
+	return string(out), true
 }

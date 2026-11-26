@@ -72,6 +72,8 @@ tags:
       
       **Storage Operations:**
       - `storage/items.*` - Direct storage inspection and manipulation
+      - `storage/scheduled.list` - List scheduled items
+      - `storage/backends.*` - List storage backends and change their affinity
       - Low-level operations for debugging and data migration
 paths:
   /v1/queue.produce:
@@ -338,7 +340,7 @@ paths:
                   summary: Success
                   value:
                     items:
-                      - name: queue-1
+                      - queue_name: queue-1
                         created_at: '2024-01-01 12:00:00.0000'
                         updated_at: '2024-01-01 12:00:00.0000'
                         dead_queue: queue-1-dead
@@ -347,7 +349,7 @@ paths:
                         expire_timeout: 24h
                         max_attempts: 10
                         requested_partitions: 5
-                      - name: queue-2
+                      - queue_name: queue-2
                         created_at: '2024-01-01 12:00:00.0000'
                         updated_at: '2024-01-01 12:00:00.0000'
                         dead_queue: queue-2-dead
@@ -472,7 +474,7 @@ paths:
                 '1':
                   summary: Success
                   value:
-                    name: queue-name
+                    queue_name: queue-name
                     created_at: '2024-01-01 12:00:00.0000'
                     updated_at: '2024-01-01 12:00:00.0000'
                     dead_queue: queue-name-dead
@@ -609,7 +611,7 @@ paths:
                     code: 200
           headers: {}
       security: []
-  /v1/storage.items-list:
+  /v1/storage/items.list:
     post:
       summary: List Items in a Partition
       deprecated: false
@@ -632,7 +634,7 @@ paths:
                 $ref: '#/components/schemas/StorageItemsListResponse'
           headers: {}
       security: []
-  /v1/storage.items-import:
+  /v1/storage/items.import:
     post:
       summary: Import Items to a Partition
       deprecated: false
@@ -655,7 +657,7 @@ paths:
                 $ref: '#/components/schemas/StorageItemsImportResponse'
           headers: {}
       security: []
-  /v1/storage.items-delete:
+  /v1/storage/items.delete:
     post:
       summary: Delete items from a partition
       deprecated: false
@@ -682,6 +684,33 @@ paths:
                     code: 200
           headers: {}
       security: []
+  /v1/storage/scheduled.list:
+    post:
+      summary: List scheduled items in a partition
+      deprecated: false
+      description: >-
+        Lists the scheduled items of a queue partition, which
+        `/storage/items.list` does not show. Takes the same request and
+        sends the same reply as `/storage/items.list`.
+      operationId: post-v1-storage-scheduled.list
+      tags:
+        - Querator V1
+      parameters: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StorageItemsListRequest'
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StorageItemsListResponse'
+          headers: {}
+      security: []
   /v1/queues.rebalance:
     post:
       summary: Rebalance every queue's partitions
@@ -703,8 +732,24 @@ paths:
         before it are empty, until the backend is back in the config file.
         The list is empty when no queue is in that state. A queue with more
         than one partition and a backend that is in the config file but down
-        are not listed. Needs the
-        `queue.rebalance` permission in the `_system` namespace.
+        are not listed. A rebalance that stops
+        part way, because rebalancing one queue failed, replies with an error
+        whose message starts `rebalance stopped;`, names the queue and says
+        what to do. Its `details` holds `queues_changed`,
+        `partitions_created` and `partitions_draining` for what was saved
+        before it stopped, as strings, `queue_name`, the queue that failed,
+        and `failed_step`, the step that failed. It replies `454` when
+        calling again finishes the work: `failed_step` is `read_record` or
+        `save_record` when the queue store failed to read or save the
+        queue's record, or the record kept changing, and `adopt_record` when
+        the running queue did not take its saved record in time. It replies
+        `400` with `place_partitions` when the queue's partitions can't be
+        placed on the storage backends. A rebalance writes only the queue's
+        record, so no partition or storage backend is written during it. The
+        store's own error text goes to the server log, not the reply. A queue
+        whose record was saved before a later step failed is counted and is
+        also the named queue.
+        Needs the `queue.rebalance` permission in the `_system` namespace.
       operationId: post-v1-queues.rebalance
       tags:
         - Querator V1
@@ -732,6 +777,50 @@ paths:
                     namespace: _system
                     backend: disk-b
                     partition: 0
+          headers: {}
+        '454':
+          description: >-
+            The rebalance stopped part way. Calling queues.rebalance again
+            finishes it.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Reply'
+              example:
+                code: 454
+                code_text: Retry Request
+                message: >-
+                  rebalance stopped; the queue store failed to save the record
+                  of queue 'orders', call queues.rebalance again
+                details:
+                  queues_changed: '1'
+                  partitions_created: '1'
+                  partitions_draining: '0'
+                  queue_name: orders
+                  failed_step: save_record
+          headers: {}
+        '400':
+          description: >-
+            The rebalance stopped part way because the queue's partitions
+            cannot be placed on the storage backends. A rebalance refused
+            before it starts also replies 400, with no details.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Reply'
+              example:
+                code: 400
+                code_text: Bad Request
+                message: >-
+                  rebalance stopped; partitions of queue 'orders' cannot be
+                  placed, the sum of partition storage affinities is too
+                  large; lower the affinities
+                details:
+                  queues_changed: '0'
+                  partitions_created: '0'
+                  partitions_draining: '0'
+                  queue_name: orders
+                  failed_step: place_partitions
           headers: {}
       security: []
   /v1/storage/backends.update:
@@ -775,7 +864,8 @@ paths:
       summary: List storage backends with their partitions
       deprecated: false
       description: >-
-        Lists every storage backend with a saved record. Replies even when a
+        Lists every storage backend with a saved record, and every backend
+        that holds a partition but has no saved record. Replies even when a
         storage backend is down. Takes no filter and does not page. Needs the
         `backend.list` permission in the `_system` namespace.
       operationId: post-v1-storage-backends.list
@@ -964,9 +1054,6 @@ components:
             knowledge of those items.
       required:
         - queue_name
-        - scheduled
-        - queue
-        - destructive
     QueuesListRequest:
       type: object
       properties:
@@ -1187,7 +1274,11 @@ components:
       properties:
         backends:
           type: array
-          description: One entry per storage backend with a saved record.
+          description: >-
+            One entry per storage backend with a saved record, in the order
+            the store returns them, then one per storage backend that holds a
+            partition and has no saved record (an entry with no `affinity`),
+            sorted by name.
           items:
             $ref: '#/components/schemas/StorageBackend'
       required:
@@ -1201,17 +1292,17 @@ components:
         affinity:
           type: number
           format: double
-          description: The saved affinity.
+          description: >-
+            The saved affinity. Left out when the backend has no saved record,
+            such as a backend a queue saved before backend records existed
+            placed a partition on.
         configured:
           type: boolean
           description: >-
-            False when the backend has a saved record and is not in this
-            instance's config file.
-        safe_to_stop:
-          type: boolean
-          description: >-
-            True only when affinity is 0 and no partition of any queue is left
-            on the backend. A partition Querator cannot read counts as left.
+            False when this instance has no such storage backend, so every call
+            on a partition it holds fails. An entry with no `affinity` can be
+            true: a backend whose record was refused at start has no saved
+            record and still holds partitions.
         partitions:
           type: array
           description: Every partition on the backend.
@@ -1221,16 +1312,15 @@ components:
           $ref: '#/components/schemas/PendingRebalance'
       required:
         - backend
-        - affinity
         - configured
-        - safe_to_stop
         - partitions
         - pending
     BackendPartition:
       type: object
       description: >-
-        One partition on a storage backend. The three counts are left out when
-        Querator cannot read the partition.
+        One partition on a storage backend. The three counts are left out only
+        when Querator cannot read the partition. An empty partition shows each
+        count as 0.
       properties:
         queue_name:
           type: string
@@ -1442,6 +1532,11 @@ components:
         message:
           type: string
           description: Additional details about the response
+        details:
+          type: object
+          additionalProperties:
+            type: string
+          description: Values the call adds to an error reply
       required:
         - code
     QueueProduceItem:
@@ -1712,6 +1807,11 @@ components:
             `/queues.update`.
           items:
             $ref: '#/components/schemas/PartitionInfo'
+        namespace:
+          type: string
+          description: >-
+            The namespace this queue belongs to. Used for multi-tenant
+            isolation. A queue created with no namespace goes in `_system`.
         pending:
           $ref: '#/components/schemas/QueuePendingRebalance'
         rebalance_refused:
@@ -1792,6 +1892,12 @@ components:
       properties:
         id:
           type: string
+        source_id:
+          type: string
+          description: >-
+            The ID the item had in its source queue. Set when an item moves to
+            a dead letter queue, or carried in when an item is imported with
+            one. Empty otherwise.
         is_leased:
           type: boolean
         lease_deadline:

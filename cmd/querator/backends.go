@@ -21,7 +21,7 @@ var backendsListCommand = &cobra.Command{
 	Use:   "list",
 	Short: "List storage backends",
 	Long: `List every storage backend with its saved affinity, the partitions on it with their
-item counts, what a rebalance would do to it, and whether it is safe to stop.
+item counts, and what a rebalance would do to it.
 Outputs JSON.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {

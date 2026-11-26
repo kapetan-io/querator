@@ -209,7 +209,7 @@ func (ms *MockServer) handleStorageBackendsUpdate(w http.ResponseWriter, _ Captu
 func (ms *MockServer) handleStorageBackendsList(w http.ResponseWriter, _ CapturedRequest) {
 	ms.writeProtoResponse(w, &proto.StorageBackendsListResponse{
 		Backends: []*proto.StorageBackend{
-			{Backend: "test-backend", Affinity: new(1.0), Configured: new(true), SafeToStop: new(false)},
+			{Backend: "test-backend", Affinity: new(1.0), Configured: new(true)},
 		},
 	})
 }

@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"maps"
+	"math"
 	"net/http"
 	"os"
 	"slices"
@@ -284,12 +286,17 @@ func producedPerPartition(t *testing.T, ctx context.Context, c *querator.Client,
 
 var errSaveFailed = errors.New("queue record save failed by test")
 
+var errReadFailed = errors.New("queue record read failed by test")
+
 // queueStoreFault changes what the queue store does for one queue. It can fail every save of the
-// queue's partition list, as a queue store does when it cannot write. It can also run one step
+// queue's partition list, as a queue store does when it cannot write, or report that the record
+// changed on every save. It can also run one step
 // once, just before the next save of that list reaches the queue store, or just after the next
 // successful read of the queue's record. A failed save does not run the step.
 type queueStoreFault struct {
 	failing    atomic.Pointer[string]
+	changing   atomic.Pointer[string]
+	reading    atomic.Pointer[string]
 	beforeSave atomic.Pointer[storeStep]
 	afterGet   atomic.Pointer[storeStep]
 }
@@ -318,6 +325,14 @@ func (f *queueStoreFault) AllowSaves() {
 	f.failing.Store(nil)
 }
 
+func (f *queueStoreFault) FailReadsOf(queueName string) {
+	f.reading.Store(&queueName)
+}
+
+func (f *queueStoreFault) ChangeEverySaveOf(queueName string) {
+	f.changing.Store(&queueName)
+}
+
 func (f *queueStoreFault) BeforeNextSaveOf(queueName string, run func()) {
 	f.beforeSave.Store(&storeStep{queueName: queueName, run: run})
 }
@@ -335,11 +350,17 @@ func (f faultyQueues) SavePartitions(ctx context.Context, list types.PartitionLi
 	if failing := f.fault.failing.Load(); failing != nil && *failing == list.QueueName {
 		return errSaveFailed
 	}
+	if changing := f.fault.changing.Load(); changing != nil && *changing == list.QueueName {
+		return store.ErrQueueChanged
+	}
 	runOnce(&f.fault.beforeSave, list.QueueName)
 	return f.Queues.SavePartitions(ctx, list)
 }
 
 func (f faultyQueues) Get(ctx context.Context, name string, queue *types.QueueInfo) error {
+	if reading := f.fault.reading.Load(); reading != nil && *reading == name {
+		return errReadFailed
+	}
 	if err := f.Queues.Get(ctx, name, queue); err != nil {
 		return err
 	}
@@ -1185,7 +1206,7 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		err := c.QueuesRebalance(ctx, &pb.QueuesRebalanceRequest{}, &pb.QueuesRebalanceResponse{})
 		var e duh.Error
 		require.ErrorAs(t, err, &e)
-		assert.Equal(t, duh.CodeInternalError, e.Code())
+		assert.Equal(t, duh.CodeRetryRequest, e.Code())
 
 		// The queue whose save failed lists what it listed before
 		assert.Equal(t, []int32{0, 1, 2}, availableOn(listedPartitions(t, ctx, c, firstQueue), name))
@@ -1195,6 +1216,184 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		assert.Equal(t, rebalanceCounts{ChangedQueues: 1, CreatedPartitions: 1}, rebalance(t, ctx, c))
 		assert.Equal(t, []int32{0, 1, 2}, availableOn(listedPartitions(t, ctx, c, firstQueue), name))
 		assert.Equal(t, []int32{0, 1, 2}, availableOn(listedPartitions(t, ctx, c, secondQueue), name))
+	})
+
+	t.Run("StoppedRebalanceRepliesWithWhatItSaved", func(t *testing.T) {
+		fault := &queueStoreFault{}
+		conf := fault.Wrap(setup())
+		defer tearDown()
+		var logs syncBuffer
+		d := newDaemon(t, 10*clock.Second, svc.Config{
+			StorageConfig: conf,
+			Log:           slog.New(slog.NewTextHandler(&logs, nil)),
+		})
+		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
+
+		suffix := random.String("", 10)
+		firstQueue, secondQueue := "queue-a-"+suffix, "queue-b-"+suffix
+		createQueueWithPartitions(t, ctx, c, firstQueue, 2)
+		createQueueWithPartitions(t, ctx, c, secondQueue, 2)
+		setPartitionCount(t, ctx, c, firstQueue, 3)
+		setPartitionCount(t, ctx, c, secondQueue, 3)
+
+		fault.FailSavesOf(secondQueue)
+		err := c.QueuesRebalance(ctx, &pb.QueuesRebalanceRequest{}, &pb.QueuesRebalanceResponse{})
+		var e duh.Error
+		require.ErrorAs(t, err, &e)
+		assert.Equal(t, duh.CodeRetryRequest, e.Code())
+		assert.Equal(t, fmt.Sprintf("rebalance stopped; the queue store failed to save the record of queue '%s', "+
+			"call queues.rebalance again", secondQueue), e.Message())
+		assert.Equal(t, "1", e.Details()["queues_changed"])
+		assert.Equal(t, "1", e.Details()["partitions_created"])
+		assert.Equal(t, "0", e.Details()["partitions_draining"])
+		assert.Equal(t, secondQueue, e.Details()["queue_name"])
+		assert.Equal(t, "save_record", e.Details()["failed_step"])
+		assert.NotContains(t, e.Error(), errSaveFailed.Error())
+		assert.Contains(t, logs.String(), errSaveFailed.Error())
+		assert.Contains(t, logs.String(), "after saving 1 queues changed, 1 partitions created, 0 partitions draining")
+	})
+
+	t.Run("RebalanceThatSavedAndTheQueueCouldNotAdoptCountsIt", func(t *testing.T) {
+		var fault partitionFault
+		conf := withExtraBackend(fault.Wrap(setup()), extraBackend, 0, nil)
+		defer tearDown()
+		d := newDaemon(t, 20*clock.Second, svc.Config{
+			StorageConfig:       conf,
+			WriteTimeout:        300 * clock.Millisecond,
+			MaxRequestsPerQueue: 1,
+		})
+		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
+
+		queueName := random.String("queue-", 10)
+		createQueueWithPartitions(t, ctx, c, queueName, 1)
+		produceInOrder(t, ctx, c, queueName, 2)
+		setAffinity(t, ctx, c, extraBackend, 1)
+		setAffinity(t, ctx, c, conf.PartitionStorage[0].Name, 0)
+
+		hold := &clearHold{Reached: make(chan struct{}), Release: make(chan struct{})}
+		fault.holdClear.Store(hold)
+		var cleared, rebalanced error
+		backgroundCall{
+			Call: func() {
+				cleared = c.QueueClear(ctx, &pb.QueueClearRequest{QueueName: queueName, Queue: true})
+			},
+			While: func() {
+				hold.WaitReached(t, ctx)
+				short, cancel := context.WithTimeout(ctx, 200*clock.Millisecond)
+				defer cancel()
+				require.Error(t, c.QueueProduce(short, &pb.QueueProduceRequest{
+					QueueName:      queueName,
+					RequestTimeout: "5s",
+					Items:          []*pb.QueueProduceItem{{Reference: "fills-the-inbox", Bytes: []byte("x")}},
+				}))
+				rebalanced = c.QueuesRebalance(ctx, &pb.QueuesRebalanceRequest{}, &pb.QueuesRebalanceResponse{})
+				close(hold.Release)
+			},
+		}.run()
+		require.NoError(t, cleared)
+		fault.holdClear.Store(nil)
+
+		var e duh.Error
+		require.ErrorAs(t, rebalanced, &e)
+		assert.Equal(t, "1", e.Details()["queues_changed"])
+		assert.Equal(t, "1", e.Details()["partitions_created"])
+		assert.Equal(t, "1", e.Details()["partitions_draining"])
+		assert.Equal(t, queueName, e.Details()["queue_name"])
+		assert.Equal(t, "adopt_record", e.Details()["failed_step"])
+		assert.Equal(t, duh.CodeRetryRequest, e.Code())
+		assert.Equal(t, fmt.Sprintf("rebalance stopped; queue '%s' did not take its saved record in time, "+
+			"call queues.rebalance again", queueName), e.Message())
+	})
+
+	t.Run("QueueThatKeepsChangingStopsTheRebalance", func(t *testing.T) {
+		fault := &queueStoreFault{}
+		conf := fault.Wrap(setup())
+		defer tearDown()
+		suffix := random.String("", 10)
+		firstQueue, secondQueue := "queue-a-"+suffix, "queue-b-"+suffix
+		fault.ChangeEverySaveOf(secondQueue)
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
+
+		createQueueWithPartitions(t, ctx, c, firstQueue, 2)
+		createQueueWithPartitions(t, ctx, c, secondQueue, 2)
+		setPartitionCount(t, ctx, c, firstQueue, 3)
+		setPartitionCount(t, ctx, c, secondQueue, 3)
+
+		var e duh.Error
+		require.ErrorAs(t, c.QueuesRebalance(ctx, &pb.QueuesRebalanceRequest{}, &pb.QueuesRebalanceResponse{}), &e)
+		assert.Equal(t, duh.CodeRetryRequest, e.Code())
+		assert.Equal(t, fmt.Sprintf("rebalance stopped; queue '%s' kept changing while it was being rebalanced, "+
+			"call queues.rebalance again", secondQueue), e.Message())
+		assert.Equal(t, "1", e.Details()["queues_changed"])
+		assert.Equal(t, "1", e.Details()["partitions_created"])
+		assert.Equal(t, "0", e.Details()["partitions_draining"])
+		assert.Equal(t, secondQueue, e.Details()["queue_name"])
+		assert.Equal(t, "save_record", e.Details()["failed_step"])
+	})
+
+	t.Run("StoppedRebalanceNamesAFailedPlacement", func(t *testing.T) {
+		conf := setup()
+		defer tearDown()
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
+		name := conf.PartitionStorage[0].Name
+
+		queueName := random.String("queue-", 10)
+		createQueueWithPartitions(t, ctx, c, queueName, 2)
+		setAffinity(t, ctx, c, name, 1)
+
+		// backends.update and the config file refuse an affinity whose sum overflows placement, so the
+		// test saves one straight to the queue store to reach the placement step
+		require.NoError(t, conf.Queues.UpdateBackend(ctx, types.Backend{Name: name, Affinity: math.MaxFloat64}))
+
+		var e duh.Error
+		require.ErrorAs(t, c.QueuesRebalance(ctx, &pb.QueuesRebalanceRequest{}, &pb.QueuesRebalanceResponse{}), &e)
+		assert.Equal(t, duh.CodeBadRequest, e.Code())
+		assert.Equal(t, fmt.Sprintf("rebalance stopped; partitions of queue '%s' cannot be placed, "+
+			"the sum of partition storage affinities is too large; lower the affinities", queueName), e.Message())
+		assert.Equal(t, "0", e.Details()["queues_changed"])
+		assert.Equal(t, queueName, e.Details()["queue_name"])
+		assert.Equal(t, "place_partitions", e.Details()["failed_step"])
+	})
+
+	t.Run("StoppedRebalanceNamesAFailedRead", func(t *testing.T) {
+		fault := &queueStoreFault{}
+		conf := fault.Wrap(setup())
+		defer tearDown()
+		var logs syncBuffer
+		d := newDaemon(t, 10*clock.Second, svc.Config{
+			StorageConfig: conf,
+			Log:           slog.New(slog.NewTextHandler(&logs, nil)),
+		})
+		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
+
+		suffix := random.String("", 10)
+		firstQueue, secondQueue := "queue-a-"+suffix, "queue-b-"+suffix
+		createQueueWithPartitions(t, ctx, c, firstQueue, 2)
+		createQueueWithPartitions(t, ctx, c, secondQueue, 2)
+		setPartitionCount(t, ctx, c, firstQueue, 3)
+		setPartitionCount(t, ctx, c, secondQueue, 3)
+
+		fault.FailReadsOf(secondQueue)
+		var e duh.Error
+		require.ErrorAs(t, c.QueuesRebalance(ctx, &pb.QueuesRebalanceRequest{}, &pb.QueuesRebalanceResponse{}), &e)
+		assert.Equal(t, duh.CodeRetryRequest, e.Code())
+		assert.Equal(t, fmt.Sprintf("rebalance stopped; the queue store failed to read the record of queue '%s', "+
+			"call queues.rebalance again", secondQueue), e.Message())
+		assert.Equal(t, "1", e.Details()["queues_changed"])
+		assert.Equal(t, "1", e.Details()["partitions_created"])
+		assert.Equal(t, "0", e.Details()["partitions_draining"])
+		assert.Equal(t, secondQueue, e.Details()["queue_name"])
+		assert.Equal(t, "read_record", e.Details()["failed_step"])
+		assert.NotContains(t, e.Error(), errReadFailed.Error())
+		assert.Contains(t, logs.String(), errReadFailed.Error())
+		assert.Contains(t, logs.String(), "in step 'read_record'")
 	})
 
 	t.Run("ReCreatedQueueKeepsItsPartitions", func(t *testing.T) {
@@ -1382,7 +1581,7 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		err := c.QueuesRebalance(ctx, &pb.QueuesRebalanceRequest{}, &pb.QueuesRebalanceResponse{})
 		var e duh.Error
 		require.ErrorAs(t, err, &e)
-		assert.Equal(t, duh.CodeInternalError, e.Code())
+		assert.Equal(t, duh.CodeRetryRequest, e.Code())
 
 		// Neither the draining mark nor the replacement partition shows
 		assert.Equal(t, before, listedPartitions(t, ctx, c, queueName))

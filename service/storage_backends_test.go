@@ -1,9 +1,16 @@
 package service_test
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"math"
+	"net/http"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/duh-rpc/duh-go"
 	"github.com/kapetan-io/querator"
@@ -108,6 +115,21 @@ func listBackends(t *testing.T, td *testDaemon) *pb.StorageBackendsListResponse 
 	return &list
 }
 
+func rawBackendsList(t *testing.T, ctx context.Context, td *testDaemon) string {
+	t.Helper()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("http://%s/v1/storage/backends.list", td.d.Listener.Addr().String()), strings.NewReader("{}"))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, resp.Body.Close()) }()
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	return string(body)
+}
+
 func testStorageBackends(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime storageLifetime) {
 	t.Run("ListsConfiguredBackendWithItsPartitions", func(t *testing.T) {
 		conf := setup()
@@ -120,7 +142,6 @@ func testStorageBackends(t *testing.T, setup NewStorageFunc, tearDown func(), li
 		backend := findBackend(t, listBackends(t, d), name)
 		assert.Equal(t, 1.0, backend.GetAffinity())
 		assert.True(t, backend.GetConfigured())
-		assert.False(t, backend.GetSafeToStop())
 		assert.Empty(t, backend.Partitions)
 		require.NotNil(t, backend.Pending)
 		assert.Empty(t, backend.Pending.Create)
@@ -153,7 +174,41 @@ func testStorageBackends(t *testing.T, setup NewStorageFunc, tearDown func(), li
 			unleased += p.GetUnleased()
 		}
 		assert.Equal(t, int32(3), unleased)
-		assert.False(t, backend.GetSafeToStop())
+	})
+
+	t.Run("ListSendsZeroCountsOverHttp", func(t *testing.T) {
+		conf := setup()
+		defer tearDown()
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
+		queueName := random.String("queue-", 10)
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			QueueName:           queueName,
+			LeaseTimeout:        "1m0s",
+			ExpireTimeout:       "24h0m0s",
+			RequestedPartitions: 2,
+		})
+
+		var raw struct {
+			Backends []struct {
+				Backend    string `json:"backend"`
+				Partitions []map[string]any
+			} `json:"backends"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(rawBackendsList(t, ctx, d)), &raw))
+		var found int
+		for _, backend := range raw.Backends {
+			for _, partition := range backend.Partitions {
+				found++
+				assert.Contains(t, partition, "partition")
+				for _, key := range []string{"unleased", "leased", "scheduled", "failures"} {
+					assert.Contains(t, partition, key)
+					assert.Equal(t, float64(0), partition[key], key)
+				}
+			}
+		}
+		assert.Equal(t, 2, found)
 	})
 
 	t.Run("ScheduledCountDropsWhenScheduledItemIsDeleted", func(t *testing.T) {
@@ -676,7 +731,6 @@ func testStorageBackends(t *testing.T, setup NewStorageFunc, tearDown func(), li
 
 		extra := findBackend(t, listBackends(t, d), "memory-extra")
 		assert.Empty(t, extra.Partitions)
-		assert.False(t, extra.GetSafeToStop())
 
 		require.NoError(t, c.StorageBackendsUpdate(ctx, &pb.StorageBackendsUpdateRequest{
 			Backend:  "memory-extra",
@@ -701,7 +755,6 @@ func testStorageBackends(t *testing.T, setup NewStorageFunc, tearDown func(), li
 		extra = findBackend(t, listBackends(t, d), "memory-extra")
 		assert.Equal(t, 0.0, extra.GetAffinity())
 		assert.Empty(t, extra.Partitions)
-		assert.True(t, extra.GetSafeToStop())
 	})
 
 	t.Run("ListRepliesWhileBackendIsDown", func(t *testing.T) {
@@ -736,12 +789,91 @@ func testStorageBackends(t *testing.T, setup NewStorageFunc, tearDown func(), li
 		assert.Equal(t, int32(0), up.Partitions[0].GetFailures())
 		assert.NotNil(t, up.Partitions[0].Unleased)
 
-		// A backend at affinity 0 that still holds a partition is not safe to stop.
 		require.NoError(t, c.StorageBackendsUpdate(ctx, &pb.StorageBackendsUpdateRequest{
 			Backend:  "memory-down",
 			Affinity: new(0.0),
 		}))
-		assert.False(t, findBackend(t, listBackends(t, d), "memory-down").GetSafeToStop())
+		down = findBackend(t, listBackends(t, d), "memory-down")
+		assert.Equal(t, 0.0, down.GetAffinity())
+		require.Len(t, down.Partitions, 1)
+		assert.Greater(t, down.Partitions[0].GetFailures(), int32(0))
+		assert.Nil(t, down.Partitions[0].Unleased)
+		assert.Nil(t, down.Partitions[0].Leased)
+		assert.Nil(t, down.Partitions[0].Scheduled)
+	})
+
+	t.Run("ListShowsPartitionOnBackendWithNoRecord", func(t *testing.T) {
+		conf := setup()
+		defer tearDown()
+		queueName := random.String("queue-", 10)
+		require.NoError(t, conf.Queues.Add(context.Background(), types.QueueInfo{
+			Name:                queueName,
+			LeaseTimeout:        time.Minute,
+			ExpireTimeout:       24 * time.Hour,
+			RequestedPartitions: 1,
+			NextPartition:       1,
+			PartitionInfo:       []types.PartitionInfo{{StorageName: "gone", PartitionNum: 0}},
+		}))
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+		defer d.Shutdown(t)
+
+		gone := findBackend(t, listBackends(t, d), "gone")
+		assert.False(t, gone.GetConfigured())
+		require.Len(t, gone.Partitions, 1)
+		assert.Equal(t, queueName, gone.Partitions[0].QueueName)
+		assert.Nil(t, gone.Affinity)
+		assert.Equal(t, int32(1), gone.Partitions[0].GetFailures())
+		assert.Nil(t, gone.Partitions[0].Unleased)
+
+		// A rebalance would drain the partition and create its replacement on the recorded backend
+		require.NotNil(t, gone.Pending)
+		assert.Empty(t, gone.Pending.Create)
+		require.Len(t, gone.Pending.Drain, 1)
+		assert.Equal(t, queueName, gone.Pending.Drain[0].QueueName)
+		assert.Equal(t, []int32{0}, gone.Pending.Drain[0].Partitions)
+		recorded := findBackend(t, listBackends(t, d), conf.PartitionStorage[0].Name)
+		assert.NotNil(t, recorded.Affinity)
+		require.Len(t, recorded.Pending.Create, 1)
+		assert.Equal(t, queueName, recorded.Pending.Create[0].QueueName)
+		assert.Equal(t, []int32{1}, recorded.Pending.Create[0].Partitions)
+
+		var resp pb.QueuesRebalanceResponse
+		require.NoError(t, d.MustClient().QueuesRebalance(d.Context(), &pb.QueuesRebalanceRequest{}, &resp))
+		assert.Equal(t, int32(1), resp.GetPartitionsDraining())
+		assert.Equal(t, int32(1), resp.GetPartitionsCreated())
+		gone = findBackend(t, listBackends(t, d), "gone")
+		require.Len(t, gone.Partitions, 1)
+		assert.Equal(t, "draining", gone.Partitions[0].State)
+		assert.Nil(t, gone.Affinity)
+		assert.Empty(t, gone.Pending.Drain)
+		recorded = findBackend(t, listBackends(t, d), conf.PartitionStorage[0].Name)
+		require.Len(t, recorded.Partitions, 1)
+		assert.Equal(t, int32(1), recorded.Partitions[0].GetPartition())
+	})
+
+	t.Run("ListOrdersUnrecordedBackendsByNameAfterRecordedOnes", func(t *testing.T) {
+		conf := setup()
+		defer tearDown()
+		queueName := random.String("queue-", 10)
+		require.NoError(t, conf.Queues.Add(context.Background(), types.QueueInfo{
+			Name:                queueName,
+			LeaseTimeout:        time.Minute,
+			ExpireTimeout:       24 * time.Hour,
+			RequestedPartitions: 2,
+			NextPartition:       2,
+			PartitionInfo: []types.PartitionInfo{
+				{StorageName: "gone-b", PartitionNum: 0},
+				{StorageName: "gone-a", PartitionNum: 1},
+			},
+		}))
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+		defer d.Shutdown(t)
+
+		var names []string
+		for _, b := range listBackends(t, d).Backends {
+			names = append(names, b.Backend)
+		}
+		assert.Equal(t, []string{conf.PartitionStorage[0].Name, "gone-a", "gone-b"}, names)
 	})
 
 	t.Run("Errors", func(t *testing.T) {
@@ -843,6 +975,33 @@ func testStorageBackends(t *testing.T, setup NewStorageFunc, tearDown func(), li
 			second := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
 			defer second.Shutdown(t)
 			assert.Equal(t, 1.0, findBackend(t, listBackends(t, second), name).GetAffinity())
+		})
+
+		t.Run("RefusedRebalancePlanLeavesUnrecordedEntryWithoutPending", func(t *testing.T) {
+			conf := withExtraBackend(setup(), "memory-removed", 1, nil)
+			defer tearDown()
+			queueName := random.String("queue-", 10)
+			require.NoError(t, conf.Queues.Add(context.Background(), types.QueueInfo{
+				Name:                queueName,
+				LeaseTimeout:        time.Minute,
+				ExpireTimeout:       24 * time.Hour,
+				RequestedPartitions: 1,
+				NextPartition:       1,
+				PartitionInfo:       []types.PartitionInfo{{StorageName: "gone", PartitionNum: 0}},
+			}))
+			first := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+			first.Shutdown(t)
+
+			// A recorded backend with affinity above 0 that the config no longer names makes
+			// the rebalance refuse, so the list has no plan to show for any backend
+			conf.PartitionStorage = conf.PartitionStorage[:1]
+			second := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+			defer second.Shutdown(t)
+
+			gone := findBackend(t, listBackends(t, second), "gone")
+			require.Len(t, gone.Partitions, 1)
+			assert.Empty(t, gone.Pending.Create)
+			assert.Empty(t, gone.Pending.Drain)
 		})
 
 		t.Run("PartitionOnBackendMissingFromConfigLoads", func(t *testing.T) {

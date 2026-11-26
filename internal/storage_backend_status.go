@@ -11,8 +11,8 @@ import (
 
 type StorageBackendStatus struct {
 	Backend    types.Backend
+	Recorded   bool
 	Configured bool
-	SafeToStop bool
 	Partitions []BackendPartition
 	Rebalance  RebalancePlan
 }
@@ -59,19 +59,26 @@ func (qm *QueuesManager) ListStorageBackends(ctx context.Context) ([]StorageBack
 		index[backend.Name] = len(statuses)
 		statuses = append(statuses, StorageBackendStatus{
 			Backend:    backend,
+			Recorded:   true,
 			Configured: qm.backends.Configured(backend.Name),
-			Rebalance:  RebalancePlan{Create: []QueuePartitions{}, Drain: []QueuePartitions{}},
+			Rebalance:  emptyPlan(),
 		})
 	}
 
 	rebalancing := rebalanceBackends(statuses)
+	for _, name := range unrecordedBackends(queues, index) {
+		index[name] = len(statuses)
+		statuses = append(statuses, StorageBackendStatus{
+			Backend:    types.Backend{Name: name},
+			Configured: qm.backends.Configured(name),
+			Rebalance:  emptyPlan(),
+		})
+	}
+
 	for _, queue := range queues {
 		counts := qm.partitionCounts(ctx, queue.Name)
 		for _, p := range queue.PartitionInfo {
-			i, ok := index[p.StorageName]
-			if !ok {
-				continue
-			}
+			i := index[p.StorageName]
 			partition := BackendPartition{Queue: queue.Name, Partition: p.PartitionNum, State: p.State()}
 			state, loaded := counts[p.PartitionNum]
 			switch {
@@ -88,10 +95,23 @@ func (qm *QueuesManager) ListStorageBackends(ctx context.Context) ([]StorageBack
 		}
 	}
 
-	for i := range statuses {
-		statuses[i].SafeToStop = statuses[i].Backend.Affinity == 0 && len(statuses[i].Partitions) == 0
-	}
 	return statuses, nil
+}
+
+func emptyPlan() RebalancePlan {
+	return RebalancePlan{Create: []QueuePartitions{}, Drain: []QueuePartitions{}}
+}
+
+func unrecordedBackends(queues []types.QueueInfo, recorded map[string]int) []string {
+	names := make(map[string]bool)
+	for _, queue := range queues {
+		for _, p := range queue.PartitionInfo {
+			if _, ok := recorded[p.StorageName]; !ok {
+				names[p.StorageName] = true
+			}
+		}
+	}
+	return slices.Sorted(maps.Keys(names))
 }
 
 func (qm *QueuesManager) partitionCounts(ctx context.Context, name string) map[int]types.PartitionState {

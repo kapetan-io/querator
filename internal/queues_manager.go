@@ -305,6 +305,15 @@ func (qm *QueuesManager) adoptRecord(ctx context.Context, stored types.QueueInfo
 	if !ok {
 		return nil
 	}
+
+	return qm.adoptRecordInto(ctx, q, stored)
+}
+
+func (qm *QueuesManager) adoptRecordInto(
+	ctx context.Context,
+	q *Queue,
+	stored types.QueueInfo,
+) error {
 	held := q.Info()
 	if held.CreationID != stored.CreationID {
 		return nil
@@ -315,15 +324,34 @@ func (qm *QueuesManager) adoptRecord(ctx context.Context, stored types.QueueInfo
 
 	stored.LinkPartitions()
 	q.RoutePartitions(stored)
-	saved, cancel := context.WithTimeout(context.WithoutCancel(ctx), qm.conf.LogicalConfig.WriteTimeout)
+
+	saved, cancel := context.WithTimeout(
+		context.WithoutCancel(ctx),
+		qm.conf.LogicalConfig.WriteTimeout,
+	)
 	defer cancel()
+
 	for _, l := range q.GetAll() {
 		if err := l.UpdateInfo(saved, stored); err != nil {
-			return errors.With("queue", stored.Name).Errorf("while the queue adopts its saved record: %w", err)
+			if !qm.isLoaded(stored.Name, q) {
+				return nil
+			}
+
+			return errors.With("queue", stored.Name).
+				Errorf("while the queue adopts its saved record: %w", err)
 		}
 	}
+
 	q.AdoptRevision(stored)
 	return nil
+}
+
+func (qm *QueuesManager) isLoaded(name string, q *Queue) bool {
+	qm.mutex.RLock()
+	defer qm.mutex.RUnlock()
+
+	loaded, ok := qm.queues[name]
+	return ok && loaded == q
 }
 
 func (qm *QueuesManager) adoptRebalancedRecord(ctx context.Context, stored types.QueueInfo) error {

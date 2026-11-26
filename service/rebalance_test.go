@@ -1124,6 +1124,46 @@ func testRebalance(t *testing.T, setup NewStorageFunc, tearDown func(), lifetime
 		assert.Equal(t, "after-the-tell", moved.Items[0].Reference)
 	})
 
+	t.Run("RebalanceContinuesWhenLoadedQueueIsDeleted", func(t *testing.T) {
+		fault := &queueStoreFault{}
+		conf := fault.Wrap(setup())
+		defer tearDown()
+		d := newDaemon(t, 10*clock.Second, svc.Config{StorageConfig: conf})
+		defer d.Shutdown(t)
+		c, ctx := d.MustClient(), d.Context()
+		backend := conf.PartitionStorage[0].Name
+
+		suffix := random.String("", 10)
+		deletedQueue := "queue-a-" + suffix
+		remainingQueue := "queue-b-" + suffix
+		createQueueWithPartitions(t, ctx, c, deletedQueue, 1)
+		createQueueWithPartitions(t, ctx, c, remainingQueue, 1)
+		setPartitionCount(t, ctx, c, remainingQueue, 2)
+
+		var deleteErr error
+		deleted := false
+		fault.AfterNextGetOf(deletedQueue, func() {
+			deleted = true
+			deleteErr = c.QueuesDelete(ctx, &pb.QueuesDeleteRequest{QueueName: deletedQueue})
+		})
+
+		counts := rebalance(t, ctx, c)
+		require.True(t, deleted)
+		require.NoError(t, deleteErr)
+		assert.Equal(t, rebalanceCounts{ChangedQueues: 1, CreatedPartitions: 1}, counts)
+
+		var info pb.QueueInfo
+		err := c.QueuesInfo(ctx, &pb.QueuesInfoRequest{QueueName: deletedQueue}, &info)
+		var e duh.Error
+		require.ErrorAs(t, err, &e)
+		assert.Equal(t, duh.CodeBadRequest, e.Code())
+
+		listed := listedPartitions(t, ctx, c, remainingQueue)
+		assert.Equal(t, []int32{0, 1}, availableOn(listed, backend))
+		assert.Empty(t, drainingOn(listed, backend))
+		assert.Equal(t, rebalanceCounts{}, rebalance(t, ctx, c))
+	})
+
 	t.Run("StoppedRebalanceIsFinishedByCallingAgain", func(t *testing.T) {
 		fault := &queueStoreFault{}
 		conf := fault.Wrap(setup())

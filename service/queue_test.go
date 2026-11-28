@@ -4294,6 +4294,8 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		})
 
 		t.Run("MaxAttemptsFinalLeaseSurvivesOtherLeaseExpiry", func(t *testing.T) {
+			// Test that an item that reached MaxAttempts but still under lease can be completed even if
+			// lifecycle processing is triggered by another item, regardless of whether the queue has a DLQ configured.
 			for _, tc := range []struct {
 				name    string
 				withDLQ bool
@@ -4325,6 +4327,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					firstRef := random.String("first-", 10)
 					secondRef := random.String("second-", 10)
 
+					// Produce first item and lease it
 					require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
 						QueueName:      queueName,
 						RequestTimeout: "1m",
@@ -4340,6 +4343,7 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					require.Equal(t, int32(1), firstLease.Attempts)
 
 					now.Advance(1 * clock.Minute)
+					// Produce second item
 					require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
 						QueueName:      queueName,
 						RequestTimeout: "1m",
@@ -4351,27 +4355,32 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 						}},
 					}))
 
+					// Expire first item lease and wait for lifecycle to re-queue it
 					now.Advance(4*clock.Minute + clock.Second)
 					waitForLifecycleRun(t, ctx, c, queueName)
 					require.Eventually(t, func() bool {
 						return isUnLeased(ctx, c, queueName, itemReference(firstRef))
 					}, 5*clock.Second, 20*clock.Millisecond)
 
+					// Lease second item
 					secondLease := leaseOne(t, ctx, c, queueName)
 					require.Equal(t, secondRef, secondLease.Reference)
 					require.Equal(t, int32(1), secondLease.Attempts)
 
+					// Lease first item for its final attempt
 					now.Advance(1 * clock.Minute)
 					finalLease := leaseOne(t, ctx, c, queueName)
 					require.Equal(t, firstRef, finalLease.Reference)
 					require.Equal(t, int32(2), finalLease.Attempts)
 
+					// Second item lease expires, triggering lifecycle scan
 					now.Advance(4*clock.Minute + clock.Second)
 					waitForLifecycleRun(t, ctx, c, queueName)
 					require.Eventually(t, func() bool {
 						return isUnLeased(ctx, c, queueName, itemReference(secondRef))
 					}, 5*clock.Second, 20*clock.Millisecond)
 
+					// Verify first item is still leased and second item is unleased
 					var resp pb.StorageItemsListResponse
 					require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &resp, nil))
 					first := findInStorageList(firstRef, &resp)
@@ -4382,18 +4391,19 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 					require.NotNil(t, second)
 					assert.False(t, second.IsLeased)
 
+					// Verify first item was not incorrectly moved to the DLQ
 					if tc.withDLQ {
 						var dlqResp pb.StorageItemsListResponse
 						require.NoError(t, c.StorageItemsList(ctx, dlqName, 0, &dlqResp, nil))
 						assert.Empty(t, dlqResp.Items)
 					}
 
+					// Verify first item can be completed successfully, removing it from storage
 					require.NoError(t, c.QueueComplete(ctx, &pb.QueueCompleteRequest{
 						QueueName:      queueName,
 						RequestTimeout: "5s",
 						Ids:            []string{finalLease.Id},
 					}))
-
 					require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &resp, nil))
 					assert.Nil(t, findInStorageList(firstRef, &resp))
 				})

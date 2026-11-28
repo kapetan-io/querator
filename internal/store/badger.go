@@ -835,15 +835,6 @@ func (b *BadgerPartition) ScanForActions(ctx context.Context, scan *types.LifeCy
 				})
 				return
 			}
-			if b.info.Queue.MaxAttempts != 0 && item.Attempts >= b.info.Queue.MaxAttempts {
-				scan.Add(types.Action{
-					Action:       types.ActionItemMaxAttempts,
-					PartitionNum: b.info.PartitionNum,
-					Queue:        b.info.Queue.Name,
-					Item:         *item,
-				})
-				return
-			}
 			scan.SeeLeaseDeadline(item.LeaseDeadline)
 		}
 		if !item.ExpireDeadline.After(now) {

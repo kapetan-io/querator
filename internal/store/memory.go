@@ -419,15 +419,6 @@ func (m *MemoryPartition) ScanForActions(_ context.Context, scan *types.LifeCycl
 				})
 				continue
 			}
-			if m.info.Queue.MaxAttempts != 0 && item.Attempts >= m.info.Queue.MaxAttempts {
-				scan.Add(types.Action{
-					Action:       types.ActionItemMaxAttempts,
-					PartitionNum: m.info.PartitionNum,
-					Queue:        m.info.Queue.Name,
-					Item:         item,
-				})
-				continue
-			}
 			scan.SeeLeaseDeadline(item.LeaseDeadline)
 		}
 		if !item.ExpireDeadline.After(now) {

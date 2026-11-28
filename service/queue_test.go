@@ -4293,6 +4293,113 @@ func testQueue(t *testing.T, setup NewStorageFunc, tearDown func()) {
 			assert.True(t, dlqItem.LeaseDeadline.AsTime().Before(now.Now()))
 		})
 
+		t.Run("MaxAttemptsFinalLeaseSurvivesOtherLeaseExpiry", func(t *testing.T) {
+			for _, tc := range []struct {
+				name    string
+				withDLQ bool
+			}{
+				{name: "WithoutDLQ"},
+				{name: "WithDLQ", withDLQ: true},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					queueName := random.String("queue-", 10)
+					dlqName := ""
+					if tc.withDLQ {
+						dlqName = random.String("dlq-", 10)
+						createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+							QueueName:           dlqName,
+							LeaseTimeout:        LeaseTimeout,
+							ExpireTimeout:       ExpireTimeout,
+							RequestedPartitions: 1,
+						})
+					}
+					createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+						QueueName:           queueName,
+						LeaseTimeout:        "5m0s",
+						ExpireTimeout:       "1h0m0s",
+						RequestedPartitions: 1,
+						MaxAttempts:         2,
+						DeadQueue:           dlqName,
+					})
+
+					firstRef := random.String("first-", 10)
+					secondRef := random.String("second-", 10)
+
+					require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+						QueueName:      queueName,
+						RequestTimeout: "1m",
+						Items: []*pb.QueueProduceItem{{
+							Reference: firstRef,
+							Encoding:  "test-encoding",
+							Kind:      "test-kind",
+							Bytes:     []byte("first item"),
+						}},
+					}))
+					firstLease := leaseOne(t, ctx, c, queueName)
+					require.Equal(t, firstRef, firstLease.Reference)
+					require.Equal(t, int32(1), firstLease.Attempts)
+
+					now.Advance(1 * clock.Minute)
+					require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+						QueueName:      queueName,
+						RequestTimeout: "1m",
+						Items: []*pb.QueueProduceItem{{
+							Reference: secondRef,
+							Encoding:  "test-encoding",
+							Kind:      "test-kind",
+							Bytes:     []byte("second item"),
+						}},
+					}))
+
+					now.Advance(4*clock.Minute + clock.Second)
+					waitForLifecycleRun(t, ctx, c, queueName)
+					require.Eventually(t, func() bool {
+						return isUnLeased(ctx, c, queueName, itemReference(firstRef))
+					}, 5*clock.Second, 20*clock.Millisecond)
+
+					secondLease := leaseOne(t, ctx, c, queueName)
+					require.Equal(t, secondRef, secondLease.Reference)
+					require.Equal(t, int32(1), secondLease.Attempts)
+
+					now.Advance(1 * clock.Minute)
+					finalLease := leaseOne(t, ctx, c, queueName)
+					require.Equal(t, firstRef, finalLease.Reference)
+					require.Equal(t, int32(2), finalLease.Attempts)
+
+					now.Advance(4*clock.Minute + clock.Second)
+					waitForLifecycleRun(t, ctx, c, queueName)
+					require.Eventually(t, func() bool {
+						return isUnLeased(ctx, c, queueName, itemReference(secondRef))
+					}, 5*clock.Second, 20*clock.Millisecond)
+
+					var resp pb.StorageItemsListResponse
+					require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &resp, nil))
+					first := findInStorageList(firstRef, &resp)
+					require.NotNil(t, first)
+					assert.True(t, first.IsLeased)
+					assert.True(t, first.LeaseDeadline.AsTime().After(now.Now()))
+					second := findInStorageList(secondRef, &resp)
+					require.NotNil(t, second)
+					assert.False(t, second.IsLeased)
+
+					if tc.withDLQ {
+						var dlqResp pb.StorageItemsListResponse
+						require.NoError(t, c.StorageItemsList(ctx, dlqName, 0, &dlqResp, nil))
+						assert.Empty(t, dlqResp.Items)
+					}
+
+					require.NoError(t, c.QueueComplete(ctx, &pb.QueueCompleteRequest{
+						QueueName:      queueName,
+						RequestTimeout: "5s",
+						Ids:            []string{finalLease.Id},
+					}))
+
+					require.NoError(t, c.StorageItemsList(ctx, queueName, 0, &resp, nil))
+					assert.Nil(t, findInStorageList(firstRef, &resp))
+				})
+			}
+		})
+
 		t.Run("SourceIDPreservedOnLeaseExpiry", func(t *testing.T) {
 			queueName := random.String("queue-", 10)
 			createQueueAndWait(t, ctx, c, &pb.QueueInfo{

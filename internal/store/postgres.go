@@ -1584,10 +1584,6 @@ func (p *PostgresPartition) ScanForScheduled(ctx context.Context, scan *types.Li
 }
 
 func (p *PostgresPartition) ScanForActions(ctx context.Context, scan *types.LifeCycleScan, now clock.Time) error {
-	p.mu.RLock()
-	maxAttempts := p.info.Queue.MaxAttempts
-	p.mu.RUnlock()
-
 	query := pageQuery{
 		columns:   actionPageColumns,
 		filter:    `(enqueue_at IS NULL OR enqueue_at <= $4)`,
@@ -1604,15 +1600,6 @@ func (p *PostgresPartition) ScanForActions(ctx context.Context, scan *types.Life
 			return
 		}
 
-		if item.IsLeased && maxAttempts != 0 && item.Attempts >= maxAttempts {
-			scan.Add(types.Action{
-				Action:       types.ActionItemMaxAttempts,
-				PartitionNum: p.info.PartitionNum,
-				Queue:        p.info.Queue.Name,
-				Item:         item,
-			})
-			return
-		}
 		if item.IsLeased {
 			scan.SeeLeaseDeadline(item.LeaseDeadline)
 		}

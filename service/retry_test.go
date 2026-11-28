@@ -207,6 +207,137 @@ func testRetry(t *testing.T, setup NewStorageFunc, tearDown func()) {
 		})
 	})
 
+	t.Run("MaxAttemptsFinalLeaseCanBeRetried", func(t *testing.T) {
+		// Test that an item that reached MaxAttempts but still under lease
+		// can be retried even if lifecycle processing is triggered by another item
+		now := clock.NewProvider()
+		now.Freeze(clock.Now())
+		defer now.UnFreeze()
+
+		dlqName := random.String("dlq-", 10)
+		queueName := random.String("queue-", 10)
+		d := newDaemon(t, 60*clock.Second, svc.Config{
+			StorageConfig: setup(),
+			Clock:         now,
+		})
+		defer func() {
+			d.Shutdown(t)
+			tearDown()
+		}()
+		c, ctx := d.MustClient(), d.Context()
+
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			QueueName:           dlqName,
+			LeaseTimeout:        LeaseTimeout,
+			ExpireTimeout:       ExpireTimeout,
+			RequestedPartitions: 1,
+		})
+		createQueueAndWait(t, ctx, c, &pb.QueueInfo{
+			QueueName:           queueName,
+			LeaseTimeout:        "5m0s",
+			ExpireTimeout:       "1h0m0s",
+			RequestedPartitions: 1,
+			MaxAttempts:         2,
+			DeadQueue:           dlqName,
+		})
+
+		ref := random.String("ref-", 10)
+		triggerRef := random.String("trigger-", 10)
+
+		// Produce first item and lease it
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			QueueName:      queueName,
+			RequestTimeout: "1m",
+			Items: []*pb.QueueProduceItem{{
+				Reference: ref,
+				Encoding:  "test-encoding",
+				Kind:      "test-kind",
+				Bytes:     []byte("final lease retry"),
+			}},
+		}))
+
+		firstLease := leaseOne(t, ctx, c, queueName)
+		require.Equal(t, ref, firstLease.Reference)
+		require.Equal(t, int32(1), firstLease.Attempts)
+
+		now.Advance(1 * clock.Minute)
+		// Produce a second item
+		require.NoError(t, c.QueueProduce(ctx, &pb.QueueProduceRequest{
+			QueueName:      queueName,
+			RequestTimeout: "1m",
+			Items: []*pb.QueueProduceItem{{
+				Reference: triggerRef,
+				Encoding:  "test-encoding",
+				Kind:      "lifecycle-trigger",
+				Bytes:     []byte("trigger lifecycle scan"),
+			}},
+		}))
+
+		// Expire first item lease and wait for lifecycle to re-queue it
+		now.Advance(4*clock.Minute + clock.Second)
+		waitForLifecycleRun(t, ctx, c, queueName)
+		require.Eventually(t, func() bool {
+			return isUnLeased(ctx, c, queueName, itemReference(ref))
+		}, 5*clock.Second, 20*clock.Millisecond)
+
+		// Lease second item
+		triggerLease := leaseOne(t, ctx, c, queueName)
+		require.Equal(t, triggerRef, triggerLease.Reference)
+		require.Equal(t, int32(1), triggerLease.Attempts)
+
+		// Lease first item for its final attempt
+		now.Advance(1 * clock.Minute)
+		var finalLeaseResponse pb.QueueLeaseResponse
+		require.NoError(t, c.QueueLease(ctx, &pb.QueueLeaseRequest{
+			ClientId:       random.String("client-", 10),
+			RequestTimeout: "5s",
+			QueueName:      queueName,
+			BatchSize:      1,
+		}, &finalLeaseResponse))
+		require.Len(t, finalLeaseResponse.Items, 1)
+		finalLease := finalLeaseResponse.Items[0]
+		require.Equal(t, ref, finalLease.Reference)
+		require.Equal(t, int32(2), finalLease.Attempts)
+
+		// Second item lease expires, triggering lifecycle scan
+		now.Advance(4*clock.Minute + clock.Second)
+		waitForLifecycleRun(t, ctx, c, queueName)
+		require.Eventually(t, func() bool {
+			return isUnLeased(ctx, c, queueName, itemReference(triggerRef))
+		}, 5*clock.Second, 20*clock.Millisecond)
+
+		// Verify first item is still leased
+		var sourceResp pb.StorageItemsListResponse
+		require.NoError(t, c.StorageItemsList(ctx, queueName, int(finalLeaseResponse.Partition), &sourceResp, nil))
+		item := findInStorageList(ref, &sourceResp)
+		require.NotNil(t, item)
+		assert.True(t, item.IsLeased)
+		assert.True(t, item.LeaseDeadline.AsTime().After(now.Now()))
+		assert.Equal(t, int32(2), item.Attempts)
+
+		// Verify first item was not incorrectly moved to the DLQ
+		var dlqResp pb.StorageItemsListResponse
+		require.NoError(t, c.StorageItemsList(ctx, dlqName, 0, &dlqResp, nil))
+		assert.Empty(t, dlqResp.Items)
+
+		// Verify first item can be retried
+		require.NoError(t, c.QueueRetry(ctx, &pb.QueueRetryRequest{
+			QueueName: queueName,
+			Partition: finalLeaseResponse.Partition,
+			Items:     []*pb.QueueRetryItem{{Id: finalLease.Id}},
+		}))
+
+		// Verify the first item was successfully requeued
+		require.NoError(t, c.StorageItemsList(ctx, queueName, int(finalLeaseResponse.Partition), &sourceResp, nil))
+		item = findInStorageList(ref, &sourceResp)
+		require.NotNil(t, item)
+		assert.False(t, item.IsLeased)
+		assert.Equal(t, int32(2), item.Attempts)
+
+		require.NoError(t, c.StorageItemsList(ctx, dlqName, 0, &dlqResp, nil))
+		assert.Empty(t, dlqResp.Items)
+	})
+
 	t.Run("ScheduledRetry", func(t *testing.T) {
 		now := clock.NewProvider()
 		now.Freeze(clock.Now())

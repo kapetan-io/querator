@@ -1380,10 +1380,6 @@ func (p *MongoPartition) ScanForScheduled(ctx context.Context, scan *types.LifeC
 }
 
 func (p *MongoPartition) ScanForActions(ctx context.Context, scan *types.LifeCycleScan, now clock.Time) error {
-	p.mu.RLock()
-	maxAttempts := p.info.Queue.MaxAttempts
-	p.mu.RUnlock()
-
 	filter := bson.M{"$or": bson.A{
 		bson.M{"enqueue_at": bson.M{"$exists": false}},
 		bson.M{"enqueue_at": bson.M{"$lte": toMicros(now)}},
@@ -1399,15 +1395,6 @@ func (p *MongoPartition) ScanForActions(ctx context.Context, scan *types.LifeCyc
 			return
 		}
 
-		if item.IsLeased && maxAttempts != 0 && item.Attempts >= maxAttempts {
-			scan.Add(types.Action{
-				Action:       types.ActionItemMaxAttempts,
-				PartitionNum: p.info.PartitionNum,
-				Queue:        p.info.Queue.Name,
-				Item:         item,
-			})
-			return
-		}
 		if item.IsLeased {
 			scan.SeeLeaseDeadline(item.LeaseDeadline)
 		}
